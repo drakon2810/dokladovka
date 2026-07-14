@@ -1,0 +1,86 @@
+name: Signed Windows agent release
+
+on:
+  push:
+    tags:
+      - 'agent-v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Determine release metadata
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}' -replace '^agent-v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Tag musí mať tvar agent-v1.2.3.' }
+          "AGENT_VERSION=$version" | Out-File $env:GITHUB_ENV -Append
+          "SETUP_NAME=Dokladovka-Agent-Setup-$version.exe" | Out-File $env:GITHUB_ENV -Append
+          "DOWNLOAD_URL=https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Dokladovka-Agent-Setup-$version.exe" | Out-File $env:GITHUB_ENV -Append
+      - run: dotnet restore .\agent\Dokladovka.Agent.sln
+      - run: dotnet test .\agent\Dokladovka.Agent.sln --configuration Release --no-restore
+      - name: Publish self-contained agent and configurator
+        shell: pwsh
+        env:
+          AGENT_CLOUD_BASE_URL: ${{ secrets.AGENT_CLOUD_BASE_URL }}
+          WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+        run: .\agent\scripts\publish.ps1 -Runtime win-x64 -Version $env:AGENT_VERSION
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - name: Restore signing certificate
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+        run: |
+          if (-not $env:SIGNING_CERTIFICATE_BASE64) { throw 'Chýba podpisový certifikát.' }
+          $path = Join-Path $env:RUNNER_TEMP 'dokladovka-signing.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+          "SIGNING_CERTIFICATE_PATH=$path" | Out-File $env:GITHUB_ENV -Append
+      - name: Build and sign installer
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ secrets.WINDOWS_SIGNING_PUBLISHER }}
+        run: |
+          $signtool = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter signtool.exe -Recurse | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $signtool) { throw 'signtool.exe nebol nájdený.' }
+          $env:AGENT_SIGNTOOL_COMMAND = "`"$signtool`" sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f `"$env:SIGNING_CERTIFICATE_PATH`" /p `"$env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD`" {file}"
+          .\agent\scripts\build-installer.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' -Version $env:AGENT_VERSION -DownloadUrl $env:DOWNLOAD_URL
+      - name: Verify signed artifact
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+        run: |
+          $setup = Get-Item ".\agent\artifacts\$env:SETUP_NAME"
+          $signature = Get-AuthenticodeSignature -LiteralPath $setup.FullName
+          if ($signature.Status -ne 'Valid') { throw "Neplatný podpis: $($signature.Status)" }
+          if ($signature.SignerCertificate.Thumbprint -ne $env:WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT.Replace(' ', '').ToUpperInvariant()) { throw 'Publisher thumbprint nesúhlasí.' }
+          $manifest = Get-Content .\agent\artifacts\release-manifest.json -Raw | ConvertFrom-Json
+          if ((Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.sha256) { throw 'SHA-256 nesúhlasí.' }
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create '${{ github.ref_name }}' ".\agent\artifacts\$env:SETUP_NAME" '.\agent\artifacts\release-manifest.json' --verify-tag --title "Dokladovka Agent $env:AGENT_VERSION" --generate-notes
+      - name: Publish metadata to backend
+        shell: pwsh
+        env:
+          DOKLADOVKA_RELEASE_API_URL: ${{ secrets.DOKLADOVKA_RELEASE_API_URL }}
+          DOKLADOVKA_RELEASE_API_TOKEN: ${{ secrets.DOKLADOVKA_RELEASE_API_TOKEN }}
+        run: |
+          if (-not $env:DOKLADOVKA_RELEASE_API_URL -or -not $env:DOKLADOVKA_RELEASE_API_TOKEN) { throw 'Chýba backend release konfigurácia.' }
+          $headers = @{ Authorization = "Bearer $env:DOKLADOVKA_RELEASE_API_TOKEN" }
+          Invoke-RestMethod -Method Post -Uri "$($env:DOKLADOVKA_RELEASE_API_URL.TrimEnd('/'))/api/internal/agent-releases" -Headers $headers -ContentType 'application/json' -InFile '.\agent\artifacts\release-manifest.json'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dokladovka-agent-win-x64-signed-${{ github.ref_name }}
+          path: agent/artifacts/*

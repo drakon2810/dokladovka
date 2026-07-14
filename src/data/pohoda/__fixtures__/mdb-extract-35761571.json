@@ -1,0 +1,4393 @@
+{
+  "predkontacie": [
+    {
+      "kod": "022200",
+      "nazov": "Zaradenie HIM do užívania"
+    },
+    {
+      "kod": "042",
+      "nazov": "obstaranie dlhodobého majetku"
+    },
+    {
+      "kod": "1",
+      "nazov": "Cestná daň"
+    },
+    {
+      "kod": "1",
+      "nazov": "Nákup tovaru"
+    },
+    {
+      "kod": "1",
+      "nazov": "Tržby za vlastné výrobky"
+    },
+    {
+      "kod": "1",
+      "nazov": "Výdaj materiálu zo skladu do spotreby"
+    },
+    {
+      "kod": "1",
+      "nazov": "Zálohová faktúra"
+    },
+    {
+      "kod": "1",
+      "nazov": "Zúčtovanie odvodu DPH z prijatej zálohy"
+    },
+    {
+      "kod": "10Gf",
+      "nazov": "Garančný fond"
+    },
+    {
+      "kod": "10Int",
+      "nazov": "Inventúrne rozdiely zúčtované do nákladov"
+    },
+    {
+      "kod": "10V",
+      "nazov": "Úhrada mzdy spoločníka"
+    },
+    {
+      "kod": "1121/501300",
+      "nazov": "1121/501300"
+    },
+    {
+      "kod": "1122/501300",
+      "nazov": "1122/501300"
+    },
+    {
+      "kod": "11Int",
+      "nazov": "Inventúrny prebytok"
+    },
+    {
+      "kod": "11penzD",
+      "nazov": "Príspevok na dôchodkové pripoistenie - daňový"
+    },
+    {
+      "kod": "11s",
+      "nazov": "Odmena konateľa - spoločníka"
+    },
+    {
+      "kod": "11z",
+      "nazov": "Odmena konateľa - zamestnanca"
+    },
+    {
+      "kod": "12V",
+      "nazov": "Úhrada doplatku mzdy spoločníka"
+    },
+    {
+      "kod": "12penzN",
+      "nazov": "Príspevok na dôchodkové pripoistenie - nedaňový"
+    },
+    {
+      "kod": "12socN",
+      "nazov": "Zákonné soc. náklady - zamestnanec"
+    },
+    {
+      "kod": "13socN",
+      "nazov": "Zákonné soc. náklady - spoločník"
+    },
+    {
+      "kod": "13uraz",
+      "nazov": "Úrazové poistenie zamestnancov"
+    },
+    {
+      "kod": "14",
+      "nazov": "Zúčtovanie odpočítania DPH zo zaplatenej zálohy"
+    },
+    {
+      "kod": "1Cr",
+      "nazov": "Čas. rozlíšenie služieb – náklady bud.období"
+    },
+    {
+      "kod": "1D",
+      "nazov": "HIM daňový odpis"
+    },
+    {
+      "kod": "1D082110",
+      "nazov": "HIM daňový odpis"
+    },
+    {
+      "kod": "1D082200",
+      "nazov": "HIM daňový odpis"
+    },
+    {
+      "kod": "1D082600",
+      "nazov": "HIM daňový odpis"
+    },
+    {
+      "kod": "1D082700",
+      "nazov": "HIM daňový odpis"
+    },
+    {
+      "kod": "1D082800",
+      "nazov": "HIM daňový odpis"
+    },
+    {
+      "kod": "1Op",
+      "nazov": "Tržby z predaja tovaru"
+    },
+    {
+      "kod": "1OpP",
+      "nazov": "Tvorba zákonnej OP k pohľadávkam"
+    },
+    {
+      "kod": "1P",
+      "nazov": "Kurzové zisky - pohľadávky"
+    },
+    {
+      "kod": "1P",
+      "nazov": "Tržba za predaj tovaru"
+    },
+    {
+      "kod": "1P",
+      "nazov": "Úhrada faktúry"
+    },
+    {
+      "kod": "1U082110",
+      "nazov": "HIM účtovný odpis"
+    },
+    {
+      "kod": "1U082200",
+      "nazov": "HIM účtovný odpis"
+    },
+    {
+      "kod": "1U082700",
+      "nazov": "HIM účtovný odpis"
+    },
+    {
+      "kod": "1U082800",
+      "nazov": "HIM účtovný odpis"
+    },
+    {
+      "kod": "1V",
+      "nazov": "Úhrada faktúry"
+    },
+    {
+      "kod": "2",
+      "nazov": "Nakúpené ostatné služby"
+    },
+    {
+      "kod": "2",
+      "nazov": "Predpis zmluvných pokút a úrokov z omeškania"
+    },
+    {
+      "kod": "2",
+      "nazov": "Prírastok zásob nedokončenej výroby"
+    },
+    {
+      "kod": "2",
+      "nazov": "Tržby z predaja služieb"
+    },
+    {
+      "kod": "211/648",
+      "nazov": "inv.rozdiel v EUR pokladni"
+    },
+    {
+      "kod": "2112",
+      "nazov": "2112"
+    },
+    {
+      "kod": "2112563",
+      "nazov": "2112"
+    },
+    {
+      "kod": "2113",
+      "nazov": "2113"
+    },
+    {
+      "kod": "2113563",
+      "nazov": "2113"
+    },
+    {
+      "kod": "2114",
+      "nazov": "2114"
+    },
+    {
+      "kod": "2114563",
+      "nazov": "2114"
+    },
+    {
+      "kod": "2115",
+      "nazov": "2114"
+    },
+    {
+      "kod": "2115563",
+      "nazov": "2114"
+    },
+    {
+      "kod": "221/261 P.na ceste",
+      "nazov": "Peniaze na ceste"
+    },
+    {
+      "kod": "261",
+      "nazov": "Vklad na účet"
+    },
+    {
+      "kod": "261",
+      "nazov": "Výber hotovosti z BÚ"
+    },
+    {
+      "kod": "261/221 P.na ceste",
+      "nazov": "Peniaze na ceste"
+    },
+    {
+      "kod": "261/648",
+      "nazov": "Odvod hotovosti na BÚ-cent.vyr."
+    },
+    {
+      "kod": "261/648",
+      "nazov": "cent.vyr.prevodu"
+    },
+    {
+      "kod": "2Cr",
+      "nazov": "Čas. rozlíšenie služieb – výdavky bud.období"
+    },
+    {
+      "kod": "2D",
+      "nazov": "NIM daňový odpis"
+    },
+    {
+      "kod": "2D 073100",
+      "nazov": "NIM daňový odpis-softvér Arcania"
+    },
+    {
+      "kod": "2OpP",
+      "nazov": "Tvorba účtovnej OP k pohľadávkam"
+    },
+    {
+      "kod": "2P",
+      "nazov": "Kurzové stráty - pohľadávky"
+    },
+    {
+      "kod": "2P",
+      "nazov": "Prevod z pokladne na účet"
+    },
+    {
+      "kod": "2P",
+      "nazov": "Úhrada faktúry"
+    },
+    {
+      "kod": "2U",
+      "nazov": "NIM účtovný odpis"
+    },
+    {
+      "kod": "2U 073100",
+      "nazov": "NIM účtovný odpis-softvér Arcania"
+    },
+    {
+      "kod": "2V",
+      "nazov": "Úhrada zálohovej faktúry"
+    },
+    {
+      "kod": "3",
+      "nazov": "Opravy a údržba"
+    },
+    {
+      "kod": "3",
+      "nazov": "Preddavky na daň z prijmov spoločníka"
+    },
+    {
+      "kod": "3",
+      "nazov": "Preplatky z preddavkov na DzP"
+    },
+    {
+      "kod": "3",
+      "nazov": "Tržby z predaja tovaru"
+    },
+    {
+      "kod": "311/378 tuzem",
+      "nazov": "Zápočet Mobilates tuzem"
+    },
+    {
+      "kod": "311/378 zahr",
+      "nazov": "Zápočet Mobilates zahr"
+    },
+    {
+      "kod": "311100/324100",
+      "nazov": "Odpočet prijatej zálohy"
+    },
+    {
+      "kod": "311100/325 PBOdobr",
+      "nazov": "Príjmy bud. období-tuz. dobropis"
+    },
+    {
+      "kod": "311100/385 PBO",
+      "nazov": "Príjmy budúcich období-tuz."
+    },
+    {
+      "kod": "311100/602200",
+      "nazov": "Skladovanie"
+    },
+    {
+      "kod": "311200/325 PBOdobr",
+      "nazov": "Príjmy bud. období-zahr. dobropis"
+    },
+    {
+      "kod": "311200/385 PBO",
+      "nazov": "Príjmy budúcich období-zahr."
+    },
+    {
+      "kod": "311tuz./395",
+      "nazov": "Zápočet vydaného dobropisu tuz."
+    },
+    {
+      "kod": "311zahr./395",
+      "nazov": "Zápočet vydaného dobropisu"
+    },
+    {
+      "kod": "314",
+      "nazov": "poskytnutá záloha"
+    },
+    {
+      "kod": "314 DD",
+      "nazov": "poskyt.záloha zdanená"
+    },
+    {
+      "kod": "314 vratka",
+      "nazov": "vrátená záloha"
+    },
+    {
+      "kod": "314300 DD",
+      "nazov": "poskyt.záloha zdanená"
+    },
+    {
+      "kod": "315 DD§69",
+      "nazov": "Nevyfa.dodávky-dobropis tuz. §69"
+    },
+    {
+      "kod": "315 tuz.",
+      "nazov": "Nevyfa.dodávky-dobropis tuz."
+    },
+    {
+      "kod": "315 zahr.DD§69",
+      "nazov": "Nevyfa.dodávky-dobropis zahr. §69"
+    },
+    {
+      "kod": "315999 nejasné",
+      "nazov": "nejasná, mylná platba"
+    },
+    {
+      "kod": "315999 nejasné+",
+      "nazov": "mylná platba"
+    },
+    {
+      "kod": "321/315999",
+      "nazov": "Úhr.FP"
+    },
+    {
+      "kod": "321/378",
+      "nazov": "Úhr.FP"
+    },
+    {
+      "kod": "321/379200",
+      "nazov": "Úhr.FP"
+    },
+    {
+      "kod": "321100/314300",
+      "nazov": "Odpočet zálohy"
+    },
+    {
+      "kod": "321200/311200",
+      "nazov": "zápočet pohľadávok a záväzkov AGS group"
+    },
+    {
+      "kod": "321tuz./314100",
+      "nazov": "Zúčt.zálohy na úhradu FP tuz."
+    },
+    {
+      "kod": "321tuz./395",
+      "nazov": "Zápočet záväzku"
+    },
+    {
+      "kod": "321zahr./314100",
+      "nazov": "Zúčt.zálohy na úhradu FP zahr."
+    },
+    {
+      "kod": "321zahr./324100",
+      "nazov": "Úhrada FP zahr.zo zálohy."
+    },
+    {
+      "kod": "321zahr./395",
+      "nazov": "Zápočet záväzku"
+    },
+    {
+      "kod": "323 CP",
+      "nazov": "rezerva na vyúčt.pracovných ciest"
+    },
+    {
+      "kod": "323 baliaci mat.",
+      "nazov": "tvorba rezervy na baliaci materiál"
+    },
+    {
+      "kod": "323 colné služby",
+      "nazov": "rezerva na colné služby"
+    },
+    {
+      "kod": "323 ost.služby",
+      "nazov": "rezerva na ostatné služby"
+    },
+    {
+      "kod": "323 prepravné",
+      "nazov": "rezerva na prepravné"
+    },
+    {
+      "kod": "323 skladovanie",
+      "nazov": "rezerva na skladovanie"
+    },
+    {
+      "kod": "323 sťahovanie",
+      "nazov": "rezerva na sťahovanie"
+    },
+    {
+      "kod": "323 účto",
+      "nazov": "rezerva na účtovníctvo"
+    },
+    {
+      "kod": "324 prijatá záloha",
+      "nazov": "prijatá záloha"
+    },
+    {
+      "kod": "324/311200",
+      "nazov": "Zúčt.zálohy na úhradu FV"
+    },
+    {
+      "kod": "324100/311100",
+      "nazov": "Zúčt.zálohy na úhradu FV"
+    },
+    {
+      "kod": "324100/324300+343",
+      "nazov": "Vymeranie DPH k prijatej zálohe"
+    },
+    {
+      "kod": "325/602100",
+      "nazov": "dobr.na sťahovanie v budúcom roku"
+    },
+    {
+      "kod": "325998 prepl",
+      "nazov": "Preplatok"
+    },
+    {
+      "kod": "325998 prepl.",
+      "nazov": "vratka preplatku"
+    },
+    {
+      "kod": "325999 nejasné",
+      "nazov": "nejasné platby"
+    },
+    {
+      "kod": "325999/311zahr.",
+      "nazov": "Zápočet nejasnej platby"
+    },
+    {
+      "kod": "325999/648999",
+      "nazov": "nejasné platby"
+    },
+    {
+      "kod": "325PK/378999",
+      "nazov": "zúčt.neznámej platby kartou"
+    },
+    {
+      "kod": "325PK/648999",
+      "nazov": "zúčt.neznámej platby kartou-preplatok"
+    },
+    {
+      "kod": "326 -tuz.",
+      "nazov": "Nevyfa.dodávky-tuz."
+    },
+    {
+      "kod": "326 DD§69",
+      "nazov": "Nevyfa.dod.tuz. §69"
+    },
+    {
+      "kod": "326 nájomné",
+      "nazov": "nevyfa.nájomné"
+    },
+    {
+      "kod": "326 obstar.DNM",
+      "nazov": "nevyfa.obstaranie dlh.nehmot.majetku"
+    },
+    {
+      "kod": "326 ost.poistné",
+      "nazov": "nevyfa.ostatné poistné"
+    },
+    {
+      "kod": "326 ost.služby",
+      "nazov": "nevyfa.ostatné služby"
+    },
+    {
+      "kod": "326 parkovanie",
+      "nazov": "nevyfa.parkovanie"
+    },
+    {
+      "kod": "326 prepravné",
+      "nazov": "nevyfa.prepravné"
+    },
+    {
+      "kod": "326 skladovanie",
+      "nazov": "nevyfa.skladovanie"
+    },
+    {
+      "kod": "326 sťahovanie",
+      "nazov": "nevyfa.sťahovanie"
+    },
+    {
+      "kod": "326 tuz.",
+      "nazov": "Nevyfa.dodávky-tuz."
+    },
+    {
+      "kod": "326 zahr.",
+      "nazov": "Nevyfa.dodávky-zahr."
+    },
+    {
+      "kod": "326 zahr.DD§69",
+      "nazov": "Nevyfa.dodávky-zahr. §69"
+    },
+    {
+      "kod": "326 zahr.neplatca",
+      "nazov": "Nevyfa.dodávky-neplatca"
+    },
+    {
+      "kod": "326 účto a mzdy",
+      "nazov": "nevyfa.účtovníctvo a mzdy"
+    },
+    {
+      "kod": "331",
+      "nazov": "SL zam."
+    },
+    {
+      "kod": "331 / 335200",
+      "nazov": "fin.príspevok na stravu"
+    },
+    {
+      "kod": "335200 fin.pr.",
+      "nazov": "fin.príspevok na stravu"
+    },
+    {
+      "kod": "341",
+      "nazov": "vrátenie preddavkov"
+    },
+    {
+      "kod": "341/343",
+      "nazov": "341/343"
+    },
+    {
+      "kod": "341200/100",
+      "nazov": "preúčt.preddavkov na DPPO"
+    },
+    {
+      "kod": "341200/648999",
+      "nazov": "zúčt.preddavkov na DPPO"
+    },
+    {
+      "kod": "343/395",
+      "nazov": "zúčt.odpočtu s povinnosťou DPH"
+    },
+    {
+      "kod": "343100",
+      "nazov": "preúčt.DPH 20% vstup tuz."
+    },
+    {
+      "kod": "343100",
+      "nazov": "preúčt.DPH vstup tuz.20%"
+    },
+    {
+      "kod": "343110",
+      "nazov": "preúčt.DPH 10% vstup tuz."
+    },
+    {
+      "kod": "343110",
+      "nazov": "preúčt.DPH vstup tuz.10%"
+    },
+    {
+      "kod": "343119",
+      "nazov": "preúčt.DPH 19% vstup tuz."
+    },
+    {
+      "kod": "343123",
+      "nazov": "preúčt.DPH 23% vstup tuz."
+    },
+    {
+      "kod": "343200",
+      "nazov": "preúčt.DPH 20% výstup tuz."
+    },
+    {
+      "kod": "343200",
+      "nazov": "preúčt.DPH výstup tuz.20%"
+    },
+    {
+      "kod": "343219",
+      "nazov": "preúčt.DPH 19% výstup tuz."
+    },
+    {
+      "kod": "343223",
+      "nazov": "preúčt.DPH 23% výstup tuz."
+    },
+    {
+      "kod": "343300",
+      "nazov": "preúčt.DPH 20% vstup samozdan."
+    },
+    {
+      "kod": "343300",
+      "nazov": "preúčt.DPH vstup samozdanenie"
+    },
+    {
+      "kod": "343400",
+      "nazov": "preúčt.DPH 20% výstup samozdan."
+    },
+    {
+      "kod": "343400",
+      "nazov": "preúčt.DPH výstup samozdanenie"
+    },
+    {
+      "kod": "355100",
+      "nazov": "Uhrada pohladavku"
+    },
+    {
+      "kod": "378500/311 tuz",
+      "nazov": "Zápočet s Mobilitas tuz"
+    },
+    {
+      "kod": "378500/311 zahr",
+      "nazov": "Zápočet s Mobilitas zahr"
+    },
+    {
+      "kod": "378500/395 Mob.",
+      "nazov": "Zápočet s Mobilitas"
+    },
+    {
+      "kod": "379100/395",
+      "nazov": "úhrada iných záväzkov"
+    },
+    {
+      "kod": "379200/5489999",
+      "nazov": "Inventarizačný odpis zostatku účtu 379200"
+    },
+    {
+      "kod": "381 ost.služby",
+      "nazov": "381 ost.služby"
+    },
+    {
+      "kod": "381 poistenie aut",
+      "nazov": "381 poistenie aut"
+    },
+    {
+      "kod": "381 poistka majetku",
+      "nazov": "381 poistenie majetku"
+    },
+    {
+      "kod": "382100/655100",
+      "nazov": "Tvorba komplexných NBO"
+    },
+    {
+      "kod": "383 D§69",
+      "nazov": "VBO-destination service DDsl§69"
+    },
+    {
+      "kod": "383 D§69 tuz.",
+      "nazov": "VBO-destination service tuz. DDsl§69"
+    },
+    {
+      "kod": "383 ost.služby",
+      "nazov": "výdavky bud.období-ostatné služby"
+    },
+    {
+      "kod": "383 prepravné",
+      "nazov": "výdavky bud.období-prepravné"
+    },
+    {
+      "kod": "383 tuz.",
+      "nazov": "Výdavky bud.období-tuz."
+    },
+    {
+      "kod": "383/538",
+      "nazov": "Korekcia dane z finančných transakcií"
+    },
+    {
+      "kod": "385/602100",
+      "nazov": "Príjmy budúcich období-sťahovanie"
+    },
+    {
+      "kod": "385/602200",
+      "nazov": "Príjmy budúcich období-skladovanie"
+    },
+    {
+      "kod": "395/311tuz.",
+      "nazov": "Zápočet pohľadávky"
+    },
+    {
+      "kod": "395/311zahr.",
+      "nazov": "Zápočet pohľadávky"
+    },
+    {
+      "kod": "395/321 tuz.",
+      "nazov": "Zápočet prijatého dobropisu"
+    },
+    {
+      "kod": "395/321 zahr.",
+      "nazov": "Zápočet prijatého dobropisu"
+    },
+    {
+      "kod": "395/324100",
+      "nazov": "Odpočet prijatej zálohy"
+    },
+    {
+      "kod": "395/324300+343",
+      "nazov": "Odpočet zdanenej zálohy"
+    },
+    {
+      "kod": "395/343",
+      "nazov": "zúčt.odpočtu s povinnosťou DPH"
+    },
+    {
+      "kod": "395/361001 Mob.",
+      "nazov": "zápočet MOBILITAS"
+    },
+    {
+      "kod": "3Cr",
+      "nazov": "Čas. rozlíšenie služieb – výnosy bud.období"
+    },
+    {
+      "kod": "3Np",
+      "nazov": "Vyradenie nehnuteľnosti pri predaji"
+    },
+    {
+      "kod": "3P",
+      "nazov": "Prevod z účtu do pokladne"
+    },
+    {
+      "kod": "3P",
+      "nazov": "Úrok z BÚ za bežné obdobie"
+    },
+    {
+      "kod": "3V",
+      "nazov": "Výber hotovosti z BÚ do pokladne"
+    },
+    {
+      "kod": "3Z",
+      "nazov": "Kurzové zisky - záväzky"
+    },
+    {
+      "kod": "3Zu",
+      "nazov": "Uvedenie diela do užívania"
+    },
+    {
+      "kod": "4",
+      "nazov": "Daň z príjmov zamestnanca - zvláštna sazba"
+    },
+    {
+      "kod": "4",
+      "nazov": "Preplatky z preddavkov na DzP"
+    },
+    {
+      "kod": "4",
+      "nazov": "Upísanie vkladov na základné imanie"
+    },
+    {
+      "kod": "4",
+      "nazov": "Vyúčtovanie prijatej zálohy"
+    },
+    {
+      "kod": "472100/331100 FPSF",
+      "nazov": "Fin.príspevok na stravu zo SF"
+    },
+    {
+      "kod": "4Cr",
+      "nazov": "Čas. rozlíšenie služieb – príjmy bud.období"
+    },
+    {
+      "kod": "4P",
+      "nazov": "Peňažný vklad podnikateľa - úhrada imania"
+    },
+    {
+      "kod": "4V",
+      "nazov": "Nákup spotrebného materiálu"
+    },
+    {
+      "kod": "4Z",
+      "nazov": "Kurzové stráty - záväzky"
+    },
+    {
+      "kod": "5",
+      "nazov": "Daň z príjmov spoločníka - zvláštna sazba"
+    },
+    {
+      "kod": "5",
+      "nazov": "Odpočet zálohy tuz."
+    },
+    {
+      "kod": "501/1121",
+      "nazov": "501/1121"
+    },
+    {
+      "kod": "501/112100",
+      "nazov": "výdaj mat.zahr. zo skladu do spotreby"
+    },
+    {
+      "kod": "501/1122",
+      "nazov": "501/1122"
+    },
+    {
+      "kod": "501/112200",
+      "nazov": "výdaj mat.tuz. zo skladu do spotreby"
+    },
+    {
+      "kod": "501100 PHM zahr.DPH",
+      "nazov": "PHM zahr. vrátane DPH"
+    },
+    {
+      "kod": "501100 PHM-tuz.",
+      "nazov": "PHM tuz."
+    },
+    {
+      "kod": "501199 PHM NEDANOVA",
+      "nazov": "PHM NEDANOVA"
+    },
+    {
+      "kod": "501200 SM",
+      "nazov": "Spotr.mat."
+    },
+    {
+      "kod": "501200 sp.mat.-NEDA",
+      "nazov": "spotr.mat. tuz NEDANOVO"
+    },
+    {
+      "kod": "501200 sp.mat.-tuz.",
+      "nazov": "spotr.mat. tuz."
+    },
+    {
+      "kod": "501200/325200",
+      "nazov": "spot.mat.-platba kartou"
+    },
+    {
+      "kod": "501300 baliaci m.",
+      "nazov": "Baliaci mat."
+    },
+    {
+      "kod": "501400 KPaHP",
+      "nazov": "Kanc. a hyg.potreby"
+    },
+    {
+      "kod": "501400 hyg.p.-tuz.",
+      "nazov": "hygienické a čistiace potreby-tuz."
+    },
+    {
+      "kod": "501400 kanc.p.-tuz.",
+      "nazov": "Kancel.potreby-tuz."
+    },
+    {
+      "kod": "501600 Auto",
+      "nazov": "Auto"
+    },
+    {
+      "kod": "501600 Auto NED",
+      "nazov": "Auto Nedanovy"
+    },
+    {
+      "kod": "501600 Auto NEDA",
+      "nazov": "Auto NEDANOVE"
+    },
+    {
+      "kod": "502100 energie-tuz.",
+      "nazov": "Spotreba energie"
+    },
+    {
+      "kod": "511 tuz.",
+      "nazov": "Opravy a udržiavanie tuz."
+    },
+    {
+      "kod": "511 tuz.neplatca",
+      "nazov": "Opravy a udržiavanie tuz.-neplatca"
+    },
+    {
+      "kod": "511100 servis-tuz.",
+      "nazov": "Opravy a udržiavanie tuz."
+    },
+    {
+      "kod": "513100/325200-",
+      "nazov": "repre-platba kartou"
+    },
+    {
+      "kod": "518100 náj.§69",
+      "nazov": "Nájomné zahr."
+    },
+    {
+      "kod": "518100 nájom Au NE",
+      "nazov": "Nájomné-tuz.Auto Nedanovy"
+    },
+    {
+      "kod": "518100 nájom-tuz.",
+      "nazov": "Nájomné-tuz."
+    },
+    {
+      "kod": "518100/315200",
+      "nazov": "\"rezerva\" na dobropis nájomného"
+    },
+    {
+      "kod": "518200 prepr.-tuz.",
+      "nazov": "Preprava-tuz."
+    },
+    {
+      "kod": "518200 prepr.tu.§69",
+      "nazov": "Preprava tuz.-prenos DD"
+    },
+    {
+      "kod": "518200/315200",
+      "nazov": "\"rezerva\" na dobropis prepravného"
+    },
+    {
+      "kod": "518300 tel.sl.-tuz.",
+      "nazov": "Telefón, internet"
+    },
+    {
+      "kod": "518400/325200-",
+      "nazov": "parkovné-platba kartou bez DPH"
+    },
+    {
+      "kod": "518600 účto tuz.",
+      "nazov": "Účtovníctvo"
+    },
+    {
+      "kod": "518700 sťahov.-tuz.",
+      "nazov": "Sťahovanie-tuz."
+    },
+    {
+      "kod": "518800/325200-",
+      "nazov": "poštovné-platba kartou"
+    },
+    {
+      "kod": "518900 des.s.-tuz.",
+      "nazov": "destination service tuzemsko"
+    },
+    {
+      "kod": "518900 ost.sl.",
+      "nazov": "Ostatné služby"
+    },
+    {
+      "kod": "518900 ost.sl.-tuz.",
+      "nazov": "ost.služby tuz."
+    },
+    {
+      "kod": "518900 ost.sl.s DPH",
+      "nazov": "ost.služby vrátane DPH"
+    },
+    {
+      "kod": "518900 ost.služ.§69",
+      "nazov": "ost.služby zahr."
+    },
+    {
+      "kod": "518900/315200",
+      "nazov": "\"rezerva\" na dobr.k ostatným službám"
+    },
+    {
+      "kod": "518910 colné sl-tuz",
+      "nazov": "Colné služby-tuz."
+    },
+    {
+      "kod": "521100/331100 HM",
+      "nazov": "Hrubá mzda zamestnanca"
+    },
+    {
+      "kod": "524100/331100",
+      "nazov": "Náhrada za PN"
+    },
+    {
+      "kod": "527100/331100 FP",
+      "nazov": "Fin.príspevok na stravu"
+    },
+    {
+      "kod": "527200",
+      "nazov": "respirátor a testy na Covid"
+    },
+    {
+      "kod": "527200 zahr.",
+      "nazov": "respirátor a testy na Covid-zahraničie"
+    },
+    {
+      "kod": "528/527 SL-NN",
+      "nazov": "SL nad rámec zákona"
+    },
+    {
+      "kod": "538200",
+      "nazov": "transakčná daň"
+    },
+    {
+      "kod": "538200/383100",
+      "nazov": "Úhrada dane z finančných transakcií"
+    },
+    {
+      "kod": "545 pokuty",
+      "nazov": "Ost.pokuty,penále"
+    },
+    {
+      "kod": "545/325200",
+      "nazov": "pokuty, penále-platba kartou"
+    },
+    {
+      "kod": "548 NN",
+      "nazov": "ostatné náklady"
+    },
+    {
+      "kod": "548 ostatné tuz-NN",
+      "nazov": "Ost.náklady na HČ-nedaňové"
+    },
+    {
+      "kod": "548/311",
+      "nazov": "548/311"
+    },
+    {
+      "kod": "548/311zahr",
+      "nazov": "odpis pohľ.zahraničnej"
+    },
+    {
+      "kod": "548/378002",
+      "nazov": "548/378002"
+    },
+    {
+      "kod": "548/3782",
+      "nazov": "548/3782"
+    },
+    {
+      "kod": "548/3783",
+      "nazov": "548/3783"
+    },
+    {
+      "kod": "548/3784",
+      "nazov": "548/3784"
+    },
+    {
+      "kod": "548/3786",
+      "nazov": "548/3786"
+    },
+    {
+      "kod": "548/3789",
+      "nazov": "548/3789"
+    },
+    {
+      "kod": "548/378999",
+      "nazov": "548/378999"
+    },
+    {
+      "kod": "548300 členské-tuz.",
+      "nazov": "Členské príspevky tuz."
+    },
+    {
+      "kod": "548300/378002",
+      "nazov": "548300/378002"
+    },
+    {
+      "kod": "548300/3781",
+      "nazov": "548300/3781"
+    },
+    {
+      "kod": "548300/3782",
+      "nazov": "548300/3782"
+    },
+    {
+      "kod": "548300/3783",
+      "nazov": "548300/3783"
+    },
+    {
+      "kod": "548300/3789",
+      "nazov": "548300/3789"
+    },
+    {
+      "kod": "548400 poist.§69",
+      "nazov": "Ostatné poist."
+    },
+    {
+      "kod": "548400/323199",
+      "nazov": "Rezerva na poistné"
+    },
+    {
+      "kod": "548500 ost.N",
+      "nazov": "Ost.náklady na HČ"
+    },
+    {
+      "kod": "548500 ostatné-tuz",
+      "nazov": "Ostatné náklady tuzemské"
+    },
+    {
+      "kod": "548900/648100",
+      "nazov": "preúčt.KS"
+    },
+    {
+      "kod": "548990/378100",
+      "nazov": "preúčt. DPH FR nad limit"
+    },
+    {
+      "kod": "548990/378300",
+      "nazov": "preúčt. DPH AT nad limit"
+    },
+    {
+      "kod": "548999 USD",
+      "nazov": "valutová pokladňa USD"
+    },
+    {
+      "kod": "548999/213100",
+      "nazov": "nespotrebované str.lístky"
+    },
+    {
+      "kod": "548999/315999",
+      "nazov": "neznáma platba"
+    },
+    {
+      "kod": "548999/321 tuz.",
+      "nazov": "Úhrada FP-dobropisu tuz."
+    },
+    {
+      "kod": "548999/325999",
+      "nazov": "nejasné platby"
+    },
+    {
+      "kod": "548999/343900",
+      "nazov": "rozdiel v DPH"
+    },
+    {
+      "kod": "548999/378999",
+      "nazov": "zúčt.škody pri sťahovaní"
+    },
+    {
+      "kod": "548999/379300",
+      "nazov": "zúčt.škody pri sťahovaní"
+    },
+    {
+      "kod": "548NN/314",
+      "nazov": "zúčt.zálohy nedaňovo"
+    },
+    {
+      "kod": "548NN/379",
+      "nazov": "neznáma platba nedaňovo"
+    },
+    {
+      "kod": "549/379300",
+      "nazov": "Náhrada škody-kompenzácie"
+    },
+    {
+      "kod": "563200 CHF",
+      "nazov": "kurzová strata CHF k 31.12."
+    },
+    {
+      "kod": "563200 CZK",
+      "nazov": "kurzová strata CZK k 31.12."
+    },
+    {
+      "kod": "563200 HUF",
+      "nazov": "kurzová strata HUF k 31.12."
+    },
+    {
+      "kod": "563200 USD",
+      "nazov": "kurzová strata USD k 31.12."
+    },
+    {
+      "kod": "5P",
+      "nazov": "Úhrada zálohovej faktúry"
+    },
+    {
+      "kod": "5V",
+      "nazov": "Nákup ostatných služieb"
+    },
+    {
+      "kod": "5ZV",
+      "nazov": "Výnosy zo zákazkovej výroby"
+    },
+    {
+      "kod": "602100 sťah.-zahr.",
+      "nazov": "sťahovanie-zahr."
+    },
+    {
+      "kod": "602100 sťahov.-tuz.",
+      "nazov": "sťahovanie-tuz."
+    },
+    {
+      "kod": "602100/315100",
+      "nazov": "zúčt.prechodných položiek"
+    },
+    {
+      "kod": "602200 sklad s DPH",
+      "nazov": "skladovanie-zahr.s DPH"
+    },
+    {
+      "kod": "602200 sklad.-tuz.",
+      "nazov": "skladovanie-tuz."
+    },
+    {
+      "kod": "602200 sklad.-zahr.",
+      "nazov": "skladovanie-zahr."
+    },
+    {
+      "kod": "602400 sťaho - zahr",
+      "nazov": "sťahovanie-zahr s DPH"
+    },
+    {
+      "kod": "663200 CHF",
+      "nazov": "kurzový zisk CHF k 31.12."
+    },
+    {
+      "kod": "663200 CZK",
+      "nazov": "kurzový zisk CZK k 31.12."
+    },
+    {
+      "kod": "6N",
+      "nazov": "Výnosy z predaja nehnuteľnosti"
+    },
+    {
+      "kod": "7",
+      "nazov": "Zrážky zo mzdy spoločníka"
+    },
+    {
+      "kod": "7OpP",
+      "nazov": "Zúčtovanie zákonnej OP k pohľadávkam"
+    },
+    {
+      "kod": "7V",
+      "nazov": "Nákup cenín"
+    },
+    {
+      "kod": "8",
+      "nazov": "Hrubá mzda spoločníka"
+    },
+    {
+      "kod": "8OpP",
+      "nazov": "Zúčtovanie účtovnej OP k pohľadávkam"
+    },
+    {
+      "kod": "8V",
+      "nazov": "Odvod dane z príjmov zo závislej činnosti"
+    },
+    {
+      "kod": "8V",
+      "nazov": "Poskytnutá záloha"
+    },
+    {
+      "kod": "9",
+      "nazov": "Sociálne a zdravotné poistenie (spoločník)"
+    },
+    {
+      "kod": "9Int",
+      "nazov": "Vymeranie DPH k prijatej zálohe"
+    },
+    {
+      "kod": "9IntOP",
+      "nazov": "Zápočet ostatnej pohľadávky"
+    },
+    {
+      "kod": "9IntOZ",
+      "nazov": "Zápočet ostatného záväzku"
+    },
+    {
+      "kod": "9IntPZ",
+      "nazov": "Zápočet prijatej zálohovej faktúry"
+    },
+    {
+      "kod": "9IntVZ",
+      "nazov": "Zápočet vydanej zálohovej faktúry"
+    },
+    {
+      "kod": "9V",
+      "nazov": "Úhrada mzdy zamestnanca"
+    },
+    {
+      "kod": "? neznáma platba",
+      "nazov": "neznáma platba"
+    },
+    {
+      "kod": "BEZ311100",
+      "nazov": "odberatelia"
+    },
+    {
+      "kod": "BEZ311200",
+      "nazov": "odberatelia"
+    },
+    {
+      "kod": "BEZ315999",
+      "nazov": "Úhrada preplatku"
+    },
+    {
+      "kod": "BEZ321100",
+      "nazov": "dodavatelia"
+    },
+    {
+      "kod": "BEZ321200",
+      "nazov": "dodavatelia"
+    },
+    {
+      "kod": "BEZ325999",
+      "nazov": "Úhrada preplatku"
+    },
+    {
+      "kod": "BEZ331000",
+      "nazov": "Úhrada mzdy zamestnanca"
+    },
+    {
+      "kod": "BEZ333000",
+      "nazov": "Doplatok (záväzok) zamestnanec"
+    },
+    {
+      "kod": "BEZ333100",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ336100",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ336200",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ336300",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ341200",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ342100",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ343900",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ343900a",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ345100",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ345200",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ355100",
+      "nazov": "Ostatné pohľadávky voči spoločníkom a členom"
+    },
+    {
+      "kod": "BEZ366000",
+      "nazov": "Úhrada mzdy spoločníka"
+    },
+    {
+      "kod": "BEZ379020",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ379100",
+      "nazov": "Údajová uzávierka"
+    },
+    {
+      "kod": "BEZ531100",
+      "nazov": "Daň z mot. vozidiel"
+    },
+    {
+      "kod": "BP",
+      "nazov": "Bankové poplatky EUR"
+    },
+    {
+      "kod": "BP US",
+      "nazov": "Bankové poplatky USD"
+    },
+    {
+      "kod": "Baliaci mat. tuz.",
+      "nazov": "Baliaci mat."
+    },
+    {
+      "kod": "Baliaci mat.-zahr.",
+      "nazov": "Baliaci mat.-zahr."
+    },
+    {
+      "kod": "Bankové poplatky EU",
+      "nazov": "Bankové poplatky EUR"
+    },
+    {
+      "kod": "Bankové poplatky US",
+      "nazov": "Bankové poplatky USB"
+    },
+    {
+      "kod": "Bez",
+      "nazov": "Doklad bez zaúčtovania"
+    },
+    {
+      "kod": "CP",
+      "nazov": "CP"
+    },
+    {
+      "kod": "CP-zo zálohy",
+      "nazov": "CP-zo zálohy"
+    },
+    {
+      "kod": "CPpohľ",
+      "nazov": "CP pohľ"
+    },
+    {
+      "kod": "DDHMo",
+      "nazov": "Odpisy DDHM"
+    },
+    {
+      "kod": "DDHMvyr",
+      "nazov": "Vyradenie DDHM"
+    },
+    {
+      "kod": "DDNMo",
+      "nazov": "Odpisy DDNM"
+    },
+    {
+      "kod": "DDNMvyr",
+      "nazov": "Vyradenie DDNM"
+    },
+    {
+      "kod": "DDS",
+      "nazov": "úhr.DDS"
+    },
+    {
+      "kod": "DDS zam.",
+      "nazov": "DDS zam."
+    },
+    {
+      "kod": "DHM DDnadEU",
+      "nazov": "DHM do 1700 € zahr. DDnadEU"
+    },
+    {
+      "kod": "DHM do 1700 €",
+      "nazov": "DHM do 1700 € tuz."
+    },
+    {
+      "kod": "DHM tuz.neplatca",
+      "nazov": "DHM do 1700 € tuz. neplatca"
+    },
+    {
+      "kod": "DPH",
+      "nazov": "Odvod DPH finančnému úradu"
+    },
+    {
+      "kod": "DPH",
+      "nazov": "Príjem nadmerného odpočtu DPH"
+    },
+    {
+      "kod": "DPH AT",
+      "nazov": "DPH neuplatnená AT"
+    },
+    {
+      "kod": "DPH AT",
+      "nazov": "Neuplatnená DPH AT"
+    },
+    {
+      "kod": "DPH AT neupl.",
+      "nazov": "preúčt. DPH AT"
+    },
+    {
+      "kod": "DPH CZ",
+      "nazov": "DPH neuplatnená CZ"
+    },
+    {
+      "kod": "DPH CZ neupl.",
+      "nazov": "preúčt. DPH CZ"
+    },
+    {
+      "kod": "DPH DE",
+      "nazov": "DPH neuplatnená DE"
+    },
+    {
+      "kod": "DPH ES",
+      "nazov": "DPH neuplatnená ES"
+    },
+    {
+      "kod": "DPH FR",
+      "nazov": "DPH neuplatnená FR"
+    },
+    {
+      "kod": "DPH FR neupl.",
+      "nazov": "preúčt. DPH Francúzsko"
+    },
+    {
+      "kod": "DPH GB",
+      "nazov": "DPH neuplatnená GB"
+    },
+    {
+      "kod": "DPH GB neupl.",
+      "nazov": "preúčt. DPH GB"
+    },
+    {
+      "kod": "DPH HR",
+      "nazov": "DPH neuplatnená Chorvátsko"
+    },
+    {
+      "kod": "DPH HR neupl.",
+      "nazov": "preúčt. DPH Chorvátsko"
+    },
+    {
+      "kod": "DPH IT",
+      "nazov": "DPH neuplatnená Taliansko"
+    },
+    {
+      "kod": "DPH IT neupl.",
+      "nazov": "preúčt. DPH Taliansko"
+    },
+    {
+      "kod": "DPH Japan",
+      "nazov": "DPH neuplatnená Japonsko"
+    },
+    {
+      "kod": "DPH LT",
+      "nazov": "DPH neuplatnená LT"
+    },
+    {
+      "kod": "DPH LT neupl.",
+      "nazov": "preúčt. DPH LT"
+    },
+    {
+      "kod": "DPH NO",
+      "nazov": "Príjem nadmerného odpočtu DPH"
+    },
+    {
+      "kod": "DPH PL",
+      "nazov": "DPH neuplatnená PL"
+    },
+    {
+      "kod": "DPH PL nad limit",
+      "nazov": "preúčt. DPH PL nad limit"
+    },
+    {
+      "kod": "DPH PL neupl.",
+      "nazov": "preúčt. DPH PL"
+    },
+    {
+      "kod": "DPH RO",
+      "nazov": "DPH neuplatnená RO-Rumunsko"
+    },
+    {
+      "kod": "DPH RO neupl.",
+      "nazov": "preúčt. DPH Rumunsko"
+    },
+    {
+      "kod": "DPH SL",
+      "nazov": "DPH neuplatnená Slovinsko"
+    },
+    {
+      "kod": "DPH SL neupl.",
+      "nazov": "preúčt. DPH Slovinsko"
+    },
+    {
+      "kod": "DPH k zál. 324",
+      "nazov": "Vymeranie DPH k prijatej zálohe"
+    },
+    {
+      "kod": "DPH k zálohe",
+      "nazov": "Vymeranie DPH k prijatej zálohe"
+    },
+    {
+      "kod": "DPH k zálohe zahr.",
+      "nazov": "Vymeranie DPH k prijatej zálohe zahr."
+    },
+    {
+      "kod": "DPH zahr. neupl.",
+      "nazov": "preúčt. DPH zahraničná"
+    },
+    {
+      "kod": "Dary",
+      "nazov": "Dary"
+    },
+    {
+      "kod": "Daň z PPO",
+      "nazov": "Daň z príjmov PO"
+    },
+    {
+      "kod": "Daň z príjmov",
+      "nazov": "Daň z príjmov"
+    },
+    {
+      "kod": "Daň z príjmov PO",
+      "nazov": "Daň z príjmov PO"
+    },
+    {
+      "kod": "Daň z príjmov dodat",
+      "nazov": "Daň z príjmov PO dodatočná"
+    },
+    {
+      "kod": "Daň z príjmov-predd",
+      "nazov": "Daň z príjmov PO-preddavok"
+    },
+    {
+      "kod": "Dotácia",
+      "nazov": "Dotácia pokladne"
+    },
+    {
+      "kod": "DrHM Alza DDsluz",
+      "nazov": "DHM do 1700 € ALZA tuz.samozd."
+    },
+    {
+      "kod": "DrHM prenos DP",
+      "nazov": "DHM do 1700 € prenos DP"
+    },
+    {
+      "kod": "DzMV",
+      "nazov": "Daň z mot. vozidiel"
+    },
+    {
+      "kod": "DzP FO ZČ",
+      "nazov": "DzP FO ZČ"
+    },
+    {
+      "kod": "DzPPO",
+      "nazov": "Daň z príjmov PO"
+    },
+    {
+      "kod": "FinCinLs",
+      "nazov": "Finančná činnosť z leasingu"
+    },
+    {
+      "kod": "HMvyr",
+      "nazov": "Vyradenie HM"
+    },
+    {
+      "kod": "Iné pohľadávky-zahr",
+      "nazov": "Iné pohľadávky-zahr.dod."
+    },
+    {
+      "kod": "Iné záväzky",
+      "nazov": "Iné záväzky"
+    },
+    {
+      "kod": "Istina",
+      "nazov": "Istina"
+    },
+    {
+      "kod": "KR 321200",
+      "nazov": "KR dodávatelia k 31.12."
+    },
+    {
+      "kod": "KR prevody medzi úč",
+      "nazov": "KR prevody medzi účtami"
+    },
+    {
+      "kod": "KR zálohy",
+      "nazov": "KR zálohy"
+    },
+    {
+      "kod": "KS mat.112100 zahr",
+      "nazov": "KS mat.na sklade-zahr."
+    },
+    {
+      "kod": "KS mat.112200 tuz.",
+      "nazov": "KS mat.na sklade-tuz."
+    },
+    {
+      "kod": "Kanc.hyg.potreby",
+      "nazov": "Kanc.hyg.potreby"
+    },
+    {
+      "kod": "LM",
+      "nazov": "Daňovo uznateľné náklady"
+    },
+    {
+      "kod": "LeasSpl",
+      "nazov": "Leasingová splátka"
+    },
+    {
+      "kod": "MOBILITAS",
+      "nazov": "MOBILITAS"
+    },
+    {
+      "kod": "Mylné a neznáme pla",
+      "nazov": "Mylné a neznáme platby"
+    },
+    {
+      "kod": "Mzda",
+      "nazov": "Hrubá mzda zamestnanca"
+    },
+    {
+      "kod": "Mzda NN",
+      "nazov": "rozdiel v mzde zamestnanca"
+    },
+    {
+      "kod": "Mzdy",
+      "nazov": "Mzdy"
+    },
+    {
+      "kod": "Mzdy doúčt.rozdiel",
+      "nazov": "Mzdy doúčt.rozdiel"
+    },
+    {
+      "kod": "NBO",
+      "nazov": "NBO"
+    },
+    {
+      "kod": "NBO zahr.",
+      "nazov": "NBO zahr."
+    },
+    {
+      "kod": "NBO-nájomné",
+      "nazov": "NBO-nájomné"
+    },
+    {
+      "kod": "NBO-parkovné",
+      "nazov": "NBO-parkovné"
+    },
+    {
+      "kod": "NBO-preprava",
+      "nazov": "NBO-preprava"
+    },
+    {
+      "kod": "NBO-sťahovanie",
+      "nazov": "NBO-sťahovanie"
+    },
+    {
+      "kod": "NEdanova rezerva",
+      "nazov": "tvorba rezervy nedanova"
+    },
+    {
+      "kod": "NMvyr",
+      "nazov": "Vyradenie NM"
+    },
+    {
+      "kod": "Nadspotreba PHM",
+      "nazov": "Nadspotreba PHM"
+    },
+    {
+      "kod": "Nedaňové služby",
+      "nazov": "Nedaňové služby"
+    },
+    {
+      "kod": "Nedaňové služby z",
+      "nazov": "Nedaňové služby zahr."
+    },
+    {
+      "kod": "Nerozdel.zisk 2020",
+      "nazov": "Nerozdelený zisk 2020"
+    },
+    {
+      "kod": "Nerozdel.zisk 2021",
+      "nazov": "Nerozdelený zisk 2021"
+    },
+    {
+      "kod": "Nerozdel.zisk 2022",
+      "nazov": "Nerozdelený zisk 2022"
+    },
+    {
+      "kod": "Nerozdel.zisk 2023",
+      "nazov": "Nerozdelený zisk 2023"
+    },
+    {
+      "kod": "Nerozdel.zisk 2024",
+      "nazov": "Nerozdelený zisk 2024"
+    },
+    {
+      "kod": "Nerozdelený zisk",
+      "nazov": "Nerozdelený zisk"
+    },
+    {
+      "kod": "Nerozedelný zisk 19",
+      "nazov": "Nerozdelený zisk 2019"
+    },
+    {
+      "kod": "Neuhr.strata 2018",
+      "nazov": "Neuhr.strata 2018"
+    },
+    {
+      "kod": "Neviem",
+      "nazov": "Neviem, zaúčtuje sa neskôr"
+    },
+    {
+      "kod": "Nájom-tuz.",
+      "nazov": "Nájomné-tuz."
+    },
+    {
+      "kod": "Nájomné",
+      "nazov": "Nájomné"
+    },
+    {
+      "kod": "Opravy a udržiavani",
+      "nazov": "Opravy a udržiavanie"
+    },
+    {
+      "kod": "Ost.dane a popl",
+      "nazov": "Koncesionársky poplatok"
+    },
+    {
+      "kod": "Ost.fin.výnosy",
+      "nazov": "Ost.fin.výnosy"
+    },
+    {
+      "kod": "Ost.pokuty a penále",
+      "nazov": "Ost.pokuty a penále a úrok z om."
+    },
+    {
+      "kod": "Ost.služby",
+      "nazov": "Nákup ostatných služieb"
+    },
+    {
+      "kod": "Ost.služby nedaň",
+      "nazov": "Nákup ostatných služieb"
+    },
+    {
+      "kod": "Ost.služby zahr.",
+      "nazov": "Ost.služby zahr."
+    },
+    {
+      "kod": "Ostatné dane a popl",
+      "nazov": "Ostatné dane a poplatky"
+    },
+    {
+      "kod": "Ostatné zahr.",
+      "nazov": "Ostatné zahr."
+    },
+    {
+      "kod": "Ostatné zahr.-nedaň",
+      "nazov": "Ostatné zahr.-nedaňové"
+    },
+    {
+      "kod": "PC",
+      "nazov": "Úhrada cestovných nákladov"
+    },
+    {
+      "kod": "PHM",
+      "nazov": "PHM"
+    },
+    {
+      "kod": "PHM vrátane DPH",
+      "nazov": "PHM zahr. vrátane DPH"
+    },
+    {
+      "kod": "PK",
+      "nazov": "PK-úhrada"
+    },
+    {
+      "kod": "PK - DPH AT",
+      "nazov": "ostatné služby-DPH AT"
+    },
+    {
+      "kod": "PK - DPH LT",
+      "nazov": "DPH Litva"
+    },
+    {
+      "kod": "PK - DPH zahr.",
+      "nazov": "ostatné služby-DPH zahraničie"
+    },
+    {
+      "kod": "PK 518 NN",
+      "nazov": "nedaňové služby-platba kartou"
+    },
+    {
+      "kod": "PK cestovné",
+      "nazov": "cestovné-platba kartou"
+    },
+    {
+      "kod": "PK kanc.+hyg.pot.",
+      "nazov": "kancel.a hyg.potr.-platba kartou"
+    },
+    {
+      "kod": "PK ost.dane a popl.",
+      "nazov": "Ostatné dane a popl.-platba kartou"
+    },
+    {
+      "kod": "PK ost.sl.",
+      "nazov": "ostatné služby-platba kartou"
+    },
+    {
+      "kod": "PK ost.sl. DPH FR",
+      "nazov": "ostatné služby-DPH FR"
+    },
+    {
+      "kod": "PK ost.sl. bez DPH",
+      "nazov": "ostatné služby-platba kartou bez DPH"
+    },
+    {
+      "kod": "PK parkovné",
+      "nazov": "parkovné-platba kartou"
+    },
+    {
+      "kod": "PK poštovné",
+      "nazov": "poštovné-platba kartou"
+    },
+    {
+      "kod": "PK prac.obleč.",
+      "nazov": "prac.oblečenie-platba kartou"
+    },
+    {
+      "kod": "PK repre",
+      "nazov": "repre-platba kartou"
+    },
+    {
+      "kod": "PK respirátor",
+      "nazov": "respirátor-platba kartou"
+    },
+    {
+      "kod": "PK sp.mat.NN",
+      "nazov": "spot.mat.nedaňová-platba kartou"
+    },
+    {
+      "kod": "PK spot.mat.",
+      "nazov": "spot.mat.-platba kartou"
+    },
+    {
+      "kod": "PK spot.mat.zahr.",
+      "nazov": "spot.mat.zahr.-platba kartou"
+    },
+    {
+      "kod": "PK-DPH AT",
+      "nazov": "PK-DPH AT"
+    },
+    {
+      "kod": "PK-PHM",
+      "nazov": "PK-PHM"
+    },
+    {
+      "kod": "PK-kanc.potreby",
+      "nazov": "PK-kanc.potreby"
+    },
+    {
+      "kod": "PK-ost.sl.-umytie",
+      "nazov": "PK-umytie auta"
+    },
+    {
+      "kod": "PK-ost.služby",
+      "nazov": "PK-ost.služby"
+    },
+    {
+      "kod": "PK-ost.služby NN",
+      "nazov": "PK-ost.služby nedaňové"
+    },
+    {
+      "kod": "PK-parkkovné",
+      "nazov": "PK-parkovné"
+    },
+    {
+      "kod": "PK-poštovné",
+      "nazov": "PK-poštovné"
+    },
+    {
+      "kod": "PK-prepravné",
+      "nazov": "PK-prepravné"
+    },
+    {
+      "kod": "PK-repre",
+      "nazov": "PK-repre"
+    },
+    {
+      "kod": "PK-spot.mat.",
+      "nazov": "PK-spot.mat."
+    },
+    {
+      "kod": "PK-úhrada",
+      "nazov": "PK-úhrada"
+    },
+    {
+      "kod": "POKUTY",
+      "nazov": "POKUTY"
+    },
+    {
+      "kod": "Prechodná položka",
+      "nazov": "Prechodná položka"
+    },
+    {
+      "kod": "Predaj majetku",
+      "nazov": "PRedaj majetku"
+    },
+    {
+      "kod": "Prenájom",
+      "nazov": "Prenájom"
+    },
+    {
+      "kod": "Preplatok",
+      "nazov": "Preplatok"
+    },
+    {
+      "kod": "Prevod na EUR",
+      "nazov": "Prevod na EUR"
+    },
+    {
+      "kod": "Prevod na USD",
+      "nazov": "Prevod na USD"
+    },
+    {
+      "kod": "Prevod z EUR",
+      "nazov": "Prevod z EUR"
+    },
+    {
+      "kod": "Prevod z pokladne n",
+      "nazov": "Prevod z pokladne na účet"
+    },
+    {
+      "kod": "Preúčt.náklady",
+      "nazov": "Preúčt.náklady na NBO"
+    },
+    {
+      "kod": "Preúčt.náklady n",
+      "nazov": "Preúčt.náklady na NBO"
+    },
+    {
+      "kod": "Preúčt.náklady na",
+      "nazov": "Preúčt.náklady na NBO"
+    },
+    {
+      "kod": "Preúčt.náklady na N",
+      "nazov": "Preúčt.náklady na NBO"
+    },
+    {
+      "kod": "Prijatá záloha",
+      "nazov": "Prijatá záloha"
+    },
+    {
+      "kod": "RZ",
+      "nazov": "RZ"
+    },
+    {
+      "kod": "Repre",
+      "nazov": "Repre"
+    },
+    {
+      "kod": "Repre-zahr.DDsluz",
+      "nazov": "Repre zahr.dodávateľ"
+    },
+    {
+      "kod": "RezSzv",
+      "nazov": "Rezerva na stratu zo zákazkovej výroby"
+    },
+    {
+      "kod": "Rozp.rez.ost.dane",
+      "nazov": "Rozpust.rez.na ost.dane a popl."
+    },
+    {
+      "kod": "Rozp.rez.ost.poist",
+      "nazov": "Rozpust.rez.na ost.poistné"
+    },
+    {
+      "kod": "Rozpust.rez.-nevyče",
+      "nazov": "Rozpust.rez.-nevyčerpaná dovolenka"
+    },
+    {
+      "kod": "Rozpust.rez.-poistn",
+      "nazov": "Rozpust.rez.-poistné nevyčerpaná dovolenka"
+    },
+    {
+      "kod": "Rozpust.rez.ost.sl.",
+      "nazov": "Rozpust.rez.na ost.služby"
+    },
+    {
+      "kod": "Rozpust.rez.poštovn",
+      "nazov": "Rozpust.rez.na poštovné"
+    },
+    {
+      "kod": "Rozpust.rez.sklad",
+      "nazov": "Rozpust.rez.na skladovanie"
+    },
+    {
+      "kod": "Rozpust.rez.účto",
+      "nazov": "Rozpust.rez.na účtovníctvo"
+    },
+    {
+      "kod": "Ručne",
+      "nazov": "Zaúčtovanie sa prevedie ručne"
+    },
+    {
+      "kod": "SF",
+      "nazov": "Sociálny fond - zaúčtovanie prídelu"
+    },
+    {
+      "kod": "SF príspevok SL",
+      "nazov": "SF príspevok SL"
+    },
+    {
+      "kod": "SL org.",
+      "nazov": "SL org."
+    },
+    {
+      "kod": "SL príspevok nad rá",
+      "nazov": "Príspevo nad Rámec SL"
+    },
+    {
+      "kod": "SL zam.",
+      "nazov": "SL zam."
+    },
+    {
+      "kod": "SL zam.-rozdiel zrá",
+      "nazov": "SL zam.-rozdiel zrážka zo mzdy"
+    },
+    {
+      "kod": "SL zam.2",
+      "nazov": "SL zam."
+    },
+    {
+      "kod": "SL zam.2rozdiel",
+      "nazov": "SL zam.rozdiel"
+    },
+    {
+      "kod": "SP",
+      "nazov": "Úhrada poistného (mzdy)"
+    },
+    {
+      "kod": "SP org.",
+      "nazov": "Sociálne poistenie (firma)"
+    },
+    {
+      "kod": "SP zam.",
+      "nazov": "Sociálne poistnie (zamestnanec)"
+    },
+    {
+      "kod": "Spot.mat.",
+      "nazov": "Spot.mat."
+    },
+    {
+      "kod": "Stravné lístky",
+      "nazov": "Stravné lístky"
+    },
+    {
+      "kod": "Tel.internet",
+      "nazov": "Telefon, internet"
+    },
+    {
+      "kod": "Tržby z mat.",
+      "nazov": "Tržby z mat."
+    },
+    {
+      "kod": "Ubytovanie",
+      "nazov": "Ubytovanie"
+    },
+    {
+      "kod": "VBO",
+      "nazov": "VBO"
+    },
+    {
+      "kod": "VBO-sťahovanie",
+      "nazov": "Čas. rozlíšenie služieb – výnosy bud.období"
+    },
+    {
+      "kod": "VFA.",
+      "nazov": "Úhrada faktúry."
+    },
+    {
+      "kod": "ZP",
+      "nazov": "Úhrada poistného (mzdy)"
+    },
+    {
+      "kod": "ZP NN",
+      "nazov": "rozdiel v zdrav.poistení zam."
+    },
+    {
+      "kod": "ZP org.",
+      "nazov": "Zdravotné poistenie (firma)"
+    },
+    {
+      "kod": "ZP zam.",
+      "nazov": "Zdravotné poistnie (zamestnanec)"
+    },
+    {
+      "kod": "ZZv",
+      "nazov": "Rozdiel medzi nár. plnením a hodnotou zákazky"
+    },
+    {
+      "kod": "Zmluvné pokuty",
+      "nazov": "Zmluvné pokuty"
+    },
+    {
+      "kod": "ZnizSzv",
+      "nazov": "Zníženie straty zo zákazkovej výroby"
+    },
+    {
+      "kod": "Zostatok PHM k 31.1",
+      "nazov": "Zostatok PHM k 31.12."
+    },
+    {
+      "kod": "Zostatok PHM z min.",
+      "nazov": "Zostatok PHM z min.roku"
+    },
+    {
+      "kod": "Zrážky zo mzdy-exek",
+      "nazov": "Zrážky zo mzdy-exekúcie"
+    },
+    {
+      "kod": "ZálLeas",
+      "nazov": "Zálohy z leasingu"
+    },
+    {
+      "kod": "Záloha",
+      "nazov": "Odpočet zálohy"
+    },
+    {
+      "kod": "Záloha zahr.",
+      "nazov": "Odpočet zálohy-zahr."
+    },
+    {
+      "kod": "Záloha-ost.záväzky",
+      "nazov": "Záloha-ost.záväzky"
+    },
+    {
+      "kod": "Zápočet 361/378",
+      "nazov": "Vzájomný zápočet záv.a pohľ.Mobilitas"
+    },
+    {
+      "kod": "Zúčt.platby 335100",
+      "nazov": "Zúčt.platby-chýba doklad"
+    },
+    {
+      "kod": "Zúčt.platby kartou-",
+      "nazov": "Zúčt.platby kartou-chýba doklad"
+    },
+    {
+      "kod": "aInt",
+      "nazov": "Samovymeranie DPH pri nadobudnutí z EU"
+    },
+    {
+      "kod": "bInt",
+      "nazov": "Odpočítanie DPH pri nadobudnutí z EU"
+    },
+    {
+      "kod": "bInt NN",
+      "nazov": "Ne-odpočítanie DPH pri nadobudnutí z EU"
+    },
+    {
+      "kod": "bank.popl",
+      "nazov": "poplatok bankový"
+    },
+    {
+      "kod": "cInt",
+      "nazov": "Uhradená záloha - daňový doklad"
+    },
+    {
+      "kod": "cestovné",
+      "nazov": "cestovné náhrady"
+    },
+    {
+      "kod": "cestovné zahr.",
+      "nazov": "cestovné zahr."
+    },
+    {
+      "kod": "clenie-zahr.",
+      "nazov": "clenie-zahr."
+    },
+    {
+      "kod": "colné sl.-zahr.D§69",
+      "nazov": "colné služby zahr. DDsl§69"
+    },
+    {
+      "kod": "colné sl.zahr.D§69",
+      "nazov": "colné služby zahr."
+    },
+    {
+      "kod": "colné slu-zahr.D§69",
+      "nazov": "colné služby-zahr.DDsl§69"
+    },
+    {
+      "kod": "colné služ.-tuz.",
+      "nazov": "colné služby tuz."
+    },
+    {
+      "kod": "cp10Int",
+      "nazov": "Náhrada za vozidlo spoločník"
+    },
+    {
+      "kod": "cp11Int",
+      "nazov": "Stravné (do limitu) spoločník"
+    },
+    {
+      "kod": "cp12Int",
+      "nazov": "Stravné (nad limit) spoločník"
+    },
+    {
+      "kod": "cp13Int",
+      "nazov": "Ubytovanie spoločník"
+    },
+    {
+      "kod": "cp14Int",
+      "nazov": "Dopravné spoločník"
+    },
+    {
+      "kod": "cp15Int",
+      "nazov": "Vedľajšie výdavky (uzn.) spoločník"
+    },
+    {
+      "kod": "cp16Int",
+      "nazov": "Vedľajšie výdavky (neuzn.) spoločník"
+    },
+    {
+      "kod": "cp17Int",
+      "nazov": "Zaokrúhlenie náklady"
+    },
+    {
+      "kod": "cp18Int",
+      "nazov": "Zaokrúhlenie výnosy"
+    },
+    {
+      "kod": "cp19Int",
+      "nazov": "Zaokrúhlenie náklady"
+    },
+    {
+      "kod": "cp1Int",
+      "nazov": "Zaúčtovanie zálohy zamestnancovi"
+    },
+    {
+      "kod": "cp1Pp",
+      "nazov": "Preplatok zamestnanec"
+    },
+    {
+      "kod": "cp1Pv",
+      "nazov": "Výplata zálohy zamestnancovi"
+    },
+    {
+      "kod": "cp20Int",
+      "nazov": "Zaokrúhlenie výnosy"
+    },
+    {
+      "kod": "cp2Int",
+      "nazov": "Náhrada za vozidlo zamestnanec"
+    },
+    {
+      "kod": "cp2Pp",
+      "nazov": "Preplatok spoločník"
+    },
+    {
+      "kod": "cp2Pv",
+      "nazov": "Doplatok (v hotovosti) zamestnanec"
+    },
+    {
+      "kod": "cp3Int",
+      "nazov": "Stravné (do limitu) zamestnanec"
+    },
+    {
+      "kod": "cp3Pv",
+      "nazov": "Výplata zálohy spoločníkovi"
+    },
+    {
+      "kod": "cp4Int",
+      "nazov": "Stravné (nad limit) zamestnanec"
+    },
+    {
+      "kod": "cp4Pv",
+      "nazov": "Doplatok (v hotovosti) spoločník"
+    },
+    {
+      "kod": "cp5Int",
+      "nazov": "Ubytovanie zamestnanec"
+    },
+    {
+      "kod": "cp6Int",
+      "nazov": "Dopravné zamestnanec"
+    },
+    {
+      "kod": "cp7Int",
+      "nazov": "Vedľajšie výdavky (uzn.) zamestnanec"
+    },
+    {
+      "kod": "cp8Int",
+      "nazov": "Vedľajšie výdavky (neuzn.) zamestnanec"
+    },
+    {
+      "kod": "cp9Int",
+      "nazov": "Zaúčtovanie zálohy spoločníkovi"
+    },
+    {
+      "kod": "cv",
+      "nazov": "Centové vyrovnanie"
+    },
+    {
+      "kod": "cv",
+      "nazov": "centové vyrovnanie tuz."
+    },
+    {
+      "kod": "cv",
+      "nazov": "zaokrúhlenie zo zákona"
+    },
+    {
+      "kod": "cv z",
+      "nazov": "centové vyrovnanie zahr."
+    },
+    {
+      "kod": "dar",
+      "nazov": "dar"
+    },
+    {
+      "kod": "daň z MV",
+      "nazov": "daň z MV"
+    },
+    {
+      "kod": "daň z MV-úhrada",
+      "nazov": "daň z MV-úhrada"
+    },
+    {
+      "kod": "daň z príjmov záv.",
+      "nazov": "Odvod dane z príjmov zo závislej činnosti"
+    },
+    {
+      "kod": "daň z úrokov",
+      "nazov": "daň z úrokov"
+    },
+    {
+      "kod": "destin.s-vrátaneDPH",
+      "nazov": "destination service"
+    },
+    {
+      "kod": "destin.s.-neplatca",
+      "nazov": "destination service neplatca"
+    },
+    {
+      "kod": "destin.s.-tuz.",
+      "nazov": "destination service tuzemsko"
+    },
+    {
+      "kod": "destin.ser.mimo EU",
+      "nazov": "destination service mimo EU"
+    },
+    {
+      "kod": "destinat.ser. D§69",
+      "nazov": "destination service DDsl§69"
+    },
+    {
+      "kod": "dfa uhrada",
+      "nazov": "Úhrada faktúry"
+    },
+    {
+      "kod": "dfa uhrada zahr",
+      "nazov": "Úhrada faktúry"
+    },
+    {
+      "kod": "dobropis VFA",
+      "nazov": "dobropis VFA"
+    },
+    {
+      "kod": "dobropis VFA zahr.",
+      "nazov": "dobropis VFA zahr."
+    },
+    {
+      "kod": "dobropis tuzemsko",
+      "nazov": "dobropis tuzemsko"
+    },
+    {
+      "kod": "dobropis zahr.",
+      "nazov": "dobropis zahraničie"
+    },
+    {
+      "kod": "dotácia zo ŠR",
+      "nazov": "dotácia zo ŠR"
+    },
+    {
+      "kod": "dotácie pokladne",
+      "nazov": "Výber hotovosti z BÚ do pokladne"
+    },
+    {
+      "kod": "energie",
+      "nazov": "Spotreba energie"
+    },
+    {
+      "kod": "exekucie",
+      "nazov": "exekucie"
+    },
+    {
+      "kod": "exekúcie",
+      "nazov": "exekúcie"
+    },
+    {
+      "kod": "hyg.potr.-tuz.",
+      "nazov": "čistiace a hyg.poreby-tuz."
+    },
+    {
+      "kod": "inkaso VFA",
+      "nazov": "Úhrada zálohovej faktúry"
+    },
+    {
+      "kod": "inkaso VFA zahr.",
+      "nazov": "Úhrada zálohovej faktúry"
+    },
+    {
+      "kod": "inv.rozdiel str.lís",
+      "nazov": "inv.rozdiel str.lístky"
+    },
+    {
+      "kod": "kBp",
+      "nazov": "Uzávierka kurzových rozdielov - kurzový zisk"
+    },
+    {
+      "kod": "kBv",
+      "nazov": "Uzávierka kurzových rozdielov - kurzová strata"
+    },
+    {
+      "kod": "kOPp",
+      "nazov": "Uzávierka kurz. rozdielov - kurzový zisk OP"
+    },
+    {
+      "kod": "kOPv",
+      "nazov": "Uzávierka kurz. rozdielov - kurzová strata OP"
+    },
+    {
+      "kod": "kPp",
+      "nazov": "Uzávierka kurzových rozdielov - kurzový zisk"
+    },
+    {
+      "kod": "kPv",
+      "nazov": "Uzávierka kurzových rozdielov - kurzová strata"
+    },
+    {
+      "kod": "kancel.Alza DDsluz",
+      "nazov": "kanc.a hyg.m. ALZA tuz.samozd."
+    },
+    {
+      "kod": "kancel.p.-tuz.",
+      "nazov": "Kancel.potreby-tuz."
+    },
+    {
+      "kod": "kancel.p.-zahr.",
+      "nazov": "Kancel.potreby-zahr."
+    },
+    {
+      "kod": "kompenzácia",
+      "nazov": "kompenzácia"
+    },
+    {
+      "kod": "krycí list",
+      "nazov": "krycí list"
+    },
+    {
+      "kod": "kurz.zisk EUR",
+      "nazov": "kurzový zisk v EUR pokladni"
+    },
+    {
+      "kod": "kurzová strata",
+      "nazov": "Kurzová strata"
+    },
+    {
+      "kod": "mBp",
+      "nazov": "Drobný preplatok"
+    },
+    {
+      "kod": "mBv",
+      "nazov": "Drobný preplatok"
+    },
+    {
+      "kod": "majetok",
+      "nazov": "obstaranie maj."
+    },
+    {
+      "kod": "mylná platba-",
+      "nazov": "mylná platba"
+    },
+    {
+      "kod": "mylné a neznáme pl",
+      "nazov": "mylné a neznáme platby EUR"
+    },
+    {
+      "kod": "mylné a neznáme pla",
+      "nazov": "mylné a neznáme platby USD"
+    },
+    {
+      "kod": "mzdy",
+      "nazov": "Úhrada mzdy zamestnanca"
+    },
+    {
+      "kod": "mzdy vratka",
+      "nazov": "vratka mzdy"
+    },
+    {
+      "kod": "nadspotreba",
+      "nazov": "nadspotreba"
+    },
+    {
+      "kod": "narovnanie 321",
+      "nazov": "narovnanie KS 321"
+    },
+    {
+      "kod": "nedaňové",
+      "nazov": "nedaňové"
+    },
+    {
+      "kod": "nedaňové",
+      "nazov": "Čas. rozlíšenie služieb – náklady bud.období"
+    },
+    {
+      "kod": "nedoplatok",
+      "nazov": "nedoplatok"
+    },
+    {
+      "kod": "nevyf.účt.",
+      "nazov": "nevyf.účt.-tel."
+    },
+    {
+      "kod": "nevyfa-sťahovanie",
+      "nazov": "nevyfa-sťahovanie"
+    },
+    {
+      "kod": "neznáma platba",
+      "nazov": "neznáma platba"
+    },
+    {
+      "kod": "neznáma platba USD",
+      "nazov": "neznáma platba USD"
+    },
+    {
+      "kod": "neznáma platba-USD",
+      "nazov": "neznáma platba-USD"
+    },
+    {
+      "kod": "nájomné",
+      "nazov": "Čas. rozlíšenie služieb – nájomné"
+    },
+    {
+      "kod": "nárok na vr.popl.",
+      "nazov": "nárok na vrátenie poplatku"
+    },
+    {
+      "kod": "obst.majetku",
+      "nazov": "obst.majetku"
+    },
+    {
+      "kod": "obstaranie",
+      "nazov": "obstaranie"
+    },
+    {
+      "kod": "odpis FP-tuz.",
+      "nazov": "odpis FP-tuz."
+    },
+    {
+      "kod": "odpis FP-zahr.",
+      "nazov": "odpis FP-zahr."
+    },
+    {
+      "kod": "odpis FV-tuz.",
+      "nazov": "odpis FV-tuz."
+    },
+    {
+      "kod": "odpis FV-zahr.",
+      "nazov": "odpis FV-zahr."
+    },
+    {
+      "kod": "odpočet 324 tuz.",
+      "nazov": "odpočet prijatej zálohy tuz."
+    },
+    {
+      "kod": "odpočet 324 zahr.",
+      "nazov": "odpočet prijatej zálohy zahr."
+    },
+    {
+      "kod": "odpočet 324 zdan.",
+      "nazov": "odpočet prijatej zálohy ZDANENEJ"
+    },
+    {
+      "kod": "odpočet zdan.zál.",
+      "nazov": "Odpočet zdanenej zálohy"
+    },
+    {
+      "kod": "odpustenie dlhu",
+      "nazov": "odpustenie dlhu"
+    },
+    {
+      "kod": "opr.fa",
+      "nazov": "oprava účtovania fa"
+    },
+    {
+      "kod": "opr.fa 314300",
+      "nazov": "oprava účtovania fa"
+    },
+    {
+      "kod": "oprava chýb 2019",
+      "nazov": "oprava chýb roku 2019"
+    },
+    {
+      "kod": "oprava účt.poist.",
+      "nazov": "oprava účtovania poistného"
+    },
+    {
+      "kod": "opravy a údržba",
+      "nazov": "Opravy a údržba"
+    },
+    {
+      "kod": "os.služby",
+      "nazov": "os.služby"
+    },
+    {
+      "kod": "os.služby-prech.pol",
+      "nazov": "prechodné položky-ostatné služby"
+    },
+    {
+      "kod": "ost.dane a poplatky",
+      "nazov": "ostatné dane a poplatky"
+    },
+    {
+      "kod": "ost.mat.-nedaňový-k",
+      "nazov": "ost.mat.-nedaňový-karta"
+    },
+    {
+      "kod": "ost.pohľadávky",
+      "nazov": "ostatné pohľadávky"
+    },
+    {
+      "kod": "ost.poistenie §69",
+      "nazov": "Ostatné poist."
+    },
+    {
+      "kod": "ost.sl.-tuz.DDsluz",
+      "nazov": "ost.služby-tuz. samozdaniť"
+    },
+    {
+      "kod": "ost.sl.-tuz.oslobod",
+      "nazov": "ost.služby-tuz.-oslobodené od DPH"
+    },
+    {
+      "kod": "ost.sl.Maersk DD§69",
+      "nazov": "Ost.služby Maersk DDsl§69"
+    },
+    {
+      "kod": "ost.sl.vrátane DPH",
+      "nazov": "Ost.služby-zahraničná DPH"
+    },
+    {
+      "kod": "ost.sl.zahr.oslobod",
+      "nazov": "ost.služby-zahr.oslobodené od DPH"
+    },
+    {
+      "kod": "ost.služ.zahr.D§69",
+      "nazov": "Ost.služby zahr."
+    },
+    {
+      "kod": "ost.služby",
+      "nazov": "Čas. rozlíšenie služieb – ostatné služby"
+    },
+    {
+      "kod": "ost.služby-tuz.",
+      "nazov": "ost.služby-tuz."
+    },
+    {
+      "kod": "ost.služby-tuz.nepl",
+      "nazov": "ost.služby-tuz. neplatca"
+    },
+    {
+      "kod": "ost.služby-zahr.",
+      "nazov": "ost.služby-zahr."
+    },
+    {
+      "kod": "ost.výnosy z HČ-dot",
+      "nazov": "ost.výnosy z HČ-dotácia zo ŠR"
+    },
+    {
+      "kod": "ostatné náklady",
+      "nazov": "ostatné náklady"
+    },
+    {
+      "kod": "ostatné pohľadávky",
+      "nazov": "ostatné pohľadávky"
+    },
+    {
+      "kod": "ostatné tuz-NN",
+      "nazov": "Ostatné náklady tuz.-nedaňové"
+    },
+    {
+      "kod": "ostatné záväzky",
+      "nazov": "ostatné záväzky"
+    },
+    {
+      "kod": "pBp",
+      "nazov": "Preplatok"
+    },
+    {
+      "kod": "park.-zahr.DD§69",
+      "nazov": "parkovanie-zahr. DDsl§69"
+    },
+    {
+      "kod": "parkov.-zahr.D§69",
+      "nazov": "parkovanie-zahr. DDsl§69"
+    },
+    {
+      "kod": "parkovanie",
+      "nazov": "parkovanie"
+    },
+    {
+      "kod": "parkovné tuz.",
+      "nazov": "parkovné tuz."
+    },
+    {
+      "kod": "parkovné zahr.",
+      "nazov": "parkovné zahr."
+    },
+    {
+      "kod": "parkovné zahr.",
+      "nazov": "parkovné zahraničné"
+    },
+    {
+      "kod": "pk-úhrada",
+      "nazov": "pk-úhrada"
+    },
+    {
+      "kod": "pohľ.voči spol.",
+      "nazov": "pohľ.voči spoločníkovi"
+    },
+    {
+      "kod": "pohľ.zam.",
+      "nazov": "pohľ.zam."
+    },
+    {
+      "kod": "pohľ.zamestnanec",
+      "nazov": "pohľ.voči zamestnancom"
+    },
+    {
+      "kod": "poistenie auta",
+      "nazov": "Čas. rozlíšenie služieb – poistenie auta"
+    },
+    {
+      "kod": "poistenie leasing",
+      "nazov": "poistenie vozidiel"
+    },
+    {
+      "kod": "poistenie majetku",
+      "nazov": "poistenie majetku"
+    },
+    {
+      "kod": "poistenie majetku",
+      "nazov": "Čas.rozlíš.služieb - poistenie majetku"
+    },
+    {
+      "kod": "poistenie vozidiel",
+      "nazov": "poistenie vozidiel"
+    },
+    {
+      "kod": "poistné plnenie",
+      "nazov": "poistné plnenie"
+    },
+    {
+      "kod": "pokuty",
+      "nazov": "pokuty"
+    },
+    {
+      "kod": "pokuty, penále",
+      "nazov": "pokuty, penále"
+    },
+    {
+      "kod": "poplatky zahr.",
+      "nazov": "poplatky zahr."
+    },
+    {
+      "kod": "pošta",
+      "nazov": "poštovné"
+    },
+    {
+      "kod": "poštovné/345",
+      "nazov": "poštovné pri ostatných poplatkoch"
+    },
+    {
+      "kod": "prBP",
+      "nazov": "Provízia PayU"
+    },
+    {
+      "kod": "prac.oblečenie",
+      "nazov": "Pracovné oblečenie"
+    },
+    {
+      "kod": "prac.oblečenie",
+      "nazov": "prac.oblečenie"
+    },
+    {
+      "kod": "prebytok",
+      "nazov": "prebytok"
+    },
+    {
+      "kod": "prech.položka",
+      "nazov": "Preplatok"
+    },
+    {
+      "kod": "prechodná položka",
+      "nazov": "prechodná položka"
+    },
+    {
+      "kod": "prechodné položky",
+      "nazov": "ost.pohľ.-prechodné položky"
+    },
+    {
+      "kod": "prenájom dodávky",
+      "nazov": "prenájom dodávky"
+    },
+    {
+      "kod": "preplatok",
+      "nazov": "Preplatok"
+    },
+    {
+      "kod": "prepr.-tuz.",
+      "nazov": "preprava-tuz."
+    },
+    {
+      "kod": "prepr.-tuz.neplatca",
+      "nazov": "preprava-tuz. neplatca DPH"
+    },
+    {
+      "kod": "prepr.-tuz.oslobod",
+      "nazov": "preprava-tuz.-oslobodené"
+    },
+    {
+      "kod": "prepr.-tuz.prenos P",
+      "nazov": "preprava-tuz.-prenos DP"
+    },
+    {
+      "kod": "prepr.-zahr.",
+      "nazov": "preprava-zahr."
+    },
+    {
+      "kod": "prepr.-zahr.DD§69",
+      "nazov": "preprava-zahr. DDsl§69"
+    },
+    {
+      "kod": "prepr.-zahr.DPH",
+      "nazov": "preprava-zahr.vrátane DPH"
+    },
+    {
+      "kod": "prepr.-zahr.oslobod",
+      "nazov": "preprava-zahr.-oslobodené"
+    },
+    {
+      "kod": "prepr.Maersk DD§69",
+      "nazov": "Preprava Maersk DDsl§69"
+    },
+    {
+      "kod": "prepravné",
+      "nazov": "prepravné"
+    },
+    {
+      "kod": "prevod ZS 112100",
+      "nazov": "prevod zač.stavu 112100 do spotreby"
+    },
+    {
+      "kod": "prevod ZS 112200",
+      "nazov": "prevod zač.stavu 112200 do spotreby"
+    },
+    {
+      "kod": "prevod ZS 112300",
+      "nazov": "prevod zač.stavu 112300 do spotreby"
+    },
+    {
+      "kod": "prevod na USD",
+      "nazov": "prevod na USD"
+    },
+    {
+      "kod": "preúčt.311",
+      "nazov": "preúčtovanie"
+    },
+    {
+      "kod": "preúčt.563",
+      "nazov": "preúčt.na analytiku"
+    },
+    {
+      "kod": "preúčt.663",
+      "nazov": "preúčt.na analytiku"
+    },
+    {
+      "kod": "preúčt.KS 548900",
+      "nazov": "preúčt.KS"
+    },
+    {
+      "kod": "preúčt.krátkodobá č",
+      "nazov": "preúčt.krátkodobá časť leasing"
+    },
+    {
+      "kod": "preúčt.zost.BU",
+      "nazov": "preúčt.zostatku na BU"
+    },
+    {
+      "kod": "prieb.položka",
+      "nazov": "priebežná položka"
+    },
+    {
+      "kod": "repre",
+      "nazov": "repre"
+    },
+    {
+      "kod": "rez na odmeny",
+      "nazov": "rezerva na mzdy-ODMENY"
+    },
+    {
+      "kod": "rez.-nevyč.dovol.",
+      "nazov": "rezerva na mzdy-nevyč.dovolenka"
+    },
+    {
+      "kod": "rez.-poist ODMENY",
+      "nazov": "rez.na mzdy-poist.k ODMENY"
+    },
+    {
+      "kod": "rez.-poist.k nevyč.",
+      "nazov": "rez.na mzdy-poist.k nevyč.dovolenke"
+    },
+    {
+      "kod": "rezerva",
+      "nazov": "rezerva"
+    },
+    {
+      "kod": "rezerva na účt.",
+      "nazov": "rezerva na účt."
+    },
+    {
+      "kod": "rezerva tuz.",
+      "nazov": "rezerva na faktúry tuzemsko"
+    },
+    {
+      "kod": "rezerva zah.",
+      "nazov": "rezerva na faktúry zah."
+    },
+    {
+      "kod": "rz",
+      "nazov": "RZ"
+    },
+    {
+      "kod": "sklad-zahr.s DPH",
+      "nazov": "skladovanie-zahr."
+    },
+    {
+      "kod": "sklad.-mimo EU",
+      "nazov": "skladovanie-mimo EU"
+    },
+    {
+      "kod": "sklad.-tuz.-",
+      "nazov": "skladovanie-tuz."
+    },
+    {
+      "kod": "sklad.-zahr.DD§69",
+      "nazov": "skladovanie-zahr. DDsl§69"
+    },
+    {
+      "kod": "skladné",
+      "nazov": "Čas. rozlíšenie služieb – skladovanie"
+    },
+    {
+      "kod": "skladovanie-tuz.",
+      "nazov": "skladovanie-tuz."
+    },
+    {
+      "kod": "skladovanie-zahr.",
+      "nazov": "skladovanie-zahr."
+    },
+    {
+      "kod": "sp.mat.Alza DDsluz",
+      "nazov": "spotr.mat. ALZA tuz.samozd."
+    },
+    {
+      "kod": "splátka leasing",
+      "nazov": "leasing"
+    },
+    {
+      "kod": "spot.mat. DDnadEU",
+      "nazov": "spot.mat.-zahr. DDnadEU"
+    },
+    {
+      "kod": "spot.ned",
+      "nazov": "PHM"
+    },
+    {
+      "kod": "spotr.mat. tuz.",
+      "nazov": "spotr.mat.-tuz."
+    },
+    {
+      "kod": "spotr.mat.-DDsluz",
+      "nazov": "spot.mat.-zahr.DDsluž."
+    },
+    {
+      "kod": "spotreba - zam.",
+      "nazov": "spotreba hradená zamest."
+    },
+    {
+      "kod": "storno letenky",
+      "nazov": "storno letenky"
+    },
+    {
+      "kod": "sťahovanie zahr.",
+      "nazov": "sťahovanie zahr."
+    },
+    {
+      "kod": "sťahovanie-tuz.",
+      "nazov": "sťahovanie-tuz."
+    },
+    {
+      "kod": "sťahovanie-tuz.-",
+      "nazov": "sťahovanie-tuz.neplatca"
+    },
+    {
+      "kod": "sťahovanie-zahr.",
+      "nazov": "sťahovanie-zahr."
+    },
+    {
+      "kod": "travel exp.",
+      "nazov": "Travel expenses"
+    },
+    {
+      "kod": "travel exp.vratka",
+      "nazov": "vratka travel expenses"
+    },
+    {
+      "kod": "upomienka",
+      "nazov": "upomienka"
+    },
+    {
+      "kod": "vklad na účet",
+      "nazov": "Odvod hotovosti na BÚ"
+    },
+    {
+      "kod": "vratka dane ZČ",
+      "nazov": "vratka dane zo záv.činnosti"
+    },
+    {
+      "kod": "vrátenie lístkov",
+      "nazov": "vrátenie lístkov"
+    },
+    {
+      "kod": "vstup 20%",
+      "nazov": "vstup 20%"
+    },
+    {
+      "kod": "vstup 20% EU",
+      "nazov": "vstup 20% EU"
+    },
+    {
+      "kod": "vstup 20% tuz.",
+      "nazov": "zúčt.DPH-vstup 20%"
+    },
+    {
+      "kod": "vstup EU",
+      "nazov": "zúčt.DPH-vstup 20% EU"
+    },
+    {
+      "kod": "vyradenie maj1",
+      "nazov": "vyradenie majetku"
+    },
+    {
+      "kod": "vyradenie majetku",
+      "nazov": "vyradenie majetku"
+    },
+    {
+      "kod": "výnosy",
+      "nazov": "Zápočet preplatku"
+    },
+    {
+      "kod": "výstup 20%",
+      "nazov": "výstup 20%"
+    },
+    {
+      "kod": "výstup 20% EU",
+      "nazov": "výstup 20% EU"
+    },
+    {
+      "kod": "výstup 20% tuz.",
+      "nazov": "zúčt.DPH-výstup 20%"
+    },
+    {
+      "kod": "výstup EU",
+      "nazov": "zúčt.DPH-výstup 20% EU"
+    },
+    {
+      "kod": "zar.Arcania 013100",
+      "nazov": "zara.softvéru Arcania do používania"
+    },
+    {
+      "kod": "zpIntpoh",
+      "nazov": "Zápočet preplatku"
+    },
+    {
+      "kod": "zpIntzav",
+      "nazov": "Zápočet preplatku"
+    },
+    {
+      "kod": "zák.soc.N-ostatné",
+      "nazov": "zák.soc.náklady-ostatné"
+    },
+    {
+      "kod": "záloha",
+      "nazov": "Poskytnutá záloha"
+    },
+    {
+      "kod": "záloha",
+      "nazov": "poskytnutá záloha"
+    },
+    {
+      "kod": "záloha PC",
+      "nazov": "záloha PC"
+    },
+    {
+      "kod": "záp.preplatku",
+      "nazov": "Zápočet preplatku"
+    },
+    {
+      "kod": "záp.záv.s Mobilitas",
+      "nazov": "zápočet záv. s MOBILITAS"
+    },
+    {
+      "kod": "zápočet",
+      "nazov": "zápočet"
+    },
+    {
+      "kod": "zápočet 342",
+      "nazov": "Zápočet dane zo záv.činnosti"
+    },
+    {
+      "kod": "zápočet MOBILITAS",
+      "nazov": "zápočet MOBILITAS"
+    },
+    {
+      "kod": "záv.zam.",
+      "nazov": "záv.zam."
+    },
+    {
+      "kod": "zúčt.nevyfakt.dodáv",
+      "nazov": "zúčt.nevyfakt.dodávky"
+    },
+    {
+      "kod": "zúčt.rez.na preprav",
+      "nazov": "zúčt.rez.na prepravu"
+    },
+    {
+      "kod": "Úhr.zál.FP",
+      "nazov": "Úhrada zálohovej faktúry"
+    },
+    {
+      "kod": "Úhrada FP-tuz.",
+      "nazov": "Úhrada FP-tuz."
+    },
+    {
+      "kod": "Úhrada FP-zahr.",
+      "nazov": "Úhrada FP-zahr."
+    },
+    {
+      "kod": "Úhrada FP-zahr.USD",
+      "nazov": "Úhrada FP-zahr.USD"
+    },
+    {
+      "kod": "Úhrada FV zo zálohy",
+      "nazov": "Úhrada FV zo zálohy"
+    },
+    {
+      "kod": "Úhrada FV-tuz.",
+      "nazov": "Úhrada FV-tuz."
+    },
+    {
+      "kod": "Úhrada FV-zahr.",
+      "nazov": "Úhrada FV-zahr."
+    },
+    {
+      "kod": "Úhrada dbps zo zál.",
+      "nazov": "Úhrada dbps zo zál.zahr."
+    },
+    {
+      "kod": "Úhrada ost.záväzkov",
+      "nazov": "Úhrada ost.záväzkov"
+    },
+    {
+      "kod": "Úhrada zálohy-USD",
+      "nazov": "Úhrada zálohy-USD"
+    },
+    {
+      "kod": "Účtovníctvo",
+      "nazov": "Účtovníctvo"
+    },
+    {
+      "kod": "úhr.FV-zahr.",
+      "nazov": "úhr.FV-zahr."
+    },
+    {
+      "kod": "úhr.konces.popl.",
+      "nazov": "úhr.konces.poplatku"
+    },
+    {
+      "kod": "úhr.ost.záv.",
+      "nazov": "úhrada ostatných záväzkov"
+    },
+    {
+      "kod": "úhrada FP od poisťo",
+      "nazov": "úhrada FP od poisťovne"
+    },
+    {
+      "kod": "úhrada oz",
+      "nazov": "Úhrada preplatku"
+    },
+    {
+      "kod": "úhrada zálohy €",
+      "nazov": "úhrada zálohy €"
+    },
+    {
+      "kod": "úhrada záväzkov-exe",
+      "nazov": "úhrada záväzkov-exekúcia"
+    },
+    {
+      "kod": "úpBp",
+      "nazov": "Úhrada preplatku"
+    },
+    {
+      "kod": "úpBv",
+      "nazov": "Úhrada preplatku"
+    },
+    {
+      "kod": "úroky",
+      "nazov": "Úrok z BÚ za bežné obdobie"
+    },
+    {
+      "kod": "úroky leasing",
+      "nazov": "úroky leasing"
+    },
+    {
+      "kod": "účto-neplatca",
+      "nazov": "Účtovníctvo-neplatca DPH"
+    },
+    {
+      "kod": "členské-tuz.",
+      "nazov": "Členské príspevky"
+    },
+    {
+      "kod": "členské-zahr.DD§69",
+      "nazov": "Členské príspevky zahraničné"
+    },
+    {
+      "kod": "členský prísp.",
+      "nazov": "Čas. rozlíšenie služieb –členské"
+    }
+  ],
+  "cleneniaDph": [
+    {
+      "kod": "DD2odb",
+      "nazov": "Tovary, pri ktorých daň platí druhý odberateľ"
+    },
+    {
+      "kod": "DDdopr",
+      "nazov": "Nadobudnutie nového dopravného prostriedku"
+    },
+    {
+      "kod": "DDnadEU",
+      "nazov": "Nadobudnutie tovaru z iného štátu EU"
+    },
+    {
+      "kod": "DDsluz",
+      "nazov": "Tovary a služby, pri ktorých daň platí príjemca"
+    },
+    {
+      "kod": "DDsl§69",
+      "nazov": "Služby, pri ktorých príjemca platí daň podľa § 69 ods.3 zákona pre osoby registr. podľa §7"
+    },
+    {
+      "kod": "DDtov§84a",
+      "nazov": "Dovoz tovaru § 84a ods. 3"
+    },
+    {
+      "kod": "DRozdiel",
+      "nazov": "Rozdiel v zákl. dane a v dani po oprave (§25 od.1 až 3) - tovary a služby (D01 - D05)"
+    },
+    {
+      "kod": "PB",
+      "nazov": "Tuzemské plnenia - bez nároku"
+    },
+    {
+      "kod": "PBnadEU",
+      "nazov": "Nadobudnutie tovaru z iného štátu EU - bez nároku"
+    },
+    {
+      "kod": "PBsluz",
+      "nazov": "Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - bez nároku"
+    },
+    {
+      "kod": "PBtovar",
+      "nazov": "Dovoz tovaru - bez nároku"
+    },
+    {
+      "kod": "PD",
+      "nazov": "Tuzemské plnenia"
+    },
+    {
+      "kod": "PD-OsU",
+      "nazov": "Tuzemské plnenia - osobitná úprava §68d"
+    },
+    {
+      "kod": "PD-OsUdod",
+      "nazov": "Tuzemské plnenia - faktúra vystavená v osobitnej úprave §68d"
+    },
+    {
+      "kod": "PD1odb",
+      "nazov": "Nadobudnutie tovaru prvým odberateľom"
+    },
+    {
+      "kod": "PDdopr",
+      "nazov": "Nadobudnutie nového dopravného prostriedku"
+    },
+    {
+      "kod": "PDnadEU",
+      "nazov": "Nadobudnutie tovaru z iného štátu EU"
+    },
+    {
+      "kod": "PDopr-OsU",
+      "nazov": "Oprava odpočítanej dane - osobitná úprava §68d"
+    },
+    {
+      "kod": "PDopr-OsUdod",
+      "nazov": "Oprava odpočítanej dane - faktúra vystavená v osobitnej úprave §68d"
+    },
+    {
+      "kod": "PDoprava",
+      "nazov": "Oprava odpočítanej dane"
+    },
+    {
+      "kod": "PDopr§53b",
+      "nazov": "Oprava odpočítanej dane (§53b)"
+    },
+    {
+      "kod": "PDsluz",
+      "nazov": "Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca"
+    },
+    {
+      "kod": "PDtovar",
+      "nazov": "Dovoz tovaru"
+    },
+    {
+      "kod": "PDtov§84a",
+      "nazov": "Dovoz tovaru (daň uplatnená podľa § 84a ods. 3)"
+    },
+    {
+      "kod": "PK",
+      "nazov": "Tuzemské plnenia - krátiť nárok"
+    },
+    {
+      "kod": "PK-OsU",
+      "nazov": "Tuzemské plnenia - osobitná úprava §68d - krátiť nárok"
+    },
+    {
+      "kod": "PK-OsUdod",
+      "nazov": "Tuzemské plnenia - faktúra vystavená v osobitnej úprave §68d - krátiť nárok"
+    },
+    {
+      "kod": "PKnadEU",
+      "nazov": "Nadobudnutie tovaru z iného štátu EU - krátiť nárok"
+    },
+    {
+      "kod": "PKopr-OsU",
+      "nazov": "Oprava odpočítanej dane - osobitná úprava §68d - krátiť nárok"
+    },
+    {
+      "kod": "PKopr-OsUdod",
+      "nazov": "Oprava odpočítanej dane - faktúra vystavená v osobitnej úprave §68d - krátiť nárok"
+    },
+    {
+      "kod": "PKoprava",
+      "nazov": "Oprava odpočítanej dane (§ 53) - krátiť nárok"
+    },
+    {
+      "kod": "PKopr§53b",
+      "nazov": "Oprava odpočítanej dane (§53b) – krátiť nárok"
+    },
+    {
+      "kod": "PKsluz",
+      "nazov": "Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - krátiť nárok"
+    },
+    {
+      "kod": "PKtovar",
+      "nazov": "Dovoz tovaru - krátiť nárok"
+    },
+    {
+      "kod": "PKtov§84a",
+      "nazov": "Dovoz tovaru (daň uplatnená podľa § 84a ods. 3) - krátiť nárok"
+    },
+    {
+      "kod": "PN",
+      "nazov": "Nezahrňovať do priznania DPH"
+    },
+    {
+      "kod": "PNeviem",
+      "nazov": "Bez členenia DPH - prijaté plnenia"
+    },
+    {
+      "kod": "PNnevymer",
+      "nazov": "Nezahrňovať do priznania DPH - nevymeriavať DPH"
+    },
+    {
+      "kod": "PVdaň",
+      "nazov": "Vrátená daň"
+    },
+    {
+      "kod": "RDcest",
+      "nazov": "Osobitná úprava pre cestovné služby"
+    },
+    {
+      "kod": "RDdod3",
+      "nazov": "Dodanie tovaru druhým podnikateľom pri trojstrannom obchode"
+    },
+    {
+      "kod": "RDdodEU",
+      "nazov": "Dodanie tovaru do iného štátu EU"
+    },
+    {
+      "kod": "RDdopr11",
+      "nazov": "Dodanie nového dopravného prostriedku"
+    },
+    {
+      "kod": "RDobch",
+      "nazov": "Osobitná úprava pre obchody s použ. tovarom a umením"
+    },
+    {
+      "kod": "RDzahr",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane"
+    },
+    {
+      "kod": "RDzahrSl",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane"
+    },
+    {
+      "kod": "RKcest",
+      "nazov": "Osobitná úprava pre cestovné služby - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RKdodEU",
+      "nazov": "Dodanie tovaru do iného štátu EU - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RKobch",
+      "nazov": "Osobitná úprava pre obchody s použ. tovarom a umením - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RKodpBez",
+      "nazov": "Oslobodené plnenia bez možnosti odpočítania dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RKodpS",
+      "nazov": "Oslobodené plnenia s možnosťou odpoč. dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RKzahr",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RKzahrSl",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "RNodpBez",
+      "nazov": "Oslobodené plnenia bez možnosti odpočítania dane"
+    },
+    {
+      "kod": "RNodpS",
+      "nazov": "Oslobodené plnenia s možnosťou odpoč. dane"
+    },
+    {
+      "kod": "UD",
+      "nazov": "Tuzemské plnenia"
+    },
+    {
+      "kod": "UD-OsU",
+      "nazov": "Tuzemské plnenia - osobitná úprava §68d"
+    },
+    {
+      "kod": "UDcest",
+      "nazov": "Osobitná úprava pre cestovné služby"
+    },
+    {
+      "kod": "UDdod3",
+      "nazov": "Dodanie tovaru druhým podnikateľom pri trojstrannom obchode"
+    },
+    {
+      "kod": "UDdodEU",
+      "nazov": "Dodanie tovaru do iného štátu EU"
+    },
+    {
+      "kod": "UDdopr11",
+      "nazov": "Dodanie nového dopravného prostriedku"
+    },
+    {
+      "kod": "UDobch",
+      "nazov": "Osobitná úprava pre obchody s použ. tovarom a umením"
+    },
+    {
+      "kod": "UDpdp",
+      "nazov": "Prenesenie daňovej povinnosti §69 ods. 12 (s uvedením sadzby dane)"
+    },
+    {
+      "kod": "UDzahr",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane"
+    },
+    {
+      "kod": "UDzahrSl",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane"
+    },
+    {
+      "kod": "UDzasEUl",
+      "nazov": "Zaslanie tovaru do iného štátu EU - do limitu"
+    },
+    {
+      "kod": "UDzrušReg",
+      "nazov": "Zrušenie registrácie platiteľa"
+    },
+    {
+      "kod": "UK",
+      "nazov": "Tuzemské plnenia - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UK-OsU",
+      "nazov": "Tuzemské plnenia - osobitná úprava §68d - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKcest",
+      "nazov": "Osobitná úprava pre cestovné služby - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKdodEU",
+      "nazov": "Dodanie tovaru do iného štátu EU - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKobch",
+      "nazov": "Osobitná úprava pre obchody s použ. tovarom a umením - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKodpBez",
+      "nazov": "Oslobodené plnenia bez možnosti odpočítania dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKodpBez-OsU",
+      "nazov": "Oslobodené plnenia bez možnosti odpočítania dane - nezapočítať do koeficientu – osobitná úprava §68d"
+    },
+    {
+      "kod": "UKodpS",
+      "nazov": "Oslobodené plnenia s možnosťou odpoč. dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKpdp",
+      "nazov": "Prenesenie daňovej povinnosti §69 ods. 12 (s uvedením sadzby dane) - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKroz-OsU",
+      "nazov": "Rozdiel v zákl.dane a v dani po opr.(§25 ods.1 až 3, §65 ods.10 a 11)-os. úpr. §68d-nezap. do koef."
+    },
+    {
+      "kod": "UKrozdiel",
+      "nazov": "Rozdiel v zákl. dane a v dani po oprave (§25 ods. 1 až 3, §65 ods. 10 a 11) - nezapočítať do koef."
+    },
+    {
+      "kod": "UKroz§25a",
+      "nazov": "Rozdiel v základe dane a v dani po oprave (§25a) - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKzahr",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UKzahrSl",
+      "nazov": "Miesto plnenia v zahraničí s možnosťou odpočítania dane - nezapočítať do koeficientu"
+    },
+    {
+      "kod": "UN",
+      "nazov": "Nezahrňovať do priznania DPH"
+    },
+    {
+      "kod": "UNeviem",
+      "nazov": "Bez členenia DPH - uskutočnené plnenia"
+    },
+    {
+      "kod": "UNodpBez",
+      "nazov": "Oslobodené plnenia bez možnosti odpočítania dane"
+    },
+    {
+      "kod": "UNodpBez-OsU",
+      "nazov": "Oslobodené plnenia bez možnosti odpočítania dane – osobitná úprava §68d"
+    },
+    {
+      "kod": "UNodpS",
+      "nazov": "Oslobodené plnenia s možnosťou odpoč. dane"
+    },
+    {
+      "kod": "UNoslob",
+      "nazov": "Oslobodené plnenia §65 ods. 7 a §67 ods.3"
+    },
+    {
+      "kod": "UN§69",
+      "nazov": "Prenesenie daňovej povinnosti §69 ods. 12"
+    },
+    {
+      "kod": "URozdiel",
+      "nazov": "Rozdiel v základe dane a v dani po oprave (§25 ods. 1 až 3, §65 ods. 10 a 11)"
+    },
+    {
+      "kod": "URoz§25a",
+      "nazov": "Rozdiel v základe dane a v dani po oprave (§25a)"
+    },
+    {
+      "kod": "UVdaň",
+      "nazov": "Vrátená daň"
+    },
+    {
+      "kod": "UZinýEU",
+      "nazov": "Zaslanie tovaru z iného štátu EU s plnením v tuzemsku"
+    },
+    {
+      "kod": "Uroz-OsU",
+      "nazov": "Rozdiel v základe dane a v dani po oprave (§25 ods. 1 až 3, §65 ods. 10 a 11) - os. úprava §68d"
+    }
+  ],
+  "ciselneRady": [
+    {
+      "kod": "2025",
+      "nazov": "Prijaté faktúry",
+      "rok": "2025"
+    },
+    {
+      "kod": "2026",
+      "nazov": "Prijate faktury",
+      "rok": "2026"
+    },
+    {
+      "kod": "25010",
+      "nazov": "Vydané faktúry január",
+      "rok": "2025"
+    },
+    {
+      "kod": "25020",
+      "nazov": "Vydané faktúry február",
+      "rok": "2025"
+    },
+    {
+      "kod": "2503",
+      "nazov": "Vydané ťarchopisy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25040",
+      "nazov": "Vydané faktúry apríl",
+      "rok": "2025"
+    },
+    {
+      "kod": "25050",
+      "nazov": "Vydané faktúry máj",
+      "rok": "2025"
+    },
+    {
+      "kod": "25060",
+      "nazov": "Vydané faktúry jún",
+      "rok": "2025"
+    },
+    {
+      "kod": "25070",
+      "nazov": "Vydané faktúry júl",
+      "rok": "2025"
+    },
+    {
+      "kod": "2508",
+      "nazov": "Vydané faktúry zálohové",
+      "rok": "2025"
+    },
+    {
+      "kod": "25090",
+      "nazov": "Vydané faktúry september",
+      "rok": "2025"
+    },
+    {
+      "kod": "25100",
+      "nazov": "Vydané faktúry október",
+      "rok": "2025"
+    },
+    {
+      "kod": "25110",
+      "nazov": "Vydané faktúry november",
+      "rok": "2025"
+    },
+    {
+      "kod": "25120",
+      "nazov": "Vydané faktúry december",
+      "rok": "2025"
+    },
+    {
+      "kod": "2513",
+      "nazov": "Prijaté ťarchopisy",
+      "rok": "2025"
+    },
+    {
+      "kod": "2518",
+      "nazov": "Prijaté faktúry zálohové",
+      "rok": "2025"
+    },
+    {
+      "kod": "2519",
+      "nazov": "Ostatné záväzky",
+      "rok": "2025"
+    },
+    {
+      "kod": "2520",
+      "nazov": "Vydané objednávky",
+      "rok": "2025"
+    },
+    {
+      "kod": "2521",
+      "nazov": "Prijaté objednávky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25CP",
+      "nazov": "Cestovné príkazy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25CP",
+      "nazov": "Ostatné záväzky - cestovné náhrady",
+      "rok": "2025"
+    },
+    {
+      "kod": "25CPT",
+      "nazov": "Tuzemské cestovné príkazy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25CPZ",
+      "nazov": "Zahraničné cestovné príkazy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25CR",
+      "nazov": "Časové rozlíšenie",
+      "rok": "2025"
+    },
+    {
+      "kod": "25D20",
+      "nazov": "Prijaté dopropisy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25DM",
+      "nazov": "Drobný majetok",
+      "rok": "2025"
+    },
+    {
+      "kod": "25DPH",
+      "nazov": "Ostatné pohľadávky-DPH",
+      "rok": "2025"
+    },
+    {
+      "kod": "25DPH",
+      "nazov": "Ostatné záv.-DPH",
+      "rok": "2025"
+    },
+    {
+      "kod": "25DPH",
+      "nazov": "Preúčtovanie DPH",
+      "rok": "2025"
+    },
+    {
+      "kod": "25DoP",
+      "nazov": "Dopyt",
+      "rok": "2025"
+    },
+    {
+      "kod": "25Ez",
+      "nazov": "Zásilky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25HP",
+      "nazov": "Hotovostný príjem",
+      "rok": "2025"
+    },
+    {
+      "kod": "25HP",
+      "nazov": "Hotovostný výdaj",
+      "rok": "2025"
+    },
+    {
+      "kod": "25ID",
+      "nazov": "Interné doklady",
+      "rok": "2025"
+    },
+    {
+      "kod": "25IM",
+      "nazov": "Investičný majetok",
+      "rok": "2025"
+    },
+    {
+      "kod": "25IS",
+      "nazov": "Inventúrne zoznamy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25LEA",
+      "nazov": "Leasingová zmluva č.5012811",
+      "rok": "2025"
+    },
+    {
+      "kod": "25LM",
+      "nazov": "Leasingový majetok",
+      "rok": "2025"
+    },
+    {
+      "kod": "25LZ",
+      "nazov": "Ostatné záv.-leasing",
+      "rok": "2025"
+    },
+    {
+      "kod": "25MOB",
+      "nazov": "Mobilitras",
+      "rok": "2025"
+    },
+    {
+      "kod": "25MZ",
+      "nazov": "Ostatné záväzky-MZDY",
+      "rok": "2025"
+    },
+    {
+      "kod": "25MZD",
+      "nazov": "Interné doklady-Mzdy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25NA",
+      "nazov": "Ponuky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25NAp",
+      "nazov": "Prijaté ponuky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25OP",
+      "nazov": "Ostatné pohľadávky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25OZ",
+      "nazov": "Ostatné záv.",
+      "rok": "2025"
+    },
+    {
+      "kod": "25OpP",
+      "nazov": "Opravné položky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25PH",
+      "nazov": "Predajky",
+      "rok": "2025"
+    },
+    {
+      "kod": "25PK",
+      "nazov": "Ostatné záv.-platba kartou",
+      "rok": "2025"
+    },
+    {
+      "kod": "25PK",
+      "nazov": "Platba kartou",
+      "rok": "2025"
+    },
+    {
+      "kod": "25PTp",
+      "nazov": "Prijaté dopyty",
+      "rok": "2025"
+    },
+    {
+      "kod": "25Pvk",
+      "nazov": "Vklad hotovosti",
+      "rok": "2025"
+    },
+    {
+      "kod": "25Pvy",
+      "nazov": "Výber hotovosti",
+      "rok": "2025"
+    },
+    {
+      "kod": "25RL",
+      "nazov": "Reklamačný list",
+      "rok": "2025"
+    },
+    {
+      "kod": "25RN",
+      "nazov": "Reklamácia nákupná",
+      "rok": "2025"
+    },
+    {
+      "kod": "25RS",
+      "nazov": "Reklamácia skladová",
+      "rok": "2025"
+    },
+    {
+      "kod": "25RZ",
+      "nazov": "Reklamácia zákaznícka",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SAM",
+      "nazov": "Samozdanenie",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SC",
+      "nazov": "Ostatné záv.-služobné cesty",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SEP",
+      "nazov": "Servis pozáručný",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SEZ",
+      "nazov": "Servis záručný",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SP",
+      "nazov": "Sklad príjem",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SPr",
+      "nazov": "Sklad prevod",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SV",
+      "nazov": "Sklad výdaj",
+      "rok": "2025"
+    },
+    {
+      "kod": "25SVy",
+      "nazov": "Sklad výroba",
+      "rok": "2025"
+    },
+    {
+      "kod": "25Sml",
+      "nazov": "Smlouvy",
+      "rok": "2025"
+    },
+    {
+      "kod": "25ZAP",
+      "nazov": "Interné doklady-zápočet",
+      "rok": "2025"
+    },
+    {
+      "kod": "26010",
+      "nazov": "Vydané faktúry január",
+      "rok": "2026"
+    },
+    {
+      "kod": "26020",
+      "nazov": "Vydané faktúry február",
+      "rok": "2026"
+    },
+    {
+      "kod": "2603",
+      "nazov": "Vydané ťarchopisy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26040",
+      "nazov": "Vydané faktúry apríl",
+      "rok": "2026"
+    },
+    {
+      "kod": "26050",
+      "nazov": "Vydané faktúry máj",
+      "rok": "2026"
+    },
+    {
+      "kod": "26060",
+      "nazov": "Vydané faktúry jún",
+      "rok": "2026"
+    },
+    {
+      "kod": "26070",
+      "nazov": "Vydané faktúry júl",
+      "rok": "2026"
+    },
+    {
+      "kod": "2608",
+      "nazov": "Vydané faktúry zálohové",
+      "rok": "2026"
+    },
+    {
+      "kod": "26090",
+      "nazov": "Vydané faktúry september",
+      "rok": "2026"
+    },
+    {
+      "kod": "26100",
+      "nazov": "Vydané faktúry október",
+      "rok": "2026"
+    },
+    {
+      "kod": "26110",
+      "nazov": "Vydané faktúry november",
+      "rok": "2026"
+    },
+    {
+      "kod": "26120",
+      "nazov": "Vydané faktúry december",
+      "rok": "2026"
+    },
+    {
+      "kod": "2613",
+      "nazov": "Prijaté ťarchopisy",
+      "rok": "2026"
+    },
+    {
+      "kod": "2618",
+      "nazov": "Prijaté faktúry zálohové",
+      "rok": "2026"
+    },
+    {
+      "kod": "2619",
+      "nazov": "Ostatné záväzky",
+      "rok": "2026"
+    },
+    {
+      "kod": "2620",
+      "nazov": "Vydané objednávky",
+      "rok": "2026"
+    },
+    {
+      "kod": "2621",
+      "nazov": "Prijaté objednávky",
+      "rok": "2026"
+    },
+    {
+      "kod": "2625",
+      "nazov": "Prijaté faktúry",
+      "rok": "2026"
+    },
+    {
+      "kod": "2650",
+      "nazov": "Prijaté faktúry-mimo zoznamu",
+      "rok": "2026"
+    },
+    {
+      "kod": "26CP",
+      "nazov": "Cestovné príkazy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26CP",
+      "nazov": "Ostatné záväzky - cestovné náhrady",
+      "rok": "2026"
+    },
+    {
+      "kod": "26CPT",
+      "nazov": "Tuzemské cestovné príkazy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26CPZ",
+      "nazov": "Zahraničné cestovné príkazy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26CR",
+      "nazov": "Časové rozlíšenie",
+      "rok": "2026"
+    },
+    {
+      "kod": "26D20",
+      "nazov": "Prijaté dopropisy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26DM",
+      "nazov": "Drobný majetok",
+      "rok": "2026"
+    },
+    {
+      "kod": "26DPH",
+      "nazov": "Ostatné pohľadávky-DPH",
+      "rok": "2026"
+    },
+    {
+      "kod": "26DPH",
+      "nazov": "Ostatné záv.-DPH",
+      "rok": "2026"
+    },
+    {
+      "kod": "26DPH",
+      "nazov": "Preúčtovanie DPH",
+      "rok": "2026"
+    },
+    {
+      "kod": "26DoP",
+      "nazov": "Dopyt",
+      "rok": "2026"
+    },
+    {
+      "kod": "26Ez",
+      "nazov": "Zásilky",
+      "rok": "2026"
+    },
+    {
+      "kod": "26HP",
+      "nazov": "Hotovostný príjem",
+      "rok": "2026"
+    },
+    {
+      "kod": "26HP",
+      "nazov": "Hotovostný výdaj",
+      "rok": "2026"
+    },
+    {
+      "kod": "26ID",
+      "nazov": "Interné doklady",
+      "rok": "2026"
+    },
+    {
+      "kod": "26IM",
+      "nazov": "Investičný majetok",
+      "rok": "2026"
+    },
+    {
+      "kod": "26IS",
+      "nazov": "Inventúrne zoznamy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26LEA",
+      "nazov": "Leasingová zmluva č.5012811",
+      "rok": "2026"
+    },
+    {
+      "kod": "26LM",
+      "nazov": "Leasingový majetok",
+      "rok": "2026"
+    },
+    {
+      "kod": "26LZ",
+      "nazov": "Ostatné záv.-leasing",
+      "rok": "2026"
+    },
+    {
+      "kod": "26MOB",
+      "nazov": "Mobilitras",
+      "rok": "2026"
+    },
+    {
+      "kod": "26MZ",
+      "nazov": "Ostatné záväzky-MZDY",
+      "rok": "2026"
+    },
+    {
+      "kod": "26MZD",
+      "nazov": "Interné doklady-Mzdy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26NA",
+      "nazov": "Ponuky",
+      "rok": "2026"
+    },
+    {
+      "kod": "26NAp",
+      "nazov": "Prijaté ponuky",
+      "rok": "2026"
+    },
+    {
+      "kod": "26OP",
+      "nazov": "Ostatné pohľadávky",
+      "rok": "2026"
+    },
+    {
+      "kod": "26OZ",
+      "nazov": "Ostatné záv.",
+      "rok": "2026"
+    },
+    {
+      "kod": "26OpP",
+      "nazov": "Opravné položky",
+      "rok": "2026"
+    },
+    {
+      "kod": "26PH",
+      "nazov": "Predajky",
+      "rok": "2026"
+    },
+    {
+      "kod": "26PK",
+      "nazov": "Ostatné záv.-platba kartou",
+      "rok": "2026"
+    },
+    {
+      "kod": "26PK",
+      "nazov": "Platba kartou",
+      "rok": "2026"
+    },
+    {
+      "kod": "26PTp",
+      "nazov": "Prijaté dopyty",
+      "rok": "2026"
+    },
+    {
+      "kod": "26Pvk",
+      "nazov": "Vklad hotovosti",
+      "rok": "2026"
+    },
+    {
+      "kod": "26Pvy",
+      "nazov": "Výber hotovosti",
+      "rok": "2026"
+    },
+    {
+      "kod": "26RL",
+      "nazov": "Reklamačný list",
+      "rok": "2026"
+    },
+    {
+      "kod": "26RN",
+      "nazov": "Reklamácia nákupná",
+      "rok": "2026"
+    },
+    {
+      "kod": "26RS",
+      "nazov": "Reklamácia skladová",
+      "rok": "2026"
+    },
+    {
+      "kod": "26RZ",
+      "nazov": "Reklamácia zákaznícka",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SAM",
+      "nazov": "Samozdanenie",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SC",
+      "nazov": "Ostatné záv.-služobné cesty",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SEP",
+      "nazov": "Servis pozáručný",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SEZ",
+      "nazov": "Servis záručný",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SP",
+      "nazov": "Sklad príjem",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SPr",
+      "nazov": "Sklad prevod",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SV",
+      "nazov": "Sklad výdaj",
+      "rok": "2026"
+    },
+    {
+      "kod": "26SVy",
+      "nazov": "Sklad výroba",
+      "rok": "2026"
+    },
+    {
+      "kod": "26Sml",
+      "nazov": "Smlouvy",
+      "rok": "2026"
+    },
+    {
+      "kod": "26ZAP",
+      "nazov": "Interné doklady-zápočet",
+      "rok": "2026"
+    },
+    {
+      "kod": "D250",
+      "nazov": "Prijaté faktúry-mimo zoznamu",
+      "rok": "2025"
+    },
+    {
+      "kod": "Z",
+      "nazov": "Zamestnanci"
+    }
+  ],
+  "strediska": [
+    {
+      "kod": "1",
+      "nazov": "s"
+    }
+  ]
+}

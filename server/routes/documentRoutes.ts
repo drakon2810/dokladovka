@@ -1,0 +1,222 @@
+import { randomUUID } from 'node:crypto';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { writeAudit } from '../audit.js';
+import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
+import type { Database } from '../db/database.js';
+import { HttpError } from '../http.js';
+import { buildApprovedDocumentsXml } from '../services/exportService.js';
+import type { ObjectStorage } from '../storage.js';
+
+interface DocumentScope extends Record<string, unknown> {
+  id: string;
+  organization_id: string;
+  status: string;
+  version: number;
+  document_type: string;
+  extracted: Record<string, unknown>;
+  accounting: Record<string, string | undefined>;
+  history: Array<Record<string, unknown>>;
+}
+
+async function scopedDocument(database: Database, tenantId: string, id: string): Promise<DocumentScope> {
+  const result = await database.query<DocumentScope>(
+    `SELECT id, organization_id, status, version, document_type, extracted, accounting, history
+       FROM documents WHERE id=$1 AND tenant_id=$2`, [id, tenantId],
+  );
+  if (!result.rows[0]) throw new HttpError(404, 'document_not_found', 'Doklad neexistuje');
+  return result.rows[0];
+}
+
+export function registerDocumentRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage): void {
+  app.get('/api/documents', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const query = z.object({ organizationId: z.string().uuid().optional(), status: z.string().max(40).optional() }).parse(request.query);
+    if (query.organizationId) await requireOrganizationAccess(database, auth, query.organizationId);
+    const result = await database.query(
+      `SELECT d.* FROM documents d
+        JOIN organization_memberships m ON m.organization_id=d.organization_id AND m.tenant_id=d.tenant_id
+       WHERE d.tenant_id=$1 AND m.user_id=$2
+         AND ($3::text IS NULL OR d.organization_id=$3)
+         AND ($4::text IS NULL OR d.status=$4)
+       ORDER BY d.created_at DESC LIMIT 500`,
+      [auth.tenantId, auth.userId, query.organizationId ?? null, query.status ?? null],
+    );
+    return result.rows;
+  });
+
+  app.get('/api/documents/:id', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const details = await database.query<Record<string, unknown>>('SELECT * FROM documents WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId]);
+    const attachment = await database.query<{ storage_key?: string } & Record<string, unknown>>(
+      'SELECT storage_key FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId],
+    );
+    const storageKey = attachment.rows[0]?.storage_key;
+    return { ...details.rows[0], fileUrl: storageKey ? await storage.signedDownloadUrl(storageKey, 300) : undefined };
+  });
+
+  app.patch('/api/documents/:id', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      documentType: z.enum(['FP','FV','BV','MZDY','OZ','PD']).optional(),
+      extracted: z.record(z.string(), z.unknown()).optional(),
+      accounting: z.record(z.string(), z.string().optional()).optional(),
+      expectedVersion: z.number().int().positive(),
+    }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.version !== body.expectedVersion) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    const approvedChanged = document.status === 'schvaleny';
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET document_type=$1, extracted=$2::jsonb, accounting=$3::jsonb,
+              version=version+1, status=$4, approved_version=NULL, approved_snapshot=NULL, updated_at=now()
+        WHERE id=$5 AND tenant_id=$6 AND version=$7 RETURNING *`,
+      [body.documentType ?? document.document_type, JSON.stringify(body.extracted ?? document.extracted),
+        JSON.stringify(body.accounting ?? document.accounting), approvedChanged ? 'na_kontrole' : document.status,
+        id, auth.tenantId, body.expectedVersion],
+    );
+    return result.rows[0];
+  });
+
+  app.post('/api/documents/:id/approve', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { expectedVersion } = z.object({ expectedVersion: z.number().int().positive() }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.version !== expectedVersion) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    const requiredIds = [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
+    if (requiredIds.some((value) => !value)) throw new HttpError(409, 'accounting_incomplete', 'Zaúčtovanie nie je kompletné');
+    if (document.document_type === 'PD' && (!document.accounting.pokladnaKod || !['receipt', 'expense'].includes(document.accounting.pokladnaTyp ?? ''))) {
+      throw new HttpError(409, 'cash_account_required', 'Pre pokladničný doklad je povinný kód pokladne a typ príjem/výdaj');
+    }
+    const valid = await database.query(
+      `SELECT id FROM code_list_items
+        WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])`,
+      [auth.tenantId, document.organization_id, requiredIds],
+    );
+    if (valid.rowCount !== new Set(requiredIds).size) throw new HttpError(409, 'code_list_invalid', 'Číselník nepatrí organizácii alebo nie je aktívny');
+    const approvedVersion = expectedVersion + 1;
+    const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, extracted: document.extracted, ucto: document.accounting };
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET status='schvaleny', version=$1, approved_version=$1, approved_snapshot=$2::jsonb, updated_at=now()
+        WHERE id=$3 AND tenant_id=$4 AND version=$5 RETURNING *`,
+      [approvedVersion, JSON.stringify(snapshot), id, auth.tenantId, expectedVersion],
+    );
+    await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
+    return result.rows[0];
+  });
+
+  for (const [route, status, action] of [
+    ['reject', 'zamietnuty', 'document.rejected'],
+    ['quarantine', 'karantena', 'document.quarantined'],
+  ] as const) {
+    app.post(`/api/documents/:id/${route}`, async (request) => {
+      const auth = await requireBrowserAuth(request, database);
+      requireCsrf(request, auth);
+      requireRole(auth, route === 'reject' ? ['admin', 'uctovnik', 'schvalovatel'] : ['admin', 'uctovnik']);
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const document = await scopedDocument(database, auth.tenantId, id);
+      await requireOrganizationAccess(database, auth, document.organization_id);
+      const decision = route === 'reject'
+        ? z.object({ expectedVersion: z.number().int().positive(), reason: z.string().trim().min(1).max(1000) }).strict().parse(request.body)
+        : undefined;
+      if (decision && document.version !== decision.expectedVersion) {
+        throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+      }
+      const history = [
+        ...document.history,
+        {
+          ts: new Date().toISOString(),
+          user: auth.name,
+          akcia: decision ? `Doklad zamietnutý — dôvod: ${decision.reason}` : 'Doklad presunutý do karantény',
+        },
+      ];
+      const result = await database.query<Record<string, unknown>>(
+        `UPDATE documents SET status=$1, version=version+1, approved_version=NULL, approved_snapshot=NULL,
+              history=$2::jsonb, updated_at=now()
+          WHERE id=$3 AND tenant_id=$4 RETURNING *`,
+        [status, JSON.stringify(history), id, auth.tenantId],
+      );
+      await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action, entityType: 'document', entityId: id, correlationId: request.id });
+      return result.rows[0];
+    });
+  }
+
+  app.post('/api/documents/:id/reprocess', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const attachment = await database.query<{ id: string } & Record<string, unknown>>('SELECT id FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
+    if (!attachment.rows[0]) throw new HttpError(409, 'attachment_missing', 'Doklad nemá zdrojovú prílohu');
+    await database.query(
+      `INSERT INTO processing_jobs (id, tenant_id, organization_id, attachment_id, document_id, kind, status, correlation_id)
+       VALUES ($1,$2,$3,$4,$5,'reprocess_document','queued',$6)`,
+      [randomUUID(), auth.tenantId, document.organization_id, attachment.rows[0].id, id, request.id],
+    );
+    return reply.code(202).send({ queued: true });
+  });
+
+  app.post('/api/exports/pohoda/xml', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const body = z.object({ organizationId: z.string().uuid(), documentIds: z.array(z.string().uuid()).min(1) }).strict().parse(request.body);
+    await requireOrganizationAccess(database, auth, body.organizationId);
+    const organization = await database.query<{ ico: string; name: string } & Record<string, unknown>>('SELECT ico, name FROM organizations WHERE id=$1 AND tenant_id=$2', [body.organizationId, auth.tenantId]);
+    if (!organization.rows[0]) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const id = randomUUID();
+    const xml = await buildApprovedDocumentsXml(database, { tenantId: auth.tenantId, organizationId: body.organizationId, ico: organization.rows[0].ico, documentIds: body.documentIds, packId: id });
+    const fileName = `pohoda-${organization.rows[0].ico}-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xml`;
+    await database.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO export_batches (id, tenant_id, organization_id, created_by, document_ids, xml_file_name, xml_snapshot)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)`,
+        [id, auth.tenantId, body.organizationId, auth.userId, JSON.stringify(body.documentIds), fileName, xml],
+      );
+      await tx.query(
+        `UPDATE documents SET status='exportovany', export_id=$1, updated_at=now()
+          WHERE tenant_id=$2 AND organization_id=$3 AND id=ANY($4::text[])`,
+        [id, auth.tenantId, body.organizationId, body.documentIds],
+      );
+      await writeAudit(tx, { tenantId: auth.tenantId, organizationId: body.organizationId, actorType: 'user', actorId: auth.userId, action: 'export.xml_created', entityType: 'export_batch', entityId: id, correlationId: request.id, metadata: { documentCount: body.documentIds.length } });
+    });
+    return reply.code(201).send({ batch: { id, tenantId: auth.tenantId, orgId: body.organizationId, createdAt: new Date().toISOString(), user: auth.name, documentIds: body.documentIds, xmlFileName: fileName }, xml });
+  });
+
+  app.get('/api/exports', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const result = await database.query(
+      `SELECT e.id, e.tenant_id AS "tenantId", e.organization_id AS "orgId", e.created_at AS "createdAt",
+              u.name AS "user", e.document_ids AS "documentIds", e.xml_file_name AS "xmlFileName"
+         FROM export_batches e JOIN users u ON u.id=e.created_by
+        WHERE e.tenant_id=$1 ORDER BY e.created_at DESC`,
+      [auth.tenantId],
+    );
+    return result.rows;
+  });
+
+  app.get('/api/exports/:id/download', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const result = await database.query<{ xml_snapshot: string; xml_file_name: string; organization_id: string } & Record<string, unknown>>(
+      'SELECT xml_snapshot, xml_file_name, organization_id FROM export_batches WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId],
+    );
+    if (!result.rows[0]) throw new HttpError(404, 'export_not_found', 'Export neexistuje');
+    await requireOrganizationAccess(database, auth, result.rows[0].organization_id);
+    reply.header('Content-Type', 'application/xml; charset=windows-1250');
+    reply.header('Content-Disposition', `attachment; filename="${result.rows[0].xml_file_name}"`);
+    return result.rows[0].xml_snapshot;
+  });
+}

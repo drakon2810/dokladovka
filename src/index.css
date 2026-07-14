@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  }
+  body {
+    @apply bg-app text-ink antialiased;
+  }
+  /* Čísla, sumy, IČO, VS — vždy tabulárne číslice (SPEC §8) */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Viditeľný keyboard focus (SPEC §8 accessibility) */
+  :focus-visible {
+    outline: 2px solid #0e7a5f;
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded border border-line bg-surface px-2.5 py-1.5 text-sm text-ink
+      placeholder:text-ink-soft/60 focus:border-accent focus:outline-none
+      disabled:bg-app disabled:text-ink-soft;
+  }
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded border border-line bg-surface px-3 py-1.5
+      text-sm font-medium text-ink shadow-card hover:bg-app
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-accent bg-accent text-white hover:bg-accent-hover hover:border-accent-hover;
+  }
+  .btn-danger {
+    @apply border-red-200 text-red-700 hover:bg-red-50;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-ink-soft;
+  }
+  .card {
+    @apply rounded border border-line bg-surface shadow-card;
+  }
+
+  .detail-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  @media (min-width: 1280px) {
+    .detail-split {
+      grid-template-columns: minmax(0, var(--detail-left, 50%)) 6px minmax(0, 1fr);
+    }
+  }
+}

@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+.local
+.git
+.env
+.env.*.local
+coverage
+*.mdb
+*.accdb
+public/samples

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rsp:responsePack version="2.0" id="ExpCis-test-20260713" state="ok"
+  xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:lCen="http://www.stormware.cz/schema/version_2/list_centre.xsd"
+  xmlns:cen="http://www.stormware.cz/schema/version_2/centre.xsd"
+  xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd"
+  xmlns:vat="http://www.stormware.cz/schema/version_2/classificationVAT.xsd">
+  <rsp:responsePackItem id="c01" state="ok">
+    <lst:listAccountingDoubleEntry version="1.1" state="ok">
+      <lst:itemAccounting id="101" code="022200" accounting="Zaradenie HIM do užívania" agenda="internalDocument"/>
+      <lst:itemAccounting id="duplicate" code="022200" accounting="Duplicitná položka" agenda="cashPaid"/>
+    </lst:listAccountingDoubleEntry>
+  </rsp:responsePackItem>
+  <rsp:responsePackItem id="c02" state="ok">
+    <lst:listClassificationVAT version="2.0" state="ok">
+      <lst:classificationVAT version="2.0">
+        <vat:classificationVATHeader>
+          <vat:id>202</vat:id>
+          <vat:code>DD2odb</vat:code>
+          <vat:name>Tovary, pri ktorých daň platí druhý odberateľ</vat:name>
+        </vat:classificationVATHeader>
+      </lst:classificationVAT>
+    </lst:listClassificationVAT>
+  </rsp:responsePackItem>
+  <rsp:responsePackItem id="c03" state="ok">
+    <lst:listNumericalSeries version="2.0" state="ok">
+      <lst:numericalSeries version="2.0">
+        <nms:numericalSeriesHeader>
+          <nms:id>303</nms:id>
+          <nms:prefix>2025</nms:prefix>
+          <nms:name>Prijaté faktúry</nms:name>
+          <nms:agenda>prijate_faktury</nms:agenda>
+          <nms:year>2025</nms:year>
+        </nms:numericalSeriesHeader>
+      </lst:numericalSeries>
+    </lst:listNumericalSeries>
+  </rsp:responsePackItem>
+  <rsp:responsePackItem id="c04" state="ok">
+    <lCen:listCentre version="2.0" state="ok">
+      <lCen:centre version="2.0">
+        <cen:centreHeader>
+          <cen:id>404</cen:id>
+          <cen:code>1</cen:code>
+          <cen:name>s</cen:name>
+        </cen:centreHeader>
+      </lCen:centre>
+    </lCen:listCentre>
+  </rsp:responsePackItem>
+  <rsp:responsePackItem id="ignored" state="ok">
+    <lst:listPayment version="2.0" state="ok"/>
+  </rsp:responsePackItem>
+</rsp:responsePack>
