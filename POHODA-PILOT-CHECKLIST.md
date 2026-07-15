@@ -6,7 +6,7 @@
 - Existuje samostatný mServer používateľ s minimálnymi právami Dátová komunikácia.
 - mServer počúva iba v dôveryhodnej lokálnej sieti; firewall povoľuje spojenie iba z hosta agenta.
 - Host má odchádzajúci HTTPS prístup na cloud Dokladovky. Nie je potrebný žiadny inbound port z internetu.
-- V Mostíku je povolená integrácia, je vybraná správna organizácia a jej jednorazový 15-minútový pairing code je pripravený.
+- V Mostíku je povolená integrácia, organizácia má správne IČO a je vygenerovaný jednorazový 15-minútový pairing code.
 - Podpísaný inštalátor a jeho SHA-256 boli overené; publisher thumbprint je uložený v konfigurácii pre automatické aktualizácie.
 
 ## Inštalácia a smoke test
@@ -25,14 +25,6 @@
 ## Akceptácia a rollback
 
 - Pilot sa považuje za prijatý až po porovnaní výsledku účtovníkom a archivácii testovacieho protokolu bez reálnych hesiel/XML obsahu.
-- Pri probléme vypnúť Mostík v UI, zastaviť `Dokladovka Agent` cez správu Služby vo Windows a v POHODE zablokovať mServer používateľa. Bežný používateľ nemusí používať `sc.exe` ani PowerShell.
-
-## Čistá inštalácia
-
-- Stiahne sa iba `Dokladovka-Agent-Setup-{version}.exe` priamo z onboarding sprievodcu.
-- Windows zobrazuje očakávaného vydavateľa a platný digitálny podpis.
-- Setup otvorí grafický konfigurátor, registruje `DokladovkaService` a nastaví recovery actions.
-- IČO zadané v konfigurátore sa zhoduje s organizáciou viazanou na pairing code; negatívny test s iným IČO musí skončiť chybou bez spotrebovania kódu.
-- Po prvom heartbeat web zobrazí `Mostík bol úspešne pripojený`.
+- Pri probléme vypnúť Mostík v UI, zastaviť službu `sc.exe stop DokladovkaService` a v POHODE zablokovať mServer používateľa.
 - Rozpracované joby nemenia stav na exportovaný bez potvrdenia POHODY. Neúspešný job sa opakuje iba explicitnou akciou používateľa.
 - Odinštalovanie odstráni službu a binárky, ale zámerne ponechá `%ProgramData%\Dokladovka` pre audit/obnovu; zmazanie dát je samostatné schválené rozhodnutie.

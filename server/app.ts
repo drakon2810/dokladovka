@@ -34,16 +34,10 @@ export async function buildApp(input: {
   await app.register(cookie);
   await app.register(rateLimit, { global: false, max: 300, timeWindow: '1 minute' });
 
-  app.addHook('onSend', async (request, reply) => {
+  app.addHook('onSend', async (_request, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'same-origin');
-    if (request.url.startsWith('/api/agent/latest')) {
-      if (!reply.hasHeader('Cache-Control')) reply.header('Cache-Control', 'public, max-age=60');
-    } else if (request.url.startsWith('/downloads/')) {
-      if (!reply.hasHeader('Cache-Control')) reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-    } else {
-      reply.header('Cache-Control', 'no-store');
-    }
+    reply.header('Cache-Control', 'no-store');
     reply.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
   });
 

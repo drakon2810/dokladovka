@@ -23,9 +23,6 @@ export interface ServerConfig {
     filesystemRoot: string;
   };
   agentInstallerPublicBaseUrl: string;
-  agentInstallerDirectory: string;
-  allowSelfSignedAgentReleases: boolean;
-  agentReleasePublishToken?: string;
   agentOfflineAlertHours: number;
   exportFailureAlertPercent: number;
   monitorIntervalMs: number;
@@ -86,9 +83,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     },
     agentInstallerPublicBaseUrl:
       env.AGENT_INSTALLER_PUBLIC_BASE_URL?.replace(/\/$/, '') || 'http://localhost:3001/downloads',
-    agentInstallerDirectory: resolve(env.AGENT_INSTALLER_DIRECTORY?.trim() || 'agent/artifacts'),
-    allowSelfSignedAgentReleases: env.AGENT_ALLOW_SELF_SIGNED_RELEASES === 'true' || nodeEnv !== 'production',
-    agentReleasePublishToken: env.AGENT_RELEASE_PUBLISH_TOKEN?.trim() || undefined,
     agentOfflineAlertHours: positiveInteger(env.AGENT_OFFLINE_ALERT_HOURS, 2),
     exportFailureAlertPercent: Math.min(100, positiveInteger(env.EXPORT_FAILURE_ALERT_PERCENT, 20)),
     monitorIntervalMs: positiveInteger(env.MONITOR_INTERVAL_MS, 60_000),

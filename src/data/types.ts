@@ -283,7 +283,6 @@ export interface AgentInstallation {
 export interface AgentPairingCode {
   code: string;
   expiresAt: string;
-  organizationId: string;
 }
 
 export interface PohodaCompanyLink {
@@ -329,27 +328,10 @@ export interface ExportJob {
 }
 
 export interface AgentRelease {
-  available: true;
   version: string;
   downloadUrl: string;
   sha256: string;
-  fileSize: number;
-  publishedAt: string;
-  publisher: string;
-  publisherThumbprint: string;
-  minimumWindowsVersion: string;
-  signed: true;
-  signatureTrust: 'public' | 'self-signed';
-  certificateUrl?: string;
-  channel: 'production' | 'temporary';
 }
-
-export interface AgentReleaseUnavailable {
-  available: false;
-  reason: 'release_not_available' | 'release_metadata_invalid';
-}
-
-export type AgentReleaseState = AgentRelease | AgentReleaseUnavailable;
 
 export type Role = 'uctovnik' | 'schvalovatel' | 'admin';
 

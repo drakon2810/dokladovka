@@ -5,19 +5,20 @@ import { EmptyState } from '../../components/ui';
 import {
   MOSTIK_DATA_MODE,
   disconnectMostikInstallation,
+  generateMostikPairingCode,
   getMostikOverview,
   retryMostikExportJob,
   setMostikEnabled,
+  simulateMostikAgentConnection,
   simulateMostikAgentResult,
   simulateMostikCodeListSync,
   updateMostikOrganizationLink,
   type MostikOverview,
 } from '../../data/mostik/mostikService';
 import { useDataQuery } from '../../data/query';
-import type { ExportJob, PohodaCompanyLink } from '../../data/types';
+import type { AgentPairingCode, ExportJob, PohodaCompanyLink } from '../../data/types';
 import { t } from '../../i18n/sk';
 import { formatDateTime } from '../../lib/format';
-import { MostikOnboarding } from './MostikOnboarding';
 
 function connected(lastSeenAt?: string): boolean {
   return Boolean(lastSeenAt && Date.now() - Date.parse(lastSeenAt) < 5 * 60 * 1000);
@@ -79,6 +80,7 @@ export function MostikTab() {
   const { data } = useDataQuery();
   const { session } = useAuth();
   const [overview, setOverview] = useState<MostikOverview>();
+  const [pairing, setPairing] = useState<AgentPairingCode>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [expandedJobId, setExpandedJobId] = useState<string>();
@@ -151,17 +153,64 @@ export function MostikTab() {
       )}
 
       <fieldset disabled={!overview.enabled || busy} className="space-y-4 disabled:opacity-60">
-        <MostikOnboarding
-          overview={overview}
-          organizations={data.organizations.filter((item) => !item.archived)}
-          csrfToken={csrfToken}
-          onReload={load}
-        />
+        <section className="card p-4">
+          <h2 className="mb-3 text-sm font-semibold">{t('mostik.instalacia')}</h2>
+          {overview.latestRelease ? (
+            <a className="btn btn-primary" href={overview.latestRelease.downloadUrl}>
+              {t('mostik.stiahnutAgent')}
+            </a>
+          ) : (
+            <button type="button" className="btn btn-primary" disabled title={t('mostik.instalatorNedostupny')}>
+              {t('mostik.stiahnutAgent')}
+            </button>
+          )}
+          {overview.latestRelease && <span className="ml-3 text-xs text-ink-soft">{t('mostik.verzia')} {overview.latestRelease.version}</span>}
+          {!overview.latestRelease && <p className="mt-2 text-xs text-ink-soft">{t('mostik.instalatorNedostupny')}</p>}
+          <h3 className="mb-2 mt-4 text-sm font-medium">{t('mostik.poziadavky')}</h3>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-ink-soft">
+            <li>{t('mostik.poziadavka.licencia')}</li>
+            <li>{t('mostik.poziadavka.prava')}</li>
+            <li>{t('mostik.poziadavka.mserver')}</li>
+            <li>{t('mostik.poziadavka.windows')}</li>
+          </ul>
+        </section>
 
         <section className="card p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">{t('mostik.instalacie')}</h2>
+            <div>
+              <h2 className="text-sm font-semibold">{t('mostik.parovanie')}</h2>
+              <p className="text-xs text-ink-soft">{t('mostik.kodJednorazovy')}</p>
+            </div>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void run(async () => {
+                const result = await generateMostikPairingCode(csrfToken);
+                setPairing(result);
+              }, t('mostik.kodVygenerovany'))}
+            >
+              {t('mostik.vygenerovatKod')}
+            </button>
           </div>
+          {pairing && (
+            <div className="mb-4 rounded border border-accent/30 bg-emerald-50 p-4">
+              <p className="tnum text-2xl font-semibold tracking-widest">{pairing.code}</p>
+              <p className="mt-1 text-xs text-ink-soft">{t('mostik.kodPlatnyDo')}: {formatDateTime(pairing.expiresAt)}</p>
+              {MOSTIK_DATA_MODE === 'mock' && (
+                <button
+                  type="button"
+                  className="btn mt-3"
+                  onClick={() => void run(async () => {
+                    await simulateMostikAgentConnection(pairing.code);
+                    setPairing(undefined);
+                  }, t('mostik.agentPripojeny'))}
+                >
+                  {t('mostik.simulovatPripojenie')}
+                </button>
+              )}
+            </div>
+          )}
+          <h3 className="mb-2 text-sm font-medium">{t('mostik.instalacie')}</h3>
           {overview.installations.length === 0 ? (
             <p className="text-sm text-ink-soft">{t('mostik.ziadneInstalacie')}</p>
           ) : (

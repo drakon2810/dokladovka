@@ -17,7 +17,3 @@ agent/**/obj/
 agent/publish/
 agent/artifacts/
 agent/vendor/pohoda-xsd/
-public/downloads/
-.git-onedrive-broken-*/
-.claude/
-.agents/

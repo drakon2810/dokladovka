@@ -1,19 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { MemoryObjectStorage } from './storage.js';
 import { createTestDatabase, seedTestUser, testConfig } from './testHelpers.js';
-import { sha256 } from './security.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
-const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(databases.splice(0).map((database) => database.close()));
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe('agent backend contour', () => {
@@ -30,18 +24,14 @@ describe('agent backend contour', () => {
 
     const enabled = await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
     expect(enabled.statusCode).toBe(200);
-    const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders, payload: { organizationId: seeded.organizationId } });
+    const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders });
     expect(pairing.statusCode).toBe(201);
     const code = pairing.json().code as string;
-    const mismatch = await app.inject({ method: 'POST', url: '/api/agent/pair', payload: { pairingCode: code, hostname: 'POHODA-SRV', agentVersion: '1.0.0', companyIco: '87654321' } });
-    expect(mismatch.statusCode).toBe(409);
-    expect(mismatch.json().code).toBe('organization_mismatch');
-    const paired = await app.inject({ method: 'POST', url: '/api/agent/pair', payload: { pairingCode: code, hostname: 'POHODA-SRV', agentVersion: '1.0.0', companyIco: '12345678' } });
+    const paired = await app.inject({ method: 'POST', url: '/api/agent/pair', payload: { pairingCode: code, hostname: 'POHODA-SRV', agentVersion: '1.0.0' } });
     expect(paired.statusCode).toBe(201);
     const agentHeaders = { authorization: `Bearer ${paired.json().agentToken as string}` };
-    const replay = await app.inject({ method: 'POST', url: '/api/agent/pair', payload: { pairingCode: code, hostname: 'OTHER', agentVersion: '1.0.0', companyIco: '12345678' } });
-    expect(replay.statusCode).toBe(409);
-    expect(replay.json().code).toBe('pairing_code_used');
+    const replay = await app.inject({ method: 'POST', url: '/api/agent/pair', payload: { pairingCode: code, hostname: 'OTHER', agentVersion: '1.0.0' } });
+    expect(replay.statusCode).toBe(400);
 
     const heartbeat = await app.inject({
       method: 'POST',
@@ -120,121 +110,6 @@ describe('agent backend contour', () => {
     expect(repeated.json()).toMatchObject({ accepted: true, idempotent: true, status: 'confirmed' });
     const document = await database.query<{ status: string; export_id: string } & Record<string, unknown>>('SELECT status, export_id FROM documents WHERE id=$1', [documentId]);
     expect(document.rows[0]).toEqual({ status: 'exportovany', export_id: exportJobId });
-
-    await app.close();
-  }, 90_000);
-
-  it('distinguishes expired pairing and publishes only complete signed releases', async () => {
-    const database = await createTestDatabase();
-    databases.push(database);
-    const seeded = await seedTestUser(database);
-    const config = testConfig({ agentReleasePublishToken: 'release-test-token', allowSelfSignedAgentReleases: true });
-    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config, logger: false });
-
-    const unavailable = await app.inject({ method: 'GET', url: '/api/agent/latest' });
-    expect(unavailable.statusCode).toBe(404);
-    expect(unavailable.json()).toEqual({ available: false, reason: 'release_not_available' });
-
-    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
-    const browserHeaders = {
-      cookie: String(login.headers['set-cookie']).split(';')[0],
-      'x-csrf-token': login.json().csrfToken as string,
-    };
-    await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
-    const pairing = await app.inject({
-      method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders,
-      payload: { organizationId: seeded.organizationId },
-    });
-    const pairingCode = pairing.json().code as string;
-    await database.query('UPDATE agent_pairing_codes SET expires_at=$1 WHERE code_hash=$2', [new Date(Date.now() - 1_000).toISOString(), sha256(pairingCode)]);
-    const expired = await app.inject({ method: 'POST', url: '/api/agent/pair', payload: { pairingCode, hostname: 'POHODA-SRV', agentVersion: '1.0.0', companyIco: '12345678' } });
-    expect(expired.statusCode).toBe(410);
-    expect(expired.json().code).toBe('pairing_code_expired');
-
-    const commonRelease = {
-      version: '1.0.0',
-      downloadUrl: 'https://downloads.example.sk/Dokladovka-Agent-Setup-1.0.0.exe',
-      sha256: 'a'.repeat(64),
-      fileSize: 123456,
-      publishedAt: '2026-07-14T12:00:00Z',
-      publisher: 'Dokladovka',
-      publisherThumbprint: 'B'.repeat(40),
-      minimumWindowsVersion: '10',
-      signed: true,
-    };
-    const unauthorized = await app.inject({ method: 'POST', url: '/api/internal/agent-releases', payload: commonRelease });
-    expect(unauthorized.statusCode).toBe(401);
-    const insecure = await app.inject({
-      method: 'POST', url: '/api/internal/agent-releases', headers: { authorization: 'Bearer release-test-token' },
-      payload: { ...commonRelease, downloadUrl: 'http://downloads.example.sk/setup.exe' },
-    });
-    expect(insecure.statusCode).toBe(400);
-    const unsigned = await app.inject({
-      method: 'POST', url: '/api/internal/agent-releases', headers: { authorization: 'Bearer release-test-token' },
-      payload: { ...commonRelease, signed: false },
-    });
-    expect(unsigned.statusCode).toBe(400);
-    const published = await app.inject({
-      method: 'POST', url: '/api/internal/agent-releases', headers: { authorization: 'Bearer release-test-token' },
-      payload: commonRelease,
-    });
-    expect(published.statusCode, published.body).toBe(201);
-    const latest = await app.inject({ method: 'GET', url: '/api/agent/latest' });
-    expect(latest.statusCode).toBe(200);
-    expect(latest.headers['cache-control']).toContain('max-age=300');
-    expect(latest.json()).toMatchObject({ available: true, version: '1.0.0', signed: true, fileSize: 123456 });
-
-    const temporaryRelease = {
-      ...commonRelease,
-      version: '1.0.1',
-      downloadUrl: '/downloads/Dokladovka-Agent-Setup-1.0.1-SELF-SIGNED-TEMP.exe',
-      publisher: 'Dokladovka – DOČASNÝ SELF-SIGNED',
-      signatureTrust: 'self-signed',
-      certificateUrl: '/downloads/Dokladovka-Agent-Temporary-Code-Signing.cer',
-      channel: 'temporary',
-    };
-    const missingCertificate = await app.inject({
-      method: 'POST', url: '/api/internal/agent-releases', headers: { authorization: 'Bearer release-test-token' },
-      payload: { ...temporaryRelease, certificateUrl: undefined },
-    });
-    expect(missingCertificate.statusCode).toBe(400);
-    const temporaryPublished = await app.inject({
-      method: 'POST', url: '/api/internal/agent-releases', headers: { authorization: 'Bearer release-test-token' },
-      payload: temporaryRelease,
-    });
-    expect(temporaryPublished.statusCode, temporaryPublished.body).toBe(201);
-    const temporaryLatest = await app.inject({ method: 'GET', url: '/api/agent/latest' });
-    expect(temporaryLatest.json()).toMatchObject({
-      available: true,
-      version: '1.0.1',
-      signatureTrust: 'self-signed',
-      channel: 'temporary',
-    });
-
-    await app.close();
-  }, 90_000);
-
-  it('serves only allow-listed installer artifacts from the configured directory', async () => {
-    const database = await createTestDatabase();
-    databases.push(database);
-    const directory = await mkdtemp(join(tmpdir(), 'dokladovka-agent-download-'));
-    temporaryDirectories.push(directory);
-    const fileName = 'Dokladovka-Agent-Setup-1.0.1-SELF-SIGNED-TEMP.exe';
-    await writeFile(join(directory, fileName), 'temporary setup');
-    await writeFile(join(directory, 'secret.txt'), 'must not be served');
-    const app = await buildApp({
-      database,
-      storage: new MemoryObjectStorage(),
-      config: testConfig({ agentInstallerDirectory: directory }),
-      logger: false,
-    });
-
-    const download = await app.inject({ method: 'GET', url: `/downloads/${fileName}` });
-    expect(download.statusCode).toBe(200);
-    expect(download.body).toBe('temporary setup');
-    expect(download.headers['content-disposition']).toContain(fileName);
-    const blocked = await app.inject({ method: 'GET', url: '/downloads/secret.txt' });
-    expect(blocked.statusCode).toBe(404);
 
     await app.close();
   }, 90_000);

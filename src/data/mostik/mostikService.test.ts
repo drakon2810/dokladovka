@@ -8,7 +8,6 @@ import {
   simulateMostikAgentConnection,
   simulateMostikAgentResult,
   simulateMostikCodeListSync,
-  validateAgentRelease,
 } from './mostikService';
 
 beforeEach(async () => {
@@ -16,8 +15,7 @@ beforeEach(async () => {
   await resetDemoData();
   await setRole('admin');
   await setMostikEnabled(true);
-  const organizationId = (await getDataSnapshot()).organizations[0].id;
-  const pairing = await generateMostikPairingCode(organizationId);
+  const pairing = await generateMostikPairingCode();
   await simulateMostikAgentConnection(pairing.code);
   await simulateMostikCodeListSync();
 });
@@ -29,34 +27,6 @@ function firstApprovedDocument(data: Awaited<ReturnType<typeof getDataSnapshot>>
 }
 
 describe('Mostík mock service', () => {
-  it('accepts only complete signed HTTPS release metadata', () => {
-    const valid = validateAgentRelease({
-      available: true,
-      version: '1.2.3',
-      downloadUrl: 'https://downloads.example.sk/Dokladovka-Agent-Setup-1.2.3.exe',
-      sha256: 'a'.repeat(64),
-      fileSize: 123,
-      publishedAt: '2026-07-14T12:00:00Z',
-      publisher: 'Dokladovka',
-      publisherThumbprint: 'B'.repeat(40),
-      minimumWindowsVersion: '10',
-      signed: true,
-    });
-    expect(valid?.version).toBe('1.2.3');
-    expect(validateAgentRelease({ ...valid, downloadUrl: 'http://downloads.example.sk/setup.exe' })).toBeUndefined();
-    expect(validateAgentRelease({ ...valid, signed: false })).toBeUndefined();
-    expect(validateAgentRelease({ ...valid, sha256: 'broken' })).toBeUndefined();
-
-    const temporary = validateAgentRelease({
-      ...valid,
-      downloadUrl: '/downloads/Dokladovka-Agent-Setup-1.2.3-SELF-SIGNED-TEMP.exe',
-      signatureTrust: 'self-signed',
-      certificateUrl: '/downloads/Dokladovka-Agent-Temporary-Code-Signing.cer',
-      channel: 'temporary',
-    });
-    expect(temporary?.signatureTrust).toBe('self-signed');
-    expect(validateAgentRelease({ ...temporary, certificateUrl: undefined })).toBeUndefined();
-  });
   it('does not mark a document exported before POHODA confirms it', async () => {
     const before = await getDataSnapshot();
     const document = firstApprovedDocument(before);

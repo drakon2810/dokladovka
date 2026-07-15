@@ -41,28 +41,36 @@ public static class Program
 
     private static async Task<int> ConfigureAsync(string[] args, CancellationToken cancellationToken)
     {
-        var cloud = Option(args, "--cloud") ?? Prompt("URL cloudu", Environment.GetEnvironmentVariable("DOKLADOVKA_CLOUD_URL") ?? "https://app.dokladorpro.sk");
+        var cloud = Option(args, "--cloud") ?? Prompt("URL cloudu", "https://app.example.sk");
         var pairingCode = Option(args, "--pairing-code") ?? Prompt("Párovací kód");
         var mServerUrl = Option(args, "--mserver-url") ?? Prompt("URL POHODA mServer", "http://localhost:444");
         var ico = Option(args, "--ico") ?? Prompt("IČO firmy v otvorenej databáze POHODA");
         var user = Option(args, "--mserver-user") ?? Prompt("Používateľ mServer");
         var password = Environment.GetEnvironmentVariable("DOKLADOVKA_MSERVER_PASSWORD") ?? ReadPassword("Heslo mServer");
-        var log = new RollingFileAgentLog();
-        var configured = await AgentConfiguration.ConfigureAsync(new AgentConfigurationRequest
+        var endpointId = Option(args, "--endpoint-id") ?? "mserver-1";
+        var endpoint = new MServerEndpointSettings
         {
-            CloudBaseUrl = cloud,
-            PairingCode = pairingCode,
-            MServerUrl = mServerUrl,
+            Id = endpointId,
+            BaseUrl = mServerUrl,
             CompanyIco = ico,
-            UserName = user,
-            Password = password,
-            EndpointId = Option(args, "--endpoint-id") ?? "mserver-1",
             InstanceName = Option(args, "--instance"),
             PohodaExePath = Option(args, "--pohoda-exe"),
-            InstallationName = Option(args, "--name"),
+        };
+        var settings = new AgentSettings
+        {
+            CloudBaseUrl = cloud,
+            InstallationName = Option(args, "--name") ?? Environment.MachineName,
+            MServers = [endpoint],
             AllowedPublisherThumbprint = Option(args, "--publisher-thumbprint"),
-        }, log, cancellationToken);
-        Console.WriteLine($"mServer je dostupný: {configured.Company.Company}, databáza {configured.Company.DatabaseName}, rok {configured.Company.Year}.");
+        };
+        AgentSettings.Validate(settings);
+        var mServerSecret = new MServerSecret { EndpointId = endpointId, UserName = user, Password = password };
+        var log = new RollingFileAgentLog();
+        var company = await new MServerClient(endpoint, mServerSecret, log).GetCompanyAsync(cancellationToken);
+        Console.WriteLine($"mServer je dostupný: {company.Company}, databáza {company.DatabaseName}, rok {company.Year}.");
+        var paired = await BackendClient.PairAsync(cloud, pairingCode, Environment.MachineName, AgentVersion.Current, cancellationToken);
+        AgentSettingsStore.Save(settings);
+        SecretVault.Save(new AgentSecrets { AgentToken = paired.AgentToken, MServers = [mServerSecret] });
         Console.WriteLine($"Agent bol úspešne nakonfigurovaný. Konfigurácia: {AgentPaths.Settings}");
         return 0;
     }

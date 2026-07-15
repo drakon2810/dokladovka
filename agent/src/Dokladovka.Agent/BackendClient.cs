@@ -6,13 +6,7 @@ using System.Text.Json.Serialization;
 
 namespace Dokladovka.Agent;
 
-public sealed record PairOrganization(string Id, string Ico, string Nazov);
-public sealed record PairResponse(
-    string AgentToken,
-    string? InstallationId = null,
-    string? TenantId = null,
-    string? OrganizationId = null,
-    PairOrganization? Organization = null);
+public sealed record PairResponse(string AgentToken);
 public sealed record AgentOrganization(
     string OrganizationId,
     string Ico,
@@ -24,18 +18,7 @@ public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyR
 public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null);
 public sealed record AgentExportJob(string ExportJobId, string DataPackXml, string IdempotencyKey);
 public sealed record ExportDocumentResult(string DocumentId, string State, string? PohodaNumber = null, string? Message = null);
-public sealed record AgentRelease(
-    bool Available,
-    string? Version = null,
-    string? DownloadUrl = null,
-    string? Sha256 = null,
-    long? FileSize = null,
-    DateTimeOffset? PublishedAt = null,
-    string? Publisher = null,
-    string? PublisherThumbprint = null,
-    string? MinimumWindowsVersion = null,
-    bool Signed = false,
-    string? Reason = null);
+public sealed record AgentRelease(string Version, string DownloadUrl, string Sha256);
 public sealed record AgentSyncResult(string OrganizationId, string Kind, string State, int ItemCount, int DurationMs, string? ErrorCode = null);
 
 public sealed class BackendApiException(HttpStatusCode statusCode, string message, bool transient = false) : Exception(message)
@@ -68,11 +51,10 @@ public sealed class BackendClient
         string pairingCode,
         string hostname,
         string agentVersion,
-        string companyIco,
         CancellationToken cancellationToken)
     {
         using var http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(30) };
-        using var response = await http.PostAsJsonAsync("api/agent/pair", new { pairingCode, hostname, agentVersion, companyIco }, JsonOptions, cancellationToken);
+        using var response = await http.PostAsJsonAsync("api/agent/pair", new { pairingCode, hostname, agentVersion }, JsonOptions, cancellationToken);
         if (!response.IsSuccessStatusCode) throw await ToException(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<PairResponse>(JsonOptions, cancellationToken)
             ?? throw new InvalidOperationException("Backend nevrátil token agenta.");
@@ -159,7 +141,5 @@ public sealed class BackendClient
 
 public static class AgentVersion
 {
-    public static string Current { get; } = typeof(AgentVersion).Assembly.GetName().Version is { } version
-        ? $"{version.Major}.{version.Minor}.{Math.Max(0, version.Build)}"
-        : "0.1.0";
+    public const string Current = "0.1.0";
 }

@@ -3,7 +3,6 @@ import type {
   AgentInstallation,
   AgentPairingCode,
   AgentRelease,
-  AgentReleaseState,
   CodeListItem,
   CodeListKind,
   DocumentItem,
@@ -41,54 +40,7 @@ export interface OrganizationMostikStatus {
   available: boolean;
 }
 
-const pairingCodes = new Map<string, { expiresAt: number; organizationId: string }>();
-
-export function validateAgentRelease(value: unknown): AgentRelease | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidate = value as Partial<AgentRelease>;
-  if (candidate.available !== true || candidate.signed !== true) return undefined;
-  if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(candidate.version ?? '')) return undefined;
-  const signatureTrust = candidate.signatureTrust === 'self-signed'
-    ? 'self-signed'
-    : candidate.signatureTrust === 'public' || candidate.signatureTrust === undefined ? 'public' : undefined;
-  if (!signatureTrust) return undefined;
-  const isHttps = /^https:\/\//i.test(candidate.downloadUrl ?? '');
-  const isLocalDownload = /^\/downloads\/[A-Za-z0-9._-]+$/.test(candidate.downloadUrl ?? '');
-  if (!isHttps && !(signatureTrust === 'self-signed' && isLocalDownload)) return undefined;
-  if (!/^[a-f0-9]{64}$/i.test(candidate.sha256 ?? '')) return undefined;
-  if (!Number.isSafeInteger(candidate.fileSize) || (candidate.fileSize ?? 0) <= 0) return undefined;
-  if (!candidate.publishedAt || Number.isNaN(Date.parse(candidate.publishedAt))) return undefined;
-  if (!candidate.publisher?.trim() || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(candidate.publisherThumbprint ?? '')) return undefined;
-  if (!candidate.minimumWindowsVersion?.trim()) return undefined;
-  if (signatureTrust === 'self-signed'
-    && (!candidate.certificateUrl || (!/^https:\/\//i.test(candidate.certificateUrl)
-      && !/^\/downloads\/[A-Za-z0-9._-]+$/.test(candidate.certificateUrl)))) return undefined;
-  return {
-    available: true,
-    version: candidate.version!,
-    downloadUrl: candidate.downloadUrl!,
-    sha256: candidate.sha256!.toLowerCase(),
-    fileSize: candidate.fileSize!,
-    publishedAt: new Date(candidate.publishedAt).toISOString(),
-    publisher: candidate.publisher.trim(),
-    publisherThumbprint: candidate.publisherThumbprint!.toUpperCase(),
-    minimumWindowsVersion: candidate.minimumWindowsVersion.trim(),
-    signed: true,
-    signatureTrust,
-    certificateUrl: candidate.certificateUrl,
-    channel: signatureTrust === 'self-signed' ? 'temporary' : 'production',
-  };
-}
-
-async function loadLocalTemporaryRelease(): Promise<AgentRelease | undefined> {
-  try {
-    const response = await fetch('/downloads/release-manifest.json', { cache: 'no-store' });
-    if (!response.ok) return undefined;
-    return validateAgentRelease(await response.json());
-  } catch {
-    return undefined;
-  }
-}
+const pairingCodes = new Map<string, number>();
 
 function requireAdmin(): void {
   if (storeApi.get().role !== 'admin') throw new Error('Na túto operáciu nemáte oprávnenie');
@@ -157,12 +109,12 @@ export async function getMostikOverview(): Promise<MostikOverview> {
       restRequest<Record<string, unknown>[]>('/api/mostik/installations'),
       restRequest<Record<string, unknown>[]>('/api/mostik/organization-links'),
       restRequest<ExportJob[]>('/api/mostik/export-jobs'),
-      restRequest<AgentReleaseState>('/api/agent/latest').catch(() => ({ available: false as const, reason: 'release_not_available' as const })),
+      restRequest<AgentRelease>('/api/agent/latest').catch(() => undefined),
       restRequest<MostikHealth>('/api/mostik/health'),
     ]);
     return {
       enabled: settings.enabled,
-      latestRelease: validateAgentRelease(release),
+      latestRelease: release,
       installations: installations.map(normalizeInstallation),
       links: links.map(normalizeLink),
       exportJobs,
@@ -170,10 +122,8 @@ export async function getMostikOverview(): Promise<MostikOverview> {
     };
   }
   const state = storeApi.get();
-  const latestRelease = await loadLocalTemporaryRelease();
   return {
     enabled: state.mostikEnabled,
-    latestRelease,
     installations: state.agentInstallations.map((item) => ({ ...item })),
     links: state.pohodaCompanyLinks.map((item) => ({ ...item })),
     exportJobs: state.exportJobs.map((item) => structuredClone(item)),
@@ -205,21 +155,19 @@ export async function setMostikEnabled(enabled: boolean, csrfToken?: string): Pr
   storeApi.set({ mostikEnabled: enabled });
 }
 
-export async function generateMostikPairingCode(organizationId: string, csrfToken?: string): Promise<AgentPairingCode> {
+export async function generateMostikPairingCode(csrfToken?: string): Promise<AgentPairingCode> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    return restRequest('/api/mostik/pairing-codes', { method: 'POST', body: JSON.stringify({ organizationId }) }, csrfToken);
+    return restRequest('/api/mostik/pairing-codes', { method: 'POST' }, csrfToken);
   }
   requireAdmin();
   if (!storeApi.get().mostikEnabled) throw new Error('Mostík nie je povolený');
-  const organization = storeApi.get().organizations.find((item) => item.id === organizationId && item.tenantId === MOCK_TENANT_ID && !item.archived);
-  if (!organization) throw new Error('Organizácia neexistuje');
   const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   const raw = Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('');
   const code = `${raw.slice(0, 4)}-${raw.slice(4)}`;
   const expiresAt = Date.now() + 15 * 60 * 1000;
-  pairingCodes.set(code, { expiresAt, organizationId });
-  return { code, expiresAt: new Date(expiresAt).toISOString(), organizationId };
+  pairingCodes.set(code, expiresAt);
+  return { code, expiresAt: new Date(expiresAt).toISOString() };
 }
 
 export async function disconnectMostikInstallation(id: string, csrfToken?: string): Promise<void> {
@@ -351,8 +299,8 @@ export async function retryMostikExportJob(id: string, csrfToken?: string): Prom
 export async function simulateMostikAgentConnection(code: string): Promise<AgentInstallation> {
   if (MOSTIK_DATA_MODE !== 'mock') throw new Error('Simulátor je dostupný iba v demo režime');
   requireAdmin();
-  const pairing = pairingCodes.get(code);
-  if (!pairing || pairing.expiresAt <= Date.now()) throw new Error('Párovací kód je neplatný alebo vypršal');
+  const expiresAt = pairingCodes.get(code);
+  if (!expiresAt || expiresAt <= Date.now()) throw new Error('Párovací kód je neplatný alebo vypršal');
   pairingCodes.delete(code);
   const state = storeApi.get();
   const heartbeatAt = nowIso();
@@ -368,13 +316,13 @@ export async function simulateMostikAgentConnection(code: string): Promise<Agent
   };
   storeApi.set({
     agentInstallations: [installation, ...state.agentInstallations],
-    pohodaCompanyLinks: state.pohodaCompanyLinks.map((link) => link.organizationId === pairing.organizationId ? ({
+    pohodaCompanyLinks: state.pohodaCompanyLinks.map((link) => ({
       ...link,
       dbName: `StwPh_${link.ico}_2026`,
       uctovnyRok: '2026',
       matchedAt: heartbeatAt,
       matchRule: 'auto_ico' as const,
-    }) : link),
+    })),
   });
   return installation;
 }

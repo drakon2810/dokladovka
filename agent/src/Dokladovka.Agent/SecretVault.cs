@@ -26,29 +26,6 @@ public static class SecretVault
         }
     }
 
-    public static void VerifyAvailable()
-    {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("DPAPI je dostupné iba na Windows.");
-        var clear = Encoding.UTF8.GetBytes("Dokladovka.Agent.DPAPI.Test");
-        byte[]? encrypted = null;
-        try
-        {
-            encrypted = ProtectedData.Protect(clear, Entropy, DataProtectionScope.LocalMachine);
-            var roundTrip = ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.LocalMachine);
-            try
-            {
-                if (!CryptographicOperations.FixedTimeEquals(clear, roundTrip))
-                    throw new CryptographicException("DPAPI kontrola zlyhala.");
-            }
-            finally { CryptographicOperations.ZeroMemory(roundTrip); }
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(clear);
-            if (encrypted is not null) CryptographicOperations.ZeroMemory(encrypted);
-        }
-    }
-
     public static AgentSecrets Load()
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("DPAPI je dostupné iba na Windows.");

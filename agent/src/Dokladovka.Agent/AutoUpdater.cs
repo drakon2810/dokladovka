@@ -16,10 +16,6 @@ public sealed class AutoUpdater(BackendClient backend, AgentSettings settings, I
         {
             return;
         }
-        if (!release.Available) return;
-        if (!release.Signed || string.IsNullOrWhiteSpace(release.Version) || string.IsNullOrWhiteSpace(release.DownloadUrl)
-            || string.IsNullOrWhiteSpace(release.Sha256) || string.IsNullOrWhiteSpace(release.PublisherThumbprint))
-            throw new InvalidOperationException("Release manifest aktualizácie nie je úplný alebo podpísaný.");
         if (!IsNewer(release.Version, AgentVersion.Current)) return;
         if (!Uri.TryCreate(release.DownloadUrl, UriKind.Absolute, out var url) || url.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("Aktualizácia agenta nemá HTTPS URL.");
@@ -37,28 +33,18 @@ public sealed class AutoUpdater(BackendClient backend, AgentSettings settings, I
         }
         await using var downloaded = File.OpenRead(temporary);
         var actual = Convert.ToHexString(await SHA256.HashDataAsync(downloaded, cancellationToken)).ToLowerInvariant();
-        if (!System.Text.RegularExpressions.Regex.IsMatch(release.Sha256, "^[a-fA-F0-9]{64}$")
-            || !CryptographicOperations.FixedTimeEquals(Convert.FromHexString(actual), Convert.FromHexString(release.Sha256)))
+        if (!CryptographicOperations.FixedTimeEquals(Convert.FromHexString(actual), Convert.FromHexString(release.Sha256)))
         {
             File.Delete(temporary);
             throw new InvalidOperationException("SHA-256 aktualizácie nesúhlasí s release manifestom.");
         }
         File.Move(temporary, target, true);
-        if (release.FileSize is > 0 && new FileInfo(target).Length != release.FileSize.Value)
-        {
-            File.Delete(target);
-            throw new InvalidOperationException("Veľkosť aktualizácie nesúhlasí s release manifestom.");
-        }
 
         if (string.IsNullOrWhiteSpace(settings.AllowedPublisherThumbprint))
         {
             log.Info("update_staged", new { release.Version, reason = "publisher_thumbprint_not_configured" });
             return;
         }
-        var expectedPublisher = settings.AllowedPublisherThumbprint.Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
-        var manifestPublisher = release.PublisherThumbprint.Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
-        if (!manifestPublisher.Equals(expectedPublisher, StringComparison.Ordinal))
-            throw new InvalidOperationException("Vydavateľ release manifestu sa nezhoduje s povoleným certifikátom.");
         if (!await HasValidSignatureAsync(target, settings.AllowedPublisherThumbprint, cancellationToken))
             throw new InvalidOperationException("Digitálny podpis aktualizácie nie je platný alebo vydavateľ nesúhlasí.");
 

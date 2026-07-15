@@ -1,7 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import { basename, resolve, sep } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { writeAudit } from '../audit.js';
@@ -9,7 +6,7 @@ import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole
 import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { HttpError } from '../http.js';
-import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from '../security.js';
+import { createPairingCode, randomToken, sha256 } from '../security.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 
 interface AgentAuth extends Record<string, unknown> {
@@ -43,66 +40,6 @@ const codeListItem = z.object({
   agenda: z.string().max(50).optional(),
   uctovnyRok: z.string().max(20).optional(),
 }).strict();
-
-const releaseSchema = z.object({
-  available: z.literal(true).optional(),
-  version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/),
-  downloadUrl: z.string().trim().min(1).max(2_000),
-  sha256: z.string().regex(/^[a-fA-F0-9]{64}$/).transform((value) => value.toLowerCase()),
-  fileSize: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  publishedAt: z.string().datetime({ offset: true }),
-  publisher: z.string().trim().min(1).max(200),
-  publisherThumbprint: z.string().regex(/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/).transform((value) => value.toUpperCase()),
-  minimumWindowsVersion: z.string().trim().min(1).max(50),
-  signed: z.literal(true),
-  signatureTrust: z.enum(['public', 'self-signed']).default('public'),
-  certificateUrl: z.string().trim().min(1).max(2_000).nullable().optional(),
-  channel: z.enum(['production', 'temporary']).default('production'),
-}).strict().superRefine((value, context) => {
-  const isHttps = (url: string) => {
-    try { return new URL(url).protocol === 'https:'; } catch { return false; }
-  };
-  const isLocalDownload = (url: string) => /^\/downloads\/[A-Za-z0-9._-]+$/.test(url);
-  if (value.signatureTrust === 'public' && !isHttps(value.downloadUrl)) {
-    context.addIssue({ code: 'custom', path: ['downloadUrl'], message: 'Produkčný download musí používať HTTPS' });
-  }
-  if (value.signatureTrust === 'self-signed') {
-    if (value.channel !== 'temporary') {
-      context.addIssue({ code: 'custom', path: ['channel'], message: 'Self-signed release musí používať temporary channel' });
-    }
-    if (!isHttps(value.downloadUrl) && !isLocalDownload(value.downloadUrl)) {
-      context.addIssue({ code: 'custom', path: ['downloadUrl'], message: 'Self-signed download musí používať HTTPS alebo lokálnu /downloads/ cestu' });
-    }
-    if (!value.certificateUrl || (!isHttps(value.certificateUrl) && !isLocalDownload(value.certificateUrl))) {
-      context.addIssue({ code: 'custom', path: ['certificateUrl'], message: 'Self-signed release vyžaduje verejný certifikát' });
-    }
-  }
-});
-
-type ReleaseInput = z.infer<typeof releaseSchema>;
-
-async function publishRelease(database: Database, body: ReleaseInput): Promise<void> {
-  await database.transaction(async (tx) => {
-    await tx.query('UPDATE agent_releases SET active=false WHERE active=true');
-    await tx.query(
-      `INSERT INTO agent_releases
-        (version,download_url,sha256,file_size,published_at,publisher,publisher_thumbprint,
-         minimum_windows_version,signed,active,signature_trust,certificate_url,release_channel)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true,$9,$10,$11)
-       ON CONFLICT (version) DO UPDATE SET
-         download_url=excluded.download_url, sha256=excluded.sha256, file_size=excluded.file_size,
-         published_at=excluded.published_at, publisher=excluded.publisher,
-         publisher_thumbprint=excluded.publisher_thumbprint,
-         minimum_windows_version=excluded.minimum_windows_version, signed=true, active=true,
-         signature_trust=excluded.signature_trust, certificate_url=excluded.certificate_url,
-         release_channel=excluded.release_channel,
-         created_at=now()`,
-      [body.version, body.downloadUrl, body.sha256, body.fileSize, body.publishedAt, body.publisher,
-        body.publisherThumbprint, body.minimumWindowsVersion, body.signatureTrust,
-        body.certificateUrl ?? null, body.channel],
-    );
-  });
-}
 
 async function mostikEnabled(queryable: Queryable, tenantId: string): Promise<boolean> {
   const result = await queryable.query<{ mostik_enabled: boolean } & Record<string, unknown>>(
@@ -202,39 +139,20 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       pairingCode: z.string().trim().min(8).max(20),
       hostname: z.string().trim().min(1).max(255),
       agentVersion: z.string().trim().min(1).max(50),
-      companyIco: z.string().regex(/^\d{8}$/),
     }).strict().parse(request.body);
     const codeHash = sha256(body.pairingCode.toUpperCase());
     const token = randomToken();
     const installationId = randomUUID();
     const paired = await database.transaction(async (tx) => {
-      const result = await tx.query<{
-        id: string; tenant_id: string; created_by: string; organization_id?: string;
-        used_at?: string | Date; expires_at: string | Date;
-      } & Record<string, unknown>>(
-        `SELECT id, tenant_id, created_by, organization_id, used_at, expires_at
-           FROM agent_pairing_codes WHERE code_hash=$1 FOR UPDATE`,
+      const result = await tx.query<{ id: string; tenant_id: string; created_by: string } & Record<string, unknown>>(
+        `SELECT id, tenant_id, created_by FROM agent_pairing_codes
+          WHERE code_hash=$1 AND used_at IS NULL AND expires_at > now()
+          FOR UPDATE`,
         [codeHash],
       );
       const pairing = result.rows[0];
-      if (!pairing) throw new HttpError(400, 'pairing_code_invalid', 'Párovací kód je neplatný');
-      if (pairing.used_at) throw new HttpError(409, 'pairing_code_used', 'Párovací kód už bol použitý');
-      if (Date.parse(String(pairing.expires_at)) <= Date.now()) {
-        throw new HttpError(410, 'pairing_code_expired', 'Platnosť párovacieho kódu vypršala');
-      }
+      if (!pairing) throw new HttpError(400, 'pairing_code_invalid', 'Párovací kód je neplatný alebo vypršal');
       if (!await mostikEnabled(tx, pairing.tenant_id)) throw new HttpError(403, 'paused', 'Mostík je pre tenant vypnutý');
-      const selectedOrganization = pairing.organization_id
-        ? (await tx.query<{ id: string; ico: string; name: string } & Record<string, unknown>>(
-            'SELECT id, ico, name FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false',
-            [pairing.organization_id, pairing.tenant_id],
-          )).rows[0]
-        : undefined;
-      if (pairing.organization_id && !selectedOrganization) {
-        throw new HttpError(409, 'organization_unavailable', 'Vybraná organizácia už nie je dostupná');
-      }
-      if (selectedOrganization && selectedOrganization.ico !== body.companyIco) {
-        throw new HttpError(409, 'organization_mismatch', 'IČO firmy v POHODE sa nezhoduje s vybranou organizáciou');
-      }
       await tx.query('UPDATE agent_pairing_codes SET used_at=now() WHERE id=$1', [pairing.id]);
       await tx.query(
         `INSERT INTO agent_installations
@@ -242,18 +160,10 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
          VALUES ($1,$2,$3,$3,$4,now(),$5,'connected')`,
         [installationId, pairing.tenant_id, body.hostname, sha256(token), body.agentVersion],
       );
-      await writeAudit(tx, { tenantId: pairing.tenant_id, organizationId: pairing.organization_id, actorType: 'agent', actorId: installationId, action: 'agent.paired', entityType: 'agent_installation', entityId: installationId, correlationId: request.id, metadata: { hostname: body.hostname, agentVersion: body.agentVersion } });
-      return { ...pairing, selectedOrganization };
+      await writeAudit(tx, { tenantId: pairing.tenant_id, actorType: 'agent', actorId: installationId, action: 'agent.paired', entityType: 'agent_installation', entityId: installationId, correlationId: request.id, metadata: { hostname: body.hostname, agentVersion: body.agentVersion } });
+      return pairing;
     });
-    return reply.code(201).send({
-      agentToken: token,
-      installationId,
-      tenantId: paired.tenant_id,
-      organizationId: paired.organization_id,
-      organization: paired.selectedOrganization
-        ? { id: paired.selectedOrganization.id, ico: paired.selectedOrganization.ico, nazov: paired.selectedOrganization.name }
-        : undefined,
-    });
+    return reply.code(201).send({ agentToken: token, installationId, tenantId: paired.tenant_id });
   });
 
   app.get('/api/agent/organizations', async (request) => {
@@ -456,95 +366,13 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     return { accepted: true, serverTime: new Date().toISOString() };
   });
 
-  app.get<{ Params: { fileName: string } }>('/downloads/:fileName', async (request, reply) => {
-    const fileName = basename(request.params.fileName);
-    const allowed = /^Dokladovka-Agent-Setup-\d+\.\d+\.\d+(?:-SELF-SIGNED-TEMP)?\.exe(?:\.sha256)?$/.test(fileName)
-      || fileName === 'Dokladovka-Agent-Temporary-Code-Signing.cer'
-      || fileName === 'release-manifest.json';
-    if (!allowed || fileName !== request.params.fileName) {
-      return reply.code(404).send({ code: 'download_not_found', message: 'Súbor nebol nájdený' });
-    }
-    const root = resolve(config.agentInstallerDirectory);
-    const filePath = resolve(root, fileName);
-    if (!filePath.startsWith(`${root}${sep}`) && filePath !== root) {
-      return reply.code(404).send({ code: 'download_not_found', message: 'Súbor nebol nájdený' });
-    }
-    try {
-      const info = await stat(filePath);
-      if (!info.isFile()) throw new Error('not_file');
-      const contentType = fileName.endsWith('.exe')
-        ? 'application/vnd.microsoft.portable-executable'
-        : fileName.endsWith('.cer') ? 'application/pkix-cert' : fileName.endsWith('.json') ? 'application/json' : 'text/plain';
-      const cacheControl = fileName === 'release-manifest.json'
-        ? 'no-cache'
-        : 'public, max-age=31536000, immutable';
-      return reply
-        .type(contentType)
-        .header('Content-Length', String(info.size))
-        .header('Content-Disposition', `attachment; filename="${fileName}"`)
-        .header('Cache-Control', cacheControl)
-        .send(createReadStream(filePath));
-    } catch {
-      return reply.code(404).send({ code: 'download_not_found', message: 'Súbor nebol nájdený' });
-    }
-  });
-
-  app.get('/api/agent/latest', async (request, reply) => {
-    const result = await database.query<{
-      version: string; download_url: string; sha256: string; file_size: number | string;
-      published_at: string | Date; publisher: string; publisher_thumbprint: string;
-      minimum_windows_version: string; signed: boolean; signature_trust: 'public' | 'self-signed';
-      certificate_url?: string; release_channel: 'production' | 'temporary';
-    } & Record<string, unknown>>(
-      `SELECT version, download_url, sha256, file_size, published_at, publisher,
-              publisher_thumbprint, minimum_windows_version, signed, signature_trust,
-              certificate_url, release_channel
-         FROM agent_releases
-        WHERE active=true AND signed=true AND file_size IS NOT NULL AND published_at IS NOT NULL
-          AND publisher IS NOT NULL AND publisher_thumbprint IS NOT NULL
-          AND minimum_windows_version IS NOT NULL
-        ORDER BY published_at DESC LIMIT 1`,
+  app.get('/api/agent/latest', async () => {
+    const result = await database.query<{ version: string; download_url: string; sha256: string } & Record<string, unknown>>(
+      `SELECT version, download_url, sha256 FROM agent_releases
+        WHERE active=true ORDER BY created_at DESC LIMIT 1`,
     );
-    const row = result.rows[0];
-    if (!row) {
-      reply.header('Cache-Control', 'public, max-age=60');
-      return reply.code(404).send({ available: false, reason: 'release_not_available' });
-    }
-    const etag = `\"${row.version}-${row.sha256.slice(0, 16)}\"`;
-    reply.header('ETag', etag).header('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
-    if (request.headers['if-none-match'] === etag) return reply.code(304).send();
-    return {
-      available: true,
-      version: row.version,
-      downloadUrl: row.download_url,
-      sha256: row.sha256,
-      fileSize: Number(row.file_size),
-      publishedAt: new Date(row.published_at).toISOString(),
-      publisher: row.publisher,
-      publisherThumbprint: row.publisher_thumbprint,
-      minimumWindowsVersion: row.minimum_windows_version,
-      signed: row.signed,
-      signatureTrust: row.signature_trust,
-      certificateUrl: row.certificate_url ?? undefined,
-      channel: row.release_channel,
-    };
-  });
-
-  app.post('/api/internal/agent-releases', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-  }, async (request, reply) => {
-    const authorization = request.headers.authorization;
-    const expected = config.agentReleasePublishToken;
-    if (!expected || !authorization?.startsWith('Bearer ')
-      || !constantTimeStringEqual(authorization.slice('Bearer '.length).trim(), expected)) {
-      throw new HttpError(401, 'release_publish_unauthorized', 'Publikovanie vydania nie je autorizované');
-    }
-    const body = releaseSchema.parse(request.body);
-    if (body.signatureTrust === 'self-signed' && !config.allowSelfSignedAgentReleases) {
-      throw new HttpError(403, 'self_signed_release_disabled', 'Publikovanie dočasného self-signed vydania nie je povolené');
-    }
-    await publishRelease(database, body);
-    return reply.code(201).send({ available: true, ...body });
+    if (!result.rows[0]) throw new HttpError(404, 'release_not_available', 'Inštalátor zatiaľ nie je publikovaný');
+    return { version: result.rows[0].version, downloadUrl: result.rows[0].download_url, sha256: result.rows[0].sha256 };
   });
 
   // Browser/admin API used by the Mostík UI.
@@ -573,16 +401,14 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     requireCsrf(request, auth);
     requireRole(auth, ['admin']);
     if (!await mostikEnabled(database, auth.tenantId)) throw new HttpError(409, 'mostik_disabled', 'Mostík nie je povolený');
-    const { organizationId } = z.object({ organizationId: z.string().uuid() }).strict().parse(request.body);
-    await requireOrganizationAccess(database, auth, organizationId);
     const code = createPairingCode();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
     await database.query(
-      `INSERT INTO agent_pairing_codes (id, code_hash, tenant_id, organization_id, created_by, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [randomUUID(), sha256(code), auth.tenantId, organizationId, auth.userId, expiresAt.toISOString()],
+      `INSERT INTO agent_pairing_codes (id, code_hash, tenant_id, created_by, expires_at)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [randomUUID(), sha256(code), auth.tenantId, auth.userId, expiresAt.toISOString()],
     );
-    return reply.code(201).send({ code, expiresAt: expiresAt.toISOString(), organizationId });
+    return reply.code(201).send({ code, expiresAt: expiresAt.toISOString() });
   });
 
   app.get('/api/mostik/installations', async (request) => {
@@ -713,20 +539,17 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
     requireRole(auth, ['admin']);
-    const body = releaseSchema.parse(request.body);
-    await publishRelease(database, body);
-    await writeAudit(database, { tenantId: auth.tenantId, actorType: 'user', actorId: auth.userId, action: 'agent.release_published', entityType: 'agent_release', entityId: body.version, correlationId: request.id, metadata: { sha256: body.sha256, publisherThumbprint: body.publisherThumbprint } });
+    const body = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/), downloadUrl: z.string().url(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(request.body);
+    await database.transaction(async (tx) => {
+      await tx.query('UPDATE agent_releases SET active=false WHERE active=true');
+      await tx.query(
+        `INSERT INTO agent_releases (version,download_url,sha256,active)
+         VALUES ($1,$2,$3,true)
+         ON CONFLICT (version) DO UPDATE SET download_url=excluded.download_url, sha256=excluded.sha256, active=true, created_at=now()`,
+        [body.version, body.downloadUrl, body.sha256],
+      );
+      await writeAudit(tx, { tenantId: auth.tenantId, actorType: 'user', actorId: auth.userId, action: 'agent.release_published', entityType: 'agent_release', entityId: body.version, correlationId: request.id, metadata: { sha256: body.sha256 } });
+    });
     return reply.code(201).send(body);
-  });
-
-  app.delete('/api/mostik/releases/:version', async (request, reply) => {
-    const auth = await requireBrowserAuth(request, database);
-    requireCsrf(request, auth);
-    requireRole(auth, ['admin']);
-    const { version } = z.object({ version: z.string().min(1).max(100) }).parse(request.params);
-    const result = await database.query('UPDATE agent_releases SET active=false WHERE version=$1 AND active=true', [version]);
-    if (result.rowCount === 0) throw new HttpError(404, 'release_not_found', 'Vydanie neexistuje alebo už je zablokované');
-    await writeAudit(database, { tenantId: auth.tenantId, actorType: 'user', actorId: auth.userId, action: 'agent.release_blocked', entityType: 'agent_release', entityId: version, correlationId: request.id });
-    return reply.code(204).send();
   });
 }

@@ -30,17 +30,3 @@ Heslo sa ukladá ako scrypt hash.
 
 Pred prvým nasadením treba doplniť doménu, hosting a prístupy. Bez nich nie
 je možné z lokálneho repozitára overiť verejné HTTPS ani auto-deploy.
-
-## Podpísaný Windows Agent
-
-Produkčný agent sa vydáva iba tagom `agent-vX.Y.Z`. Windows workflow zostaví
-self-contained agent a grafický konfigurátor, vytvorí Inno Setup, podpíše ho,
-overí Authenticode a SHA-256, publikuje GitHub Release a odošle manifest do
-`POST /api/internal/agent-releases`. Backend vyžaduje serverový
-`AGENT_RELEASE_PUBLISH_TOKEN`; rovnaká hodnota je uložená v GitHub secret
-`DOKLADOVKA_RELEASE_API_TOKEN`. Download URL musí byť verejné HTTPS. Súkromný
-GitHub Release sa nesmie publikovať do produkčného UI bez autentizovanej
-download proxy.
-
-Úplný postup, secrets, rollback a blokovanie vydania sú v
-`MOSTIK-RELEASE-PROCESS.md`.

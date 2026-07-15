@@ -99,12 +99,4 @@ public static class AgentSettingsStore
         File.WriteAllText(temporary, JsonSerializer.Serialize(settings, JsonOptions));
         File.Move(temporary, AgentPaths.Settings, true);
     }
-
-    public static void VerifyWritable()
-    {
-        Directory.CreateDirectory(AgentPaths.Root);
-        var path = Path.Combine(AgentPaths.Root, $"write-test-{Guid.NewGuid():N}.tmp");
-        try { File.WriteAllText(path, "ok"); }
-        finally { if (File.Exists(path)) File.Delete(path); }
-    }
 }
