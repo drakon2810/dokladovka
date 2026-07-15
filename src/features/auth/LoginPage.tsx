@@ -6,6 +6,10 @@ import { startOidc } from '../../auth/sessionGateway';
 import { AuthError } from '../../auth/types';
 import { t } from '../../i18n/sk';
 
+// Redesign прежнего LoginPage.tsx: та же логика, обновлённая композиция.
+// Палитра из tailwind.config.ts: accent #0E7A5F, accent-hover #0A6650,
+// app #F6F7F5, line #E3E6E2, ink #1B1F1D, ink-soft #5C645F.
+
 function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden>
@@ -79,6 +83,7 @@ export function LoginPage() {
       }}
     >
       <div className="flex w-full max-w-[460px] flex-col gap-7">
+        {/* Логотип */}
         <div className="flex items-center justify-center gap-3">
           <span
             className="grid h-11 w-11 place-items-center rounded-[14px] bg-gradient-to-br from-accent to-accent-hover shadow-lg shadow-accent/40"
@@ -124,7 +129,7 @@ export function LoginPage() {
             <span className="h-px flex-1 bg-gradient-to-r from-line to-transparent" />
           </div>
 
-          <form onSubmit={submit} className="flex flex-col" style={{ gap: 18 }}>
+          <form onSubmit={submit} className="flex flex-col gap-4.5 space-y-0" style={{ gap: 18 }}>
             <label className="flex flex-col gap-1.5">
               <span className="text-[13px] font-medium text-ink-soft">{t('auth.email')}</span>
               <input
@@ -168,7 +173,7 @@ export function LoginPage() {
           </form>
 
           {AUTH_MODE === 'demo' && (
-            <div className="mt-7 rounded-2xl border border-[#F3E3B3] bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-5" style={{ paddingTop: 18, paddingBottom: 18 }}>
+            <div className="mt-7 rounded-2xl border border-[#F3E3B3] bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-5 py-4.5" style={{ paddingTop: 18, paddingBottom: 18 }}>
               <div className="flex items-center gap-2">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
                   <path d="M12 3l9 16H3l9-16z" stroke="#92730A" strokeWidth="1.8" strokeLinejoin="round" />

@@ -1,4 +1,5 @@
-// Zdieľané UI komponenty — statusové badge, chipy, indikátory, modály, toasty.
+// Zdieľané UI komponenty — редизайн: pill-badges, мягкие тени, скругления.
+// API компонентов не менялось — drop-in замена.
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { DocumentStatus, DocumentType, Organization, PaymentStatus, ProcessingStatus } from '../data/types';
 import { t, type SkKey } from '../i18n/sk';
@@ -20,7 +21,7 @@ const STATUS_STYLES: Record<DocumentStatus, string> = {
 export function StatusBadge({ status }: { status: DocumentStatus }) {
   return (
     <span
-      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${STATUS_STYLES[status]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${STATUS_STYLES[status]}`}
     >
       {t(`status.${status}` as SkKey)}
     </span>
@@ -32,7 +33,7 @@ export function ProcessingBadge({ status, label }: { status: ProcessingStatus; l
   const isDone = status === 'ready_for_review';
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs whitespace-nowrap ${
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs ${
         isError
           ? 'border-red-200 bg-red-50 text-red-800'
           : isDone
@@ -40,6 +41,9 @@ export function ProcessingBadge({ status, label }: { status: ProcessingStatus; l
             : 'border-sky-200 bg-sky-50 text-sky-800'
       }`}
     >
+      {!isError && !isDone && (
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-600" aria-hidden />
+      )}
       {label ?? t(`processing.${status}` as SkKey)}
     </span>
   );
@@ -55,7 +59,7 @@ export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
           ? 'border-sky-200 bg-sky-50 text-sky-800'
           : 'border-line bg-app text-ink-soft';
   return (
-    <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs whitespace-nowrap ${style}`}>
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs ${style}`}>
       {t(`platba.status.${status}` as SkKey)}
     </span>
   );
@@ -64,7 +68,7 @@ export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
 export function TypBadge({ typ }: { typ: DocumentType }) {
   return (
     <span
-      className="tnum inline-flex items-center rounded border border-line bg-app px-1.5 py-0.5 text-xs font-semibold text-ink-soft"
+      className="tnum inline-flex items-center rounded-md border border-line bg-app px-2 py-0.5 text-xs font-semibold text-ink-soft"
       title={t(`typ.${typ}.dlhy` as SkKey)}
     >
       {typ}
@@ -103,8 +107,8 @@ export function OrgDot({ org, size = 10 }: { org: Organization; size?: number })
 
 export function OrgChip({ org }: { org: Organization }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded border border-line bg-app px-1.5 py-0.5 text-xs text-ink">
-      <OrgDot org={org} size={8} />
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-app px-2.5 py-0.5 text-xs text-ink">
+      <OrgDot org={org} size={7} />
       {org.nazov}
     </span>
   );
@@ -114,7 +118,7 @@ export function CopyButton({ value, label }: { value: string; label?: string }) 
   return (
     <button
       type="button"
-      className="btn px-2 py-1 text-xs"
+      className="btn px-2.5 py-1 text-xs"
       onClick={async (e) => {
         e.stopPropagation();
         await navigator.clipboard.writeText(value);
@@ -154,7 +158,7 @@ export function Modal({
   }, [onClose]);
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 p-6 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/30 p-6 backdrop-blur-[2px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -165,11 +169,18 @@ export function Modal({
       <div
         ref={ref}
         tabIndex={-1}
-        className={`card mt-8 w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} p-5`}
+        className={`mt-8 w-full rounded-2xl border border-line/70 bg-surface shadow-pop ${
+          wide ? 'max-w-3xl' : 'max-w-lg'
+        } p-6`}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button type="button" className="btn px-2 py-1" onClick={onClose} aria-label={t('akcia.zatvorit')}>
+          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+          <button
+            type="button"
+            className="grid h-8 w-8 place-items-center rounded-full text-ink-soft transition hover:bg-app hover:text-ink"
+            onClick={onClose}
+            aria-label={t('akcia.zatvorit')}
+          >
             ✕
           </button>
         </div>
@@ -223,7 +234,7 @@ export function ToastViewport() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`pointer-events-auto card flex items-center justify-between gap-3 border-l-4 p-3 text-sm ${
+          className={`pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-line/70 border-l-4 bg-surface p-3 text-sm shadow-pop ${
             toast.tone === 'error'
               ? 'border-l-red-600'
               : toast.tone === 'info'
@@ -237,7 +248,7 @@ export function ToastViewport() {
             {toast.actionLabel && toast.onAction && (
               <button
                 type="button"
-                className="btn px-2 py-1 text-xs"
+                className="btn px-2.5 py-1 text-xs"
                 onClick={() => {
                   toast.onAction?.();
                   dismissToast(toast.id);
@@ -248,7 +259,7 @@ export function ToastViewport() {
             )}
             <button
               type="button"
-              className="rounded px-1 text-ink-soft hover:text-ink"
+              className="rounded px-1 text-ink-soft transition hover:text-ink"
               onClick={() => dismissToast(toast.id)}
               aria-label={t('akcia.zatvorit')}
             >
@@ -263,7 +274,7 @@ export function ToastViewport() {
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="card flex flex-col items-center gap-1 p-10 text-center text-sm text-ink-soft">
+    <div className="card flex flex-col items-center gap-1 border-dashed p-10 text-center text-sm text-ink-soft">
       {children}
     </div>
   );

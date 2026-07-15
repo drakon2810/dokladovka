@@ -1,3 +1,5 @@
+// DashboardPage — редизайн: KPI-карточки с иконками, лента событий, график.
+// Логика и данные (useDataQuery, buildThirtyDaySeries, роуты) без изменений.
 import { Link } from 'react-router-dom';
 import { useDataQuery } from '../../data/query';
 import type { DocumentItem, DocumentStatus } from '../../data/types';
@@ -23,6 +25,33 @@ function buildThirtyDaySeries(documents: DocumentItem[]) {
   });
 }
 
+const stroke = { fill: 'none', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
+
+const KPI_ICONS = {
+  nove: (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} stroke="#0E7A5F" aria-hidden>
+      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </svg>
+  ),
+  naKontrolu: (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} stroke="#D97706" aria-hidden>
+      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+    </svg>
+  ),
+  schvalene: (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} stroke="#047857" aria-hidden>
+      <circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" />
+    </svg>
+  ),
+  problemy: (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} stroke="#DC2626" aria-hidden>
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z" />
+      <path d="M12 9v4" /><path d="M12 17h.01" />
+    </svg>
+  ),
+};
+
 export function DashboardPage() {
   const { data, loading, error } = useDataQuery();
 
@@ -41,7 +70,9 @@ export function DashboardPage() {
       label: t('dash.nove'),
       count: documents.filter((document) => document.status === 'novy').length,
       to: '/doklady?status=novy',
-      accent: 'border-l-slate-500',
+      icon: KPI_ICONS.nove,
+      tint: '#E6F4EF',
+      number: 'text-ink',
     },
     {
       label: t('dash.naKontrolu'),
@@ -49,19 +80,25 @@ export function DashboardPage() {
         (document) => document.status === 'extrahovany' || document.status === 'na_kontrole',
       ).length,
       to: '/doklady?tab=na_kontrole',
-      accent: 'border-l-amber-600',
+      icon: KPI_ICONS.naKontrolu,
+      tint: '#FFFBEB',
+      number: 'text-ink',
     },
     {
       label: t('dash.schvalene'),
       count: documents.filter((document) => document.status === 'schvaleny').length,
       to: '/doklady?tab=schvalene',
-      accent: 'border-l-green-700',
+      icon: KPI_ICONS.schvalene,
+      tint: '#ECFDF5',
+      number: 'text-ink',
     },
     {
       label: t('dash.problemy'),
       count: documents.filter((document) => PROBLEM_STATUSES.has(document.status)).length,
       to: '/doklady?tab=problemy',
-      accent: 'border-l-red-700',
+      icon: KPI_ICONS.problemy,
+      tint: '#FEF2F2',
+      number: 'text-red-600',
     },
   ];
 
@@ -79,18 +116,25 @@ export function DashboardPage() {
   const maxCount = Math.max(1, ...series.map((day) => day.count));
 
   return (
-    <div>
-      <h1 className="mb-4 text-xl font-semibold">{t('dash.titulok')}</h1>
+    <div className="mx-auto max-w-[1240px]">
+      <h1 className="mb-5 text-[22px] font-bold tracking-tight">{t('dash.titulok')}</h1>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {counters.map((counter) => (
           <Link
             key={counter.label}
             to={counter.to}
-            className={`card border-l-[3px] ${counter.accent} p-4 transition-colors hover:bg-app focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+            className="card p-5 transition hover:-translate-y-0.5 hover:shadow-card-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            <span className="text-sm text-ink-soft">{counter.label}</span>
-            <strong className="tnum mt-1 block text-2xl font-semibold text-ink">
+            <span
+              className="grid h-10 w-10 place-items-center rounded-xl"
+              style={{ backgroundColor: counter.tint }}
+              aria-hidden
+            >
+              {counter.icon}
+            </span>
+            <span className="mt-3 block text-sm font-medium text-ink-soft">{counter.label}</span>
+            <strong className={`tnum mt-0.5 block text-3xl font-extrabold tracking-tight ${counter.number}`}>
               {counter.count}
             </strong>
           </Link>
@@ -98,17 +142,17 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        <section className="card p-4">
-          <h2 className="mb-3 text-sm font-semibold">{t('dash.posledneUdalosti')}</h2>
+        <section className="card p-5">
+          <h2 className="mb-3 text-[15px] font-semibold">{t('dash.posledneUdalosti')}</h2>
           {recentEvents.length === 0 ? (
             <p className="py-6 text-center text-sm text-ink-soft">{t('dash.ziadneUdalosti')}</p>
           ) : (
-            <ol className="divide-y divide-line">
+            <ol className="divide-y divide-line/60">
               {recentEvents.map((event) => (
                 <li key={event.key}>
                   <Link
                     to={`/doklady/${event.document.id}`}
-                    className="flex gap-3 rounded px-1 py-2.5 hover:bg-app focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="flex gap-3 rounded-lg px-2 py-2.5 transition hover:bg-app focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <span
                       className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
@@ -126,7 +170,7 @@ export function DashboardPage() {
                         {event.document.extracted.cisloFaktury} · {event.user}
                       </span>
                     </span>
-                    <time className="tnum shrink-0 text-xs text-ink-soft" dateTime={event.ts}>
+                    <time className="tnum shrink-0 text-xs text-ink-soft/80" dateTime={event.ts}>
                       {formatDateTime(event.ts)}
                     </time>
                   </Link>
@@ -136,21 +180,23 @@ export function DashboardPage() {
           )}
         </section>
 
-        <section className="card p-4">
-          <h2 className="mb-3 text-sm font-semibold">{t('dash.grafTitulok')}</h2>
+        <section className="card p-5">
+          <h2 className="mb-4 text-[15px] font-semibold">{t('dash.grafTitulok')}</h2>
           <div
-            className="flex h-52 items-end gap-1 border-b border-line px-1 pt-4"
+            className="flex h-52 items-end gap-[3px] border-b border-line px-1 pt-4"
             role="img"
             aria-label={t('dash.grafTitulok')}
           >
             {series.map((day, index) => (
               <div key={day.key} className="flex h-full min-w-0 flex-1 flex-col justify-end">
                 <div
-                  className={`w-full rounded-t ${day.count > 0 ? 'bg-accent' : 'bg-line'}`}
+                  className={`w-full rounded-t ${
+                    day.count > 0 ? 'bg-accent transition-colors hover:bg-accent-hover' : 'bg-line'
+                  }`}
                   style={{ height: `${day.count > 0 ? Math.max(7, (day.count / maxCount) * 100) : 2}%` }}
                   title={`${formatDate(day.key)}: ${day.count}`}
                 />
-                <span className="tnum mt-1 h-4 text-center text-[9px] text-ink-soft" aria-hidden>
+                <span className="tnum mt-1 h-4 text-center text-[9px] text-ink-soft/70" aria-hidden>
                   {index % 5 === 0 || index === series.length - 1 ? day.key.slice(8, 10) : ''}
                 </span>
               </div>

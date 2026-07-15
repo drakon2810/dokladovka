@@ -15,33 +15,37 @@
   }
   /* Viditeľný keyboard focus (SPEC §8 accessibility) */
   :focus-visible {
-    outline: 2px solid #0e7a5f;
+    outline: 3px solid rgba(14, 122, 95, 0.35);
     outline-offset: 1px;
   }
 }
 
 @layer components {
   .input {
-    @apply w-full rounded border border-line bg-surface px-2.5 py-1.5 text-sm text-ink
-      placeholder:text-ink-soft/60 focus:border-accent focus:outline-none
+    @apply w-full rounded border border-line bg-surface px-3 py-2 text-sm text-ink transition
+      placeholder:text-ink-soft/60 hover:border-[#C9D0CB]
+      focus:border-accent focus:outline-none focus:ring-[3px] focus:ring-accent/15
       disabled:bg-app disabled:text-ink-soft;
   }
   .btn {
-    @apply inline-flex items-center gap-1.5 rounded border border-line bg-surface px-3 py-1.5
-      text-sm font-medium text-ink shadow-card hover:bg-app
-      disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center gap-1.5 rounded border border-line bg-surface px-3.5 py-2
+      text-sm font-medium text-ink shadow-card transition
+      hover:border-[#A7D9C9] hover:text-accent-hover
+      disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line disabled:hover:text-ink;
   }
   .btn-primary {
-    @apply border-accent bg-accent text-white hover:bg-accent-hover hover:border-accent-hover;
+    @apply border-transparent bg-accent text-white shadow-glow
+      hover:-translate-y-px hover:border-transparent hover:bg-accent-hover hover:text-white
+      active:translate-y-0;
   }
   .btn-danger {
-    @apply border-red-200 text-red-700 hover:bg-red-50;
+    @apply border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 hover:text-red-700;
   }
   .label {
     @apply mb-1 block text-xs font-medium text-ink-soft;
   }
   .card {
-    @apply rounded border border-line bg-surface shadow-card;
+    @apply rounded-[14px] border border-line/70 bg-surface shadow-card;
   }
 
   .detail-split {
