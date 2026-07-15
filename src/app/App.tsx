@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Layout } from './Layout';
+import { LandingPage } from '../features/landing/LandingPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { DocumentsPage } from '../features/documents/DocumentsPage';
 import { ExportPage } from '../features/export/ExportPage';
@@ -10,7 +11,6 @@ import { t } from '../i18n/sk';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { AuthProvider } from '../auth/AuthProvider';
 import { useAuth } from '../auth/AuthContext';
-import { RequireAuth } from '../auth/RequireAuth';
 import { LoginPage } from '../features/auth/LoginPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
 
@@ -19,6 +19,17 @@ const DocumentDetailPage = lazy(() =>
     default: module.DocumentDetailPage,
   })),
 );
+
+function AppShell() {
+  const { session, loading } = useAuth();
+  const location = useLocation();
+  if (loading) return <p className="p-6 text-sm text-ink-soft">{t('stav.nacitavam')}</p>;
+  if (!session) {
+    if (location.pathname === '/') return <LandingPage />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+  return <Layout />;
+}
 
 function AdminRoute({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -36,13 +47,7 @@ export function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-          <Route
-            element={
-              <RequireAuth>
-                <Layout />
-              </RequireAuth>
-            }
-          >
+          <Route element={<AppShell />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/doklady" element={<DocumentsPage />} />
             <Route
