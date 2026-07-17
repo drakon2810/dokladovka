@@ -1572,6 +1572,18 @@ export async function applyExtractionRun(
     'document.reprocess',
     'Schvaľovateľ nemôže použiť výsledok extrakcie',
   );
+  if (REST_DATA_MODE) {
+    const document = s.documents.find((item) => item.id === documentId);
+    const version = expectedVersion ?? document?.version;
+    if (!version) throw new Error('Doklad neexistuje');
+    await restRequest(`/api/documents/${encodeURIComponent(documentId)}/extraction-runs/${encodeURIComponent(runId)}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ expectedVersion: version }),
+    });
+    const updated = (await refreshRestSnapshot()).documents.find((item) => item.id === documentId);
+    if (!updated) throw new Error('Doklad neexistuje');
+    return updated;
+  }
   const run = s.extractionRuns.find(
     (item) =>
       item.id === runId &&
@@ -1632,6 +1644,9 @@ export async function applyExtractionRun(
 export async function getSuggestion(documentId: string): Promise<AccountingSuggestion | undefined> {
   const s = storeApi.get();
   assertCapability(s.role, 'tenant.read');
+  if (REST_DATA_MODE) {
+    return (await refreshRestSnapshot()).suggestions.find((item) => item.documentId === documentId);
+  }
   const stored = s.suggestions.find(
     (x) => x.tenantId === MOCK_TENANT_ID && x.documentId === documentId,
   );
@@ -2088,7 +2103,7 @@ export async function getDataSnapshot(): Promise<AppDataState> {
   assertCapability(storeApi.get().role, 'tenant.read');
   expireGraceAliases();
   const s = storeApi.get();
-  const belongsToTenant = (item: { tenantId: string }) =>
+  const belongsToTenant = (item: { tenantId?: string }) =>
     item.tenantId === MOCK_TENANT_ID;
   return {
     ...s,

@@ -18,7 +18,7 @@ function vatRows(result: ExtractionResult): VatBreakdownRow[] {
     const rate = Number(row.vatRate);
     const base = parseDecimalString(row.base);
     const vat = parseDecimalString(row.vat);
-    if (![23, 19, 5, 0].includes(rate) || base === undefined || vat === undefined) return [];
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100 || base === undefined || vat === undefined) return [];
     return [{ sadzba: rate as VatRate, zaklad: round2(base), dph: round2(vat) }];
   });
 }
@@ -64,7 +64,7 @@ export function normalizeExtractionResult(
         jednotka: item.unit,
         jednotkovaCenaBezDph: parseDecimalString(item.unitPriceWithoutVat),
         sadzbaDph:
-          item.vatRate && [23, 19, 5, 0].includes(Number(item.vatRate))
+          item.vatRate && Number.isFinite(Number(item.vatRate)) && Number(item.vatRate) >= 0 && Number(item.vatRate) <= 100
             ? (Number(item.vatRate) as VatRate)
             : undefined,
         sumaBezDph: parseDecimalString(item.amountWithoutVat),

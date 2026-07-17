@@ -7,8 +7,8 @@ import type { AccountingSuggestion, DocumentItem } from '../types';
 import type { AppDataState } from '../store';
 import { nowIso } from '../../lib/id';
 
-// TODO: integration point — manual_rule pravidlá (supplier_accounting_rules)
-// vzniknú vo Fáze 2 explicitnou akciou používateľa s audit trailom.
+// Produkčný backend ukladá manual rules, históriu a organizačné defaults
+// server-side. Tento modul zostáva deterministickým adaptérom pre mock režim.
 
 function activeUcto(
   state: Pick<AppDataState, 'codeLists'>,

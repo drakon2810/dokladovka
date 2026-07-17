@@ -5,16 +5,19 @@ export function validateICO(ico: string): boolean {
   return /^\d{8}$/.test(ico.trim());
 }
 
-/** IBAN formát SK: SK + 2 kontrolné číslice + 20 číslic (SPEC §6.4). */
+/** IBAN podľa ISO 13616; podporuje aj slovenských a českých dodávateľov. */
 export function validateIBAN(iban: string): boolean {
   const normalized = iban.replace(/\s+/g, '').toUpperCase();
-  if (!/^SK\d{22}$/.test(normalized)) return false;
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(normalized)) return false;
+  const knownLengths: Record<string, number> = { SK: 24, CZ: 24 };
+  const knownLength = knownLengths[normalized.slice(0, 2)];
+  if (knownLength && normalized.length !== knownLength) return false;
   // mod-97 kontrola podľa ISO 13616
   const rearranged = normalized.slice(4) + normalized.slice(0, 4);
-  const numeric = rearranged.replace(/[A-Z]/g, (ch) => String(ch.charCodeAt(0) - 55));
   let remainder = 0;
-  for (const digit of numeric) {
-    remainder = (remainder * 10 + Number(digit)) % 97;
+  for (const char of rearranged) {
+    const digits = /[A-Z]/.test(char) ? String(char.charCodeAt(0) - 55) : char;
+    for (const digit of digits) remainder = (remainder * 10 + Number(digit)) % 97;
   }
   return remainder === 1;
 }

@@ -28,7 +28,8 @@ export type ProcessingStatus =
   | 'failed_retryable'
   | 'failed_permanent';
 
-export type VatRate = 23 | 19 | 5 | 0; // sadzby DPH platné v SR
+/** Číselná sadzba z dokladu; UI ponúka aktuálne SK/CZ sadzby, historická sa však zachová. */
+export type VatRate = number;
 
 export interface Organization {
   id: string;
@@ -110,8 +111,10 @@ export interface DocumentSource {
   attachmentId?: string;
   /** Kľúč súboru v mock object-storage adaptéri (IndexedDB vo Fáze 1). */
   localFileKey?: string;
-  mimeType?: 'application/pdf' | 'image/jpeg' | 'image/png';
+  mimeType?: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp' | 'application/xml';
   byteSize?: number;
+  /** Formát zdroja klasifikovaný backendom (pdf | foto | peppol_xml | blocek_foto | mzdova_paska). */
+  format?: string;
   odosielatel?: string;
   prijemcaAlias?: string;
   predmet?: string;
@@ -195,6 +198,7 @@ export interface DocumentItem {
   quarantineReason?: string; // napr. buyer_ico_mismatch (SPEC §11.7)
   duplicateOfDocumentId?: string; // účtovná duplicita (SPEC §11.11)
   notDuplicate?: boolean; // rozhodnutie „Nie je duplicita" sa ukladá (SPEC §11.11)
+  appliedExtractionRunId?: string; // evidence/warnings patria k explicitne použitému behu
   version: number;
   approvedVersion?: number;
   approvedSnapshot?: ApprovedDocumentSnapshot;
@@ -416,7 +420,8 @@ export interface OrganizationEmailAlias {
 
 export interface InboundEmail {
   id: string;
-  tenantId: string;
+  /** Chýba pri nezaradenom karanténnom e-maile (ešte nepriradený tenantovi). */
+  tenantId?: string;
   organizationId?: string;
   aliasId?: string;
   provider: string;
@@ -438,7 +443,8 @@ export interface InboundEmail {
 
 export interface InboundAttachment {
   id: string;
-  tenantId: string;
+  /** Chýba pri prílohe nezaradeného karanténneho e-mailu. */
+  tenantId?: string;
   inboundEmailId: string;
   organizationId?: string;
   originalFileName: string;
@@ -487,7 +493,7 @@ export interface ExtractionResult {
     quantity?: string;
     unit?: string;
     unitPriceWithoutVat?: string;
-    vatRate?: '23' | '19' | '5' | '0' | string;
+    vatRate?: '23' | '21' | '19' | '12' | '5' | '0' | string;
     amountWithoutVat?: string;
     vatAmount?: string;
     amountTotal?: string;

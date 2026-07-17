@@ -5,12 +5,7 @@ import { z } from 'zod';
 import { isValidIsoDate } from './validation/documentValidation';
 import { validateIBAN } from '../lib/validate';
 
-export const vatRateSchema = z.union([
-  z.literal(23),
-  z.literal(19),
-  z.literal(5),
-  z.literal(0),
-]);
+export const vatRateSchema = z.number().finite().min(0).max(100);
 
 export const vatBreakdownRowSchema = z.object({
   sadzba: vatRateSchema,

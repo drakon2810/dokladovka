@@ -109,6 +109,33 @@ export function buildServerDataPack(input: {
     </vch:voucher>
   </dat:dataPackItem>`;
     }
+    if (snapshot.typ === 'MZDY') {
+      // Mzdová páska sa účtuje ako interný doklad (agenda Interné doklady).
+      // Mzdy nemajú DPH — celková suma ide do priceNone, ak rozpis chýba.
+      const priceNone = rows.length > 0 ? base0 : Number(extracted.sumaSpolu || 0);
+      const mzdyCurrency = rows.length > 0 ? currency : `<typ:priceHigh>0.00</typ:priceHigh>
+        <typ:priceHighVAT>0.00</typ:priceHighVAT>
+        <typ:priceLow>0.00</typ:priceLow>
+        <typ:priceLowVAT>0.00</typ:priceLowVAT>
+        <typ:price3>0.00</typ:price3>
+        <typ:price3VAT>0.00</typ:price3VAT>
+        <typ:priceNone>${amount(priceNone)}</typ:priceNone>`;
+      return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
+    <int:intDoc version="2.0">
+      <int:intDocHeader>
+        <int:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></int:number>
+        <int:date>${escapeXml(extracted.datumVystavenia)}</int:date>
+        <int:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></int:accounting>
+        <int:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></int:classificationVAT>
+        <int:text>${escapeXml(extracted.textPolozky ?? `Mzdová páska ${extracted.cisloFaktury || extracted.datumVystavenia}`)}</int:text>
+        <int:partnerIdentity>${partner}</int:partnerIdentity>
+      </int:intDocHeader>
+      <int:intDocSummary><int:homeCurrency>
+        ${mzdyCurrency}
+      </int:homeCurrency></int:intDocSummary>
+    </int:intDoc>
+  </dat:dataPackItem>`;
+    }
     const paymentAccount = skIbanAccount(supplier.iban);
     return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <inv:invoice version="2.0">
@@ -140,6 +167,7 @@ export function buildServerDataPack(input: {
   xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
   xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd"
   xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd"
+  xmlns:int="http://www.stormware.cz/schema/version_2/intDoc.xsd"
   xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
 ${items}
 </dat:dataPack>`;

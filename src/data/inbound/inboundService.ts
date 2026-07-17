@@ -70,7 +70,7 @@ function toVatRows(breakdown: Array<{ vatRate: string; base: string; vat: string
   return breakdown
     .map((row) => {
       const sadzba = Number(row.vatRate);
-      if (![23, 19, 5, 0].includes(sadzba)) return undefined;
+      if (!Number.isFinite(sadzba) || sadzba < 0 || sadzba > 100) return undefined;
       const zaklad = parseDecimalString(row.base);
       const dph = parseDecimalString(row.vat);
       if (zaklad === undefined || dph === undefined) return undefined;
@@ -368,7 +368,7 @@ export async function simulateInboundEmail(
           mnozstvo: parseDecimalString(li.quantity),
           jednotka: li.unit,
           jednotkovaCenaBezDph: parseDecimalString(li.unitPriceWithoutVat),
-          sadzbaDph: li.vatRate && [23, 19, 5, 0].includes(Number(li.vatRate))
+          sadzbaDph: li.vatRate && Number.isFinite(Number(li.vatRate)) && Number(li.vatRate) >= 0 && Number(li.vatRate) <= 100
             ? (Number(li.vatRate) as VatRate)
             : undefined,
           sumaBezDph: parseDecimalString(li.amountWithoutVat),

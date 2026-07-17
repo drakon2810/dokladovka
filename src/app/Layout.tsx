@@ -37,6 +37,13 @@ function IconExport() {
     </svg>
   );
 }
+function IconDokumenty() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </svg>
+  );
+}
 function IconNastavenia() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
@@ -49,6 +56,7 @@ function IconNastavenia() {
 const NAV_ITEMS = [
   { to: '/', label: 'nav.prehlad', icon: <IconPrehlad />, end: true },
   { to: '/doklady', label: 'nav.doklady', icon: <IconDoklady />, end: false },
+  { to: '/dokumenty', label: 'nav.dokumenty', icon: <IconDokumenty />, end: false },
   { to: '/export', label: 'nav.export', icon: <IconExport />, end: false },
 ] as const;
 

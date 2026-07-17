@@ -50,7 +50,13 @@ services:
       DATABASE_URL: postgresql://dokladovka:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/dokladovka
       MAIL_RECEIVING_DOMAIN: ${MAIL_RECEIVING_DOMAIN:-doklady.localhost.test}
       INBOUND_WEBHOOK_SECRET: ${INBOUND_WEBHOOK_SECRET:-local-only-change-me}
-      DOCUMENT_EXTRACTION_PROVIDER: mock
+      DOCUMENT_EXTRACTION_PROVIDER: ${DOCUMENT_EXTRACTION_PROVIDER:-mock}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+      OPENAI_STORE_RESPONSES: ${OPENAI_STORE_RESPONSES:-false}
+      OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-120000}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      EXTRACTION_MAX_FILE_BYTES: ${EXTRACTION_MAX_FILE_BYTES:-20971520}
+      EXTRACTION_MAX_PDF_PAGES: ${EXTRACTION_MAX_PDF_PAGES:-50}
       OBJECT_STORAGE_MODE: s3
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
       OBJECT_STORAGE_REGION: eu-central-1
@@ -74,7 +80,14 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://dokladovka:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/dokladovka
       MAIL_RECEIVING_DOMAIN: ${MAIL_RECEIVING_DOMAIN:-doklady.localhost.test}
-      DOCUMENT_EXTRACTION_PROVIDER: mock
+      DOCUMENT_EXTRACTION_PROVIDER: ${DOCUMENT_EXTRACTION_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+      OPENAI_STORE_RESPONSES: ${OPENAI_STORE_RESPONSES:-false}
+      OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-120000}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      EXTRACTION_MAX_FILE_BYTES: ${EXTRACTION_MAX_FILE_BYTES:-20971520}
+      EXTRACTION_MAX_PDF_PAGES: ${EXTRACTION_MAX_PDF_PAGES:-50}
       OBJECT_STORAGE_MODE: s3
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
       OBJECT_STORAGE_REGION: eu-central-1
@@ -82,6 +95,25 @@ services:
       OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-dokladovka-local}
       OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
       OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+
+  imap:
+    build: .
+    command: ["node", "build/server/imap.js"]
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      # Poller nepotrebuje DB ani storage — parsuje poštu a volá inbound webhook API.
+      API_BASE_URL: http://api:3001
+      INBOUND_WEBHOOK_SECRET: ${INBOUND_WEBHOOK_SECRET:-local-only-change-me}
+      MAIL_RECEIVING_DOMAIN: ${MAIL_RECEIVING_DOMAIN:-doklady.localhost.test}
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      IMAP_USER: ${IMAP_USER:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_POLL_INTERVAL: ${IMAP_POLL_INTERVAL:-30}
+      IMAP_MAILBOX: ${IMAP_MAILBOX:-INBOX}
 
   monitor:
     build: .

@@ -7,11 +7,16 @@ import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import type { ObjectStorage } from '../storage.js';
+import type { ServerConfig } from '../config.js';
+import { extractionResultSchema } from '../extraction/contract.js';
+import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
+import { rebuildAccountingSuggestion } from '../services/accountingSuggestionService.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
   organization_id: string;
   status: string;
+  processing_status: string;
   version: number;
   document_type: string;
   extracted: Record<string, unknown>;
@@ -21,14 +26,14 @@ interface DocumentScope extends Record<string, unknown> {
 
 async function scopedDocument(database: Database, tenantId: string, id: string): Promise<DocumentScope> {
   const result = await database.query<DocumentScope>(
-    `SELECT id, organization_id, status, version, document_type, extracted, accounting, history
+    `SELECT id, organization_id, status, processing_status, version, document_type, extracted, accounting, history
        FROM documents WHERE id=$1 AND tenant_id=$2`, [id, tenantId],
   );
   if (!result.rows[0]) throw new HttpError(404, 'document_not_found', 'Doklad neexistuje');
   return result.rows[0];
 }
 
-export function registerDocumentRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage): void {
+export function registerDocumentRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage, config: ServerConfig): void {
   app.get('/api/documents', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const query = z.object({ organizationId: z.string().uuid().optional(), status: z.string().max(40).optional() }).parse(request.query);
@@ -56,6 +61,26 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     );
     const storageKey = attachment.rows[0]?.storage_key;
     return { ...details.rows[0], fileUrl: storageKey ? await storage.signedDownloadUrl(storageKey, 300) : undefined };
+  });
+
+  app.get('/api/documents/:id/file', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const attachment = await database.query<{
+      storage_key?: string; detected_mime_type?: string; original_file_name: string;
+    } & Record<string, unknown>>(
+      `SELECT storage_key,detected_mime_type,original_file_name FROM inbound_attachments
+        WHERE document_id=$1 AND tenant_id=$2 AND organization_id=$3 ORDER BY created_at LIMIT 1`,
+      [id, auth.tenantId, document.organization_id],
+    );
+    const source = attachment.rows[0];
+    if (!source?.storage_key) throw new HttpError(404, 'attachment_missing', 'Zdrojový súbor neexistuje');
+    const safeName = source.original_file_name.replace(/[\r\n"\\]/g, '_').slice(0, 180);
+    reply.header('Content-Type', source.detected_mime_type ?? 'application/octet-stream');
+    reply.header('Content-Disposition', `inline; filename="${safeName}"`);
+    return reply.send(Buffer.from(await storage.get(source.storage_key)));
   });
 
   app.patch('/api/documents/:id', async (request) => {
@@ -93,6 +118,25 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
     if (document.version !== expectedVersion) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    if (!['na_kontrole', 'extrahovany'].includes(document.status) || document.processing_status !== 'ready_for_review') {
+      throw new HttpError(409, 'document_not_ready', 'Doklad ešte nie je pripravený na schválenie');
+    }
+    const organization = await database.query<{ ico: string; dic?: string; ic_dph?: string } & Record<string, unknown>>(
+      'SELECT ico,dic,ic_dph FROM organizations WHERE id=$1 AND tenant_id=$2',
+      [document.organization_id, auth.tenantId],
+    );
+    const extracted = document.extracted as any;
+    const validationIssues = validateNormalizedExtraction({
+      documentType: document.document_type as any,
+      extracted,
+      fieldConfidence: {},
+      confidence: 0,
+      totalAmount: Number(extracted.sumaSpolu),
+      currency: extracted.mena,
+    }, organization.rows[0]);
+    if (validationIssues.some((issue) => issue.severity === 'error')) {
+      throw new HttpError(409, 'document_validation_failed', 'Doklad obsahuje údaje, ktoré treba opraviť pred schválením');
+    }
     const requiredIds = [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
     if (requiredIds.some((value) => !value)) throw new HttpError(409, 'accounting_incomplete', 'Zaúčtovanie nie je kompletné');
     if (document.document_type === 'PD' && (!document.accounting.pokladnaKod || !['receipt', 'expense'].includes(document.accounting.pokladnaTyp ?? ''))) {
@@ -161,11 +205,97 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const attachment = await database.query<{ id: string } & Record<string, unknown>>('SELECT id FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
     if (!attachment.rows[0]) throw new HttpError(409, 'attachment_missing', 'Doklad nemá zdrojovú prílohu');
     await database.query(
-      `INSERT INTO processing_jobs (id, tenant_id, organization_id, attachment_id, document_id, kind, status, correlation_id)
-       VALUES ($1,$2,$3,$4,$5,'reprocess_document','queued',$6)`,
-      [randomUUID(), auth.tenantId, document.organization_id, attachment.rows[0].id, id, request.id],
+      `INSERT INTO processing_jobs (id, tenant_id, organization_id, attachment_id, document_id, kind, status, correlation_id, max_attempts)
+       VALUES ($1,$2,$3,$4,$5,'reprocess_document','queued',$6,$7)`,
+      [randomUUID(), auth.tenantId, document.organization_id, attachment.rows[0].id, id, request.id,
+        config.extractionProvider === 'openai' ? config.openai.maxRetries + 1 : 5],
     );
     return reply.code(202).send({ queued: true });
+  });
+
+  app.get('/api/documents/:id/extraction-runs', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const runs = await database.query(
+      `SELECT * FROM extraction_runs
+        WHERE document_id=$1 AND tenant_id=$2 AND organization_id=$3 ORDER BY created_at DESC`,
+      [id, auth.tenantId, document.organization_id],
+    );
+    return runs.rows;
+  });
+
+  app.post('/api/documents/:id/extraction-runs/:runId/apply', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id, runId } = z.object({ id: z.string().uuid(), runId: z.string().uuid() }).parse(request.params);
+    const { expectedVersion } = z.object({ expectedVersion: z.number().int().positive() }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.version !== expectedVersion) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    if (document.status === 'exportovany') throw new HttpError(409, 'document_exported', 'Exportovaný doklad nie je možné meniť');
+    const run = await database.query<{ result: unknown } & Record<string, unknown>>(
+      `SELECT result FROM extraction_runs
+        WHERE id=$1 AND document_id=$2 AND tenant_id=$3 AND organization_id=$4 AND status='succeeded'`,
+      [runId, id, auth.tenantId, document.organization_id],
+    );
+    if (!run.rows[0]?.result) throw new HttpError(404, 'extraction_run_not_found', 'Úspešný výsledok extrakcie neexistuje');
+    const result = extractionResultSchema.parse(run.rows[0].result);
+    const normalized = normalizeExtractionResult(result, id, new Date().toISOString().slice(0, 10));
+    const organization = await database.query<{ ico: string; dic?: string; ic_dph?: string } & Record<string, unknown>>(
+      'SELECT ico,dic,ic_dph FROM organizations WHERE id=$1 AND tenant_id=$2',
+      [document.organization_id, auth.tenantId],
+    );
+    const issues = validateExtractionResult(result, normalized, organization.rows[0]);
+    const buyerMismatch = issues.some((issue) => ['buyer_ico_mismatch', 'supplier_buyer_may_be_inverted'].includes(issue.code));
+    const invoiceNumber = result.invoiceNumber?.trim().toLocaleLowerCase('sk');
+    const supplierIco = result.supplier.ico?.replace(/\D/g, '');
+    const supplierName = result.supplier.nazov?.trim().toLocaleLowerCase('sk');
+    let duplicateId: string | undefined;
+    if (invoiceNumber && (supplierIco || supplierName)) {
+      const candidates = await database.query<{ id: string; extracted: any } & Record<string, unknown>>(
+        `SELECT id,extracted FROM documents
+          WHERE tenant_id=$1 AND organization_id=$2 AND id<>$3 AND status<>'zamietnuty'
+          ORDER BY created_at DESC LIMIT 500`,
+        [auth.tenantId, document.organization_id, id],
+      );
+      duplicateId = candidates.rows.find((candidate) => {
+        const supplier = candidate.extracted?.dodavatel ?? {};
+        const sameSupplier = supplierIco
+          ? String(supplier.ico ?? '').replace(/\D/g, '') === supplierIco
+          : String(supplier.nazov ?? '').trim().toLocaleLowerCase('sk') === supplierName;
+        return sameSupplier && String(candidate.extracted?.cisloFaktury ?? '').trim().toLocaleLowerCase('sk') === invoiceNumber;
+      })?.id;
+    }
+    const status = buyerMismatch ? 'karantena' : duplicateId ? 'duplicita' : 'na_kontrole';
+    const history = [...document.history, { ts: new Date().toISOString(), user: auth.name, akcia: `Použitá extrakcia ${runId}` }];
+    const updated = await database.transaction(async (tx) => {
+      const changed = await tx.query<Record<string, unknown>>(
+        `UPDATE documents SET document_type=$1,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
+                field_confidence=$4::jsonb,confidence=$5,total_amount=$6,currency=$7,history=$8::jsonb,
+                quarantine_reason=$9,duplicate_of_document_id=$10,not_duplicate=false,
+                applied_extraction_run_id=$11,version=version+1,approved_version=NULL,approved_snapshot=NULL,updated_at=now()
+          WHERE id=$12 AND tenant_id=$13 AND organization_id=$14 AND version=$15 RETURNING *`,
+        [normalized.documentType, status, JSON.stringify(normalized.extracted), JSON.stringify(normalized.fieldConfidence),
+          normalized.confidence, normalized.totalAmount, normalized.currency, JSON.stringify(history),
+          buyerMismatch ? 'buyer_ico_mismatch' : null, duplicateId ?? null, runId,
+          id, auth.tenantId, document.organization_id, expectedVersion],
+      );
+      if (!changed.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+      await rebuildAccountingSuggestion(tx, {
+        tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
+        supplierIco: result.supplier.ico, supplierName: result.supplier.nazov,
+      });
+      await writeAudit(tx, {
+        tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,
+        action: 'document.extraction_applied', entityType: 'document', entityId: id, correlationId: request.id,
+        metadata: { extractionRunId: runId },
+      });
+      return changed.rows[0];
+    });
+    return updated;
   });
 
   app.post('/api/exports/pohoda/xml', async (request, reply) => {

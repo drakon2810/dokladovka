@@ -4,6 +4,7 @@ import { Layout } from './Layout';
 import { LandingPage } from '../features/landing/LandingPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { DocumentsPage } from '../features/documents/DocumentsPage';
+import { DokumentyPage } from '../features/dokumenty/DokumentyPage';
 import { ExportPage } from '../features/export/ExportPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { useDataQuery } from '../data/query';
@@ -60,6 +61,7 @@ export function App() {
                 </ErrorBoundary>
               }
             />
+            <Route path="/dokumenty" element={<DokumentyPage />} />
             <Route path="/export" element={<ExportPage />} />
             <Route path="/profil" element={<ProfilePage />} />
             <Route

@@ -62,6 +62,8 @@ import {
 } from '../../lib/validate';
 import { t, type SkKey } from '../../i18n/sk';
 import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
+import { EInvoicePreview } from './EInvoicePreview';
+import { BankStatementPreview } from './BankStatementPreview';
 import { useAuth } from '../../auth/AuthContext';
 import {
   createMostikExportJob,
@@ -79,7 +81,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const DOCUMENT_TYPES: DocumentType[] = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'];
-const VAT_RATES: VatRate[] = [23, 19, 5, 0];
+const VAT_RATES: VatRate[] = [23, 21, 19, 12, 5, 0];
 
 const FIELD_ALIASES: Record<string, string[]> = {
   'dodavatel.nazov': ['dodavatel.nazov', 'supplier.nazov'],
@@ -133,16 +135,44 @@ function confidenceFor(document: DocumentItem, field: string): number | undefine
   return undefined;
 }
 
-function evidenceFor(runs: ExtractionRun[], field: string): string[] {
-  const run = runs.find((item) => item.status === 'succeeded' && item.result);
+function evidenceFor(runs: ExtractionRun[], field: string, appliedRunId?: string): string[] {
+  const run = runs.find((item) => item.id === appliedRunId && item.status === 'succeeded' && item.result)
+    ?? runs.find((item) => item.status === 'succeeded' && item.result);
   if (!run?.result) return [];
   for (const key of FIELD_ALIASES[field] ?? [field]) {
     const evidence = run.result.evidence[key]
-      ?.map((item) => item.text?.trim())
+      ?.map((item) => {
+        const text = item.text?.trim();
+        if (!text) return undefined;
+        return item.page ? `${t('detail.strana')} ${item.page}: ${text}` : text;
+      })
       .filter((item): item is string => Boolean(item));
     if (evidence?.length) return evidence;
   }
   return [];
+}
+
+const WARNING_FIELDS: Record<string, string[]> = {
+  supplier_name_required: ['dodavatel.nazov'],
+  invalid_supplier_ico: ['dodavatel.ico'],
+  invalid_supplier_dic: ['dodavatel.dic'],
+  invalid_supplier_vat_id: ['dodavatel.icDph'],
+  invalid_iban: ['dodavatel.iban'],
+  invoice_number_required: ['cisloFaktury'],
+  invalid_issue_date: ['datumVystavenia'],
+  tax_date_required: ['datumDodania'],
+  due_date_required: ['datumSplatnosti'],
+  due_before_issue: ['datumSplatnosti'],
+  unsupported_currency: ['mena'],
+  total_required: ['sumaSpolu'],
+  total_mismatch: ['sumaSpolu'],
+  declared_totals_mismatch: ['sumaSpolu'],
+};
+
+function hasFieldWarning(runs: ExtractionRun[], field: string, appliedRunId?: string): boolean {
+  const run = runs.find((item) => item.id === appliedRunId && item.status === 'succeeded' && item.result)
+    ?? runs.find((item) => item.status === 'succeeded' && item.result);
+  return run?.result?.warnings.some((warning) => WARNING_FIELDS[warning.code]?.includes(field)) ?? false;
 }
 
 function Field({
@@ -484,7 +514,23 @@ export function DocumentDetailPage() {
 
   const hasAttachedFile = Boolean(draft.zdroj.localFileKey || draft.pdfUrl);
   const fileUrl = draft.zdroj.localFileKey ? localFileUrl : draft.pdfUrl || undefined;
-  const imagePreview = draft.zdroj.mimeType === 'image/jpeg' || draft.zdroj.mimeType === 'image/png';
+  const imagePreview = ['image/jpeg', 'image/png', 'image/webp'].includes(draft.zdroj.mimeType ?? '');
+  // XML doklady nemajú PDF — náhľad sa generuje z extrahovaných dát
+  // (e-faktúra PEPPOL alebo bankový výpis SEPA).
+  const xmlPreview = draft.zdroj.mimeType === 'application/xml'
+    || draft.zdroj.format === 'peppol_xml'
+    || draft.zdroj.format === 'sepa_xml';
+  const sepaPreview = draft.zdroj.format === 'sepa_xml';
+  const formatBadgeKey: SkKey | undefined =
+    draft.zdroj.format === 'peppol_xml'
+      ? 'format.peppol'
+      : draft.zdroj.format === 'sepa_xml'
+        ? 'format.sepa'
+        : draft.zdroj.format === 'blocek_foto'
+          ? 'format.blocek'
+          : draft.zdroj.format === 'mzdova_paska'
+            ? 'format.mzdova'
+            : undefined;
   const intakeProcessingLabel =
     draft.processingStatus === 'ready_for_review' && draft.zdroj.typ === 'manual'
       ? t('processing.manual')
@@ -568,7 +614,8 @@ export function DocumentDetailPage() {
 
   const fieldProps = (field: string) => ({
     confidence: confidenceFor(draft, field),
-    evidence: evidenceFor(runs, field),
+    evidence: evidenceFor(runs, field, draft.appliedExtractionRunId),
+    error: hasFieldWarning(runs, field, draft.appliedExtractionRunId) ? t('detail.aiWarning') : undefined,
   });
 
   const storeDraft = async (): Promise<DocumentItem> =>
@@ -806,7 +853,12 @@ export function DocumentDetailPage() {
             >
               +
             </button>
-            {!imagePreview && hasAttachedFile && (
+            {formatBadgeKey && (
+              <span className="ml-2 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] font-semibold text-accent-hover">
+                {t(formatBadgeKey)}
+              </span>
+            )}
+            {!imagePreview && !xmlPreview && hasAttachedFile && (
               <>
                 <button
                   type="button"
@@ -842,7 +894,13 @@ export function DocumentDetailPage() {
             )}
           </div>
           <div className="flex min-h-[34rem] justify-center overflow-auto bg-slate-100 p-4">
-            {!hasAttachedFile ? (
+            {xmlPreview ? (
+              sepaPreview ? (
+                <BankStatementPreview doklad={draft} zoom={zoom} />
+              ) : (
+                <EInvoicePreview doklad={draft} zoom={zoom} />
+              )
+            ) : !hasAttachedFile ? (
               <p className="self-center text-sm text-ink-soft">{t('detail.bezSuboru')}</p>
             ) : localFileLoading ? (
               <p className="self-center text-sm">{t('stav.nacitavam')}</p>
@@ -1523,6 +1581,11 @@ export function DocumentDetailPage() {
                       <p className="tnum text-xs text-ink-soft">
                         {formatDateTime(run.completedAt ?? run.startedAt ?? run.createdAt)}
                       </p>
+                      {run.status === 'failed' && run.errorMessage && (
+                        <p className="mt-1 text-xs text-red-700">
+                          {t('detail.zdroj.chyba')}: {run.errorMessage}
+                        </p>
+                      )}
                       {run.status === 'succeeded' && run.result && (
                         <button
                           type="button"

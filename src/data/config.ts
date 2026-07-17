@@ -26,4 +26,7 @@ export const SUPPORTED_ATTACHMENT_MIME_TYPES = [
   'application/pdf',
   'image/jpeg',
   'image/png',
+  'image/webp',
+  // PEPPOL BIS 3.0 e-faktúry; backend ne-PEPPOL XML odmieta.
+  'application/xml',
 ] as const;

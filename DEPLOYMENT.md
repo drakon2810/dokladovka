@@ -28,6 +28,46 @@ Heslo sa ukladá ako scrypt hash.
 - Všetky heslá, webhook secrets, DB URL a storage credentials patria iba do
   secret managera hostingu. Hodnoty z `.env.example` nie sú produkčné secrets.
 
+## AI extrakcia faktúr
+
+Worker podporuje `DOCUMENT_EXTRACTION_PROVIDER=mock|openai`. Pre produkčnú
+extrakciu nastavte v secret manageri hostingu `DOCUMENT_EXTRACTION_PROVIDER=openai`
+a `OPENAI_API_KEY`. Voliteľné nastavenia sú `OPENAI_MODEL` (predvolene
+`gpt-5.6-terra`), `OPENAI_STORE_RESPONSES=false`, `OPENAI_TIMEOUT_MS`,
+`OPENAI_MAX_RETRIES`, `EXTRACTION_MAX_FILE_BYTES` a `EXTRACTION_MAX_PDF_PAGES`.
+Kľúč nikdy nepatrí do
+`VITE_*`, frontend buildu, Git repozitára ani databázy.
+
+Worker načíta PDF/JPEG/PNG z privátneho object storage, odošle ho cez OpenAI
+Responses API so Structured Outputs a výsledok uloží ako samostatný nemenný
+`extraction_run`. Pri opakovanej extrakcii sa existujúci doklad ani ručné
+úpravy neprepíšu; používateľ musí nový úspešný výsledok výslovne použiť.
+OpenAI výsledok sa pred zápisom a schválením kontroluje deterministicky
+(IČO odberateľa, dátumy, DPH, súčty, duplicita a hranice organizácie).
+
+Po zmene providera reštartujte worker. Overenie bez reálneho API kľúča:
+
+1. nechajte `DOCUMENT_EXTRACTION_PROVIDER=mock`,
+2. prijmite testovací webhook s PDF/JPEG/PNG,
+3. spustite worker a skontrolujte nový doklad aj `extraction_runs`,
+4. až potom nastavte OpenAI secret a provider na `openai`.
+
+Voliteľný test proti skutočnému API sa spustí iba s
+`RUN_OPENAI_EXTRACTION_INTEGRATION=true` a `OPENAI_API_KEY`; bežné `npm test`
+ho preskočí a nič neúčtuje.
+
+## IMAP poller (príjem pošty zo schránky)
+
+Samostatný proces `server/imap.ts` (`npm run dev:imap`, v produkcii služba
+`imap` v docker-compose) periodicky číta IMAP schránku, parsuje MIME a prílohy
+odovzdáva do `POST /api/webhooks/inbound-email/imap` s `INBOUND_WEBHOOK_SECRET`.
+Idempotenciu zaručuje `providerMessageId` (Message-ID); správa sa označí ako
+prečítaná až po úspešnom prijatí webhookom. Konfigurácia: `IMAP_HOST`,
+`IMAP_PORT` (993), `IMAP_USER`, `IMAP_PASSWORD` (pre Gmail app password),
+`IMAP_POLL_INTERVAL` (sekundy, predvolene 30), `IMAP_MAILBOX` (INBOX).
+Bez nastavených IMAP premenných proces skončí chybou — služba je voliteľná,
+nasadzujte ju len s nakonfigurovanou schránkou.
+
 Pred prvým nasadením treba doplniť doménu, hosting a prístupy. Bez nich nie
 je možné z lokálneho repozitára overiť verejné HTTPS ani auto-deploy.
 

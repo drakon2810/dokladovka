@@ -4,6 +4,7 @@ export interface ServerConfig {
   nodeEnv: 'development' | 'test' | 'production';
   port: number;
   appBaseUrl: string;
+  apiBaseUrl: string;
   databaseUrl?: string;
   pgliteDataDir: string;
   mailReceivingDomain: string;
@@ -11,6 +12,23 @@ export interface ServerConfig {
   sessionCookieSecure: boolean;
   sessionTtlHours: number;
   extractionProvider: 'mock' | 'openai';
+  imap: {
+    host?: string;
+    port: number;
+    user?: string;
+    password?: string;
+    pollIntervalSeconds: number;
+    mailbox: string;
+  };
+  openai: {
+    apiKey?: string;
+    model: string;
+    storeResponses: boolean;
+    timeoutMs: number;
+    maxRetries: number;
+  };
+  extractionMaxFileBytes: number;
+  extractionMaxPdfPages: number;
   workerPollIntervalMs: number;
   objectStorage: {
     mode: 'memory' | 'filesystem' | 's3';
@@ -34,6 +52,11 @@ export interface ServerConfig {
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function validDomain(value: string | undefined): string {
@@ -62,17 +85,42 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     throw new Error('OBJECT_STORAGE_MODE=s3 je v produkcii povinné');
   }
 
+  const extractionProvider = env.DOCUMENT_EXTRACTION_PROVIDER === 'openai' ? 'openai' : 'mock';
+  const openaiApiKey = env.OPENAI_API_KEY?.trim() || undefined;
+
   return {
     nodeEnv,
     port: positiveInteger(env.PORT, 3001),
     appBaseUrl: env.APP_BASE_URL?.trim() || 'http://localhost:5173',
+    // 127.0.0.1 namiesto localhost: node fetch skúša najprv IPv6 ::1,
+    // ale Fastify počúva na IPv4 — na Windows by spojenie zlyhalo.
+    apiBaseUrl:
+      env.API_BASE_URL?.trim().replace(/\/$/, '') || `http://127.0.0.1:${positiveInteger(env.PORT, 3001)}`,
     databaseUrl: env.DATABASE_URL?.trim() || undefined,
     pgliteDataDir: resolve(env.PGLITE_DATA_DIR?.trim() || defaultPgliteDataDir),
     mailReceivingDomain: validDomain(env.MAIL_RECEIVING_DOMAIN || 'doklady.localhost.test'),
     webhookSecret: env.INBOUND_WEBHOOK_SECRET?.trim() || undefined,
     sessionCookieSecure: env.SESSION_COOKIE_SECURE === 'true' || nodeEnv === 'production',
     sessionTtlHours: positiveInteger(env.SESSION_TTL_HOURS, 8),
-    extractionProvider: env.DOCUMENT_EXTRACTION_PROVIDER === 'openai' ? 'openai' : 'mock',
+    extractionProvider,
+    imap: {
+      host: env.IMAP_HOST?.trim() || undefined,
+      port: positiveInteger(env.IMAP_PORT, 993),
+      user: env.IMAP_USER?.trim() || undefined,
+      // App password: Google ho zobrazuje s medzerami — odstránime ich.
+      password: env.IMAP_PASSWORD?.replace(/\s+/g, '') || undefined,
+      pollIntervalSeconds: positiveInteger(env.IMAP_POLL_INTERVAL, 30),
+      mailbox: env.IMAP_MAILBOX?.trim() || 'INBOX',
+    },
+    openai: {
+      apiKey: openaiApiKey,
+      model: env.OPENAI_MODEL?.trim() || 'gpt-5.6-terra',
+      storeResponses: env.OPENAI_STORE_RESPONSES === 'true',
+      timeoutMs: positiveInteger(env.OPENAI_API_TIMEOUT_MS || env.OPENAI_TIMEOUT_MS, 120_000),
+      maxRetries: nonNegativeInteger(env.OPENAI_MAX_RETRIES, 2),
+    },
+    extractionMaxFileBytes: positiveInteger(env.EXTRACTION_MAX_FILE_BYTES, 20 * 1024 * 1024),
+    extractionMaxPdfPages: positiveInteger(env.EXTRACTION_MAX_PDF_PAGES, 50),
     workerPollIntervalMs: positiveInteger(env.WORKER_POLL_INTERVAL_MS, 1500),
     objectStorage: {
       mode: storageMode,

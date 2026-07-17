@@ -172,7 +172,7 @@ export function LoginPage() {
             </button>
           </form>
 
-          {AUTH_MODE === 'demo' && (
+          {(AUTH_MODE === 'demo' || import.meta.env.DEV) && (
             <div className="mt-7 rounded-2xl border border-[#F3E3B3] bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-5 py-4.5" style={{ paddingTop: 18, paddingBottom: 18 }}>
               <div className="flex items-center gap-2">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>

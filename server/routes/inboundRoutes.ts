@@ -7,6 +7,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { constantTimeStringEqual, sha256 } from '../security.js';
+import { classifyXml, looksLikeXml } from '../inbound/xmlClassifier.js';
 import type { ObjectStorage } from '../storage.js';
 
 const attachmentSchema = z.object({
@@ -37,7 +38,18 @@ function detectedMimeType(bytes: Uint8Array): string | undefined {
   if (bytes.length >= 5 && Buffer.from(bytes.slice(0, 5)).toString('ascii') === '%PDF-') return 'application/pdf';
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
   if (bytes.length >= 8 && Buffer.from(bytes.slice(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (bytes.length >= 12 && Buffer.from(bytes.slice(0, 4)).toString('ascii') === 'RIFF'
+    && Buffer.from(bytes.slice(8, 12)).toString('ascii') === 'WEBP') return 'image/webp';
+  if (looksLikeXml(bytes)) return 'application/xml';
   return undefined;
+}
+
+// Deklarované MIME pre XML sa v e-mailových klientoch líši; obsahová detekcia rozhoduje.
+const XML_DECLARED_MIME_TYPES = ['application/xml', 'text/xml', 'application/octet-stream'];
+
+function mimeMatchesDeclared(actualMime: string, declaredMime: string): boolean {
+  if (actualMime === declaredMime) return true;
+  return actualMime === 'application/xml' && XML_DECLARED_MIME_TYPES.includes(declaredMime);
 }
 
 function safeName(value: string): string {
@@ -96,18 +108,24 @@ export function registerInboundRoutes(
     );
 
     let queued = 0;
+    let duplicates = 0;
     for (const attachment of body.attachments) {
       const attachmentId = randomUUID();
       const bytes = Buffer.from(attachment.contentBase64, 'base64');
       const actualMime = detectedMimeType(bytes);
       const hash = sha256(bytes);
       let status: 'queued' | 'quarantine' | 'duplicate' = 'quarantine';
-      let reason = quarantineReason;
+      let reason: string | undefined;
       let storageKey: string | undefined;
 
-      if (!reason && bytes.byteLength > 20 * 1024 * 1024) reason = 'attachment_too_large';
+      if (bytes.byteLength > config.extractionMaxFileBytes) reason = 'attachment_too_large';
       if (!reason && !actualMime) reason = 'unsupported_or_corrupted_file';
-      if (!reason && actualMime !== attachment.mimeType) reason = 'mime_mismatch';
+      if (!reason && !mimeMatchesDeclared(actualMime!, attachment.mimeType)) reason = 'mime_mismatch';
+      if (!reason && actualMime === 'application/xml') {
+        // PEPPOL BIS (UBL Invoice/CreditNote) aj SEPA camt.053 sa spracúvajú
+        // deterministicky; iné XML zostáva v karanténe.
+        if (classifyXml(bytes) === 'unknown_xml') reason = 'unsupported_xml';
+      }
       if (!reason && resolved) {
         const duplicate = await database.query(
           `SELECT 1 FROM inbound_attachments
@@ -118,12 +136,20 @@ export function registerInboundRoutes(
         if (duplicate.rowCount > 0) {
           status = 'duplicate';
           reason = 'technical_duplicate';
+          duplicates += 1;
         } else {
           storageKey = `inbound/${resolved.tenant_id}/${resolved.organization_id}/${emailId}/${attachmentId}/${safeName(attachment.fileName)}`;
           await storage.put(storageKey, bytes, actualMime!);
           status = 'queued';
           queued += 1;
         }
+      } else if (!reason) {
+        // Nezaradený e-mail (unknown_alias/ambiguous_recipient): platné bajty sa
+        // uložia, aby priradenie organizácii mohlo spustiť extrakciu bez
+        // opätovného zaslania e-mailu.
+        storageKey = `inbound/unassigned/${emailId}/${attachmentId}/${safeName(attachment.fileName)}`;
+        await storage.put(storageKey, bytes, actualMime!);
+        reason = quarantineReason;
       }
 
       await database.query(
@@ -138,18 +164,25 @@ export function registerInboundRoutes(
       if (status === 'queued' && resolved) {
         await database.query(
           `INSERT INTO processing_jobs
-            (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id, payload)
-           VALUES ($1,$2,$3,$4,'extract_document','queued',$5,$6::jsonb)`,
+            (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id, payload, max_attempts)
+           VALUES ($1,$2,$3,$4,'extract_document','queued',$5,$6::jsonb,$7)`,
           [randomUUID(), resolved.tenant_id, resolved.organization_id, attachmentId, correlationId,
-            JSON.stringify({ mockExtraction: attachment.mockExtraction ?? {} })],
+            JSON.stringify({ mockExtraction: attachment.mockExtraction ?? {} }),
+            config.extractionProvider === 'openai' ? config.openai.maxRetries + 1 : 5],
         );
       }
     }
 
+    // Technický repeat (všetky prílohy sú duplicity) je 'processed' — §11.11;
+    // karanténa je len pre e-maily bez použiteľnej prílohy.
+    const allDuplicates = body.attachments.length > 0 && duplicates === body.attachments.length;
+    const emailStatus = quarantineReason
+      ? 'quarantine'
+      : queued > 0 ? 'queued' : allDuplicates ? 'processed' : 'quarantine';
     if (!quarantineReason) {
       await database.query(
         `UPDATE inbound_emails SET status=$1, quarantine_reason=$2 WHERE id=$3`,
-        [queued > 0 ? 'queued' : 'quarantine', queued > 0 ? null : 'no_supported_attachment', emailId],
+        [emailStatus, emailStatus === 'quarantine' ? 'no_supported_attachment' : null, emailId],
       );
     }
     if (resolved) {
@@ -164,13 +197,15 @@ export function registerInboundRoutes(
         metadata: { provider, attachmentCount: body.attachments.length, queued },
       });
     }
-    return reply.code(202).send({ id: emailId, duplicate: false, queued, status: queued > 0 ? 'queued' : 'quarantine' });
+    return reply.code(202).send({ id: emailId, duplicate: false, queued, status: emailStatus });
   });
 
   app.get('/api/inbound-emails', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const query = z.object({ organizationId: z.string().uuid().optional() }).parse(request.query);
     if (query.organizationId) await requireOrganizationAccess(database, auth, query.organizationId);
+    // Nezaradené karanténne e-maily (tenant_id IS NULL) vidí iba admin —
+    // rozhoduje o ich priradení organizácii.
     const result = await database.query(
       `SELECT id, tenant_id AS "tenantId", organization_id AS "organizationId", alias_id AS "aliasId",
               provider, provider_message_id AS "providerMessageId", envelope_recipients AS "envelopeRecipients",
@@ -179,9 +214,10 @@ export function registerInboundRoutes(
               processing_error_code AS "processingErrorCode", processing_error_message AS "processingErrorMessage",
               correlation_id AS "correlationId", created_at AS "createdAt"
          FROM inbound_emails
-        WHERE tenant_id=$1 AND ($2::text IS NULL OR organization_id=$2)
+        WHERE (tenant_id=$1 OR ($3 AND tenant_id IS NULL AND status='quarantine'))
+          AND ($2::text IS NULL OR organization_id=$2)
         ORDER BY created_at DESC LIMIT 200`,
-      [auth.tenantId, query.organizationId ?? null],
+      [auth.tenantId, query.organizationId ?? null, auth.role === 'admin'],
     );
     return result.rows;
   });
@@ -189,13 +225,17 @@ export function registerInboundRoutes(
   app.get('/api/inbound-emails/:id', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const email = await database.query<{ organization_id: string } & Record<string, unknown>>(
-      'SELECT organization_id FROM inbound_emails WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId],
+    const email = await database.query<{ tenant_id: string | null; organization_id: string | null } & Record<string, unknown>>(
+      'SELECT tenant_id, organization_id FROM inbound_emails WHERE id=$1', [id],
     );
-    if (!email.rows[0]) throw new HttpError(404, 'inbound_email_not_found', 'E-mail neexistuje');
-    await requireOrganizationAccess(database, auth, email.rows[0].organization_id);
-    const details = await database.query('SELECT * FROM inbound_emails WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId]);
-    const attachments = await database.query('SELECT * FROM inbound_attachments WHERE inbound_email_id=$1 AND tenant_id=$2 ORDER BY created_at', [id, auth.tenantId]);
+    const scope = email.rows[0];
+    if (!scope || (scope.tenant_id !== null && scope.tenant_id !== auth.tenantId)) {
+      throw new HttpError(404, 'inbound_email_not_found', 'E-mail neexistuje');
+    }
+    if (scope.tenant_id === null || scope.organization_id === null) requireRole(auth, ['admin']);
+    else await requireOrganizationAccess(database, auth, scope.organization_id);
+    const details = await database.query('SELECT * FROM inbound_emails WHERE id=$1', [id]);
+    const attachments = await database.query('SELECT * FROM inbound_attachments WHERE inbound_email_id=$1 ORDER BY created_at', [id]);
     return { email: details.rows[0], attachments: attachments.rows };
   });
 
@@ -213,9 +253,10 @@ export function registerInboundRoutes(
       await requireOrganizationAccess(database, auth, attachment.organization_id);
       await database.query(`UPDATE inbound_attachments SET status='queued', quarantine_reason=NULL WHERE id=$1 AND tenant_id=$2`, [attachment.id, auth.tenantId]);
       await database.query(
-        `INSERT INTO processing_jobs (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id)
-         VALUES ($1,$2,$3,$4,'extract_document','queued',$5)`,
-        [randomUUID(), auth.tenantId, attachment.organization_id, attachment.id, request.id],
+        `INSERT INTO processing_jobs (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id, max_attempts)
+         VALUES ($1,$2,$3,$4,'extract_document','queued',$5,$6)`,
+        [randomUUID(), auth.tenantId, attachment.organization_id, attachment.id, request.id,
+          config.extractionProvider === 'openai' ? config.openai.maxRetries + 1 : 5],
       );
     }
     return reply.code(202).send({ queued: attachments.rowCount });
@@ -228,12 +269,67 @@ export function registerInboundRoutes(
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { organizationId } = z.object({ organizationId: z.string().uuid() }).strict().parse(request.body);
     await requireOrganizationAccess(database, auth, organizationId);
-    await database.query(
+    const updated = await database.query(
       `UPDATE inbound_emails SET tenant_id=$1, organization_id=$2, status='received', quarantine_reason=NULL
-        WHERE id=$3 AND (tenant_id IS NULL OR tenant_id=$1)`,
+        WHERE id=$3 AND (tenant_id IS NULL OR tenant_id=$1) RETURNING id`,
       [auth.tenantId, organizationId, id],
     );
-    await writeAudit(database, { tenantId: auth.tenantId, organizationId, actorType: 'user', actorId: auth.userId, action: 'inbound_email.assigned', entityType: 'inbound_email', entityId: id, correlationId: request.id });
+    if (updated.rowCount === 0) throw new HttpError(404, 'inbound_email_not_found', 'E-mail neexistuje');
+
+    // Prílohy s uloženými bajtmi sa po priradení zaradia do extrakcie —
+    // rovnaká dedup logika ako pri priamom routovaní cez alias.
+    const attachments = await database.query<{ id: string; storage_key: string | null; sha256: string; status: string } & Record<string, unknown>>(
+      `SELECT id, storage_key, sha256, status FROM inbound_attachments
+        WHERE inbound_email_id=$1 AND (tenant_id IS NULL OR tenant_id=$2)`,
+      [id, auth.tenantId],
+    );
+    let queued = 0;
+    let duplicates = 0;
+    for (const attachment of attachments.rows) {
+      if (attachment.storage_key && attachment.status === 'quarantine') {
+        const duplicate = await database.query(
+          `SELECT 1 FROM inbound_attachments
+            WHERE tenant_id=$1 AND organization_id=$2 AND sha256=$3
+              AND status IN ('queued','processing','document_created','duplicate')`,
+          [auth.tenantId, organizationId, attachment.sha256],
+        );
+        if (duplicate.rowCount > 0) {
+          await database.query(
+            `UPDATE inbound_attachments SET tenant_id=$1, organization_id=$2, status='duplicate', quarantine_reason='technical_duplicate' WHERE id=$3`,
+            [auth.tenantId, organizationId, attachment.id],
+          );
+          duplicates += 1;
+        } else {
+          await database.query(
+            `UPDATE inbound_attachments SET tenant_id=$1, organization_id=$2, status='queued', quarantine_reason=NULL WHERE id=$3`,
+            [auth.tenantId, organizationId, attachment.id],
+          );
+          await database.query(
+            `INSERT INTO processing_jobs (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id, max_attempts)
+             VALUES ($1,$2,$3,$4,'extract_document','queued',$5,$6)`,
+            [randomUUID(), auth.tenantId, organizationId, attachment.id, request.id,
+              config.extractionProvider === 'openai' ? config.openai.maxRetries + 1 : 5],
+          );
+          queued += 1;
+        }
+      } else {
+        await database.query(
+          `UPDATE inbound_attachments SET tenant_id=$1, organization_id=$2 WHERE id=$3`,
+          [auth.tenantId, organizationId, attachment.id],
+        );
+      }
+    }
+    const emailStatus = queued > 0
+      ? 'queued'
+      : attachments.rowCount > 0 && duplicates === attachments.rowCount ? 'processed' : 'received';
+    if (emailStatus !== 'received') {
+      await database.query('UPDATE inbound_emails SET status=$1 WHERE id=$2', [emailStatus, id]);
+    }
+    await writeAudit(database, {
+      tenantId: auth.tenantId, organizationId, actorType: 'user', actorId: auth.userId,
+      action: 'inbound_email.assigned', entityType: 'inbound_email', entityId: id,
+      correlationId: request.id, metadata: { queued, duplicates },
+    });
     return reply.code(204).send();
   });
 }

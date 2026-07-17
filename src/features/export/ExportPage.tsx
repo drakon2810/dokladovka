@@ -19,6 +19,12 @@ import {
 
 type ExportTab = 'novy' | 'historia';
 
+/** Konkrétna hláška zo servera (restRequest ju prenáša z body.message), inak generická. */
+function exportErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message.trim() : '';
+  return message || t('chyba.vseobecna');
+}
+
 function downloadXml(xml: string, fileName: string): void {
   // buildDataPack emituje iba ASCII + numeric entities; deklarácia
   // Windows-1250 je preto byte-safe aj pri vytvorení Blob-u v prehliadači.
@@ -33,28 +39,37 @@ function downloadXml(xml: string, fileName: string): void {
   URL.revokeObjectURL(url);
 }
 
-type ExportUnavailableReason = 'bankovy-vypis' | 'mzdy' | 'ciselny-rad';
+type ExportUnavailableReason = 'bankovy-vypis' | 'mzdy' | 'ciselny-rad' | 'ucto-nekompletne';
 
 function exportUnavailableReason(
   document: DocumentItem,
-  numberSeries: CodeListItem[],
+  codeLists: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[]; ciselneRady: CodeListItem[] },
 ): ExportUnavailableReason | undefined {
   if (document.typ === 'BV') return 'bankovy-vypis';
   if (document.typ === 'MZDY') return 'mzdy';
-  const seriesId = document.approvedSnapshot
-    ? document.approvedSnapshot.ucto.ciselnyRadId
-    : document.ucto.ciselnyRadId;
-  const hasActiveSeries = Boolean(
-    seriesId &&
-      numberSeries.some(
-        (item) =>
-          item.id === seriesId &&
-          item.tenantId === document.tenantId &&
-          item.orgId === document.orgId &&
-          item.active,
-      ),
-  );
-  return hasActiveSeries ? undefined : 'ciselny-rad';
+  // Export používa schválený snapshot; ak ešte neexistuje, aktuálne účtovanie.
+  const ucto = document.approvedSnapshot ? document.approvedSnapshot.ucto : document.ucto;
+  const hasActiveCode = (list: CodeListItem[], id: string | undefined): boolean =>
+    Boolean(
+      id &&
+        list.some(
+          (item) =>
+            item.id === id &&
+            item.tenantId === document.tenantId &&
+            item.orgId === document.orgId &&
+            item.active,
+        ),
+    );
+  // Server vyžaduje všetky tri aktívne číselníky (server/pohodaXml.ts), preto ich
+  // musíme skontrolovať aj v UI — inak doklad vyzerá exportovateľný a padne na 500.
+  if (!hasActiveCode(codeLists.ciselneRady, ucto.ciselnyRadId)) return 'ciselny-rad';
+  if (
+    !hasActiveCode(codeLists.predkontacie, ucto.predkontaciaId) ||
+    !hasActiveCode(codeLists.cleneniaDph, ucto.clenenieDphId)
+  ) {
+    return 'ucto-nekompletne';
+  }
+  return undefined;
 }
 
 export function ExportPage() {
@@ -114,7 +129,7 @@ export function ExportPage() {
   const unavailableReasons = new Map(
     approvedDocuments.map((document) => [
       document.id,
-      exportUnavailableReason(document, data.codeLists.ciselneRady),
+      exportUnavailableReason(document, data.codeLists),
     ]),
   );
   const selectableDocuments = approvedDocuments.filter(
@@ -142,8 +157,8 @@ export function ExportPage() {
       setSelected(new Set());
       downloadXml(result.xml, result.batch.xmlFileName);
       showToast(t('toast.exportHotovy'));
-    } catch {
-      showToast(t('chyba.vseobecna'), { tone: 'error' });
+    } catch (error) {
+      showToast(exportErrorMessage(error), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -154,8 +169,8 @@ export function ExportPage() {
     try {
       const result = await getBatchXml(batchId);
       downloadXml(result.xml, result.fileName);
-    } catch {
-      showToast(t('chyba.vseobecna'), { tone: 'error' });
+    } catch (error) {
+      showToast(exportErrorMessage(error), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -168,8 +183,8 @@ export function ExportPage() {
       await createMostikExportJob(organizationId, selectedIds, session?.csrfToken);
       setSelected(new Set());
       showToast(t('mostik.prenosVytvoreny'));
-    } catch {
-      showToast(t('chyba.vseobecna'), { tone: 'error' });
+    } catch (error) {
+      showToast(exportErrorMessage(error), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -272,7 +287,9 @@ export function ExportPage() {
                           ? t('export.mzdyTooltip')
                           : reason === 'ciselny-rad'
                             ? t('export.ciselnyRadTooltip')
-                            : undefined;
+                            : reason === 'ucto-nekompletne'
+                              ? t('export.uctoNekompletneTooltip')
+                              : undefined;
                     return (
                       <tr
                         key={document.id}

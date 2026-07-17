@@ -24,9 +24,25 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     const bankAccounts = await inScope('organization_bank_accounts', 'label');
     const aliases = await inScope('organization_email_aliases');
     const documents = await inScope('documents');
-    const inboundEmails = await inScope('inbound_emails');
-    const inboundAttachments = await inScope('inbound_attachments');
+    // Nezaradené karanténne e-maily (tenant_id IS NULL) patria do snapshotu
+    // iba pre admina — sekcia priradenia v Nastavenia → Schránky.
+    const includeUnassigned = auth.role === 'admin';
+    const inboundEmails = await database.query<Record<string, any>>(
+      `SELECT * FROM inbound_emails
+        WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))
+           OR ($3 AND tenant_id IS NULL AND status='quarantine')
+        ORDER BY created_at DESC`,
+      [auth.tenantId, organizationIds, includeUnassigned],
+    );
+    const inboundAttachments = await database.query<Record<string, any>>(
+      `SELECT * FROM inbound_attachments
+        WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))
+           OR ($3 AND tenant_id IS NULL)
+        ORDER BY created_at DESC`,
+      [auth.tenantId, organizationIds, includeUnassigned],
+    );
     const extractionRuns = await inScope('extraction_runs');
+    const suggestions = await inScope('accounting_suggestions', 'created_at DESC');
     const codeListRows = await inScope('code_list_items', 'code');
     const users = await database.query<Record<string, any>>(
       'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
@@ -79,15 +95,16 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       })),
       documents: documents.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, queueId: row.queue_id ?? '', typ: row.document_type,
-        status: row.status, processingStatus: row.processing_status, pdfUrl: '', prijateDna: iso(row.created_at),
+        status: row.status, processingStatus: row.processing_status, pdfUrl: `/api/documents/${row.id}/file`, prijateDna: iso(row.created_at),
         zdroj: row.source, confidence: Number(row.confidence), fieldConfidence: row.field_confidence,
         extracted: row.extracted, ucto: row.accounting, history: row.history, comments: row.comments,
         exportId: row.export_id ?? undefined, quarantineReason: row.quarantine_reason ?? undefined,
         duplicateOfDocumentId: row.duplicate_of_document_id ?? undefined, notDuplicate: row.not_duplicate,
+        appliedExtractionRunId: row.applied_extraction_run_id ?? undefined,
         version: row.version, approvedVersion: row.approved_version ?? undefined, approvedSnapshot: row.approved_snapshot ?? undefined,
       })),
       inboundEmails: inboundEmails.rows.map((row) => ({
-        id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id ?? undefined, aliasId: row.alias_id ?? undefined,
+        id: row.id, tenantId: row.tenant_id ?? undefined, organizationId: row.organization_id ?? undefined, aliasId: row.alias_id ?? undefined,
         provider: row.provider, providerMessageId: row.provider_message_id, envelopeRecipients: row.envelope_recipients,
         senderEmail: row.sender_email ?? undefined, senderName: row.sender_name ?? undefined, subject: row.subject ?? undefined,
         receivedAt: iso(row.received_at), status: row.status, attachmentCount: row.attachment_count,
@@ -96,7 +113,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         correlationId: row.correlation_id, createdAt: iso(row.created_at),
       })),
       inboundAttachments: inboundAttachments.rows.map((row) => ({
-        id: row.id, tenantId: row.tenant_id, inboundEmailId: row.inbound_email_id, organizationId: row.organization_id ?? undefined,
+        id: row.id, tenantId: row.tenant_id ?? undefined, inboundEmailId: row.inbound_email_id, organizationId: row.organization_id ?? undefined,
         originalFileName: row.original_file_name, safeFileName: row.safe_file_name, declaredMimeType: row.declared_mime_type ?? undefined,
         detectedMimeType: row.detected_mime_type ?? undefined, byteSize: Number(row.byte_size), sha256: row.sha256,
         storageKey: row.storage_key ?? undefined, status: row.status, documentId: row.document_id ?? undefined,
@@ -108,7 +125,13 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         status: row.status, result: row.result ?? undefined, errorCode: row.error_code ?? undefined, errorMessage: row.error_message ?? undefined,
         latencyMs: row.latency_ms ?? undefined, usage: row.usage ?? undefined, startedAt: iso(row.started_at), completedAt: iso(row.completed_at), createdAt: iso(row.created_at),
       })),
-      suggestions: [],
+      suggestions: suggestions.rows.map((row) => ({
+        tenantId: row.tenant_id, organizationId: row.organization_id, documentId: row.document_id,
+        predkontaciaId: row.predkontacia_id ?? undefined, clenenieDphId: row.clenenie_dph_id ?? undefined,
+        ciselnyRadId: row.ciselny_rad_id ?? undefined, strediskoId: row.stredisko_id ?? undefined,
+        source: row.source, confidence: Number(row.confidence), reason: row.reason,
+        basedOnDocumentId: row.based_on_document_id ?? undefined, createdAt: iso(row.created_at),
+      })),
       codeLists,
       users: users.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, meno: row.name, email: row.email, rola: row.role, jazyk: row.language, notifikacie: row.notifications })),
       exportBatches: batches.rows.map((row) => ({

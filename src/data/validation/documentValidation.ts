@@ -68,10 +68,10 @@ export function validateDocument(
   if (supplier.ico && !validateICO(supplier.ico)) {
     issues.push({ code: 'invalid_ico', field: 'dodavatel.ico' });
   }
-  if (supplier.dic && !/^\d{10}$/.test(supplier.dic)) {
+  if (supplier.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(supplier.dic.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_dic', field: 'dodavatel.dic' });
   }
-  if (supplier.icDph && !/^SK\d{10}$/.test(supplier.icDph)) {
+  if (supplier.icDph && !/^(?:SK\d{10}|CZ[A-Z0-9]{8,12})$/.test(supplier.icDph.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_ic_dph', field: 'dodavatel.icDph' });
   }
   if (supplier.iban && !validateIBAN(supplier.iban)) {
@@ -163,10 +163,10 @@ export function validateDocument(
   if (buyer?.ico && !validateICO(buyer.ico)) {
     issues.push({ code: 'invalid_ico', field: 'odberatel.ico' });
   }
-  if (buyer?.dic && !/^\d{10}$/.test(buyer.dic)) {
+  if (buyer?.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(buyer.dic.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_dic', field: 'odberatel.dic' });
   }
-  if (buyer?.icDph && !/^SK\d{10}$/.test(buyer.icDph)) {
+  if (buyer?.icDph && !/^(?:SK\d{10}|CZ[A-Z0-9]{8,12})$/.test(buyer.icDph.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_ic_dph', field: 'odberatel.icDph' });
   }
   if (

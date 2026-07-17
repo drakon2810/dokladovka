@@ -7,7 +7,7 @@ import { showToast } from '../../components/toast';
 import { t, type SkKey } from '../../i18n/sk';
 
 const DOCUMENT_TYPES: DocumentType[] = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'];
-const VAT_RATES: VatRate[] = [23, 19, 5, 0];
+const VAT_RATES: VatRate[] = [23, 21, 19, 12, 5, 0];
 const TYPE_LABELS: Record<DocumentType, SkKey> = {
   FP: 'typ.FP.dlhy',
   FV: 'typ.FV.dlhy',
@@ -276,7 +276,7 @@ export function DocumentCreateModal({
             <input
               className="mx-auto mt-3 block max-w-full text-sm"
               type="file"
-              accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+              accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp"
               aria-required="true"
               onChange={(event) => setFile(event.target.files?.[0])}
             />

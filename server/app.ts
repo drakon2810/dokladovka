@@ -12,6 +12,7 @@ import { registerOrganizationRoutes } from './routes/organizationRoutes.js';
 import { registerAgentRoutes } from './routes/agentRoutes.js';
 import { registerDataSnapshotRoutes } from './routes/dataSnapshotRoutes.js';
 import { registerCodeListRoutes } from './routes/codeListRoutes.js';
+import { registerOrgDocumentRoutes } from './routes/orgDocumentRoutes.js';
 import type { ObjectStorage } from './storage.js';
 
 export async function buildApp(input: {
@@ -68,10 +69,11 @@ export async function buildApp(input: {
   registerAuthRoutes(app, input.database, input.config);
   registerOrganizationRoutes(app, input.database, input.config);
   registerInboundRoutes(app, input.database, input.storage, input.config);
-  registerDocumentRoutes(app, input.database, input.storage);
+  registerDocumentRoutes(app, input.database, input.storage, input.config);
   registerAgentRoutes(app, input.database, input.config);
   registerDataSnapshotRoutes(app, input.database);
   registerCodeListRoutes(app, input.database);
+  registerOrgDocumentRoutes(app, input.database, input.storage, input.config);
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {

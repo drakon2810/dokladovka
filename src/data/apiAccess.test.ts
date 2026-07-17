@@ -113,7 +113,7 @@ describe('tenant isolation at the service boundary', () => {
     const state = storeApi.get();
     const foreignTenantId = 'tenant-foreign';
     const foreignOrgId = 'org-foreign';
-    const foreign = <T extends { tenantId: string }>(item: T, patch: Partial<T> = {}): T => ({
+    const foreign = <T extends { tenantId?: string }>(item: T, patch: Partial<T> = {}): T => ({
       ...structuredClone(item),
       ...patch,
       tenantId: foreignTenantId,

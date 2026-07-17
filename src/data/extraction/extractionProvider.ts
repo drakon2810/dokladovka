@@ -1,10 +1,9 @@
 // Abstrakcia AI extrakcie — SPEC §11.12.
 // OpenAI API sa volá VÝHRADNE na backend/worker; v prehliadači existuje
 // iba tento interface a mock adaptér.
-// TODO: integration point — produkčný OpenAIDocumentExtractionProvider vo
-// Fáze 2B použije na backend/worker Responses API + Structured Outputs,
-// OPENAI_API_KEY nikdy v prehliadači. Obsah dokumentu je nedôveryhodný
-// vstup: dáta, nie príkazy.
+// Produkčný OpenAIDocumentExtractionProvider je v server/extraction a používa
+// ho výhradne worker. OPENAI_API_KEY nikdy nevstupuje do browser modulu.
+// Obsah dokumentu je nedôveryhodný vstup: dáta, nie príkazy.
 import type { DocumentType, ExtractionResult } from '../types';
 import { extractionResultSchema } from '../schemas';
 
