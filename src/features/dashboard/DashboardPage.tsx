@@ -115,9 +115,49 @@ export function DashboardPage() {
   const series = buildThirtyDaySeries(documents);
   const maxCount = Math.max(1, ...series.map((day) => day.count));
 
+  // Avízo: neuhradené doklady so splatnosťou do 7 dní alebo po splatnosti.
+  const paidByDocument = new Map<string, number>();
+  for (const payment of data.payments ?? []) {
+    paidByDocument.set(payment.documentId, (paidByDocument.get(payment.documentId) ?? 0) + payment.amount);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const dueSoon = data.documents.filter((document) => {
+    if (document.typ === 'BV' || !['extrahovany', 'na_kontrole', 'schvaleny', 'exportovany'].includes(document.status)) return false;
+    const due = document.extracted.datumSplatnosti;
+    if (!due) return false;
+    const remaining = (document.extracted.sumaSpolu ?? 0) - (paidByDocument.get(document.id) ?? 0);
+    if (remaining <= 0.005) return false;
+    const days = Math.round((Date.parse(due) - Date.parse(today)) / 86_400_000);
+    return days <= 7;
+  });
+
   return (
     <div className="mx-auto max-w-[1240px]">
       <h1 className="mb-5 text-[22px] font-bold tracking-tight">{t('dash.titulok')}</h1>
+
+      {dueSoon.length > 0 && (
+        <div className="mb-4 rounded-2xl border border-amber-300 bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-4 py-3">
+          <p className="text-sm font-semibold text-amber-900">⚠ {t('platby.avizo')} ({dueSoon.length})</p>
+          <ul className="mt-1.5 space-y-0.5">
+            {dueSoon.slice(0, 5).map((document) => {
+              const days = Math.round((Date.parse(document.extracted.datumSplatnosti!) - Date.parse(today)) / 86_400_000);
+              return (
+                <li key={document.id} className="text-sm text-amber-900/90">
+                  <Link className="underline-offset-2 hover:underline" to={`/doklady/${document.id}`}>
+                    {document.extracted.dodavatel.nazov || document.extracted.cisloFaktury || document.id.slice(0, 8)}
+                  </Link>
+                  {' · '}
+                  <span className="tnum">{(document.extracted.sumaSpolu ?? 0).toLocaleString('sk-SK', { minimumFractionDigits: 2 })} {document.extracted.mena ?? 'EUR'}</span>
+                  {' · '}
+                  <span className={`tnum font-medium ${days < 0 ? 'text-red-700' : ''}`}>
+                    {days < 0 ? `${-days} ${t('platby.dniPo')}` : `${t('platby.o')} ${days} ${t('platby.dni')}`}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {counters.map((counter) => (

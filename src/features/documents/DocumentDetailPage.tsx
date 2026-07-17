@@ -42,6 +42,7 @@ import type {
   VatBreakdownRow,
   VatRate,
 } from '../../data/types';
+import { CLENENIE_KV_KODY } from '../../data/types';
 import {
   ConfidenceIndicator,
   Modal,
@@ -64,6 +65,7 @@ import { t, type SkKey } from '../../i18n/sk';
 import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
+import { PaymentCard } from './PaymentCard';
 import { useAuth } from '../../auth/AuthContext';
 import {
   createMostikExportJob,
@@ -954,6 +956,13 @@ export function DocumentDetailPage() {
         />
 
         <div className="min-w-0 space-y-4">
+          {draft.typ !== 'BV' && (
+            <PaymentCard
+              doklad={draft}
+              payments={(data.payments ?? []).filter((payment) => payment.documentId === draft.id)}
+              readOnly={role === 'schvalovatel'}
+            />
+          )}
           <fieldset disabled={readOnly} className="space-y-4 disabled:opacity-75">
             <Section title={t('detail.hlavicka')}>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1048,6 +1057,25 @@ export function DocumentDetailPage() {
                     onChange={(event) => updateSupplier('iban', event.target.value)}
                   />
                 </Field>
+                <Field label={t('detail.bic')}>
+                  <input
+                    className="input tnum"
+                    value={draft.extracted.dodavatel.bic ?? ''}
+                    onChange={(event) => updateSupplier('bic', event.target.value)}
+                  />
+                  {(() => {
+                    // Kód banky a číslo účtu sú v SK IBAN — zobrazujeme odvodené, needitovateľné.
+                    const iban = (draft.extracted.dodavatel.iban ?? '').replace(/\s/g, '').toUpperCase();
+                    if (!/^SK\d{22}$/.test(iban)) return null;
+                    const prefix = iban.slice(8, 14).replace(/^0+/, '');
+                    const account = iban.slice(14, 24).replace(/^0+/, '') || '0';
+                    return (
+                      <p className="tnum mt-1 text-xs text-ink-soft">
+                        {t('detail.kodBanky')}: {iban.slice(4, 8)} · {t('detail.cisloUctu')}: {prefix ? `${prefix}-${account}` : account}
+                      </p>
+                    );
+                  })()}
+                </Field>
                 <Field label={t('detail.adresa')} {...fieldProps('dodavatel.adresa')}>
                   <input
                     className="input"
@@ -1092,6 +1120,27 @@ export function DocumentDetailPage() {
                     onChange={(event) =>
                       updateExtracted('specifickySymbol', event.target.value || undefined)
                     }
+                  />
+                </Field>
+                <Field label={t('detail.interneCislo')}>
+                  <input
+                    className="input tnum"
+                    value={draft.extracted.interneCislo ?? ''}
+                    onChange={(event) => updateExtracted('interneCislo', event.target.value || undefined)}
+                  />
+                </Field>
+                <Field label={t('detail.cisloObjednavky')}>
+                  <input
+                    className="input tnum"
+                    value={draft.extracted.cisloObjednavky ?? ''}
+                    onChange={(event) => updateExtracted('cisloObjednavky', event.target.value || undefined)}
+                  />
+                </Field>
+                <Field label={t('detail.cisloDodacieho')}>
+                  <input
+                    className="input tnum"
+                    value={draft.extracted.cisloDodaciehoListu ?? ''}
+                    onChange={(event) => updateExtracted('cisloDodaciehoListu', event.target.value || undefined)}
                   />
                 </Field>
                 <Field label={t('detail.datumVystavenia')} {...fieldProps('datumVystavenia')}>
@@ -1498,6 +1547,21 @@ export function DocumentDetailPage() {
                     </select>
                   </label>
                 ))}
+                <label className="block">
+                  <span className="label">{t('detail.clenenieKv')}</span>
+                  <select
+                    className="input"
+                    value={draft.ucto.clenenieKvKod ?? ''}
+                    onChange={(event) => updateUcto({ clenenieKvKod: event.target.value || undefined })}
+                  >
+                    <option value="">{t('detail.nevybrane')}</option>
+                    {CLENENIE_KV_KODY.map((kod) => (
+                      <option key={kod} value={kod}>
+                        {kod} · {t(`kv.${kod}` as SkKey)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {draft.typ === 'PD' && (
                   <>
                     <label className="block">

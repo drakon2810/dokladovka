@@ -105,6 +105,22 @@ export interface DocumentLineItem {
   sumaSpolu?: number;
 }
 
+/** Úhrada dokladu — manuálna alebo automaticky spárovaná z bankového výpisu. */
+export interface DocumentPayment {
+  id: string;
+  tenantId: string;
+  organizationId: string;
+  documentId: string;
+  amount: number;
+  currency: string;
+  paidOn: string; // ISO date
+  source: 'manual' | 'bank_statement';
+  bankStatementDocumentId?: string;
+  note?: string;
+  createdBy?: string;
+  createdAt?: string;
+}
+
 export interface DocumentSource {
   typ: 'email' | 'manual' | 'upload';
   inboundEmailId?: string;
@@ -129,6 +145,7 @@ export interface DocumentExtractedData {
     icDph?: string;
     adresa?: string;
     iban?: string;
+    bic?: string;
   };
   odberatel?: {
     nazov?: string;
@@ -138,6 +155,10 @@ export interface DocumentExtractedData {
     adresa?: string;
   };
   cisloFaktury: string; // dodávateľské číslo
+  /** Vlastné interné číslo účtovníka (nie je z dokladu). */
+  interneCislo?: string;
+  cisloObjednavky?: string;
+  cisloDodaciehoListu?: string;
   variabilnySymbol?: string;
   konstantnySymbol?: string;
   specifickySymbol?: string;
@@ -162,7 +183,12 @@ export interface DocumentUcto {
   /** Smer pokladničného dokladu podľa voucher.xsd. */
   pokladnaTyp?: 'receipt' | 'expense';
   poznamka?: string;
+  /** Sekcia kontrolného výkazu DPH (štatutárny číselník A1…D2, KN). */
+  clenenieKvKod?: string;
 }
+
+/** Štatutárne sekcie kontrolného výkazu DPH — pevný zoznam, nie POHODA import. */
+export const CLENENIE_KV_KODY = ['A1', 'A2', 'B1', 'B2', 'B3', 'C1', 'C2', 'D1', 'D2', 'KN'] as const;
 
 export interface HistoryEntry {
   ts: string;

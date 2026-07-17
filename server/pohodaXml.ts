@@ -100,6 +100,7 @@ export function buildServerDataPack(input: {
         <vch:dateTax>${escapeXml(extracted.datumDodania ?? extracted.datumVystavenia)}</vch:dateTax>
         <vch:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></vch:accounting>
         <vch:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></vch:classificationVAT>
+        ${snapshot.ucto.clenenieKvKod ? `<vch:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></vch:classificationKVDPH>` : ''}
         <vch:text>${escapeXml(extracted.textPolozky ?? extracted.cisloFaktury ?? 'Pokladničný doklad')}</vch:text>
         <vch:partnerIdentity>${partner}</vch:partnerIdentity>
       </vch:voucherHeader>
@@ -148,12 +149,15 @@ export function buildServerDataPack(input: {
         <inv:dateDue>${escapeXml(extracted.datumSplatnosti ?? extracted.datumVystavenia)}</inv:dateDue>
         <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>
         <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
+        ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
+        ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(extracted.cisloObjednavky)}</inv:numberOrder>` : ''}
         <inv:partnerIdentity><typ:address>
           <typ:company>${escapeXml(supplier.nazov)}</typ:company>
           <typ:ico>${escapeXml(supplier.ico)}</typ:ico>
           <typ:dic>${escapeXml(supplier.dic)}</typ:dic>
         </typ:address></inv:partnerIdentity>
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
+        ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}
       </inv:invoiceHeader>
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}

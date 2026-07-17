@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:api": "tsx watch --env-file-if-exists=.env server/index.ts",
+    "dev:api": "tsx --env-file-if-exists=.env server/index.ts",
+    "dev:api:watch": "tsx watch --env-file-if-exists=.env server/index.ts",
     "dev:worker": "tsx watch --env-file-if-exists=.env server/worker.ts",
     "dev:monitor": "tsx watch --env-file-if-exists=.env server/monitor.ts",
     "dev:imap": "tsx watch --env-file-if-exists=.env server/imap.ts",

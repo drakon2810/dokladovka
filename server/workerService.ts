@@ -22,6 +22,7 @@ import {
   rebuildAccountingSuggestion,
   type AiSuggestionDocumentContext,
 } from './services/accountingSuggestionService.js';
+import { matchStatementPayments } from './services/paymentService.js';
 import type { ObjectStorage } from './storage.js';
 import { PDFDocument } from 'pdf-lib';
 
@@ -432,6 +433,19 @@ export async function processNextJob(
       schemaVersion: EXTRACTION_SCHEMA_VERSION,
     });
     const summary = await completeRun(database, job, context, prepared, outcome, startedAt);
+    // Bankový výpis: automatické párovanie odchádzajúcich transakcií na otvorené
+    // faktúry podľa VS + sumy. Zlyhanie párovania nesmie zhodiť spracovanie.
+    if (summary && summary.documentType === 'BV') {
+      try {
+        await matchStatementPayments(database, {
+          tenantId: job.tenant_id,
+          organizationId: job.organization_id,
+          statementDocumentId: prepared.documentId,
+        });
+      } catch {
+        // Párovanie je best-effort; výpis je už uložený.
+      }
+    }
     // AI návrh zaúčtovania z POHODA číselníkov — len keď deterministické zdroje
     // nič nenašli; zlyhanie návrhu nesmie zhodiť spracovanie dokladu.
     if (summary && summary.status !== 'karantena' && summary.documentType !== 'BV') {

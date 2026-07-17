@@ -43,6 +43,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     );
     const extractionRuns = await inScope('extraction_runs');
     const suggestions = await inScope('accounting_suggestions', 'created_at DESC');
+    const payments = await inScope('document_payments', 'paid_on DESC');
     const codeListRows = await inScope('code_list_items', 'code');
     const users = await database.query<Record<string, any>>(
       'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
@@ -133,6 +134,12 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         basedOnDocumentId: row.based_on_document_id ?? undefined, createdAt: iso(row.created_at),
       })),
       codeLists,
+      payments: payments.rows.map((row) => ({
+        id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id, documentId: row.document_id,
+        amount: Number(row.amount), currency: row.currency, paidOn: iso(row.paid_on)?.slice(0, 10) ?? '',
+        source: row.source, bankStatementDocumentId: row.bank_statement_document_id ?? undefined,
+        note: row.note ?? undefined, createdBy: row.created_by ?? undefined, createdAt: iso(row.created_at),
+      })),
       users: users.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, meno: row.name, email: row.email, rola: row.role, jazyk: row.language, notifikacie: row.notifications })),
       exportBatches: batches.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, createdAt: iso(row.created_at),

@@ -10,9 +10,10 @@ function wireResult() {
   return {
     schemaVersion: EXTRACTION_SCHEMA_VERSION,
     documentType: 'FP',
-    supplier: { nazov: 'Český Dodavatel s.r.o.', ico: '12345678', dic: null, icDph: 'CZ12345678', adresa: null, iban: null },
+    supplier: { nazov: 'Český Dodavatel s.r.o.', ico: '12345678', dic: null, icDph: 'CZ12345678', adresa: null, iban: null, bic: null },
     buyer: { nazov: 'Test s.r.o.', ico: '87654321', dic: null, icDph: null, adresa: null },
-    invoiceNumber: '2026-001', variableSymbol: null, constantSymbol: null, specificSymbol: null,
+    invoiceNumber: '2026-001', orderNumber: null, deliveryNoteNumber: null,
+    variableSymbol: null, constantSymbol: null, specificSymbol: null,
     issueDate: '2026-07-14', taxDate: '2026-07-14', dueDate: '2026-07-28', currency: 'CZK',
     lineItems: [],
     vatBreakdown: [{ vatRate: '21', base: '100.00', vat: '21.00', total: '121.00' }],

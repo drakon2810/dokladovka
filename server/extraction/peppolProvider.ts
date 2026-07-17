@@ -149,6 +149,8 @@ export class PeppolDocumentExtractionProvider implements ServerDocumentExtractio
     });
 
     const invoiceNumber = text(doc.ID);
+    const orderNumber = text(asArray(doc.OrderReference)[0]?.ID);
+    const deliveryNoteNumber = text(asArray(doc.DespatchDocumentReference)[0]?.ID);
     const issueDate = isoDate(doc.IssueDate);
     const dueDate = isoDate(doc.DueDate) ?? isoDate(asArray(doc.PaymentMeans)[0]?.PaymentDueDate);
     const taxDate = isoDate(doc.TaxPointDate) ?? isoDate(asArray(doc.Delivery)[0]?.ActualDeliveryDate) ?? issueDate;
@@ -160,6 +162,8 @@ export class PeppolDocumentExtractionProvider implements ServerDocumentExtractio
       supplier: { ...supplier, iban },
       buyer,
       invoiceNumber,
+      orderNumber,
+      deliveryNoteNumber,
       variableSymbol,
       issueDate,
       taxDate,

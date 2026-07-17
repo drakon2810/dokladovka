@@ -24,9 +24,10 @@ const partyWireSchema = z.object({
   icDph: nullableShortText,
   adresa: nullableText,
   iban: nullableShortText,
+  bic: nullableShortText,
 }).strict();
 
-const buyerWireSchema = partyWireSchema.omit({ iban: true }).strict();
+const buyerWireSchema = partyWireSchema.omit({ iban: true, bic: true }).strict();
 
 const lineItemWireSchema = z.object({
   description: nullableText,
@@ -63,6 +64,8 @@ export const extractionWireSchema = z.object({
   supplier: partyWireSchema,
   buyer: buyerWireSchema,
   invoiceNumber: nullableShortText,
+  orderNumber: nullableShortText,
+  deliveryNoteNumber: nullableShortText,
   variableSymbol: nullableShortText,
   constantSymbol: nullableShortText,
   specificSymbol: nullableShortText,
@@ -97,6 +100,8 @@ export interface ExtractionResult {
   supplier: SupplierPartyResult;
   buyer: BuyerPartyResult;
   invoiceNumber?: string;
+  orderNumber?: string;
+  deliveryNoteNumber?: string;
   variableSymbol?: string;
   constantSymbol?: string;
   specificSymbol?: string;
@@ -131,7 +136,7 @@ interface BuyerPartyResult {
   adresa?: string;
 }
 
-interface SupplierPartyResult extends BuyerPartyResult { iban?: string }
+interface SupplierPartyResult extends BuyerPartyResult { iban?: string; bic?: string }
 
 function compactParty<T extends Record<string, string | null>>(party: T): Record<string, string> {
   return Object.fromEntries(Object.entries(party).filter(([, value]) => value !== null)) as Record<string, string>;
@@ -150,6 +155,8 @@ export function fromWireResult(value: unknown): ExtractionResult {
     buyer: compactParty(parsed.buyer),
     ...withoutNulls({
       invoiceNumber: parsed.invoiceNumber,
+      orderNumber: parsed.orderNumber,
+      deliveryNoteNumber: parsed.deliveryNoteNumber,
       variableSymbol: parsed.variableSymbol,
       constantSymbol: parsed.constantSymbol,
       specificSymbol: parsed.specificSymbol,
@@ -181,12 +188,14 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   supplier: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
     icDph: z.string().optional(), adresa: z.string().optional(), iban: z.string().optional(),
+    bic: z.string().optional(),
   }),
   buyer: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
     icDph: z.string().optional(), adresa: z.string().optional(),
   }),
-  invoiceNumber: z.string().optional(), variableSymbol: z.string().optional(),
+  invoiceNumber: z.string().optional(), orderNumber: z.string().optional(),
+  deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),
   constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
   issueDate: z.string().optional(), taxDate: z.string().optional(), dueDate: z.string().optional(),
   currency: z.string().optional(),

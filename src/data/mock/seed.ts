@@ -862,5 +862,6 @@ export function buildSeedState() {
       preferredYear: 'latest' as const,
     })),
     exportJobs: [],
+    payments: [],
   };
 }

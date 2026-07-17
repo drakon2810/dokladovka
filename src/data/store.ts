@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
   AccountingSuggestion,
+  DocumentPayment,
   AgentInstallation,
   AppUser,
   CodeListItem,
@@ -44,6 +45,7 @@ export interface AppDataState {
   inboundAttachments: InboundAttachment[];
   extractionRuns: ExtractionRun[];
   suggestions: AccountingSuggestion[];
+  payments: DocumentPayment[];
   codeLists: Record<CodeListKind, CodeListItem[]>;
   users: AppUser[];
   exportBatches: ExportBatch[];
@@ -187,6 +189,7 @@ export function migratePersistedState(persisted: unknown, version: number): AppD
       preferredYear: 'latest',
     })),
     exportJobs: state.exportJobs ?? [],
+    payments: state.payments ?? [],
   };
 }
 

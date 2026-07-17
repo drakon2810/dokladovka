@@ -2132,7 +2132,27 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     },
     users: s.users.filter(belongsToTenant),
     exportBatches: s.exportBatches.filter(belongsToTenant),
+    payments: (s.payments ?? []).filter(belongsToTenant),
   };
+}
+
+/** Úhrada dokladu (bez sumy = celý zvyšok). Reálna funkcia backendu; mock režim ju nemá. */
+export async function addDocumentPayment(
+  documentId: string,
+  input: { amount?: number; paidOn?: string; note?: string } = {},
+): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Úhrady vyžadujú spustený backend');
+  await restRequest(`/api/documents/${documentId}/payments`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  await refreshRestSnapshot();
+}
+
+export async function removeDocumentPayment(documentId: string, paymentId: string): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Úhrady vyžadujú spustený backend');
+  await restRequest(`/api/documents/${documentId}/payments/${paymentId}`, { method: 'DELETE' });
+  await refreshRestSnapshot();
 }
 
 export function subscribeDataChanges(listener: () => void): () => void {

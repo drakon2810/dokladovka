@@ -7,7 +7,24 @@ import { processNextJob } from './workerService.js';
 import { createObjectStorage } from './storage.js';
 
 const config = loadConfig();
-const database = await createDatabase(config);
+
+// PGlite (dev): pri reštarte tsx watch môže starý proces ešte držať data dir,
+// prvé otvorenie potom spadne WASM abortom. Krátky retry rieši túto race.
+async function openDatabaseWithRetry(attempts = 4, delayMs = 3_000): Promise<Awaited<ReturnType<typeof createDatabase>>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await createDatabase(config);
+    } catch (error) {
+      lastError = error;
+      console.error(`Databáza sa nepodarilo otvoriť (pokus ${attempt}/${attempts}); skúšam znova o ${delayMs / 1000}s`);
+      await delay(delayMs);
+    }
+  }
+  throw lastError;
+}
+
+const database = await openDatabaseWithRetry();
 await migrateDatabase(database);
 const storage = createObjectStorage(config);
 const app = await buildApp({ database, storage, config });
