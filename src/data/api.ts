@@ -2133,7 +2133,21 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     users: s.users.filter(belongsToTenant),
     exportBatches: s.exportBatches.filter(belongsToTenant),
     payments: (s.payments ?? []).filter(belongsToTenant),
+    approvalRules: (s.approvalRules ?? []).filter(belongsToTenant),
   };
+}
+
+/** Uloženie pravidla schvaľovania podľa sumy (iba admin, jedno na organizáciu). */
+export async function saveApprovalRule(
+  organizationId: string,
+  input: { minAmount: number; requiredRole: 'admin' | 'schvalovatel'; active: boolean },
+): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá schvaľovania vyžadujú spustený backend');
+  await restRequest(`/api/organizations/${organizationId}/approval-rule`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+  await refreshRestSnapshot();
 }
 
 /** Úhrada dokladu (bez sumy = celý zvyšok). Reálna funkcia backendu; mock režim ju nemá. */

@@ -81,6 +81,40 @@ function mapAlias(row: AliasRow): AliasRecord {
 }
 
 export function registerOrganizationRoutes(app: FastifyInstance, database: Database, config: ServerConfig): void {
+  // Schvaľovanie podľa sumy — jedno pravidlo na organizáciu, upsert (admin).
+  app.put('/api/organizations/:organizationId/approval-rule', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const body = z.object({
+      minAmount: z.number().min(0).max(100_000_000),
+      requiredRole: z.enum(['admin', 'schvalovatel']),
+      active: z.boolean(),
+    }).strict().parse(request.body);
+    await database.query(
+      `INSERT INTO approval_rules (organization_id, tenant_id, min_amount, required_role, active, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,now())
+       ON CONFLICT (organization_id) DO UPDATE SET
+         min_amount=excluded.min_amount, required_role=excluded.required_role,
+         active=excluded.active, updated_by=excluded.updated_by, updated_at=now()`,
+      [organizationId, auth.tenantId, Math.round(body.minAmount * 100) / 100, body.requiredRole, body.active, auth.userId],
+    );
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'organization.approval_rule_updated',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+      metadata: { minAmount: body.minAmount, requiredRole: body.requiredRole, active: body.active },
+    });
+    return { organizationId, minAmount: body.minAmount, requiredRole: body.requiredRole, active: body.active };
+  });
+
   app.get('/api/organizations', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const result = await database.query<OrganizationRow>(

@@ -112,7 +112,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
   app.post('/api/documents/:id/approve', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
-    requireRole(auth, ['admin', 'uctovnik']);
+    requireRole(auth, ['admin', 'uctovnik', 'schvalovatel']);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { expectedVersion } = z.object({ expectedVersion: z.number().int().positive() }).strict().parse(request.body);
     const document = await scopedDocument(database, auth.tenantId, id);
@@ -120,6 +120,24 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     if (document.version !== expectedVersion) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
     if (!['na_kontrole', 'extrahovany'].includes(document.status) || document.processing_status !== 'ready_for_review') {
       throw new HttpError(409, 'document_not_ready', 'Doklad ešte nie je pripravený na schválenie');
+    }
+    // Schvaľovanie podľa sumy: od prahu smie schváliť len vyhradená rola
+    // (admin vždy). Deterministická kontrola pred všetkými ostatnými.
+    const approvalRule = await database.query<{ min_amount: string | number; required_role: string } & Record<string, unknown>>(
+      'SELECT min_amount, required_role FROM approval_rules WHERE organization_id=$1 AND tenant_id=$2 AND active=true',
+      [document.organization_id, auth.tenantId],
+    );
+    const rule = approvalRule.rows[0];
+    const documentTotal = Number((document.extracted as any)?.sumaSpolu ?? 0);
+    if (rule && documentTotal >= Number(rule.min_amount)) {
+      const allowedRoles = rule.required_role === 'admin' ? ['admin'] : ['admin', 'schvalovatel'];
+      if (!allowedRoles.includes(auth.role)) {
+        throw new HttpError(
+          403,
+          'approval_threshold',
+          `Doklad od ${Number(rule.min_amount).toFixed(2)} € musí schváliť ${rule.required_role === 'admin' ? 'administrátor' : 'schvaľovateľ'}`,
+        );
+      }
     }
     const organization = await database.query<{ ico: string; dic?: string; ic_dph?: string } & Record<string, unknown>>(
       'SELECT ico,dic,ic_dph FROM organizations WHERE id=$1 AND tenant_id=$2',

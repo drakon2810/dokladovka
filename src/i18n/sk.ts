@@ -105,6 +105,16 @@ export const sk = {
   'platby.avizo': 'Blíži sa splatnosť neuhradených dokladov',
   'platby.avizoPo': 'po splatnosti',
 
+  // ===== Schvaľovanie podľa sumy =====
+  'nast.tab.schvalovanie': 'Schvaľovanie',
+  'schvalovanie.popis': 'Doklady od zadanej sumy musí schváliť vybraná rola. Administrátor môže schváliť vždy.',
+  'schvalovanie.aktivne': 'Aktívne',
+  'schvalovanie.odSumy': 'Od sumy (€)',
+  'schvalovanie.rola': 'Musí schváliť',
+  'schvalovanie.ulozit': 'Uložiť pravidlo',
+  'schvalovanie.ulozeneOk': 'Pravidlo schvaľovania bolo uložené.',
+  'schvalovanie.neplatnaSuma': 'Zadajte platnú sumu prahu.',
+
   // ===== Nespracované doklady =====
   'nespracovane.titulok': 'Nespracované doklady',
   'nespracovane.popis': 'E-maily, z ktorých nevznikol doklad — priraďte ich organizácii alebo skontrolujte dôvod.',

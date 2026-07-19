@@ -105,6 +105,15 @@ export interface DocumentLineItem {
   sumaSpolu?: number;
 }
 
+/** Schvaľovanie podľa sumy: od prahu smie doklad schváliť len vyhradená rola. */
+export interface ApprovalRule {
+  organizationId: string;
+  tenantId: string;
+  minAmount: number;
+  requiredRole: 'admin' | 'schvalovatel';
+  active: boolean;
+}
+
 /** Úhrada dokladu — manuálna alebo automaticky spárovaná z bankového výpisu. */
 export interface DocumentPayment {
   id: string;
