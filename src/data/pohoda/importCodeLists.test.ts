@@ -21,6 +21,9 @@ function emptyPreview(orgId = 'org-alfa'): CodeListImportPreview {
       cleneniaDph: emptyKind(),
       ciselneRady: emptyKind(),
       strediska: emptyKind(),
+      zakazky: emptyKind(),
+      cinnosti: emptyKind(),
+      projekty: emptyKind(),
     },
     warnings: [],
   };

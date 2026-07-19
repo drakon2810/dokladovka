@@ -69,7 +69,10 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
          FROM export_jobs WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ORDER BY created_at DESC`, [auth.tenantId, organizationIds],
     );
 
-    const codeLists = { predkontacie: [], cleneniaDph: [], ciselneRady: [], strediska: [] } as Record<string, any[]>;
+    const codeLists = {
+      predkontacie: [], cleneniaDph: [], ciselneRady: [], strediska: [],
+      zakazky: [], cinnosti: [], projekty: [],
+    } as Record<string, any[]>;
     for (const row of codeListRows.rows) {
       codeLists[row.kind].push({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, kod: row.code, nazov: row.name,

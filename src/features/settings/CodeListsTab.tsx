@@ -26,6 +26,9 @@ const KINDS: Array<{ kind: CodeListKind; label: string }> = [
   { kind: 'cleneniaDph', label: t('nast.cis.cleneniaDph') },
   { kind: 'ciselneRady', label: t('nast.cis.ciselneRady') },
   { kind: 'strediska', label: t('nast.cis.strediska') },
+  { kind: 'zakazky', label: t('nast.cis.zakazky') },
+  { kind: 'cinnosti', label: t('nast.cis.cinnosti') },
+  { kind: 'projekty', label: t('nast.cis.projekty') },
 ];
 
 function downloadXml(xml: string, fileName: string): void {
@@ -48,6 +51,9 @@ export function CodeListsTab() {
     cleneniaDph: [],
     ciselneRady: [],
     strediska: [],
+    zakazky: [],
+    cinnosti: [],
+    projekty: [],
   };
   const [orgId, setOrgId] = useState('');
   const [preview, setPreview] = useState<CodeListImportPreview>();

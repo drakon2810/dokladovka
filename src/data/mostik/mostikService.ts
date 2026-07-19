@@ -390,6 +390,9 @@ const SYNC_ITEMS: Record<CodeListKind, Array<Pick<CodeListItem, 'kod' | 'nazov'>
   ],
   ciselneRady: [{ kod: '26FP', nazov: 'Prijaté faktúry 2026' }],
   strediska: [{ kod: 'HLAVNE', nazov: 'Hlavné stredisko' }],
+  zakazky: [],
+  cinnosti: [],
+  projekty: [],
 };
 
 export async function simulateMostikCodeListSync(organizationId?: string): Promise<void> {

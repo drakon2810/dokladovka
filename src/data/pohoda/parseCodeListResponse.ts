@@ -90,6 +90,9 @@ function emptyPreview(orgId: string): CodeListImportPreview {
       cleneniaDph: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
       ciselneRady: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
       strediska: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
+      zakazky: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
+      cinnosti: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
+      projekty: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
     },
     warnings: [],
   };
@@ -144,6 +147,9 @@ export function parseCodeListResponse(
     cleneniaDph: [],
     ciselneRady: [],
     strediska: [],
+    zakazky: [],
+    cinnosti: [],
+    projekty: [],
   };
 
   for (const item of Array.from(document.getElementsByTagName('*')).filter(

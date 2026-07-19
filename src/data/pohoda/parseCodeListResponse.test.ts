@@ -10,6 +10,9 @@ const emptyLists = (): Record<CodeListKind, CodeListItem[]> => ({
   cleneniaDph: [],
   ciselneRady: [],
   strediska: [],
+  zakazky: [],
+  cinnosti: [],
+  projekty: [],
 });
 
 describe('parseCodeListResponse', () => {
@@ -149,7 +152,9 @@ describe('parseCodeListResponse', () => {
       Array<{ kod: string; nazov: string; rok?: string }>
     >;
     (Object.keys(preview.perKind) as CodeListKind[]).forEach((kind) => {
-      const knownCodes = new Set(fixtureByKind[kind].map((item) => item.kod));
+      // Fixture pokrýva len číselníky importované z POHODY; nové druhy
+      // (zákazky, činnosti, projekty) sa zatiaľ spravujú ručne.
+      const knownCodes = new Set((fixtureByKind[kind] ?? []).map((item) => item.kod));
       preview.perKind[kind].nove.forEach((item) => {
         expect(knownCodes.has(item.kod), `${kind}:${item.kod}`).toBe(true);
       });

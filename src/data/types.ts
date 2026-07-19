@@ -296,6 +296,10 @@ export interface DocumentUcto {
   clenenieDphId?: string;
   ciselnyRadId?: string;
   strediskoId?: string;
+  /** Analytické dimenzie (voliteľné): zákazka, činnosť, projekt. */
+  zakazkaId?: string;
+  cinnostId?: string;
+  projektId?: string;
   /** Kód pokladne POHODA; povinný pri pokladničnom doklade. */
   pokladnaKod?: string;
   /** Smer pokladničného dokladu podľa voucher.xsd. */
@@ -387,7 +391,14 @@ export interface ApprovedDocumentSnapshot {
   ucto: DocumentUcto;
 }
 
-export type CodeListKind = 'predkontacie' | 'cleneniaDph' | 'ciselneRady' | 'strediska';
+export type CodeListKind =
+  | 'predkontacie'
+  | 'cleneniaDph'
+  | 'ciselneRady'
+  | 'strediska'
+  | 'zakazky'
+  | 'cinnosti'
+  | 'projekty';
 
 export type CodeListSource = 'manual' | 'pohoda';
 

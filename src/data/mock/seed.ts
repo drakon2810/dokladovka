@@ -228,6 +228,9 @@ function codeListsFor(orgId: string): Record<CodeListKind, CodeListItem[]> {
       mk('cr', '26OZ', 'Ostatné záväzky 2026'),
     ],
     strediska: [mk('st', 'HLAVNE', 'Hlavné stredisko'), mk('st', 'SKLAD', 'Sklad')],
+    zakazky: [mk('za', 'Z2026-01', 'Zákazka 2026/01')],
+    cinnosti: [mk('ci', 'VYROBA', 'Výroba'), mk('ci', 'SPRAVA', 'Správa')],
+    projekty: [mk('pr', 'P-WEB', 'Projekt web')],
   };
 }
 
@@ -237,6 +240,9 @@ export function buildSeedCodeLists(): Record<CodeListKind, CodeListItem[]> {
     cleneniaDph: [],
     ciselneRady: [],
     strediska: [],
+    zakazky: [],
+    cinnosti: [],
+    projekty: [],
   };
   for (const org of seedOrganizations) {
     const lists = codeListsFor(org.id);

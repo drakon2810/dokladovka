@@ -5,7 +5,7 @@ import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole
 import { writeAudit } from '../audit.js';
 import type { Database } from '../db/database.js';
 
-const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska'] as const;
+const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'zakazky', 'cinnosti', 'projekty'] as const;
 const itemSchema = z.object({
   kod: z.string().trim().min(1).max(100),
   nazov: z.string().trim().min(1).max(300),

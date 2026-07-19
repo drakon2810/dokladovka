@@ -611,6 +611,15 @@ export function DocumentDetailPage() {
     strediska: data.codeLists.strediska.filter(
       (item) => item.orgId === draft.orgId && item.active,
     ),
+    zakazky: (data.codeLists.zakazky ?? []).filter(
+      (item) => item.orgId === draft.orgId && item.active,
+    ),
+    cinnosti: (data.codeLists.cinnosti ?? []).filter(
+      (item) => item.orgId === draft.orgId && item.active,
+    ),
+    projekty: (data.codeLists.projekty ?? []).filter(
+      (item) => item.orgId === draft.orgId && item.active,
+    ),
   };
 
   const markDirty = (updater: (current: DocumentItem) => DocumentItem) => {
@@ -1634,6 +1643,9 @@ export function DocumentDetailPage() {
                     ['clenenieDphId', t('detail.clenenieDph'), codeLists.cleneniaDph],
                     ['ciselnyRadId', t('detail.ciselnyRad'), codeLists.ciselneRady],
                     ['strediskoId', t('detail.stredisko'), codeLists.strediska],
+                    ['zakazkaId', t('detail.zakazka'), codeLists.zakazky],
+                    ['cinnostId', t('detail.cinnost'), codeLists.cinnosti],
+                    ['projektId', t('detail.projekt'), codeLists.projekty],
                   ] as const
                 ).map(([key, label, items]) => (
                   <label key={key} className="block">

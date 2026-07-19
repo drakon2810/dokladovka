@@ -120,6 +120,9 @@ export function applyPohodaCodeListImport(
     cleneniaDph: [...currentCodeLists.cleneniaDph],
     ciselneRady: [...currentCodeLists.ciselneRady],
     strediska: [...currentCodeLists.strediska],
+    zakazky: [...(currentCodeLists.zakazky ?? [])],
+    cinnosti: [...(currentCodeLists.cinnosti ?? [])],
+    projekty: [...(currentCodeLists.projekty ?? [])],
   };
   const perKind = Object.fromEntries(
     CODE_LIST_KINDS.map((kind) => [kind, emptyKindResult(preview.perKind[kind].bezZmeny)]),

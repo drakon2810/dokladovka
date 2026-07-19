@@ -414,6 +414,9 @@ export const sk = {
   'detail.dph.navrh': 'Návrh DPH',
   'detail.dph.pouzitClenenie': 'Použiť navrhované členenie',
   'detail.spomenutTip': 'Napíšte @ a meno kolegu pre spomenutie',
+  'detail.zakazka': 'Zákazka',
+  'detail.cinnost': 'Činnosť',
+  'detail.projekt': 'Projekt',
   'detail.navrhZdroj.manual_rule': 'Navrhnuté podľa pravidla pre dodávateľa.',
   'detail.navrhZdroj.partner_default': 'Navrhnuté podľa predvolieb partnera.',
   'detail.navrhZdroj.supplier_history':
@@ -759,6 +762,9 @@ export const sk = {
   'nast.cis.cleneniaDph': 'Členenia DPH',
   'nast.cis.ciselneRady': 'Číselné rady',
   'nast.cis.strediska': 'Strediská',
+  'nast.cis.zakazky': 'Zákazky',
+  'nast.cis.cinnosti': 'Činnosti',
+  'nast.cis.projekty': 'Projekty',
   'nast.cis.kod': 'Kód',
   'nast.cis.nazov': 'Názov',
   'nast.cis.banner':
