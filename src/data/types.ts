@@ -318,6 +318,8 @@ export interface CommentEntry {
   ts: string;
   user: string;
   text: string;
+  /** Id spomenutých používateľov (@meno) — dopĺňa server. */
+  mentions?: string[];
 }
 
 export interface DocumentItem {

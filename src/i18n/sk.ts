@@ -413,6 +413,7 @@ export const sk = {
   'detail.dph.varovanie': 'Upozornenie DPH',
   'detail.dph.navrh': 'Návrh DPH',
   'detail.dph.pouzitClenenie': 'Použiť navrhované členenie',
+  'detail.spomenutTip': 'Napíšte @ a meno kolegu pre spomenutie',
   'detail.navrhZdroj.manual_rule': 'Navrhnuté podľa pravidla pre dodávateľa.',
   'detail.navrhZdroj.partner_default': 'Navrhnuté podľa predvolieb partnera.',
   'detail.navrhZdroj.supplier_history':

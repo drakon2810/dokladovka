@@ -79,6 +79,37 @@ const PaymentQrModal = lazy(() =>
   import('../payments/PaymentQrModal').then((module) => ({ default: module.PaymentQrModal })),
 );
 
+// ===== Komunikácia: @-spomenutia v komentároch =====
+
+const MENTION_TOKEN = /@([\p{L}\p{N}. ]{0,40})$/u;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Zvýrazní @-spomenutia známych používateľov v texte komentára. */
+function CommentText({ text, names }: { text: string; names: string[] }) {
+  if (names.length === 0) return <p className="whitespace-pre-wrap">{text}</p>;
+  const pattern = names
+    .map(escapeRegExp)
+    .sort((a, b) => b.length - a.length)
+    .join('|');
+  const parts = text.split(new RegExp(`(@(?:${pattern}))`, 'gu'));
+  return (
+    <p className="whitespace-pre-wrap">
+      {parts.map((part, index) =>
+        part.startsWith('@') && names.includes(part.slice(1)) ? (
+          <span key={index} className="rounded bg-accent/10 px-1 font-medium text-accent-hover">
+            {part}
+          </span>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </p>
+  );
+}
+
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url,
@@ -724,6 +755,19 @@ export function DocumentDetailPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // @-spomenutia: kandidáti sa ponúkajú pre rozpísaný @token na konci textu.
+  const userNames = (data?.users ?? []).map((user) => user.meno).filter(Boolean);
+  const mentionMatch = MENTION_TOKEN.exec(comment);
+  const mentionCandidates = mentionMatch
+    ? (data?.users ?? [])
+        .filter((user) => user.meno.toLocaleLowerCase('sk').startsWith(mentionMatch[1].toLocaleLowerCase('sk'))
+          && user.meno.toLocaleLowerCase('sk') !== mentionMatch[1].trim().toLocaleLowerCase('sk'))
+        .slice(0, 5)
+    : [];
+  const insertMention = (name: string) => {
+    setComment((current) => current.replace(MENTION_TOKEN, `@${name} `));
   };
 
   const handleComment = async () => {
@@ -1764,7 +1808,7 @@ export function DocumentDetailPage() {
                     {draft.comments.length ? (
                       draft.comments.map((item, index) => (
                         <div key={`${item.ts}-${index}`} className="rounded border border-line p-2 text-sm">
-                          <p>{item.text}</p>
+                          <CommentText text={item.text} names={userNames} />
                           <p className="mt-1 text-xs text-ink-soft">
                             {item.user} · {formatDateTime(item.ts)}
                           </p>
@@ -1774,14 +1818,29 @@ export function DocumentDetailPage() {
                       <p className="text-sm text-ink-soft">{t('stav.ziadneData')}</p>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="relative flex gap-2">
                     <textarea
-                      className="input min-h-20"
+                      className="input min-h-20 flex-1"
                       value={comment}
                       maxLength={4000}
                       onChange={(event) => setComment(event.target.value)}
                       placeholder={t('detail.pridatKomentar')}
                     />
+                    {mentionCandidates.length > 0 && (
+                      <div className="absolute bottom-full left-0 z-10 mb-1 w-72 rounded border border-line bg-white shadow-lg">
+                        {mentionCandidates.map((candidate) => (
+                          <button
+                            key={candidate.id}
+                            type="button"
+                            className="block w-full px-3 py-2 text-left text-sm hover:bg-app"
+                            onClick={() => insertMention(candidate.meno)}
+                          >
+                            @{candidate.meno}
+                            <span className="ml-2 text-xs text-ink-soft">{candidate.email}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <button
                       type="button"
                       className="btn btn-primary self-end"
@@ -1792,7 +1851,7 @@ export function DocumentDetailPage() {
                     </button>
                   </div>
                   <p className="mt-1 text-right text-xs text-ink-soft">
-                    {comment.length} / 4000
+                    {t('detail.spomenutTip')} · {comment.length} / 4000
                   </p>
                 </>
               ) : draft.history.length ? (

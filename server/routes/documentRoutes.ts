@@ -209,6 +209,51 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     return result.rows[0];
   });
 
+  // Komunikácia na doklade: komentár s @-spomenutiami. Spomenutia sa
+  // rozpoznávajú deterministicky na serveri podľa mien aktívnych používateľov
+  // tenanta. Verzia dokladu sa nemení — komentár nie je účtovná zmena.
+  app.post('/api/documents/:id/comments', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik', 'schvalovatel']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { text } = z.object({ text: z.string().trim().min(1).max(4000) }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const users = await database.query<{ id: string; name: string } & Record<string, unknown>>(
+      'SELECT id, name FROM users WHERE tenant_id=$1 AND active=true', [auth.tenantId],
+    );
+    const author = users.rows.find((row) => row.id === auth.userId);
+    const mentions = users.rows
+      .filter((row) => row.name && text.includes(`@${row.name}`))
+      .map((row) => row.id);
+    const comment = {
+      ts: new Date().toISOString(),
+      user: author?.name ?? 'Používateľ',
+      text,
+      mentions,
+    };
+    const historyEntry = { ts: comment.ts, user: comment.user, akcia: 'Komentár pridaný' };
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET comments = comments || $1::jsonb, history = history || $2::jsonb, updated_at=now()
+        WHERE id=$3 AND tenant_id=$4 RETURNING *`,
+      [JSON.stringify([comment]), JSON.stringify([historyEntry]), id, auth.tenantId],
+    );
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId: document.organization_id,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'document.commented',
+      entityType: 'document',
+      entityId: id,
+      correlationId: request.id,
+      // Obsah komentára sa do auditu nekopíruje — len počet spomenutí.
+      metadata: { mentionCount: mentions.length },
+    });
+    return result.rows[0];
+  });
+
   // DPH poradca: posúdenie dokladu podľa DPH profilu organizácie. Počíta sa
   // vždy nanovo — zmena profilu sa prejaví okamžite bez prepočtu dokladov.
   app.get('/api/documents/:id/dph-advisor', async (request) => {

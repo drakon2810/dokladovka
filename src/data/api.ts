@@ -1457,6 +1457,16 @@ export async function addComment(id: string, text: string): Promise<DocumentItem
   const normalized = text.trim();
   if (!normalized) throw new Error('Komentár nemôže byť prázdny');
   if (normalized.length > 4000) throw new Error('Komentár môže mať najviac 4000 znakov');
+  if (REST_DATA_MODE) {
+    const row = await restRequest<{ comments: DocumentItem['comments']; history: DocumentItem['history'] }>(
+      `/api/documents/${encodeURIComponent(id)}/comments`,
+      { method: 'POST', body: JSON.stringify({ text: normalized }) },
+    );
+    await refreshRestSnapshot();
+    const document = storeApi.get().documents.find((item) => item.id === id);
+    if (!document) throw new Error('Doklad neexistuje');
+    return { ...document, comments: row?.comments ?? document.comments, history: row?.history ?? document.history };
+  }
   return updateDoc(id, (doc) => ({
     ...doc,
     comments: [...doc.comments, { ts: nowIso(), user: currentUserName(), text: normalized }],
