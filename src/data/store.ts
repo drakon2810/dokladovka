@@ -9,6 +9,7 @@ import type {
   ApprovalRule,
   DocumentPayment,
   DphProfil,
+  Partner,
   UctovnyProfil,
   AgentInstallation,
   AppUser,
@@ -52,6 +53,7 @@ export interface AppDataState {
   approvalRules: ApprovalRule[];
   dphProfiles: DphProfil[];
   accountingProfiles: UctovnyProfil[];
+  partners: Partner[];
   codeLists: Record<CodeListKind, CodeListItem[]>;
   users: AppUser[];
   exportBatches: ExportBatch[];
@@ -199,6 +201,7 @@ export function migratePersistedState(persisted: unknown, version: number): AppD
     approvalRules: state.approvalRules ?? [],
     dphProfiles: state.dphProfiles ?? [],
     accountingProfiles: state.accountingProfiles ?? [],
+    partners: state.partners ?? [],
   };
 }
 

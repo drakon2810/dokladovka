@@ -14,6 +14,7 @@ import type {
   DocumentType,
   DphPosudok,
   DphProfil,
+  PartnerInput,
   UctovnyProfil,
   ExportBatch,
   ExtractionRun,
@@ -2139,6 +2140,7 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     approvalRules: (s.approvalRules ?? []).filter(belongsToTenant),
     dphProfiles: (s.dphProfiles ?? []).filter(belongsToTenant),
     accountingProfiles: (s.accountingProfiles ?? []).filter(belongsToTenant),
+    partners: (s.partners ?? []).filter(belongsToTenant),
   };
 }
 
@@ -2178,6 +2180,33 @@ export async function saveAccountingProfile(
     method: 'PUT',
     body: JSON.stringify(input),
   });
+  await refreshRestSnapshot();
+}
+
+/** Vytvorenie partnera (kontrahenta) v adresári organizácie. */
+export async function createPartner(organizationId: string, input: PartnerInput): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Partneri vyžadujú spustený backend');
+  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/partners`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  await refreshRestSnapshot();
+}
+
+/** Úprava partnera vrátane predvolieb zaúčtovania. */
+export async function updatePartner(partnerId: string, input: Partial<PartnerInput>): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Partneri vyžadujú spustený backend');
+  await restRequest(`/api/partners/${encodeURIComponent(partnerId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+  await refreshRestSnapshot();
+}
+
+/** Archivácia partnera — zmizne z párovania aj návrhov. */
+export async function archivePartner(partnerId: string): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Partneri vyžadujú spustený backend');
+  await restRequest(`/api/partners/${encodeURIComponent(partnerId)}/archive`, { method: 'POST' });
   await refreshRestSnapshot();
 }
 

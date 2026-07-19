@@ -8,6 +8,7 @@ import { DokumentyPage } from '../features/dokumenty/DokumentyPage';
 import { NespracovanePage } from '../features/nespracovane/NespracovanePage';
 import { ExportPage } from '../features/export/ExportPage';
 import { PaymentsPage } from '../features/payments/PaymentsPage';
+import { PartnersPage } from '../features/partners/PartnersPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { useDataQuery } from '../data/query';
 import { t } from '../i18n/sk';
@@ -67,6 +68,7 @@ export function App() {
             <Route path="/dokumenty" element={<DokumentyPage />} />
             <Route path="/export" element={<ExportPage />} />
             <Route path="/uhrady" element={<PaymentsPage />} />
+            <Route path="/partneri" element={<PartnersPage />} />
             <Route path="/profil" element={<ProfilePage />} />
             <Route
               path="/nastavenia"

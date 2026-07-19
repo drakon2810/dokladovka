@@ -3,6 +3,7 @@ import { requireBrowserAuth } from '../auth.js';
 import type { Database } from '../db/database.js';
 import { mapDphProfilRow } from '../services/dphProfileService.js';
 import { mapUctovnyProfilRow } from '../services/accountingProfileService.js';
+import { mapPartnerRow } from '../services/partnerService.js';
 
 function iso(value: unknown): string | undefined {
   return value ? new Date(String(value)).toISOString() : undefined;
@@ -49,6 +50,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     const approvalRules = await inScope('approval_rules', 'organization_id');
     const dphProfiles = await inScope('organization_dph_profiles', 'organization_id');
     const accountingProfiles = await inScope('organization_accounting_profiles', 'organization_id');
+    const partners = await inScope('partners', 'name');
     const codeListRows = await inScope('code_list_items', 'code');
     const users = await database.query<Record<string, any>>(
       'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
@@ -151,6 +153,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       })),
       dphProfiles: dphProfiles.rows.map(mapDphProfilRow),
       accountingProfiles: accountingProfiles.rows.map(mapUctovnyProfilRow),
+      partners: partners.rows.map(mapPartnerRow),
       users: users.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, meno: row.name, email: row.email, rola: row.role, jazyk: row.language, notifikacie: row.notifications })),
       exportBatches: batches.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, createdAt: iso(row.created_at),

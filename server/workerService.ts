@@ -23,6 +23,7 @@ import {
   type AiSuggestionDocumentContext,
 } from './services/accountingSuggestionService.js';
 import { matchStatementPayments } from './services/paymentService.js';
+import { upsertPartnerZDokladu } from './services/partnerService.js';
 import type { ObjectStorage } from './storage.js';
 import { PDFDocument } from 'pdf-lib';
 
@@ -269,12 +270,30 @@ async function completeRun(
           sourceFormat(context.detected_mime_type, normalized.documentType),
           prepared.documentId, job.tenant_id, job.organization_id],
       );
+      // Partner sa založí/doplní z dodávateľa ešte pred návrhom zaúčtovania,
+      // aby predvoľby partnera platili už pre tento doklad.
+      if (status !== 'karantena' && !['BV', 'MZDY'].includes(normalized.documentType)) {
+        await upsertPartnerZDokladu(tx, {
+          tenantId: job.tenant_id,
+          organizationId: job.organization_id,
+          dodavatel: {
+            nazov: result.supplier.nazov,
+            ico: result.supplier.ico,
+            dic: result.supplier.dic,
+            icDph: result.supplier.icDph,
+            iban: result.supplier.iban,
+            adresa: result.supplier.adresa,
+          },
+        });
+      }
       await rebuildAccountingSuggestion(tx, {
         tenantId: job.tenant_id,
         organizationId: job.organization_id,
         documentId: prepared.documentId,
         supplierIco: result.supplier.ico,
         supplierName: result.supplier.nazov,
+        supplierIcDph: result.supplier.icDph,
+        supplierIban: result.supplier.iban,
       });
     }
     await tx.query(

@@ -5,6 +5,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { dphPokynyPreAi } from './dphAdvisor.js';
 import { loadDphProfil } from './dphProfileService.js';
+import { najdiPartnera } from './partnerService.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -12,6 +13,8 @@ interface SuggestionInput {
   documentId: string;
   supplierIco?: string;
   supplierName?: string;
+  supplierIcDph?: string;
+  supplierIban?: string;
 }
 
 interface SuggestionCandidate extends Record<string, unknown> {
@@ -64,7 +67,7 @@ async function onlyActiveIds(
 export async function rebuildAccountingSuggestion(tx: Queryable, input: SuggestionInput): Promise<void> {
   const supplierIco = input.supplierIco?.replace(/\D/g, '') || undefined;
   const supplierName = normalizeName(input.supplierName);
-  let source: 'manual_rule' | 'supplier_history' | 'organization_default' | 'none' = 'none';
+  let source: 'manual_rule' | 'partner_default' | 'supplier_history' | 'organization_default' | 'none' = 'none';
   let confidence = 0;
   let reason = 'Nie je dostupný dôveryhodný návrh zaúčtovania.';
   let basedOnDocumentId: string | undefined;
@@ -85,6 +88,26 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
     source = 'manual_rule';
     confidence = 1;
     reason = 'Návrh podľa aktívneho pravidla pre dodávateľa.';
+  }
+
+  // Predvoľby partnera: silnejšie než história, slabšie než ručné pravidlo.
+  if (!hasAccounting(candidate)) {
+    const partner = await najdiPartnera(tx, input.tenantId, input.organizationId, {
+      nazov: input.supplierName,
+      ico: input.supplierIco,
+      icDph: input.supplierIcDph,
+      iban: input.supplierIban,
+    });
+    if (partner && (partner.predvolenaPredkontaciaId || partner.predvoleneClenenieDphId || partner.predvoleneStrediskoId)) {
+      candidate = {
+        predkontacia_id: partner.predvolenaPredkontaciaId,
+        clenenie_dph_id: partner.predvoleneClenenieDphId,
+        stredisko_id: partner.predvoleneStrediskoId,
+      };
+      source = 'partner_default';
+      confidence = 0.9;
+      reason = `Návrh podľa predvolieb partnera ${partner.nazov}.`;
+    }
   }
 
   if (!hasAccounting(candidate)) {

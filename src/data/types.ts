@@ -197,6 +197,32 @@ export interface UctovnyProfil {
   updatedAt?: string;
 }
 
+/** Partner (kontrahent) — adresár dodávateľov s predvoľbami zaúčtovania. */
+export interface Partner {
+  id: string;
+  tenantId: string;
+  organizationId: string;
+  nazov: string;
+  ico?: string;
+  dic?: string;
+  icDph?: string;
+  iban?: string;
+  adresa?: string;
+  email?: string;
+  telefon?: string;
+  predvolenaPredkontaciaId?: string;
+  predvoleneClenenieDphId?: string;
+  predvoleneStrediskoId?: string;
+  poznamka?: string;
+  source: 'auto' | 'manual';
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Vstup formulára partnera (bez systémových polí). */
+export type PartnerInput = Omit<Partner, 'id' | 'tenantId' | 'organizationId' | 'source' | 'active' | 'createdAt' | 'updatedAt'>;
+
 /** Úhrada dokladu — manuálna alebo automaticky spárovaná z bankového výpisu. */
 export interface DocumentPayment {
   id: string;
@@ -662,6 +688,7 @@ export interface ExtractionRun {
 
 export type SuggestionSource =
   | 'manual_rule'
+  | 'partner_default'
   | 'supplier_history'
   | 'organization_default'
   | 'ai'

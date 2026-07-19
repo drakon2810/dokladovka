@@ -9,6 +9,7 @@ export const sk = {
   'nav.nespracovane': 'Nespracované',
   'nav.export': 'Export',
   'nav.uhrady': 'Úhrady',
+  'nav.partneri': 'Partneri',
   'nav.nastavenia': 'Nastavenia',
   'nav.zbalit': 'Zbaliť panel',
   'nav.rozbalit': 'Rozbaliť panel',
@@ -413,6 +414,7 @@ export const sk = {
   'detail.dph.navrh': 'Návrh DPH',
   'detail.dph.pouzitClenenie': 'Použiť navrhované členenie',
   'detail.navrhZdroj.manual_rule': 'Navrhnuté podľa pravidla pre dodávateľa.',
+  'detail.navrhZdroj.partner_default': 'Navrhnuté podľa predvolieb partnera.',
   'detail.navrhZdroj.supplier_history':
     'Navrhnuté podľa posledných schválených faktúr od tohto dodávateľa.',
   'detail.navrhZdroj.organization_default':
@@ -534,6 +536,31 @@ export const sk = {
   'export.hist.stiahnutZnova': 'Stiahnuť znova',
   'export.hist.prazdne': 'Zatiaľ žiadne exporty.',
   'export.hotovo': 'Export dokončený',
+
+  // ===== Partneri =====
+  'partneri.titulok': 'Partneri',
+  'partneri.hladat': 'Hľadať: názov, IČO, IČ DPH, IBAN…',
+  'partneri.zobrazitArchivovanych': 'Zobraziť archivovaných',
+  'partneri.novy': 'Nový partner',
+  'partneri.upravit': 'Upraviť',
+  'partneri.archivovat': 'Archivovať',
+  'partneri.archivovatPotvrdenie':
+    'Partner sa vyradí z párovania aj návrhov zaúčtovania. Pokračovať?',
+  'partneri.ziadni': 'Žiadni partneri. Záznamy vznikajú automaticky z prijatých dokladov.',
+  'partneri.st.nazov': 'Názov',
+  'partneri.st.organizacia': 'Organizácia',
+  'partneri.st.predvolby': 'Predvolené zaúčtovanie',
+  'partneri.st.zdroj': 'Zdroj',
+  'partneri.zdroj.auto': 'Z dokladu',
+  'partneri.zdroj.manual': 'Ručne',
+  'partneri.predvolbyNastavene': 'Nastavené',
+  'partneri.predvolenaPredkontacia': 'Predvolená predkontácia',
+  'partneri.predvoleneClenenie': 'Predvolené členenie DPH',
+  'partneri.predvoleneStredisko': 'Predvolené stredisko',
+  'partneri.adresa': 'Adresa',
+  'partneri.telefon': 'Telefón',
+  'partneri.poznamka': 'Poznámka',
+  'partneri.nazovPovinny': 'Názov partnera je povinný.',
 
   // ===== Realizované úhrady =====
   'uhrady.titulok': 'Realizované úhrady',

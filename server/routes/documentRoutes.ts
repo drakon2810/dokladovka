@@ -388,6 +388,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       await rebuildAccountingSuggestion(tx, {
         tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
         supplierIco: result.supplier.ico, supplierName: result.supplier.nazov,
+        supplierIcDph: result.supplier.icDph, supplierIban: result.supplier.iban,
       });
       await writeAudit(tx, {
         tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,

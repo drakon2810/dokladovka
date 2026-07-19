@@ -14,6 +14,7 @@ import { registerDataSnapshotRoutes } from './routes/dataSnapshotRoutes.js';
 import { registerCodeListRoutes } from './routes/codeListRoutes.js';
 import { registerOrgDocumentRoutes } from './routes/orgDocumentRoutes.js';
 import { registerPaymentRoutes } from './routes/paymentRoutes.js';
+import { registerPartnerRoutes } from './routes/partnerRoutes.js';
 import type { ObjectStorage } from './storage.js';
 
 export async function buildApp(input: {
@@ -76,6 +77,7 @@ export async function buildApp(input: {
   registerCodeListRoutes(app, input.database);
   registerOrgDocumentRoutes(app, input.database, input.storage, input.config);
   registerPaymentRoutes(app, input.database);
+  registerPartnerRoutes(app, input.database);
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
