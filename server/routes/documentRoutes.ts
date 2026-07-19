@@ -195,6 +195,40 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     });
   }
 
+  app.post('/api/documents/:id/restore', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.status !== 'zamietnuty') {
+      throw new HttpError(409, 'not_rejected', 'Obnoviť možno len zamietnutý doklad');
+    }
+    // Späť na kontrolu, ak je extrakcia hotová; inak do stavu chyba na došetrenie.
+    const restoredStatus = document.processing_status === 'ready_for_review' ? 'na_kontrole' : 'chyba';
+    const history = [
+      ...document.history,
+      { ts: new Date().toISOString(), user: auth.name, akcia: 'Doklad obnovený z koša' },
+    ];
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET status=$1, version=version+1, history=$2::jsonb, updated_at=now()
+        WHERE id=$3 AND tenant_id=$4 RETURNING *`,
+      [restoredStatus, JSON.stringify(history), id, auth.tenantId],
+    );
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId: document.organization_id,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'document.restored',
+      entityType: 'document',
+      entityId: id,
+      correlationId: request.id,
+    });
+    return result.rows[0];
+  });
+
   app.post('/api/documents/:id/reprocess', async (request, reply) => {
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);

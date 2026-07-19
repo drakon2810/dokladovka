@@ -2149,6 +2149,13 @@ export async function addDocumentPayment(
   await refreshRestSnapshot();
 }
 
+/** Obnovenie zamietnutého dokladu z koša (späť na kontrolu / do stavu chyba). */
+export async function restoreDocument(documentId: string): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Obnovenie z koša vyžaduje spustený backend');
+  await restRequest(`/api/documents/${documentId}/restore`, { method: 'POST' });
+  await refreshRestSnapshot();
+}
+
 export async function removeDocumentPayment(documentId: string, paymentId: string): Promise<void> {
   if (!REST_DATA_MODE) throw new Error('Úhrady vyžadujú spustený backend');
   await restRequest(`/api/documents/${documentId}/payments/${paymentId}`, { method: 'DELETE' });

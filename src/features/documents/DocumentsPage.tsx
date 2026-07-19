@@ -6,7 +6,9 @@ import {
   moveDocumentToReview,
   quarantineDocument,
   rejectDocuments,
+  restoreDocument,
 } from '../../data/api';
+import { paymentStateFor } from './PaymentCard';
 import { useDataQuery } from '../../data/query';
 import type {
   DocumentItem,
@@ -48,7 +50,7 @@ const DOCUMENT_STATUSES: DocumentStatus[] = [
 ];
 const PROBLEM_STATUSES = new Set<DocumentStatus>(['chyba', 'karantena', 'duplicita']);
 
-type TabId = 'vsetky' | 'na_kontrole' | 'schvalene' | 'exportovane' | 'na_uhradu' | 'problemy';
+type TabId = 'vsetky' | 'na_kontrole' | 'schvalene' | 'exportovane' | 'na_uhradu' | 'problemy' | 'kos';
 type SourceFilter = '' | DocumentItem['zdroj']['typ'];
 type ProcessingFilter = '' | 'caka' | 'spracuva' | 'hotovo' | 'chyba';
 type SortKey =
@@ -64,7 +66,7 @@ type SortKey =
   | 'confidence';
 type SortDirection = 'asc' | 'desc';
 
-const TAB_IDS: TabId[] = ['vsetky', 'na_kontrole', 'schvalene', 'exportovane', 'na_uhradu', 'problemy'];
+const TAB_IDS: TabId[] = ['vsetky', 'na_kontrole', 'schvalene', 'exportovane', 'na_uhradu', 'problemy', 'kos'];
 const COLLATOR = new Intl.Collator('sk', { sensitivity: 'base', numeric: true });
 
 function normalizeSearch(value: string): string {
@@ -85,7 +87,9 @@ function matchesTab(document: DocumentItem, tab: TabId): boolean {
     return ['to_pay', 'payment_order', 'partially_paid'].includes(document.payment?.status ?? '');
   }
   if (tab === 'problemy') return PROBLEM_STATUSES.has(document.status);
-  return true;
+  // Kôš: zamietnuté doklady žijú len tu — vo „Všetky" sa neukazujú.
+  if (tab === 'kos') return document.status === 'zamietnuty';
+  return document.status !== 'zamietnuty';
 }
 
 function matchesProcessing(status: ProcessingStatus, filter: ProcessingFilter): boolean {
@@ -362,9 +366,16 @@ export function DocumentsPage() {
     { id: 'exportovane', label: t('doklady.tab.exportovane') },
     { id: 'na_uhradu', label: t('doklady.tab.naUhradu') },
     { id: 'problemy', label: t('doklady.tab.problemy') },
+    { id: 'kos', label: t('doklady.tab.kos') },
   ];
   const tabCount = (tab: TabId) =>
     queueScopedDocuments.filter((document) => matchesTab(document, tab)).length;
+  const paymentsByDocument = new Map<string, typeof data.payments>();
+  for (const payment of data.payments ?? []) {
+    const list = paymentsByDocument.get(payment.documentId) ?? [];
+    list.push(payment);
+    paymentsByDocument.set(payment.documentId, list);
+  }
   const showOrganization = currentOrgId === 'all';
   const selectedIds = [...selected];
   const allVisibleSelected =
@@ -777,7 +788,35 @@ export function DocumentsPage() {
                     <td className="tnum whitespace-nowrap px-3 py-2.5 text-right font-medium">{formatMoney(document.extracted.sumaSpolu, document.extracted.mena)}</td>
                     <td className="px-3 py-2.5"><StatusBadge status={document.status} /></td>
                     <td className="px-3 py-2.5">
-                      <PaymentStatusBadge status={document.payment?.status ?? 'unpaid'} />
+                      {activeTab === 'kos' ? (
+                        <button
+                          type="button"
+                          className="btn px-2.5 py-1 text-xs"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void restoreDocument(document.id)
+                              .then(() => showToast(t('doklady.obnovene')))
+                              .catch((cause) => showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna')));
+                          }}
+                        >
+                          {t('doklady.obnovit')}
+                        </button>
+                      ) : document.typ === 'BV' ? (
+                        <span className="text-ink-soft">—</span>
+                      ) : (() => {
+                        const state = paymentStateFor(document, paymentsByDocument.get(document.id) ?? []);
+                        const styles: Record<string, string> = {
+                          uhradena: 'bg-accent/10 text-accent-hover border-accent/30',
+                          ciastocna: 'bg-amber-50 text-amber-800 border-amber-300',
+                          neuhradena: 'bg-app text-ink-soft border-line',
+                          po_splatnosti: 'bg-red-50 text-red-700 border-red-200',
+                        };
+                        return (
+                          <span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold ${styles[state.status]}`}>
+                            {t(`platby.stav.${state.status}`)}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2.5">
                       <ProcessingBadge
