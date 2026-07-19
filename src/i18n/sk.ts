@@ -417,6 +417,11 @@ export const sk = {
   'detail.zakazka': 'Zákazka',
   'detail.cinnost': 'Činnosť',
   'detail.projekt': 'Projekt',
+  'detail.pozicne': 'Pozičné zaúčtovanie (odlišné zaúčtovanie na položkách)',
+  'detail.pozicne.riadok': 'Zaúčtovanie položky:',
+  'detail.sucty.celkovo': 'Celkovo',
+  'detail.sucty.naPolozkach': 'Na položkách',
+  'detail.sucty.rozdiel': 'Rozdiel',
   'detail.navrhZdroj.manual_rule': 'Navrhnuté podľa pravidla pre dodávateľa.',
   'detail.navrhZdroj.partner_default': 'Navrhnuté podľa predvolieb partnera.',
   'detail.navrhZdroj.supplier_history':

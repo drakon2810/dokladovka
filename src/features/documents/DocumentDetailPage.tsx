@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   lazy,
@@ -306,6 +307,7 @@ export function DocumentDetailPage() {
   const [localFileLoading, setLocalFileLoading] = useState(false);
   const [splitPercent, setSplitPercent] = useState(50);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [pozicneUcto, setPozicneUcto] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [mostikStatus, setMostikStatus] = useState<OrganizationMostikStatus>();
@@ -621,6 +623,11 @@ export function DocumentDetailPage() {
       (item) => item.orgId === draft.orgId && item.active,
     ),
   };
+  // Kontrola súčtov Celkovo / Na položkách / Rozdiel (pozičné zaúčtovanie).
+  const polozkySpolu = round2(
+    (draft.extracted.polozky ?? []).reduce((sum, item) => sum + (item.sumaSpolu ?? 0), 0),
+  );
+  const polozkyRozdiel = round2((draft.extracted.sumaSpolu ?? 0) - polozkySpolu);
 
   const markDirty = (updater: (current: DocumentItem) => DocumentItem) => {
     setDraft((current) => (current ? updater(current) : current));
@@ -1445,6 +1452,14 @@ export function DocumentDetailPage() {
             </Section>
 
             <Section title={t('detail.polozky')}>
+              <label className="mb-2 flex items-center gap-2 text-sm text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={pozicneUcto}
+                  onChange={(event) => setPozicneUcto(event.target.checked)}
+                />
+                {t('detail.pozicne')}
+              </label>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[55rem] text-sm">
                   <thead>
@@ -1462,7 +1477,8 @@ export function DocumentDetailPage() {
                   </thead>
                   <tbody>
                     {(draft.extracted.polozky ?? []).map((item, index) => (
-                      <tr key={item.id} className="border-b border-line">
+                      <Fragment key={item.id}>
+                      <tr className="border-b border-line">
                         <td className="px-2 py-2">
                           <input
                             className="input min-w-48"
@@ -1584,9 +1600,64 @@ export function DocumentDetailPage() {
                           </button>
                         </td>
                       </tr>
+                      {pozicneUcto && (
+                        <tr className="border-b border-line bg-app/60">
+                          <td colSpan={9} className="px-2 py-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-ink-soft">
+                                {t('detail.pozicne.riadok')}
+                              </span>
+                              {(
+                                [
+                                  ['predkontaciaId', t('detail.predkontacia'), codeLists.predkontacie],
+                                  ['clenenieDphId', t('detail.clenenieDph'), codeLists.cleneniaDph],
+                                  ['strediskoId', t('detail.stredisko'), codeLists.strediska],
+                                ] as const
+                              ).map(([key, label, items]) => (
+                                <select
+                                  key={key}
+                                  className="input w-52"
+                                  aria-label={label}
+                                  value={item.ucto?.[key] ?? ''}
+                                  onChange={(event) =>
+                                    updateLineItem(index, {
+                                      ucto: { ...item.ucto, [key]: event.target.value || undefined },
+                                    })
+                                  }
+                                >
+                                  <option value="">{label}: {t('detail.nevybrane')}</option>
+                                  {items.map((cli) => (
+                                    <option key={cli.id} value={cli.id}>
+                                      {cli.kod} · {cli.nazov}
+                                    </option>
+                                  ))}
+                                </select>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
+              </div>
+              {/* Kontrola súčtov: hlavička dokladu vs. súčet položiek. */}
+              <div className="mt-3 grid max-w-lg grid-cols-3 gap-2 text-sm">
+                <div className="rounded border border-line p-2">
+                  <span className="block text-xs text-ink-soft">{t('detail.sucty.celkovo')}</span>
+                  <strong className="tnum">{formatMoney(draft.extracted.sumaSpolu ?? 0, draft.extracted.mena)}</strong>
+                </div>
+                <div className="rounded border border-line p-2">
+                  <span className="block text-xs text-ink-soft">{t('detail.sucty.naPolozkach')}</span>
+                  <strong className="tnum">{formatMoney(polozkySpolu, draft.extracted.mena)}</strong>
+                </div>
+                <div className={`rounded border p-2 ${Math.abs(polozkyRozdiel) > 0.01 ? 'border-amber-300 bg-amber-50' : 'border-line'}`}>
+                  <span className="block text-xs text-ink-soft">{t('detail.sucty.rozdiel')}</span>
+                  <strong className={`tnum ${Math.abs(polozkyRozdiel) > 0.01 ? 'text-amber-800' : 'text-emerald-700'}`}>
+                    {formatMoney(polozkyRozdiel, draft.extracted.mena)}
+                  </strong>
+                </div>
               </div>
               <button
                 type="button"

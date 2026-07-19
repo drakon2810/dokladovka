@@ -103,6 +103,12 @@ export interface DocumentLineItem {
   sumaBezDph?: number;
   sumaDph?: number;
   sumaSpolu?: number;
+  /** Pozičné zaúčtovanie: odlišná predkontácia/členenie/stredisko pre položku. */
+  ucto?: {
+    predkontaciaId?: string;
+    clenenieDphId?: string;
+    strediskoId?: string;
+  };
 }
 
 /** Schvaľovanie podľa sumy: od prahu smie doklad schváliť len vyhradená rola. */
