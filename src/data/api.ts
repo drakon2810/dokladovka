@@ -12,6 +12,8 @@ import type {
   DocumentQueue,
   DocumentStatus,
   DocumentType,
+  DphPosudok,
+  DphProfil,
   ExportBatch,
   ExtractionRun,
   InboundEmail,
@@ -2134,6 +2136,7 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     exportBatches: s.exportBatches.filter(belongsToTenant),
     payments: (s.payments ?? []).filter(belongsToTenant),
     approvalRules: (s.approvalRules ?? []).filter(belongsToTenant),
+    dphProfiles: (s.dphProfiles ?? []).filter(belongsToTenant),
   };
 }
 
@@ -2148,6 +2151,26 @@ export async function saveApprovalRule(
     body: JSON.stringify(input),
   });
   await refreshRestSnapshot();
+}
+
+/** Uloženie DPH profilu klienta (iba admin, jeden profil na organizáciu). */
+export async function saveDphProfile(
+  organizationId: string,
+  input: Omit<DphProfil, 'organizationId' | 'tenantId' | 'updatedAt'>,
+): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('DPH profil klienta vyžaduje spustený backend');
+  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/dph-profile`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+  await refreshRestSnapshot();
+}
+
+/** Posúdenie dokladu DPH poradcom podľa profilu klienta (počíta server). */
+export async function getDphAdvice(documentId: string): Promise<DphPosudok> {
+  if (!REST_DATA_MODE) return { navrhy: [], varovania: [], blokacie: [] };
+  return await restRequest<DphPosudok>(`/api/documents/${encodeURIComponent(documentId)}/dph-advisor`)
+    ?? { navrhy: [], varovania: [], blokacie: [] };
 }
 
 /** Úhrada dokladu (bez sumy = celý zvyšok). Reálna funkcia backendu; mock režim ju nemá. */

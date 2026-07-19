@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requireBrowserAuth } from '../auth.js';
 import type { Database } from '../db/database.js';
+import { mapDphProfilRow } from '../services/dphProfileService.js';
 
 function iso(value: unknown): string | undefined {
   return value ? new Date(String(value)).toISOString() : undefined;
@@ -45,6 +46,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     const suggestions = await inScope('accounting_suggestions', 'created_at DESC');
     const payments = await inScope('document_payments', 'paid_on DESC');
     const approvalRules = await inScope('approval_rules', 'organization_id');
+    const dphProfiles = await inScope('organization_dph_profiles', 'organization_id');
     const codeListRows = await inScope('code_list_items', 'code');
     const users = await database.query<Record<string, any>>(
       'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
@@ -145,6 +147,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         organizationId: row.organization_id, tenantId: row.tenant_id,
         minAmount: Number(row.min_amount), requiredRole: row.required_role, active: row.active,
       })),
+      dphProfiles: dphProfiles.rows.map(mapDphProfilRow),
       users: users.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, meno: row.name, email: row.email, rola: row.role, jazyk: row.language, notifikacie: row.notifications })),
       exportBatches: batches.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, createdAt: iso(row.created_at),

@@ -11,6 +11,8 @@ import type { ServerConfig } from '../config.js';
 import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
 import { rebuildAccountingSuggestion } from '../services/accountingSuggestionService.js';
+import { posudDph } from '../services/dphAdvisor.js';
+import { loadDphProfil } from '../services/dphProfileService.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -31,6 +33,22 @@ async function scopedDocument(database: Database, tenantId: string, id: string):
   );
   if (!result.rows[0]) throw new HttpError(404, 'document_not_found', 'Doklad neexistuje');
   return result.rows[0];
+}
+
+/** Zvolené členenie DPH dokladu rozpísané z číselníka (pre dphAdvisor). */
+async function clenenieDphDokladu(
+  database: Database,
+  tenantId: string,
+  document: DocumentScope,
+): Promise<{ id: string; kod: string; nazov: string } | undefined> {
+  const clenenieDphId = document.accounting?.clenenieDphId;
+  if (!clenenieDphId) return undefined;
+  const result = await database.query<{ id: string; code: string; name: string } & Record<string, unknown>>(
+    'SELECT id, code, name FROM code_list_items WHERE id=$1 AND tenant_id=$2 AND organization_id=$3',
+    [clenenieDphId, tenantId, document.organization_id],
+  );
+  const row = result.rows[0];
+  return row ? { id: row.id, kod: row.code, nazov: row.name } : undefined;
 }
 
 export function registerDocumentRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage, config: ServerConfig): void {
@@ -166,6 +184,20 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       [auth.tenantId, document.organization_id, requiredIds],
     );
     if (valid.rowCount !== new Set(requiredIds).size) throw new HttpError(409, 'code_list_invalid', 'Číselník nepatrí organizácii alebo nie je aktívny');
+    // DPH profil klienta: deterministické blokácie (napr. neplatiteľ so
+    // zvoleným odpočtom) sa nedajú obísť klientom — kontrola beží na serveri.
+    const dphProfil = await loadDphProfil(database, auth.tenantId, document.organization_id);
+    if (dphProfil) {
+      const posudok = posudDph({
+        documentType: document.document_type,
+        extracted: document.extracted,
+        accounting: document.accounting,
+        clenenieDph: await clenenieDphDokladu(database, auth.tenantId, document),
+      }, dphProfil);
+      if (posudok.blokacie.length > 0) {
+        throw new HttpError(409, 'dph_profil_blokacia', posudok.blokacie[0].sprava);
+      }
+    }
     const approvedVersion = expectedVersion + 1;
     const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, extracted: document.extracted, ucto: document.accounting };
     const result = await database.query<Record<string, unknown>>(
@@ -175,6 +207,23 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     );
     await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
     return result.rows[0];
+  });
+
+  // DPH poradca: posúdenie dokladu podľa DPH profilu organizácie. Počíta sa
+  // vždy nanovo — zmena profilu sa prejaví okamžite bez prepočtu dokladov.
+  app.get('/api/documents/:id/dph-advisor', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const profil = await loadDphProfil(database, auth.tenantId, document.organization_id);
+    if (!profil) return { navrhy: [], varovania: [], blokacie: [] };
+    return posudDph({
+      documentType: document.document_type,
+      extracted: document.extracted,
+      accounting: document.accounting,
+      clenenieDph: await clenenieDphDokladu(database, auth.tenantId, document),
+    }, profil);
   });
 
   for (const [route, status, action] of [

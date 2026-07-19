@@ -11,10 +11,12 @@ import { MailboxesTab } from './MailboxesTab';
 import { QueuesTab } from './QueuesTab';
 import { MostikTab } from './MostikTab';
 import { ApprovalRulesTab } from './ApprovalRulesTab';
+import { ClientProfileTab } from './ClientProfileTab';
 
 const TABS = [
   { id: 'organizacie', label: 'nast.tab.organizacie' },
   { id: 'fronty', label: 'nast.tab.fronty' },
+  { id: 'profil', label: 'nast.tab.profil' },
   { id: 'ciselniky', label: 'nast.tab.ciselniky' },
   { id: 'pouzivatelia', label: 'nast.tab.pouzivatelia' },
   { id: 'schvalovanie', label: 'nast.tab.schvalovanie' },
@@ -58,6 +60,7 @@ export function SettingsPage() {
 
       {tab === 'organizacie' && <OrganizationsTab />}
       {tab === 'fronty' && <QueuesTab />}
+      {tab === 'profil' && <ClientProfileTab />}
       {tab === 'ciselniky' && <CodeListsTab />}
       {tab === 'pouzivatelia' && <UsersTab />}
       {tab === 'schvalovanie' && <ApprovalRulesTab />}

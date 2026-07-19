@@ -19,6 +19,7 @@ import {
   approveDocument,
   checkApprovable,
   getDocument,
+  getDphAdvice,
   getLastUsedForSupplier,
   getSuggestion,
   listExtractionRuns,
@@ -38,6 +39,7 @@ import type {
   DocumentLineItem,
   DocumentType,
   DocumentUcto,
+  DphPosudok,
   ExtractionRun,
   VatBreakdownRow,
   VatRate,
@@ -261,6 +263,7 @@ export function DocumentDetailPage() {
   const [busy, setBusy] = useState(false);
   const [runs, setRuns] = useState<ExtractionRun[]>([]);
   const [suggestion, setSuggestion] = useState<AccountingSuggestion>();
+  const [dphAdvice, setDphAdvice] = useState<DphPosudok>();
   const [lastUsed, setLastUsed] = useState<{ label: string; ucto: DocumentUcto }>();
   const [activeBottomTab, setActiveBottomTab] = useState<'comments' | 'history'>('comments');
   const [comment, setComment] = useState('');
@@ -339,6 +342,21 @@ export function DocumentDetailPage() {
       active = false;
     };
   }, [id]);
+
+  // DPH poradca sa prepočítava na serveri — po každej uloženej verzii dokladu
+  // sa načíta znova, aby varovania zodpovedali aktuálnemu zaúčtovaniu.
+  useEffect(() => {
+    let active = true;
+    if (!id) return undefined;
+    void getDphAdvice(id)
+      .then((advice) => {
+        if (active) setDphAdvice(advice);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [id, sourceDocument?.version]);
 
   useEffect(() => {
     let active = true;
@@ -649,8 +667,10 @@ export function DocumentDetailPage() {
       setDraft(cloneDocument(approved));
       setDirty(false);
       showToast(t('toast.schvalene'));
-    } catch {
-      showToast(t('chyba.vseobecna'), { tone: 'error' });
+    } catch (cause) {
+      // Server vracia zrozumiteľné slovenské správy (prahy schvaľovania,
+      // blokácie DPH profilu) — zobrazíme ich namiesto všeobecnej chyby.
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
     } finally {
       setBusy(false);
     }
@@ -826,6 +846,47 @@ export function DocumentDetailPage() {
         <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
           <p className="font-semibold">{t('detail.chyba.banner')}</p>
           <ProcessingBadge status={draft.processingStatus} label={intakeProcessingLabel} />
+        </div>
+      )}
+      {dphAdvice && dphAdvice.blokacie.length > 0 && (
+        <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <p className="font-semibold">{t('detail.dph.blokacia')} — {t('detail.dph.titulok')}</p>
+          {dphAdvice.blokacie.map((zistenie) => (
+            <p key={`${zistenie.kod}-${zistenie.sprava}`}>{zistenie.sprava}</p>
+          ))}
+        </div>
+      )}
+      {dphAdvice && dphAdvice.varovania.length > 0 && (
+        <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">{t('detail.dph.varovanie')}</p>
+          {dphAdvice.varovania.map((zistenie) => (
+            <p key={`${zistenie.kod}-${zistenie.sprava}`}>{zistenie.sprava}</p>
+          ))}
+        </div>
+      )}
+      {dphAdvice && dphAdvice.navrhy.length > 0 && (
+        <div className="rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">{t('detail.dph.navrh')} — {t('detail.dph.titulok')}</p>
+          {dphAdvice.navrhy.map((zistenie) => (
+            <div key={`${zistenie.kod}-${zistenie.sprava}`} className="mt-1 flex flex-wrap items-center gap-2">
+              <p>{zistenie.sprava}</p>
+              {!readOnly
+                && (zistenie.clenenieDphId || zistenie.clenenieKvKod)
+                && (draft.ucto.clenenieDphId !== zistenie.clenenieDphId
+                  || (zistenie.clenenieKvKod && draft.ucto.clenenieKvKod !== zistenie.clenenieKvKod)) && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => updateUcto({
+                    ...(zistenie.clenenieDphId ? { clenenieDphId: zistenie.clenenieDphId } : {}),
+                    ...(zistenie.clenenieKvKod ? { clenenieKvKod: zistenie.clenenieKvKod } : {}),
+                  })}
+                >
+                  {t('detail.dph.pouzitClenenie')}
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

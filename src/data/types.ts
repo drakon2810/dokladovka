@@ -114,6 +114,67 @@ export interface ApprovalRule {
   active: boolean;
 }
 
+/** Záznam koeficientu DPH v profile klienta (história po rokoch). */
+export interface DphKoeficientZaznam {
+  rok: number;
+  typ: 'zalohovy' | 'rocny';
+  hodnota: number;
+  platnostOd?: string;
+  platnostDo?: string;
+}
+
+/** Pravidlo odpočtu s kľúčovými slovami (autá, pomerné odpočítanie). */
+export interface DphPravidloOdpoctu {
+  kategoria: string;
+  percento: number;
+  klucoveSlova: string[];
+}
+
+/** Kategória bez nároku na odpočet (reprezentácia, občerstvenie…). */
+export interface DphKategoriaBezNaroku {
+  kategoria: string;
+  klucoveSlova: string[];
+}
+
+/** DPH profil klienta — inštrukcia pre AI aj deterministický kontrolór. */
+export interface DphProfil {
+  organizationId: string;
+  tenantId: string;
+  platitelDph: 'platitel' | 'neplatitel' | 'registracia_7a';
+  obdobieDph: 'mesacne' | 'stvrtrocne';
+  uzavreteDo?: string;
+  koeficient: DphKoeficientZaznam[];
+  pomerneOdpocitanie: DphPravidloOdpoctu[];
+  rezim: 'tuzemsky' | 'zahranicny';
+  nakupyZEu: boolean;
+  sluzbyZEu: boolean;
+  prenesenieDp: boolean;
+  pravidlaAut: DphPravidloOdpoctu[];
+  bezNaroku: DphKategoriaBezNaroku[];
+  samozdanenieAktivne: boolean;
+  samozdanenieClenenieDphId?: string;
+  samozdanenieClenenieKvKod?: string;
+  clenenieBezOdpoctuId?: string;
+  updatedAt?: string;
+}
+
+/** Jedno zistenie DPH poradcu k dokladu. */
+export interface DphZistenie {
+  kod: string;
+  sprava: string;
+  kategoria?: string;
+  percento?: number;
+  clenenieDphId?: string;
+  clenenieKvKod?: string;
+}
+
+/** Posúdenie dokladu DPH poradcom podľa profilu klienta. */
+export interface DphPosudok {
+  navrhy: DphZistenie[];
+  varovania: DphZistenie[];
+  blokacie: DphZistenie[];
+}
+
 /** Úhrada dokladu — manuálna alebo automaticky spárovaná z bankového výpisu. */
 export interface DocumentPayment {
   id: string;
