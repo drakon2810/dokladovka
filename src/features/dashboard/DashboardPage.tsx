@@ -1,11 +1,12 @@
 // DashboardPage — редизайн: KPI-карточки с иконками, лента событий, график.
 // Логика и данные (useDataQuery, buildThirtyDaySeries, роуты) без изменений.
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useDataQuery } from '../../data/query';
-import type { DocumentItem, DocumentStatus } from '../../data/types';
+import type { DocumentItem, DocumentPayment, DocumentStatus } from '../../data/types';
 import { t } from '../../i18n/sk';
-import { formatDate, formatDateTime } from '../../lib/format';
+import { formatDate, formatDateTime, formatMoney } from '../../lib/format';
 
 const PROBLEM_STATUSES = new Set<DocumentStatus>(['chyba', 'karantena', 'duplicita']);
 
@@ -27,6 +28,111 @@ function buildThirtyDaySeries(documents: DocumentItem[]) {
 }
 
 const stroke = { fill: 'none', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
+
+// ===== Financie: výnosy / náklady + očakávané, prepínač s/bez DPH =====
+
+const FINANCNE_STATUSY = new Set<DocumentStatus>(['extrahovany', 'na_kontrole', 'schvaleny', 'exportovany']);
+
+type FinObdobie = 'mesiac' | 'stvrtrok' | 'rok';
+
+function zaciatokObdobia(obdobie: FinObdobie): string {
+  const now = new Date();
+  if (obdobie === 'mesiac') return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  if (obdobie === 'stvrtrok') {
+    return new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1).toISOString().slice(0, 10);
+  }
+  return new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+}
+
+function sumaDokladu(document: DocumentItem, sDph: boolean): number {
+  const spolu = document.extracted.sumaSpolu ?? 0;
+  if (sDph) return spolu;
+  const dph = (document.extracted.rozpisDph ?? []).reduce((sum, row) => sum + (row.dph ?? 0), 0);
+  return spolu - dph;
+}
+
+function FinanciePrehlad({ documents, payments }: { documents: DocumentItem[]; payments: DocumentPayment[] }) {
+  const [obdobie, setObdobie] = useState<FinObdobie>('mesiac');
+  const [sDph, setSDph] = useState(true);
+
+  const prehlad = useMemo(() => {
+    const od = zaciatokObdobia(obdobie);
+    const paidByDocument = new Map<string, number>();
+    for (const payment of payments) {
+      paidByDocument.set(payment.documentId, (paidByDocument.get(payment.documentId) ?? 0) + payment.amount);
+    }
+    let naklady = 0;
+    let vynosy = 0;
+    let ocakavaneNaklady = 0;
+    let ocakavaneVynosy = 0;
+    for (const document of documents) {
+      if (!FINANCNE_STATUSY.has(document.status)) continue;
+      if (document.typ === 'BV' || document.typ === 'MZDY' || document.typ === 'OZ') continue;
+      const datum = (document.extracted.datumDodania ?? document.extracted.datumVystavenia ?? '').slice(0, 10);
+      if (!datum || datum < od) continue;
+      const suma = sumaDokladu(document, sDph);
+      const zostatokSDph = (document.extracted.sumaSpolu ?? 0) - (paidByDocument.get(document.id) ?? 0);
+      const pomer = (document.extracted.sumaSpolu ?? 0) > 0 ? suma / (document.extracted.sumaSpolu ?? 1) : 1;
+      const zostatok = Math.max(0, zostatokSDph) * pomer;
+      if (document.typ === 'FV') {
+        vynosy += suma;
+        ocakavaneVynosy += zostatok;
+      } else {
+        naklady += suma;
+        ocakavaneNaklady += zostatok;
+      }
+    }
+    return { naklady, vynosy, ocakavaneNaklady, ocakavaneVynosy };
+  }, [documents, payments, obdobie, sDph]);
+
+  const bunky = [
+    { label: t('dash.fin.vynosy'), value: prehlad.vynosy, tone: 'text-emerald-700' },
+    { label: t('dash.fin.naklady'), value: prehlad.naklady, tone: 'text-ink' },
+    { label: t('dash.fin.ocakavaneVynosy'), value: prehlad.ocakavaneVynosy, tone: 'text-emerald-700/80' },
+    { label: t('dash.fin.ocakavaneNaklady'), value: prehlad.ocakavaneNaklady, tone: 'text-amber-700' },
+  ];
+
+  return (
+    <section className="card mb-4 p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-[15px] font-semibold">{t('dash.fin.titulok')}</h2>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-line p-0.5" role="tablist">
+            {(['mesiac', 'stvrtrok', 'rok'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={obdobie === value}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                  obdobie === value ? 'bg-accent text-white' : 'text-ink-soft hover:text-ink'
+                }`}
+                onClick={() => setObdobie(value)}
+              >
+                {t(`dash.fin.obdobie.${value}`)}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-ink-soft">
+            <input type="checkbox" checked={sDph} onChange={(event) => setSDph(event.target.checked)} />
+            {t('dash.fin.sDph')}
+          </label>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {bunky.map((bunka) => (
+          <div key={bunka.label} className="rounded-xl bg-app p-3">
+            <span className="block text-xs font-medium text-ink-soft">{bunka.label}</span>
+            <strong className={`tnum mt-1 block text-xl font-bold tracking-tight ${bunka.tone}`}>
+              {formatMoney(bunka.value)}
+            </strong>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-ink-soft">{t('dash.fin.popis')}</p>
+    </section>
+  );
+}
 
 const KPI_ICONS = {
   nove: (
@@ -164,6 +270,8 @@ export function DashboardPage() {
           </ul>
         </motion.div>
       )}
+
+      <FinanciePrehlad documents={documents} payments={data.payments ?? []} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {counters.map((counter) => (

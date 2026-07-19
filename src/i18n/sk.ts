@@ -538,6 +538,19 @@ export const sk = {
   'export.hist.prazdne': 'Zatiaľ žiadne exporty.',
   'export.hotovo': 'Export dokončený',
 
+  // ===== Dashboard — financie =====
+  'dash.fin.titulok': 'Financie',
+  'dash.fin.vynosy': 'Výnosy',
+  'dash.fin.naklady': 'Náklady',
+  'dash.fin.ocakavaneVynosy': 'Očakávané výnosy (neuhradené)',
+  'dash.fin.ocakavaneNaklady': 'Očakávané náklady (neuhradené)',
+  'dash.fin.obdobie.mesiac': 'Mesiac',
+  'dash.fin.obdobie.stvrtrok': 'Štvrťrok',
+  'dash.fin.obdobie.rok': 'Rok',
+  'dash.fin.sDph': 's DPH',
+  'dash.fin.popis':
+    'Výnosy = vystavené faktúry, náklady = prijaté faktúry a pokladničné doklady v období (podľa DUZP). Očakávané sumy sú neuhradené zostatky.',
+
   // ===== Partneri =====
   'partneri.titulok': 'Partneri',
   'partneri.hladat': 'Hľadať: názov, IČO, IČ DPH, IBAN…',
