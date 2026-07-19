@@ -8,6 +8,7 @@ export const sk = {
   'nav.dokumenty': 'Dokumenty',
   'nav.nespracovane': 'Nespracované',
   'nav.export': 'Export',
+  'nav.uhrady': 'Úhrady',
   'nav.nastavenia': 'Nastavenia',
   'nav.zbalit': 'Zbaliť panel',
   'nav.rozbalit': 'Rozbaliť panel',
@@ -533,6 +534,23 @@ export const sk = {
   'export.hist.stiahnutZnova': 'Stiahnuť znova',
   'export.hist.prazdne': 'Zatiaľ žiadne exporty.',
   'export.hotovo': 'Export dokončený',
+
+  // ===== Realizované úhrady =====
+  'uhrady.titulok': 'Realizované úhrady',
+  'uhrady.hladat': 'Hľadať: dodávateľ, číslo, VS, poznámka…',
+  'uhrady.mesiac': 'Mesiac',
+  'uhrady.zdroj.vsetky': 'Všetky zdroje',
+  'uhrady.zdroj.manual': 'Manuálna úhrada',
+  'uhrady.zdroj.bank_statement': 'Bankový výpis',
+  'uhrady.ziadne': 'Žiadne úhrady pre zvolené filtre.',
+  'uhrady.st.datum': 'Dátum úhrady',
+  'uhrady.st.organizacia': 'Organizácia',
+  'uhrady.st.dodavatel': 'Dodávateľ',
+  'uhrady.st.doklad': 'Doklad',
+  'uhrady.st.zdroj': 'Zdroj',
+  'uhrady.st.poznamka': 'Poznámka',
+  'uhrady.st.suma': 'Suma',
+  'uhrady.spolu': 'Spolu',
 
   // ===== Nastavenia =====
   'nast.titulok': 'Nastavenia',

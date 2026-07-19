@@ -52,6 +52,15 @@ function IconDokumenty() {
     </svg>
   );
 }
+function IconUhrady() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
+      <rect width="20" height="12" x="2" y="6" rx="2" />
+      <circle cx="12" cy="12" r="2" />
+      <path d="M6 12h.01M18 12h.01" />
+    </svg>
+  );
+}
 function IconNastavenia() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
@@ -66,6 +75,7 @@ const NAV_ITEMS = [
   { to: '/doklady', label: 'nav.doklady', icon: <IconDoklady />, end: false },
   { to: '/nespracovane', label: 'nav.nespracovane', icon: <IconNespracovane />, end: false },
   { to: '/dokumenty', label: 'nav.dokumenty', icon: <IconDokumenty />, end: false },
+  { to: '/uhrady', label: 'nav.uhrady', icon: <IconUhrady />, end: false },
   { to: '/export', label: 'nav.export', icon: <IconExport />, end: false },
 ] as const;
 
