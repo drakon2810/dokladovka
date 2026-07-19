@@ -8,6 +8,7 @@ import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { insertUniqueAlias, type AliasRecord } from '../services/organizationService.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
+import { loadUctovnyProfil } from '../services/accountingProfileService.js';
 
 const organizationSchema = z.object({
   nazov: z.string().trim().min(1).max(200),
@@ -50,6 +51,19 @@ const dphProfilSchema = z.object({
   samozdanenieClenenieDphId: z.string().optional(),
   samozdanenieClenenieKvKod: z.string().trim().max(10).optional(),
   clenenieBezOdpoctuId: z.string().optional(),
+}).strict();
+
+const uctovnyProfilSchema = z.object({
+  obdobieUctovania: z.enum(['mesacne', 'stvrtrocne']),
+  zaokruhlovanieCelkom: z.enum(['centy', 'pat_centov', 'eura']),
+  zaokruhlovanieDph: z.enum(['matematicky', 'nahor', 'nadol']),
+  parovanieDodavatelov: z.array(z.enum(['ico', 'ic_dph', 'iban', 'nazov'])).min(1).max(4)
+    .refine((values) => new Set(values).size === values.length, 'Kritériá párovania sa nesmú opakovať'),
+  uctovnyRozvrh: z.array(z.object({
+    ucet: z.string().trim().min(1).max(10),
+    nazov: z.string().trim().min(1).max(200),
+    analytiky: z.array(z.string().trim().min(1).max(10)).max(50),
+  }).strict()).max(500).default([]),
 }).strict();
 
 interface OrganizationRow extends Record<string, unknown> {
@@ -207,6 +221,45 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
       metadata: { platitelDph: body.platitelDph, obdobieDph: body.obdobieDph, rezim: body.rezim },
     });
     return await loadDphProfil(database, auth.tenantId, organizationId);
+  });
+
+  // Účtovný profil klienta (2. časť) — obdobie, zaokrúhľovanie, párovanie
+  // dodávateľov a účtovný rozvrh s analytikami. Upsert (admin).
+  app.put('/api/organizations/:organizationId/accounting-profile', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const body = uctovnyProfilSchema.parse(request.body);
+    await database.query(
+      `INSERT INTO organization_accounting_profiles
+        (organization_id, tenant_id, obdobie_uctovania, zaokruhlovanie_celkom, zaokruhlovanie_dph,
+         parovanie_dodavatelov, uctovny_rozvrh, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,now())
+       ON CONFLICT (organization_id) DO UPDATE SET
+         obdobie_uctovania=excluded.obdobie_uctovania,
+         zaokruhlovanie_celkom=excluded.zaokruhlovanie_celkom,
+         zaokruhlovanie_dph=excluded.zaokruhlovanie_dph,
+         parovanie_dodavatelov=excluded.parovanie_dodavatelov,
+         uctovny_rozvrh=excluded.uctovny_rozvrh,
+         updated_by=excluded.updated_by, updated_at=now()`,
+      [organizationId, auth.tenantId, body.obdobieUctovania, body.zaokruhlovanieCelkom,
+        body.zaokruhlovanieDph, JSON.stringify(body.parovanieDodavatelov),
+        JSON.stringify(body.uctovnyRozvrh), auth.userId],
+    );
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'organization.accounting_profile_updated',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+      metadata: { obdobieUctovania: body.obdobieUctovania },
+    });
+    return await loadUctovnyProfil(database, auth.tenantId, organizationId);
   });
 
   app.get('/api/organizations', async (request) => {

@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
-import { saveDphProfile } from '../../data/api';
+import { saveAccountingProfile, saveDphProfile } from '../../data/api';
 import { useDataQuery } from '../../data/query';
-import { CLENENIE_KV_KODY, type DphProfil } from '../../data/types';
+import {
+  CLENENIE_KV_KODY,
+  type DphProfil,
+  type ParovacieKriterium,
+  type UctovnyProfil,
+} from '../../data/types';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 
@@ -445,6 +450,192 @@ export function ClientProfileTab() {
           </button>
         </div>
       </section>
+
+      <UctovnaSekcia
+        key={orgId}
+        orgId={orgId}
+        profil={data.accountingProfiles?.find((profil) => profil.organizationId === orgId)}
+      />
     </div>
+  );
+}
+
+// ===== Účtovníctvo (2. časť profilu klienta) =====
+
+const PAROVACIE_KRITERIA: ParovacieKriterium[] = ['ico', 'ic_dph', 'iban', 'nazov'];
+
+interface RozvrhDraft {
+  ucet: string;
+  nazov: string;
+  analytiky: string;
+}
+
+function UctovnaSekcia({ orgId, profil }: { orgId: string; profil?: UctovnyProfil }) {
+  const [busy, setBusy] = useState(false);
+  const [obdobieUctovania, setObdobieUctovania] = useState<UctovnyProfil['obdobieUctovania']>(
+    profil?.obdobieUctovania ?? 'mesacne',
+  );
+  const [zaokruhlovanieCelkom, setZaokruhlovanieCelkom] = useState<UctovnyProfil['zaokruhlovanieCelkom']>(
+    profil?.zaokruhlovanieCelkom ?? 'centy',
+  );
+  const [zaokruhlovanieDph, setZaokruhlovanieDph] = useState<UctovnyProfil['zaokruhlovanieDph']>(
+    profil?.zaokruhlovanieDph ?? 'matematicky',
+  );
+  const [parovanie, setParovanie] = useState<ParovacieKriterium[]>(
+    profil?.parovanieDodavatelov ?? PAROVACIE_KRITERIA,
+  );
+  const [rozvrh, setRozvrh] = useState<RozvrhDraft[]>(
+    (profil?.uctovnyRozvrh ?? []).map((riadok) => ({
+      ucet: riadok.ucet,
+      nazov: riadok.nazov,
+      analytiky: riadok.analytiky.join(', '),
+    })),
+  );
+
+  function posunVyssie(index: number) {
+    if (index === 0) return;
+    setParovanie((current) => {
+      const next = [...current];
+      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+      return next;
+    });
+  }
+
+  async function save() {
+    const uctovnyRozvrh = rozvrh.map((riadok) => ({
+      ucet: riadok.ucet.trim(),
+      nazov: riadok.nazov.trim(),
+      analytiky: slova(riadok.analytiky),
+    }));
+    if (uctovnyRozvrh.some((riadok) => !riadok.ucet || !riadok.nazov)) {
+      showToast(t('nast.uct.neplatnaHodnota'), { tone: 'error' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await saveAccountingProfile(orgId, {
+        obdobieUctovania,
+        zaokruhlovanieCelkom,
+        zaokruhlovanieDph,
+        parovanieDodavatelov: parovanie,
+        uctovnyRozvrh,
+      });
+      showToast(t('nast.uct.ulozeneOk'));
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card space-y-4 p-4">
+      <h2 className="font-semibold text-ink">{t('nast.uct.sekcia')}</h2>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <label className="block">
+          <span className="label">{t('nast.uct.obdobie')}</span>
+          <select
+            className="input w-full"
+            value={obdobieUctovania}
+            onChange={(event) => setObdobieUctovania(event.target.value as UctovnyProfil['obdobieUctovania'])}
+          >
+            <option value="mesacne">{t('nast.uct.obdobie.mesacne')}</option>
+            <option value="stvrtrocne">{t('nast.uct.obdobie.stvrtrocne')}</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="label">{t('nast.uct.zaokruhlovanieCelkom')}</span>
+          <select
+            className="input w-full"
+            value={zaokruhlovanieCelkom}
+            onChange={(event) => setZaokruhlovanieCelkom(event.target.value as UctovnyProfil['zaokruhlovanieCelkom'])}
+          >
+            <option value="centy">{t('nast.uct.zaokruhlovanie.centy')}</option>
+            <option value="pat_centov">{t('nast.uct.zaokruhlovanie.pat_centov')}</option>
+            <option value="eura">{t('nast.uct.zaokruhlovanie.eura')}</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="label">{t('nast.uct.zaokruhlovanieDph')}</span>
+          <select
+            className="input w-full"
+            value={zaokruhlovanieDph}
+            onChange={(event) => setZaokruhlovanieDph(event.target.value as UctovnyProfil['zaokruhlovanieDph'])}
+          >
+            <option value="matematicky">{t('nast.uct.zaokruhlovanie.matematicky')}</option>
+            <option value="nahor">{t('nast.uct.zaokruhlovanie.nahor')}</option>
+            <option value="nadol">{t('nast.uct.zaokruhlovanie.nadol')}</option>
+          </select>
+        </label>
+      </div>
+
+      <div>
+        <p className="label">{t('nast.uct.parovanie')}</p>
+        <p className="text-xs text-ink-soft">{t('nast.uct.parovaniePopis')}</p>
+        <ol className="mt-2 space-y-1">
+          {parovanie.map((kriterium, index) => (
+            <li key={kriterium} className="flex items-center gap-2 text-sm text-ink">
+              <span className="tnum w-5 text-ink-soft">{index + 1}.</span>
+              <span className="w-24">{t(`nast.uct.parovanie.${kriterium}`)}</span>
+              <button
+                type="button"
+                className="btn px-2 py-1 text-xs"
+                disabled={index === 0}
+                onClick={() => posunVyssie(index)}
+              >
+                ↑ {t('nast.uct.hore')}
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div>
+        <p className="label">{t('nast.uct.rozvrh')}</p>
+        {rozvrh.map((riadok, index) => (
+          <div key={index} className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              className="input tnum w-24"
+              placeholder={t('nast.uct.rozvrh.ucet')}
+              value={riadok.ucet}
+              onChange={(event) => setRozvrh((current) => current.map((item, i) => (i === index ? { ...item, ucet: event.target.value } : item)))}
+            />
+            <input
+              className="input w-64"
+              placeholder={t('nast.uct.rozvrh.nazov')}
+              value={riadok.nazov}
+              onChange={(event) => setRozvrh((current) => current.map((item, i) => (i === index ? { ...item, nazov: event.target.value } : item)))}
+            />
+            <input
+              className="input min-w-48 flex-1"
+              placeholder={t('nast.uct.rozvrh.analytiky')}
+              value={riadok.analytiky}
+              onChange={(event) => setRozvrh((current) => current.map((item, i) => (i === index ? { ...item, analytiky: event.target.value } : item)))}
+            />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setRozvrh((current) => current.filter((_, i) => i !== index))}
+            >
+              {t('nast.dph.odstranit')}
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn mt-2"
+          onClick={() => setRozvrh((current) => [...current, { ucet: '', nazov: '', analytiky: '' }])}
+        >
+          {t('nast.dph.pridatRiadok')}
+        </button>
+      </div>
+
+      <div>
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+          {busy ? t('stav.nacitavam') : t('nast.uct.ulozit')}
+        </button>
+      </div>
+    </section>
   );
 }

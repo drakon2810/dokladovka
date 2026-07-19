@@ -14,6 +14,7 @@ import type {
   DocumentType,
   DphPosudok,
   DphProfil,
+  UctovnyProfil,
   ExportBatch,
   ExtractionRun,
   InboundEmail,
@@ -2137,6 +2138,7 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     payments: (s.payments ?? []).filter(belongsToTenant),
     approvalRules: (s.approvalRules ?? []).filter(belongsToTenant),
     dphProfiles: (s.dphProfiles ?? []).filter(belongsToTenant),
+    accountingProfiles: (s.accountingProfiles ?? []).filter(belongsToTenant),
   };
 }
 
@@ -2160,6 +2162,19 @@ export async function saveDphProfile(
 ): Promise<void> {
   if (!REST_DATA_MODE) throw new Error('DPH profil klienta vyžaduje spustený backend');
   await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/dph-profile`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+  await refreshRestSnapshot();
+}
+
+/** Uloženie účtovného profilu klienta (iba admin, jeden na organizáciu). */
+export async function saveAccountingProfile(
+  organizationId: string,
+  input: Omit<UctovnyProfil, 'organizationId' | 'tenantId' | 'updatedAt'>,
+): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Účtovný profil klienta vyžaduje spustený backend');
+  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/accounting-profile`, {
     method: 'PUT',
     body: JSON.stringify(input),
   });

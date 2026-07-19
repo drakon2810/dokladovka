@@ -175,6 +175,28 @@ export interface DphPosudok {
   blokacie: DphZistenie[];
 }
 
+/** Kritérium párovania dodávateľa (priorita zľava doprava). */
+export type ParovacieKriterium = 'ico' | 'ic_dph' | 'iban' | 'nazov';
+
+/** Riadok účtovného rozvrhu s analytickými účtami. */
+export interface UctovnyRozvrhRiadok {
+  ucet: string;
+  nazov: string;
+  analytiky: string[];
+}
+
+/** Účtovný profil klienta — 2. časť profilu (obdobie, zaokrúhľovanie, párovanie). */
+export interface UctovnyProfil {
+  organizationId: string;
+  tenantId: string;
+  obdobieUctovania: 'mesacne' | 'stvrtrocne';
+  zaokruhlovanieCelkom: 'centy' | 'pat_centov' | 'eura';
+  zaokruhlovanieDph: 'matematicky' | 'nahor' | 'nadol';
+  parovanieDodavatelov: ParovacieKriterium[];
+  uctovnyRozvrh: UctovnyRozvrhRiadok[];
+  updatedAt?: string;
+}
+
 /** Úhrada dokladu — manuálna alebo automaticky spárovaná z bankového výpisu. */
 export interface DocumentPayment {
   id: string;

@@ -163,6 +163,52 @@ describe('DPH profil klienta', () => {
     await app.close();
   }, 120_000);
 
+  it('účtovný profil: PUT uloží obdobie, zaokrúhľovanie, párovanie a rozvrh', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    const saved = await app.inject({
+      method: 'PUT',
+      url: `/api/organizations/${seeded.organizationId}/accounting-profile`,
+      headers,
+      payload: {
+        obdobieUctovania: 'stvrtrocne',
+        zaokruhlovanieCelkom: 'pat_centov',
+        zaokruhlovanieDph: 'nahor',
+        parovanieDodavatelov: ['ic_dph', 'ico', 'nazov'],
+        uctovnyRozvrh: [{ ucet: '518', nazov: 'Ostatné služby', analytiky: ['001', '002'] }],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().obdobieUctovania).toBe('stvrtrocne');
+    expect(saved.json().parovanieDodavatelov).toEqual(['ic_dph', 'ico', 'nazov']);
+    expect(saved.json().uctovnyRozvrh[0].analytiky).toEqual(['001', '002']);
+
+    const snapshot = await app.inject({ method: 'GET', url: '/api/data/snapshot', headers: { cookie: headers.cookie } });
+    expect(snapshot.json().accountingProfiles).toHaveLength(1);
+    expect(snapshot.json().accountingProfiles[0].zaokruhlovanieDph).toBe('nahor');
+
+    // Duplicitné kritériá párovania odmietne validácia.
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: `/api/organizations/${seeded.organizationId}/accounting-profile`,
+      headers,
+      payload: {
+        obdobieUctovania: 'mesacne',
+        zaokruhlovanieCelkom: 'centy',
+        zaokruhlovanieDph: 'matematicky',
+        parovanieDodavatelov: ['ico', 'ico'],
+        uctovnyRozvrh: [],
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+  }, 120_000);
+
   it('dph-advisor vracia varovanie pri PHM pravidle a návrh bez profilu je prázdny', async () => {
     const database = await createTestDatabase();
     databases.push(database);
