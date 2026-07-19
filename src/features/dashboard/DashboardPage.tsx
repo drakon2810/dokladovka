@@ -1,6 +1,7 @@
 // DashboardPage — редизайн: KPI-карточки с иконками, лента событий, график.
 // Логика и данные (useDataQuery, buildThirtyDaySeries, роуты) без изменений.
 import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { useDataQuery } from '../../data/query';
 import type { DocumentItem, DocumentStatus } from '../../data/types';
 import { t } from '../../i18n/sk';
@@ -136,7 +137,12 @@ export function DashboardPage() {
       <h1 className="mb-5 text-[22px] font-bold tracking-tight">{t('dash.titulok')}</h1>
 
       {dueSoon.length > 0 && (
-        <div className="mb-4 rounded-2xl border border-amber-300 bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-4 py-3">
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="mb-4 rounded-2xl border border-amber-300 bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-4 py-3"
+        >
           <p className="text-sm font-semibold text-amber-900">⚠ {t('platby.avizo')} ({dueSoon.length})</p>
           <ul className="mt-1.5 space-y-0.5">
             {dueSoon.slice(0, 5).map((document) => {
@@ -156,7 +162,7 @@ export function DashboardPage() {
               );
             })}
           </ul>
-        </div>
+        </motion.div>
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

@@ -3,10 +3,9 @@
 // Heslo Dokladovka2026! je verejné demo heslo, nie produkčný secret.
 // Idempotentné — opakované spustenie nič neduplikuje.
 import { randomUUID } from 'node:crypto';
-import { loadConfig } from '../config.js';
+import type { ServerConfig } from '../config.js';
 import { hashPassword } from '../security.js';
-import { createDatabase } from './database.js';
-import { migrateDatabase } from './migrate.js';
+import type { Database } from './database.js';
 import { insertUniqueAlias } from '../services/organizationService.js';
 
 const DEMO_PASSWORD = 'Dokladovka2026!';
@@ -16,11 +15,11 @@ const DEMO_USERS = [
   { name: 'Peter Horváth', email: 'peter@kancelaria.sk', role: 'schvalovatel' },
 ] as const;
 
-const config = loadConfig();
-const database = await createDatabase(config);
-
-try {
-  await migrateDatabase(database);
+export async function seedDemoData(
+  database: Database,
+  config: ServerConfig,
+  log: (line: string) => void = (line) => process.stdout.write(`${line}\n`),
+): Promise<void> {
   const passwordHash = await hashPassword(DEMO_PASSWORD);
 
   // Tenant — buď existujúci demo tenant (podľa prvého demo účtu), alebo nový.
@@ -49,7 +48,7 @@ try {
       [id, tenantId, user.name, user.email, passwordHash, user.role],
     );
     userIds.push(id);
-    process.stdout.write(`+ používateľ ${user.email} (${user.role})\n`);
+    log(`+ používateľ ${user.email} (${user.role})`);
   }
 
   // Demo organizácia s frontou.
@@ -76,7 +75,7 @@ try {
       domain: config.mailReceivingDomain,
       primary: true,
     });
-    process.stdout.write(`+ organizácia Alfa Trade s.r.o.\n`);
+    log('+ organizácia Alfa Trade s.r.o.');
   }
 
   for (const userId of userIds) {
@@ -103,11 +102,24 @@ try {
          VALUES ($1,$2,$3,$4,$4,$5,$6,'imap-demo','imapbx','active',false)`,
         [randomUUID(), tenantId, organizationId, imapUser, localPart, domain],
       );
-      process.stdout.write(`+ alias ${imapUser} → Alfa Trade s.r.o.\n`);
+      log(`+ alias ${imapUser} → Alfa Trade s.r.o.`);
     }
   }
 
-  process.stdout.write('Demo seed hotový.\n');
-} finally {
-  await database.close();
+  log('Demo seed hotový.');
+}
+
+// CLI: npm run db:seed:demo — spúšťajte len so ZASTAVENÝM API (PGlite je single-process).
+if (import.meta.url === `file://${process.argv[1]?.replaceAll('\\', '/')}`) {
+  const { loadConfig } = await import('../config.js');
+  const { createDatabase } = await import('./database.js');
+  const { migrateDatabase } = await import('./migrate.js');
+  const config = loadConfig();
+  const database = await createDatabase(config);
+  try {
+    await migrateDatabase(database);
+    await seedDemoData(database, config);
+  } finally {
+    await database.close();
+  }
 }

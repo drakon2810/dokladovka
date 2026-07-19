@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { addDocumentPayment, removeDocumentPayment } from '../../data/api';
 import type { DocumentItem, DocumentPayment } from '../../data/types';
 import { showToast } from '../../components/toast';
@@ -168,8 +169,14 @@ export function PaymentCard({
                 {t('platby.pridatUhradu')}
               </button>
             </div>
+            <AnimatePresence initial={false}>
             {formOpen && (
-              <form
+              <motion.form
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+                style={{ overflow: 'hidden' }}
                 className="grid grid-cols-2 gap-2"
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -209,8 +216,9 @@ export function PaymentCard({
                 <button type="submit" className="btn btn-primary col-span-2" disabled={busy}>
                   {t('platby.ulozit')}
                 </button>
-              </form>
+              </motion.form>
             )}
+            </AnimatePresence>
           </div>
         )}
       </div>

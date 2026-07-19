@@ -34,6 +34,7 @@
     "date-fns": "^3.6.0",
     "fast-xml-parser": "^5.10.1",
     "fastify": "^5.10.0",
+    "framer-motion": "^12.42.2",
     "imapflow": "^1.4.7",
     "mailparser": "^3.9.14",
     "openai": "^6.46.0",
