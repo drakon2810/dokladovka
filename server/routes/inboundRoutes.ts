@@ -91,7 +91,22 @@ export function registerInboundRoutes(
     );
     const scopes = new Set(aliases.rows.map((row) => `${row.tenant_id}:${row.organization_id}`));
     const resolved = scopes.size === 1 ? aliases.rows[0] : undefined;
-    const quarantineReason = scopes.size === 0 ? 'unknown_alias' : scopes.size > 1 ? 'ambiguous_recipient' : undefined;
+    let quarantineReason = scopes.size === 0 ? 'unknown_alias' : scopes.size > 1 ? 'ambiguous_recipient' : undefined;
+    // Whitelist odosielateľov: ak je pre organizáciu vyplnený, e-maily od
+    // iných adries končia v karanténe (prázdny zoznam = prijíma sa všetko).
+    if (!quarantineReason && resolved) {
+      const organization = await database.query<{ sender_whitelist?: string[] } & Record<string, unknown>>(
+        'SELECT sender_whitelist FROM organizations WHERE id=$1 AND tenant_id=$2',
+        [resolved.organization_id, resolved.tenant_id],
+      );
+      const whitelist = (organization.rows[0]?.sender_whitelist ?? [])
+        .map((address) => String(address).trim().toLowerCase())
+        .filter(Boolean);
+      const sender = body.senderEmail?.trim().toLowerCase();
+      if (whitelist.length > 0 && (!sender || !whitelist.includes(sender))) {
+        quarantineReason = 'sender_not_whitelisted';
+      }
+    }
     const emailId = randomUUID();
     const correlationId = request.id;
     const receivedAt = body.receivedAt ?? new Date().toISOString();

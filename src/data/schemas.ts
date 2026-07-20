@@ -57,8 +57,9 @@ export type BankAccountInput = z.infer<typeof bankAccountInputSchema>;
 
 export const organizationInputSchema = z.object({
   nazov: z.string().trim().min(1, 'Názov je povinný'),
-  ico: z.string().regex(/^\d{8}$/, 'IČO musí mať presne 8 číslic'),
-  dic: z.string().regex(/^\d{10}$/, 'DIČ musí mať 10 číslic'),
+  // Prázdne IČO/DIČ je dovolené len pre FO nepodnikateľa (kontrola vo formulári/serveri).
+  ico: z.string().regex(/^\d{8}$/, 'IČO musí mať presne 8 číslic').or(z.literal('')),
+  dic: z.string().regex(/^\d{10}$/, 'DIČ musí mať 10 číslic').or(z.literal('')),
   icDph: z
     .string()
     .regex(/^SK\d{10}$/, 'IČ DPH musí mať tvar SK + 10 číslic')
@@ -67,8 +68,14 @@ export const organizationInputSchema = z.object({
   farba: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Farba musí byť hex kód'),
   /** voliteľný návrh slugu — nikdy nie celá adresa (SPEC §11.19) */
   slugSuggestion: z.string().max(64).optional(),
+  typSubjektu: z.enum(['company', 'fo_nepodnikatel']).default('company'),
+  ulica: z.string().trim().max(200).optional().or(z.literal('').transform(() => undefined)),
+  mesto: z.string().trim().max(120).optional().or(z.literal('').transform(() => undefined)),
+  psc: z.string().trim().max(12).optional().or(z.literal('').transform(() => undefined)),
+  krajina: z.string().trim().max(56).optional().or(z.literal('').transform(() => undefined)),
+  senderWhitelist: z.array(z.string().trim().min(3).max(200)).max(200).optional(),
 });
-export type OrganizationInput = z.infer<typeof organizationInputSchema>;
+export type OrganizationInput = z.input<typeof organizationInputSchema>;
 
 // E-mail alias — validácia formátu local-part@domain (SPEC §11.2/§11.3)
 export const emailAliasSchema = z

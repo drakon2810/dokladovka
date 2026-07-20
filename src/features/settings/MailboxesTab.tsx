@@ -64,6 +64,7 @@ const SCENARIOS: Array<{ value: SimulationScenario; label: SkKey }> = [
 
 const QUARANTINE_REASON_KEYS: Record<string, SkKey> = {
   unknown_alias: 'detail.karantena.unknown_alias',
+  sender_not_whitelisted: 'detail.karantena.sender_not_whitelisted',
   alias_disabled: 'detail.karantena.alias_disabled',
   ambiguous_recipient: 'detail.karantena.ambiguous_recipient',
   organization_archived: 'detail.karantena.organization_archived',

@@ -20,9 +20,12 @@ const kindSchema = z.object({
   bezZmeny: z.number().int().nonnegative(),
   vyradene: z.array(removedSchema),
 }).strict();
+// Staršie klienty posielajú len pôvodné 4 číselníky — chýbajúce druhy sa
+// doplnia prázdnym výsledkom.
+const kindWithDefault = kindSchema.default({ nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] });
 const importSchema = z.object({
   orgId: z.string().uuid(),
-  perKind: z.object(Object.fromEntries(kinds.map((kind) => [kind, kindSchema])) as Record<typeof kinds[number], typeof kindSchema>),
+  perKind: z.object(Object.fromEntries(kinds.map((kind) => [kind, kindWithDefault])) as Record<typeof kinds[number], typeof kindWithDefault>),
   warnings: z.array(z.string()).default([]),
 }).strict();
 

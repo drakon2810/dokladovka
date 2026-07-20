@@ -27,6 +27,12 @@ interface FormState {
   icDph: string;
   farba: string;
   slugSuggestion: string;
+  typSubjektu: 'company' | 'fo_nepodnikatel';
+  ulica: string;
+  mesto: string;
+  psc: string;
+  krajina: string;
+  senderWhitelist: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -36,6 +42,12 @@ const EMPTY_FORM: FormState = {
   icDph: '',
   farba: DEFAULT_COLORS[0],
   slugSuggestion: '',
+  typSubjektu: 'company',
+  ulica: '',
+  mesto: '',
+  psc: '',
+  krajina: '',
+  senderWhitelist: '',
 };
 
 export function OrganizationsTab() {
@@ -218,6 +230,12 @@ export function OrganizationFormModal({
           icDph: existing.icDph ?? '',
           farba: existing.farba,
           slugSuggestion: '',
+          typSubjektu: existing.typSubjektu ?? 'company',
+          ulica: existing.ulica ?? '',
+          mesto: existing.mesto ?? '',
+          psc: existing.psc ?? '',
+          krajina: existing.krajina ?? '',
+          senderWhitelist: (existing.senderWhitelist ?? []).join(', '),
         }
       : EMPTY_FORM,
   );
@@ -233,6 +251,10 @@ export function OrganizationFormModal({
       ...form,
       icDph: form.icDph || undefined,
       slugSuggestion: form.slugSuggestion || undefined,
+      senderWhitelist: form.senderWhitelist
+        .split(',')
+        .map((address) => address.trim())
+        .filter(Boolean),
     });
     if (!parsed.success) {
       const map: Record<string, string> = {};
@@ -240,6 +262,11 @@ export function OrganizationFormModal({
         map[String(issue.path[0])] = issue.message;
       }
       setErrors(map);
+      return;
+    }
+    // FO nepodnikateľ smie mať prázdne IČO/DIČ; firma nie.
+    if (parsed.data.typSubjektu === 'company' && !parsed.data.ico) {
+      setErrors({ ico: t('nast.org.icoPovinne') });
       return;
     }
     setErrors({});
@@ -252,6 +279,12 @@ export function OrganizationFormModal({
           dic: parsed.data.dic,
           icDph: parsed.data.icDph,
           farba: parsed.data.farba,
+          typSubjektu: parsed.data.typSubjektu,
+          ulica: parsed.data.ulica,
+          mesto: parsed.data.mesto,
+          psc: parsed.data.psc,
+          krajina: parsed.data.krajina,
+          senderWhitelist: parsed.data.senderWhitelist ?? [],
         });
         showToast(t('toast.ulozene'));
         onClose();
@@ -275,6 +308,20 @@ export function OrganizationFormModal({
           <input id="org-nazov" className="input" value={form.nazov} onChange={set('nazov')} />
           {errors.nazov && <p className="mt-1 text-xs text-red-700">{errors.nazov}</p>}
         </div>
+        <div>
+          <label className="label" htmlFor="org-typ">
+            {t('nast.org.typSubjektu')}
+          </label>
+          <select
+            id="org-typ"
+            className="input"
+            value={form.typSubjektu}
+            onChange={(e) => setForm((f) => ({ ...f, typSubjektu: e.target.value as FormState['typSubjektu'] }))}
+          >
+            <option value="company">{t('nast.org.typSubjektu.company')}</option>
+            <option value="fo_nepodnikatel">{t('nast.org.typSubjektu.fo_nepodnikatel')}</option>
+          </select>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label" htmlFor="org-ico">
@@ -297,6 +344,35 @@ export function OrganizationFormModal({
           </label>
           <input id="org-icdph" className="input tnum" value={form.icDph} onChange={set('icDph')} placeholder="SK2020123456" />
           {errors.icDph && <p className="mt-1 text-xs text-red-700">{errors.icDph}</p>}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label" htmlFor="org-ulica">{t('nast.org.ulica')}</label>
+            <input id="org-ulica" className="input" value={form.ulica} onChange={set('ulica')} />
+          </div>
+          <div>
+            <label className="label" htmlFor="org-mesto">{t('nast.org.mesto')}</label>
+            <input id="org-mesto" className="input" value={form.mesto} onChange={set('mesto')} />
+          </div>
+          <div>
+            <label className="label" htmlFor="org-psc">{t('nast.org.psc')}</label>
+            <input id="org-psc" className="input tnum" value={form.psc} onChange={set('psc')} />
+          </div>
+          <div>
+            <label className="label" htmlFor="org-krajina">{t('nast.org.krajina')}</label>
+            <input id="org-krajina" className="input" value={form.krajina} onChange={set('krajina')} />
+          </div>
+        </div>
+        <div>
+          <label className="label" htmlFor="org-whitelist">{t('nast.org.whitelist')}</label>
+          <input
+            id="org-whitelist"
+            className="input"
+            value={form.senderWhitelist}
+            onChange={set('senderWhitelist')}
+            placeholder="fakturacia@dodavatel.sk, uctaren@klient.sk"
+          />
+          <p className="mt-1 text-xs text-ink-soft">{t('nast.org.whitelistPopis')}</p>
         </div>
         <div>
           <span className="label">{t('nast.org.farba')}</span>

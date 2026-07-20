@@ -180,6 +180,12 @@ export async function createOrganization(
         dic: parsed.dic,
         icDph: parsed.icDph,
         farba: parsed.farba,
+        typSubjektu: parsed.typSubjektu,
+        ulica: parsed.ulica,
+        mesto: parsed.mesto,
+        psc: parsed.psc,
+        krajina: parsed.krajina,
+        senderWhitelist: parsed.senderWhitelist ?? [],
       }),
     });
     await refreshRestSnapshot();
@@ -298,7 +304,9 @@ export async function createOrganization(
 
 export async function updateOrganization(
   id: string,
-  patch: Partial<Pick<Organization, 'nazov' | 'ico' | 'dic' | 'icDph' | 'farba'>>,
+  patch: Partial<Pick<Organization,
+    'nazov' | 'ico' | 'dic' | 'icDph' | 'farba'
+    | 'typSubjektu' | 'ulica' | 'mesto' | 'psc' | 'krajina' | 'senderWhitelist'>>,
 ): Promise<Organization> {
   assertCapability(
     storeApi.get().role,
@@ -2154,6 +2162,8 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     dphProfiles: (s.dphProfiles ?? []).filter(belongsToTenant),
     accountingProfiles: (s.accountingProfiles ?? []).filter(belongsToTenant),
     partners: (s.partners ?? []).filter(belongsToTenant),
+    noteTemplates: (s.noteTemplates ?? []).filter(belongsToTenant),
+    emailTemplates: (s.emailTemplates ?? []).filter(belongsToTenant),
   };
 }
 
@@ -2220,6 +2230,29 @@ export async function updatePartner(partnerId: string, input: Partial<PartnerInp
 export async function archivePartner(partnerId: string): Promise<void> {
   if (!REST_DATA_MODE) throw new Error('Partneri vyžadujú spustený backend');
   await restRequest(`/api/partners/${encodeURIComponent(partnerId)}/archive`, { method: 'POST' });
+  await refreshRestSnapshot();
+}
+
+/** Uloženie preddefinovaných poznámok organizácie (nahrádza celý zoznam). */
+export async function saveNoteTemplates(organizationId: string, poznamky: string[]): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Preddefinované poznámky vyžadujú spustený backend');
+  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/note-templates`, {
+    method: 'PUT',
+    body: JSON.stringify({ poznamky }),
+  });
+  await refreshRestSnapshot();
+}
+
+/** Uloženie e-mailových šablón organizácie (nahrádza celý zoznam). */
+export async function saveEmailTemplates(
+  organizationId: string,
+  sablony: Array<{ nazov: string; predmet: string; telo: string }>,
+): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('E-mailové šablóny vyžadujú spustený backend');
+  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/email-templates`, {
+    method: 'PUT',
+    body: JSON.stringify({ sablony }),
+  });
   await refreshRestSnapshot();
 }
 

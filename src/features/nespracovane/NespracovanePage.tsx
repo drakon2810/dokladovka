@@ -14,6 +14,7 @@ import { formatDateTime } from '../../lib/format';
 
 const REASON_KEYS: Record<string, string> = {
   unknown_alias: 'nespracovane.dovod.unknown_alias',
+  sender_not_whitelisted: 'nespracovane.dovod.sender_not_whitelisted',
   alias_disabled: 'nespracovane.dovod.alias_disabled',
   organization_archived: 'nespracovane.dovod.organization_archived',
   ambiguous_recipient: 'nespracovane.dovod.ambiguous_recipient',

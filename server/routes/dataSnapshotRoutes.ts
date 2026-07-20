@@ -51,6 +51,8 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     const dphProfiles = await inScope('organization_dph_profiles', 'organization_id');
     const accountingProfiles = await inScope('organization_accounting_profiles', 'organization_id');
     const partners = await inScope('partners', 'name');
+    const noteTemplates = await inScope('note_templates', 'created_at');
+    const emailTemplates = await inScope('email_templates', 'name');
     const codeListRows = await inScope('code_list_items', 'code');
     const users = await database.query<Record<string, any>>(
       'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
@@ -87,6 +89,8 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       organizations: organizations.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, nazov: row.name, ico: row.ico, dic: row.dic,
         icDph: row.ic_dph ?? undefined, emailAlias: row.email_alias ?? '', farba: row.color, archived: row.archived,
+        typSubjektu: row.subject_type ?? 'company', ulica: row.street ?? undefined, mesto: row.city ?? undefined,
+        psc: row.zip ?? undefined, krajina: row.country ?? undefined, senderWhitelist: row.sender_whitelist ?? [],
       })),
       queues: queues.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id, name: row.name, kind: row.kind,
@@ -157,6 +161,13 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       dphProfiles: dphProfiles.rows.map(mapDphProfilRow),
       accountingProfiles: accountingProfiles.rows.map(mapUctovnyProfilRow),
       partners: partners.rows.map(mapPartnerRow),
+      noteTemplates: noteTemplates.rows.map((row) => ({
+        id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id, text: row.text,
+      })),
+      emailTemplates: emailTemplates.rows.map((row) => ({
+        id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id,
+        nazov: row.name, predmet: row.subject, telo: row.body, active: row.active,
+      })),
       users: users.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, meno: row.name, email: row.email, rola: row.role, jazyk: row.language, notifikacie: row.notifications })),
       exportBatches: batches.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, createdAt: iso(row.created_at),

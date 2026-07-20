@@ -35,12 +35,39 @@ export interface Organization {
   id: string;
   tenantId: string;
   nazov: string; // "Alfa s.r.o."
-  ico: string; // 8 cifier
+  ico: string; // 8 cifier; FO nepodnikateľ môže mať prázdne
   dic: string;
   icDph?: string; // "SK2020..."
   emailAlias: string; // primárny alias — generuje sa automaticky (SPEC §11.3)
   farba: string; // hex, farebný štítok organizácie v UI
   archived?: boolean; // organizácie s dokladmi sa nemažú, archivujú sa (SPEC §11.3)
+  /** FO nepodnikateľ nemá IČO/DIČ — voľnejšia validácia. */
+  typSubjektu?: 'company' | 'fo_nepodnikatel';
+  ulica?: string;
+  mesto?: string;
+  psc?: string;
+  krajina?: string;
+  /** Whitelist odosielateľov: prázdny = prijíma sa všetko. */
+  senderWhitelist?: string[];
+}
+
+/** Preddefinovaná poznámka pre pole „poznámka“ na doklade. */
+export interface NoteTemplate {
+  id: string;
+  tenantId: string;
+  organizationId: string;
+  text: string;
+}
+
+/** E-mailová šablóna organizácie (predmet + telo). */
+export interface EmailTemplate {
+  id: string;
+  tenantId: string;
+  organizationId: string;
+  nazov: string;
+  predmet: string;
+  telo: string;
+  active?: boolean;
 }
 
 export interface OrganizationBankAccount {

@@ -12,10 +12,17 @@ import { loadUctovnyProfil } from '../services/accountingProfileService.js';
 
 const organizationSchema = z.object({
   nazov: z.string().trim().min(1).max(200),
-  ico: z.string().regex(/^\d{8}$/),
+  // FO nepodnikateľ nemá IČO — povinnosť pre firmu sa vynucuje v handleri.
+  ico: z.string().regex(/^\d{8}$/).or(z.literal('')).default(''),
   dic: z.string().trim().max(20).default(''),
   icDph: z.string().trim().max(20).optional(),
   farba: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+  typSubjektu: z.enum(['company', 'fo_nepodnikatel']).default('company'),
+  ulica: z.string().trim().max(200).optional(),
+  mesto: z.string().trim().max(120).optional(),
+  psc: z.string().trim().max(12).optional(),
+  krajina: z.string().trim().max(56).optional(),
+  senderWhitelist: z.array(z.string().trim().min(3).max(200)).max(200).default([]),
 }).strict();
 
 const patchSchema = organizationSchema.partial().strict();
@@ -76,6 +83,12 @@ interface OrganizationRow extends Record<string, unknown> {
   color: string;
   archived: boolean;
   email_alias?: string;
+  subject_type?: string;
+  street?: string;
+  city?: string;
+  zip?: string;
+  country?: string;
+  sender_whitelist?: string[];
 }
 
 interface AliasRow extends Record<string, unknown> {
@@ -106,6 +119,12 @@ function mapOrganization(row: OrganizationRow) {
     emailAlias: row.email_alias ?? '',
     farba: row.color,
     archived: row.archived,
+    typSubjektu: (row.subject_type as 'company' | 'fo_nepodnikatel' | undefined) ?? 'company',
+    ulica: row.street ?? undefined,
+    mesto: row.city ?? undefined,
+    psc: row.zip ?? undefined,
+    krajina: row.country ?? undefined,
+    senderWhitelist: row.sender_whitelist ?? [],
   };
 }
 
@@ -262,10 +281,81 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     return await loadUctovnyProfil(database, auth.tenantId, organizationId);
   });
 
+  // Preddefinované poznámky — celý zoznam sa nahrádza naraz (jednoduchý PUT).
+  app.put('/api/organizations/:organizationId/note-templates', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const body = z.object({
+      poznamky: z.array(z.string().trim().min(1).max(500)).max(100),
+    }).strict().parse(request.body);
+    await database.transaction(async (tx) => {
+      await tx.query('DELETE FROM note_templates WHERE organization_id=$1 AND tenant_id=$2', [organizationId, auth.tenantId]);
+      for (const text of body.poznamky) {
+        await tx.query(
+          'INSERT INTO note_templates (id, tenant_id, organization_id, text, created_by) VALUES ($1,$2,$3,$4,$5)',
+          [randomUUID(), auth.tenantId, organizationId, text, auth.userId],
+        );
+      }
+    });
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'organization.note_templates_updated',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+      metadata: { count: body.poznamky.length },
+    });
+    return { poznamky: body.poznamky };
+  });
+
+  // E-mailové šablóny — celý zoznam sa nahrádza naraz.
+  app.put('/api/organizations/:organizationId/email-templates', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const body = z.object({
+      sablony: z.array(z.object({
+        nazov: z.string().trim().min(1).max(120),
+        predmet: z.string().trim().min(1).max(300),
+        telo: z.string().trim().min(1).max(5000),
+      }).strict()).max(100),
+    }).strict().parse(request.body);
+    await database.transaction(async (tx) => {
+      await tx.query('DELETE FROM email_templates WHERE organization_id=$1 AND tenant_id=$2', [organizationId, auth.tenantId]);
+      for (const sablona of body.sablony) {
+        await tx.query(
+          `INSERT INTO email_templates (id, tenant_id, organization_id, name, subject, body, updated_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [randomUUID(), auth.tenantId, organizationId, sablona.nazov, sablona.predmet, sablona.telo, auth.userId],
+        );
+      }
+    });
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'organization.email_templates_updated',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+      metadata: { count: body.sablony.length },
+    });
+    return { sablony: body.sablony };
+  });
+
   app.get('/api/organizations', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const result = await database.query<OrganizationRow>(
-      `SELECT o.id, o.tenant_id, o.name, o.ico, o.dic, o.ic_dph, o.color, o.archived, a.address AS email_alias
+      `SELECT o.*, a.address AS email_alias
          FROM organizations o
          JOIN organization_memberships m ON m.organization_id = o.id AND m.tenant_id = o.tenant_id
          LEFT JOIN organization_email_aliases a
@@ -282,7 +372,7 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await requireOrganizationAccess(database, auth, id);
     const result = await database.query<OrganizationRow>(
-      `SELECT o.id, o.tenant_id, o.name, o.ico, o.dic, o.ic_dph, o.color, o.archived, a.address AS email_alias
+      `SELECT o.*, a.address AS email_alias
          FROM organizations o LEFT JOIN organization_email_aliases a
            ON a.organization_id = o.id AND a.is_primary = true AND a.status <> 'disabled'
         WHERE o.id = $1 AND o.tenant_id = $2`,
@@ -297,14 +387,22 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     requireCsrf(request, auth);
     requireRole(auth, ['admin', 'uctovnik']);
     const body = organizationSchema.parse(request.body);
+    if (body.typSubjektu === 'company' && !body.ico) {
+      throw new HttpError(400, 'organization_ico_required', 'IČO je pre firmu povinné');
+    }
     const organizationId = randomUUID();
     const result = await database.transaction(async (tx) => {
-      const duplicate = await tx.query('SELECT 1 FROM organizations WHERE tenant_id = $1 AND ico = $2', [auth.tenantId, body.ico]);
-      if (duplicate.rowCount > 0) throw new HttpError(409, 'organization_ico_exists', 'Organizácia s týmto IČO už existuje');
+      if (body.ico) {
+        const duplicate = await tx.query('SELECT 1 FROM organizations WHERE tenant_id = $1 AND ico = $2', [auth.tenantId, body.ico]);
+        if (duplicate.rowCount > 0) throw new HttpError(409, 'organization_ico_exists', 'Organizácia s týmto IČO už existuje');
+      }
       await tx.query(
-        `INSERT INTO organizations (id, tenant_id, name, ico, dic, ic_dph, color)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [organizationId, auth.tenantId, body.nazov, body.ico, body.dic, body.icDph ?? null, body.farba],
+        `INSERT INTO organizations (id, tenant_id, name, ico, dic, ic_dph, color,
+           subject_type, street, city, zip, country, sender_whitelist)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
+        [organizationId, auth.tenantId, body.nazov, body.ico, body.dic, body.icDph ?? null, body.farba,
+          body.typSubjektu, body.ulica ?? null, body.mesto ?? null, body.psc ?? null, body.krajina ?? null,
+          JSON.stringify(body.senderWhitelist)],
       );
       await tx.query(
         'INSERT INTO organization_memberships (user_id, organization_id, tenant_id) VALUES ($1,$2,$3)',
@@ -358,6 +456,12 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
         color: body.farba,
         archived: false,
         email_alias: result.address,
+        subject_type: body.typSubjektu,
+        street: body.ulica,
+        city: body.mesto,
+        zip: body.psc,
+        country: body.krajina,
+        sender_whitelist: body.senderWhitelist,
       }),
       primaryEmailAlias: result,
     });
@@ -371,15 +475,25 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     await requireOrganizationAccess(database, auth, id);
     const body = patchSchema.parse(request.body);
     const current = await database.query<OrganizationRow>(
-      'SELECT id, tenant_id, name, ico, dic, ic_dph, color, archived FROM organizations WHERE id = $1 AND tenant_id = $2',
+      'SELECT * FROM organizations WHERE id = $1 AND tenant_id = $2',
       [id, auth.tenantId],
     );
     const row = current.rows[0];
     if (!row) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const typSubjektu = body.typSubjektu ?? (row.subject_type as 'company' | 'fo_nepodnikatel' | undefined) ?? 'company';
+    if (typSubjektu === 'company' && !(body.ico ?? row.ico)) {
+      throw new HttpError(400, 'organization_ico_required', 'IČO je pre firmu povinné');
+    }
     await database.query(
-      `UPDATE organizations SET name=$1, ico=$2, dic=$3, ic_dph=$4, color=$5, updated_at=now()
-        WHERE id=$6 AND tenant_id=$7`,
-      [body.nazov ?? row.name, body.ico ?? row.ico, body.dic ?? row.dic, body.icDph ?? row.ic_dph ?? null, body.farba ?? row.color, id, auth.tenantId],
+      `UPDATE organizations SET name=$1, ico=$2, dic=$3, ic_dph=$4, color=$5,
+              subject_type=$6, street=$7, city=$8, zip=$9, country=$10, sender_whitelist=$11::jsonb,
+              updated_at=now()
+        WHERE id=$12 AND tenant_id=$13`,
+      [body.nazov ?? row.name, body.ico ?? row.ico, body.dic ?? row.dic, body.icDph ?? row.ic_dph ?? null, body.farba ?? row.color,
+        typSubjektu, body.ulica ?? row.street ?? null, body.mesto ?? row.city ?? null,
+        body.psc ?? row.zip ?? null, body.krajina ?? row.country ?? null,
+        JSON.stringify(body.senderWhitelist ?? row.sender_whitelist ?? []),
+        id, auth.tenantId],
     );
     await database.query('UPDATE pohoda_company_links SET ico=$1, updated_at=now() WHERE organization_id=$2 AND tenant_id=$3', [body.ico ?? row.ico, id, auth.tenantId]);
     return { ...mapOrganization(row), nazov: body.nazov ?? row.name, ico: body.ico ?? row.ico, dic: body.dic ?? row.dic, icDph: body.icDph ?? row.ic_dph, farba: body.farba ?? row.color };

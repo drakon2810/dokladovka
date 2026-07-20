@@ -140,6 +140,7 @@ const FIELD_ALIASES: Record<string, string[]> = {
 const QUARANTINE_KEYS: Record<string, SkKey> = {
   buyer_ico_mismatch: 'detail.karantena.buyer_ico_mismatch',
   unknown_alias: 'detail.karantena.unknown_alias',
+  sender_not_whitelisted: 'detail.karantena.sender_not_whitelisted',
   alias_disabled: 'detail.karantena.alias_disabled',
   ambiguous_recipient: 'detail.karantena.ambiguous_recipient',
   organization_archived: 'detail.karantena.organization_archived',
@@ -628,6 +629,9 @@ export function DocumentDetailPage() {
     (draft.extracted.polozky ?? []).reduce((sum, item) => sum + (item.sumaSpolu ?? 0), 0),
   );
   const polozkyRozdiel = round2((draft.extracted.sumaSpolu ?? 0) - polozkySpolu);
+  const orgNoteTemplates = (data.noteTemplates ?? []).filter(
+    (template) => template.organizationId === draft.orgId,
+  );
 
   const markDirty = (updater: (current: DocumentItem) => DocumentItem) => {
     setDraft((current) => (current ? updater(current) : current));
@@ -1772,6 +1776,23 @@ export function DocumentDetailPage() {
                 )}
                 <label className="block sm:col-span-2">
                   <span className="label">{t('detail.poznamka')}</span>
+                  {orgNoteTemplates.length > 0 && (
+                    <select
+                      className="input mb-1"
+                      value=""
+                      aria-label={t('detail.poznamkaSablona')}
+                      onChange={(event) => {
+                        if (!event.target.value) return;
+                        const existing = draft.ucto.poznamka?.trim();
+                        updateUcto({ poznamka: existing ? `${existing}\n${event.target.value}` : event.target.value });
+                      }}
+                    >
+                      <option value="">{t('detail.poznamkaSablona')}</option>
+                      {orgNoteTemplates.map((template) => (
+                        <option key={template.id} value={template.text}>{template.text}</option>
+                      ))}
+                    </select>
+                  )}
                   <textarea
                     className="input min-h-20"
                     value={draft.ucto.poznamka ?? ''}

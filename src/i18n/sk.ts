@@ -109,6 +109,7 @@ export const sk = {
 
   // ===== Schvaľovanie podľa sumy =====
   'nast.tab.schvalovanie': 'Schvaľovanie',
+  'nast.tab.sablony': 'Šablóny',
   'schvalovanie.popis': 'Doklady od zadanej sumy musí schváliť vybraná rola. Administrátor môže schváliť vždy.',
   'schvalovanie.aktivne': 'Aktívne',
   'schvalovanie.odSumy': 'Od sumy (€)',
@@ -135,6 +136,7 @@ export const sk = {
   'nespracovane.dovod.sepa': 'SEPA výpis (spracuje sa ako BV)',
   'nespracovane.dovod.corrupted': 'Nepodporovaný alebo poškodený súbor',
   'nespracovane.dovod.mime_mismatch': 'Typ súboru nesedí s obsahom',
+  'nespracovane.dovod.sender_not_whitelisted': 'Odosielateľ nie je vo whiteliste',
   'nespracovane.dovod.too_large': 'Príloha je príliš veľká',
 
   // ===== Dokumenty (schránka organizácie) =====
@@ -404,6 +406,7 @@ export const sk = {
   'detail.pokladnaPrijem': 'Príjmový',
   'detail.pokladnaVydaj': 'Výdavkový',
   'detail.poznamka': 'Poznámka',
+  'detail.poznamkaSablona': 'Vložiť preddefinovanú poznámku…',
   'detail.nevybrane': '— nevybrané —',
   'detail.naposledy': 'Naposledy pre tohto dodávateľa:',
   'detail.pouzitNavrh': 'Použiť návrh',
@@ -461,6 +464,8 @@ export const sk = {
   'detail.karantena.buyer_ico_mismatch':
     'IČO odberateľa v doklade zodpovedá inej organizácii.',
   'detail.karantena.unknown_alias': 'E-mail prišiel na neznámy alias.',
+  'detail.karantena.sender_not_whitelisted':
+    'Odosielateľ nie je vo whiteliste organizácie — doklad treba skontrolovať ručne.',
   'detail.karantena.alias_disabled': 'E-mail prišiel na vypnutý alias.',
   'detail.karantena.ambiguous_recipient':
     'E-mail bol doručený na aliasy viacerých organizácií.',
@@ -545,6 +550,18 @@ export const sk = {
   'export.hist.stiahnutZnova': 'Stiahnuť znova',
   'export.hist.prazdne': 'Zatiaľ žiadne exporty.',
   'export.hotovo': 'Export dokončený',
+
+  // ===== Šablóny =====
+  'nast.sablony.poznamky': 'Preddefinované poznámky',
+  'nast.sablony.poznamkyPopis':
+    'Poznámky sa ponúkajú na vloženie do poľa „poznámka“ pri zaúčtovaní dokladu.',
+  'nast.sablony.emaily': 'E-mailové šablóny',
+  'nast.sablony.emailyPopis':
+    'Šablóny pre komunikáciu s klientom — predmet a telo e-mailu.',
+  'nast.sablony.nazov': 'Názov šablóny',
+  'nast.sablony.predmet': 'Predmet',
+  'nast.sablony.telo': 'Telo e-mailu',
+  'nast.sablony.neuplna': 'Každá šablóna musí mať názov, predmet aj telo.',
 
   // ===== Dashboard — financie =====
   'dash.fin.titulok': 'Financie',
@@ -642,6 +659,17 @@ export const sk = {
   'nast.banka.pridat': 'Pridať účet',
   'nast.banka.ziadne': 'Organizácia zatiaľ nemá aktívny bankový účet.',
   'nast.banka.chyba': 'Bankový účet sa nepodarilo uložiť. Skontrolujte IBAN a BIC.',
+  'nast.org.typSubjektu': 'Typ subjektu',
+  'nast.org.typSubjektu.company': 'Firma / podnikateľ',
+  'nast.org.typSubjektu.fo_nepodnikatel': 'FO nepodnikateľ (bez IČO)',
+  'nast.org.icoPovinne': 'IČO je pre firmu povinné',
+  'nast.org.ulica': 'Ulica a číslo',
+  'nast.org.mesto': 'Mesto',
+  'nast.org.psc': 'PSČ',
+  'nast.org.krajina': 'Krajina',
+  'nast.org.whitelist': 'Whitelist odosielateľov (oddelené čiarkou)',
+  'nast.org.whitelistPopis':
+    'Prázdny zoznam = doklady sa prijímajú od všetkých. Inak e-maily od iných adries skončia v karanténe.',
   'nast.org.archivovat': 'Archivovať',
   'nast.org.archivovana': 'Archivovaná',
   'nast.org.archivovatPotvrdenie':
