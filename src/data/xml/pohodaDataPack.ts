@@ -43,6 +43,61 @@ export function mapInvoiceType(typ: DocumentItem['typ']): string {
   }
 }
 
+/** Krajina z prefixu IČ DPH — POHODA číselník krajín používa ISO kódy (EL→GR, XI→GB). */
+export function vatCountryIds(icDph: string | undefined): string | undefined {
+  const prefix = (icDph ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 2);
+  if (!/^[A-Z]{2}$/.test(prefix)) return undefined;
+  if (prefix === 'EL') return 'GR';
+  if (prefix === 'XI') return 'GB';
+  return prefix;
+}
+
+/**
+ * Heuristický rozklad voľnej adresy z extrakcie na ulicu / mesto / PSČ.
+ * Musí zostať v zhode so serverovým splitPostalAddress v server/pohodaXml.ts.
+ */
+export function splitPostalAddress(value: string | undefined): { street?: string; city?: string; zip?: string } {
+  const parts = (value ?? '')
+    .split(/\r?\n|\s+[–—-]\s+|,/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return {};
+  let city: string | undefined;
+  let zip: string | undefined;
+  const rest: string[] = [];
+  for (const part of parts) {
+    const match = !city && part.match(/^(\d{3}\s?\d{2}|\d{4,6})\s+(\D.*)$/);
+    if (match) {
+      zip = match[1];
+      city = match[2].trim();
+    } else {
+      rest.push(part);
+    }
+  }
+  if (!city && rest.length === 1) return { street: rest[0] };
+  const street = rest.find((part) => /\d/.test(part)) ?? rest[0];
+  return { street, city, zip };
+}
+
+/** Riadky typ:address partnera — prázdne prvky sa vynechávajú, krajina z IČ DPH. */
+function partnerAddressLines(
+  supplier: { nazov: string; ico?: string; dic?: string; icDph?: string; adresa?: string },
+  indent: string,
+): string[] {
+  const address = splitPostalAddress(supplier.adresa);
+  const country = vatCountryIds(supplier.icDph);
+  const lines = [`${indent}<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
+  if (address.city) lines.push(`${indent}<typ:city>${escapeXml(address.city)}</typ:city>`);
+  if (address.street) lines.push(`${indent}<typ:street>${escapeXml(address.street)}</typ:street>`);
+  if (address.zip) lines.push(`${indent}<typ:zip>${escapeXml(address.zip)}</typ:zip>`);
+  if (supplier.ico) lines.push(`${indent}<typ:ico>${escapeXml(supplier.ico)}</typ:ico>`);
+  if (supplier.dic) lines.push(`${indent}<typ:dic>${escapeXml(supplier.dic)}</typ:dic>`);
+  if (supplier.icDph) lines.push(`${indent}<typ:icDph>${escapeXml(supplier.icDph.replace(/\s+/g, ''))}</typ:icDph>`);
+  // Tuzemsko (SK) sa v POHODE necháva prázdne — krajina len pre zahraničie.
+  if (country && country !== 'SK') lines.push(`${indent}<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
+  return lines;
+}
+
 export function skIbanAccount(iban: string | undefined): { accountNo: string; bankCode: string } | undefined {
   const normalized = (iban ?? '').replaceAll(' ', '').toUpperCase();
   if (!/^SK\d{2}\d{4}\d{16}$/.test(normalized)) return undefined;
@@ -159,9 +214,7 @@ export function buildDataPack(
           ...(clenenie ? [`        <vch:classificationVAT><typ:ids>${escapeXml(clenenie)}</typ:ids></vch:classificationVAT>`] : []),
           `        <vch:text>${escapeXml(d.textPolozky ?? `Pokladničný doklad ${d.cisloFaktury}`)}</vch:text>`,
           '        <vch:partnerIdentity><typ:address>',
-          `          <typ:company>${escapeXml(d.dodavatel.nazov)}</typ:company>`,
-          ...(d.dodavatel.ico ? [`          <typ:ico>${escapeXml(d.dodavatel.ico)}</typ:ico>`] : []),
-          ...(d.dodavatel.dic ? [`          <typ:dic>${escapeXml(d.dodavatel.dic)}</typ:dic>`] : []),
+          ...partnerAddressLines(d.dodavatel, '          '),
           '        </typ:address></vch:partnerIdentity>',
           '      </vch:voucherHeader>',
           '      <vch:voucherSummary><vch:homeCurrency>',
@@ -180,11 +233,20 @@ export function buildDataPack(
       lines.push(
         `        <inv:number><typ:numberRequested>${escapeXml(numberRequested)}</typ:numberRequested></inv:number>`,
       );
-      lines.push(`        <inv:symVar>${escapeXml(d.variabilnySymbol ?? d.cisloFaktury.replace(/\D/g, ''))}</inv:symVar>`);
+      // AI môže vrátiť prázdny reťazec (nie undefined) — VS musí mať fallback
+      // na číslice z čísla faktúry, inak sa v POHODE nespáruje úhrada.
+      lines.push(`        <inv:symVar>${escapeXml((d.variabilnySymbol ?? '').trim() || d.cisloFaktury.replace(/\D/g, ''))}</inv:symVar>`);
+      // „Doklad" v POHODE = dodávateľské číslo faktúry; pri vydaných faktúrach pole neexistuje.
+      if (doc.typ !== 'FV' && d.cisloFaktury) {
+        lines.push(`        <inv:originalDocument>${escapeXml(d.cisloFaktury)}</inv:originalDocument>`);
+      }
       lines.push(`        <inv:date>${escapeXml(d.datumVystavenia)}</inv:date>`);
       lines.push(`        <inv:dateTax>${escapeXml(d.datumDodania ?? d.datumVystavenia)}</inv:dateTax>`);
       if (d.datumSplatnosti) {
         lines.push(`        <inv:dateDue>${escapeXml(d.datumSplatnosti)}</inv:dateDue>`);
+      }
+      if (d.datumDodania) {
+        lines.push(`        <inv:dateDelivery>${escapeXml(d.datumDodania)}</inv:dateDelivery>`);
       }
       if (predkontacia) {
         lines.push(`        <inv:accounting><typ:ids>${escapeXml(predkontacia)}</typ:ids></inv:accounting>`);
@@ -197,9 +259,7 @@ export function buildDataPack(
       lines.push(`        <inv:text>${escapeXml(d.textPolozky ?? `Faktúra ${d.cisloFaktury}`)}</inv:text>`);
       lines.push('        <inv:partnerIdentity>');
       lines.push('          <typ:address>');
-      lines.push(`            <typ:company>${escapeXml(d.dodavatel.nazov)}</typ:company>`);
-      if (d.dodavatel.ico) lines.push(`            <typ:ico>${escapeXml(d.dodavatel.ico)}</typ:ico>`);
-      if (d.dodavatel.dic) lines.push(`            <typ:dic>${escapeXml(d.dodavatel.dic)}</typ:dic>`);
+      lines.push(...partnerAddressLines(d.dodavatel, '            '));
       lines.push('          </typ:address>');
       lines.push('        </inv:partnerIdentity>');
       if (d.dodavatel.iban) {

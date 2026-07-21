@@ -9,6 +9,35 @@
   body {
     @apply bg-app text-ink antialiased;
   }
+  /* Tenké zaoblené scrollbary (vzor Claude Design). */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d2d8d3;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  /* Fieldset má v prehliadačoch min-inline-size: min-content a nezmenšuje sa
+     pod šírku obsahu — na detaile dokladu to pretláčalo pravý stĺpec mimo
+     obrazovky. Vraciame bežné blokové správanie. */
+  fieldset {
+    min-inline-size: 0;
+  }
   /* Čísla, sumy, IČO, VS — vždy tabulárne číslice (SPEC §8) */
   .tnum {
     font-variant-numeric: tabular-nums;
@@ -48,6 +77,38 @@
     @apply rounded-[14px] border border-line/70 bg-surface shadow-card;
   }
 
+  /* Kaskádový nástup kariet (vzor Claude Design „Detail dokladu“). */
+  .anim-in {
+    animation: dvIn 0.22s ease both;
+  }
+  .anim-pop {
+    animation: dvPop 0.2s ease both;
+  }
+  .detail-stack > * {
+    animation: dvIn 0.22s ease both;
+  }
+  .detail-stack > *:nth-child(2) {
+    animation-delay: 30ms;
+  }
+  .detail-stack > *:nth-child(3) {
+    animation-delay: 60ms;
+  }
+  .detail-stack > *:nth-child(4) {
+    animation-delay: 90ms;
+  }
+  .detail-stack > *:nth-child(5) {
+    animation-delay: 120ms;
+  }
+  .detail-stack > *:nth-child(6) {
+    animation-delay: 150ms;
+  }
+  .detail-stack > *:nth-child(7) {
+    animation-delay: 180ms;
+  }
+  .detail-stack > *:nth-child(n + 8) {
+    animation-delay: 210ms;
+  }
+
   .detail-split {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -56,5 +117,26 @@
     .detail-split {
       grid-template-columns: minmax(0, var(--detail-left, 50%)) 6px minmax(0, 1fr);
     }
+  }
+}
+
+@keyframes dvIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dvPop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }

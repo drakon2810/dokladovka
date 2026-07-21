@@ -79,7 +79,9 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       codeLists[row.kind].push({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, kod: row.code, nazov: row.name,
         source: row.source, active: row.active, externalId: row.external_id ?? undefined,
-        agenda: row.agenda ?? undefined, uctovnyRok: row.accounting_year ?? undefined, syncedAt: iso(row.synced_at),
+        agenda: row.agenda ?? undefined, uctovnyRok: row.accounting_year ?? undefined,
+        posledneCislo: row.last_number ?? undefined, kvSekcia: row.kv_section ?? undefined,
+        syncedAt: iso(row.synced_at),
       });
     }
 

@@ -92,6 +92,18 @@ export function registerInboundRoutes(
     const scopes = new Set(aliases.rows.map((row) => `${row.tenant_id}:${row.organization_id}`));
     const resolved = scopes.size === 1 ? aliases.rows[0] : undefined;
     let quarantineReason = scopes.size === 0 ? 'unknown_alias' : scopes.size > 1 ? 'ambiguous_recipient' : undefined;
+    // Diagnostika smerovania: ktoré adresy prišli, ktorý alias sa zhodol a do
+    // ktorej organizácie sa e-mail zaradil. Bez toho sa nedá overiť, prečo
+    // doklad skončil pod inou firmou, než odosielateľ zamýšľal.
+    request.log.info(
+      {
+        recipients,
+        matchedAliases: aliases.rows.map((row) => row.address_normalized),
+        resolvedOrganizationId: resolved?.organization_id ?? null,
+        quarantineReason: quarantineReason ?? null,
+      },
+      'inbound_routing',
+    );
     // Whitelist odosielateľov: ak je pre organizáciu vyplnený, e-maily od
     // iných adries končia v karanténe (prázdny zoznam = prijíma sa všetko).
     if (!quarantineReason && resolved) {

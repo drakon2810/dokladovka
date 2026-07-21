@@ -145,6 +145,82 @@ function validDic(value: unknown): boolean {
   return /^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(normalizedIdentifier(value));
 }
 
+// IČ DPH podľa krajín: EÚ formáty podľa VIES + XI/GB/CH/NO, ktoré sa na
+// faktúrach zahraničných dodávateľov bežne vyskytujú. CZ zostáva zámerne
+// voľnejšie než oficiálny formát (spätná kompatibilita s existujúcimi dokladmi).
+const VAT_ID_FORMATS: Record<string, RegExp> = {
+  AT: /^ATU\d{8}$/,
+  BE: /^BE[01]\d{9}$/,
+  BG: /^BG\d{9,10}$/,
+  CH: /^CHE\d{9}(?:MWST|TVA|IVA)?$/,
+  CY: /^CY\d{8}[A-Z]$/,
+  CZ: /^CZ[A-Z0-9]{8,12}$/,
+  DE: /^DE\d{9}$/,
+  DK: /^DK\d{8}$/,
+  EE: /^EE\d{9}$/,
+  EL: /^EL\d{9}$/,
+  ES: /^ES[A-Z0-9]\d{7}[A-Z0-9]$/,
+  FI: /^FI\d{8}$/,
+  FR: /^FR[A-Z0-9]{2}\d{9}$/,
+  GB: /^GB(?:\d{9}|\d{12}|(?:GD|HA)\d{3})$/,
+  GR: /^GR\d{9}$/,
+  HR: /^HR\d{11}$/,
+  HU: /^HU\d{8}$/,
+  IE: /^IE(?:\d{7}[A-Z]{1,2}|\d[A-Z0-9]\d{5}[A-Z])$/,
+  IT: /^IT\d{11}$/,
+  LT: /^LT(?:\d{9}|\d{12})$/,
+  LU: /^LU\d{8}$/,
+  LV: /^LV\d{11}$/,
+  MT: /^MT\d{8}$/,
+  NL: /^NL[A-Z0-9]{9}B\d{2}$/,
+  NO: /^NO\d{9}(?:MVA)?$/,
+  PL: /^PL\d{10}$/,
+  PT: /^PT\d{9}$/,
+  RO: /^RO\d{2,10}$/,
+  SE: /^SE\d{12}$/,
+  SI: /^SI\d{8}$/,
+  SK: /^SK\d{10}$/,
+  XI: /^XI(?:\d{9}|\d{12}|(?:GD|HA)\d{3})$/,
+};
+
+/**
+ * Efektívne sumy položky: prázdna DPH pri vyplnenej sadzbe znamená
+ * „dopočítaj zo základu“. Ak extrahované „spolu“ zodpovedá základu (faktúry
+ * uvádzajú riadky bez DPH a daň pridávajú až v súčte), efektívne spolu je
+ * základ + dopočítaná DPH. Musí zostať v zhode s klientom (src/lib/validate.ts).
+ */
+function lineItemEffective(item: {
+  sadzbaDph?: number;
+  sumaBezDph?: number;
+  sumaDph?: number;
+  sumaSpolu?: number;
+}): { bezDph?: number; dph?: number; spolu?: number } {
+  const bezDph = item.sumaBezDph;
+  let dph = item.sumaDph;
+  let spolu = item.sumaSpolu;
+  if (dph === undefined && item.sadzbaDph !== undefined && bezDph !== undefined) {
+    dph = round2((bezDph * item.sadzbaDph) / 100);
+    if (spolu === undefined || Math.abs(spolu - bezDph) <= 0.02) {
+      spolu = round2(bezDph + dph);
+    }
+  }
+  if (spolu === undefined && bezDph !== undefined && dph !== undefined) {
+    spolu = round2(bezDph + dph);
+  }
+  return { bezDph, dph, spolu };
+}
+
+type VatIdCheck = 'valid' | 'invalid' | 'unknown_country';
+
+function checkVatId(value: unknown): VatIdCheck {
+  const normalized = normalizedIdentifier(value);
+  const format = VAT_ID_FORMATS[normalized.slice(0, 2)];
+  if (format) return format.test(normalized) ? 'valid' : 'invalid';
+  // Neznámy kód krajiny nesmie blokovať schválenie — o zahraničnom doklade
+  // rozhoduje človek; error je len pre hodnoty, ktoré nie sú IČ DPH vôbec.
+  return /^[A-Z]{2}[A-Z0-9]{2,13}$/.test(normalized) ? 'unknown_country' : 'invalid';
+}
+
 function validIban(value: string): boolean {
   const iban = value.replace(/\s/g, '').toUpperCase();
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
@@ -173,23 +249,39 @@ export function validateNormalizedExtraction(
   if (!isIsoDate(extracted.datumVystavenia)) issues.push({ code: 'invalid_issue_date', field: 'datumVystavenia', severity: 'error', message: 'Dátum vystavenia nie je platný' });
   if (invoiceType && !isIsoDate(extracted.datumDodania)) issues.push({ code: 'tax_date_required', field: 'datumDodania', severity: 'error', message: 'Chýba platný dátum dodania' });
   if (invoiceType && !isIsoDate(extracted.datumSplatnosti)) issues.push({ code: 'due_date_required', field: 'datumSplatnosti', severity: 'error', message: 'Chýba platný dátum splatnosti' });
+  // Splatnosť pred vystavením je nezvyčajná, ale legitímna (napr. zálohové
+  // faktúry) — varovanie, o schválení rozhoduje človek.
   if (isIsoDate(extracted.datumSplatnosti) && isIsoDate(extracted.datumVystavenia) && extracted.datumSplatnosti < extracted.datumVystavenia) {
-    issues.push({ code: 'due_before_issue', field: 'datumSplatnosti', severity: 'error', message: 'Dátum splatnosti je pred dátumom vystavenia' });
+    issues.push({ code: 'due_before_issue', field: 'datumSplatnosti', severity: 'warning', message: 'Dátum splatnosti je pred dátumom vystavenia' });
   }
-  if (supplier.icDph && !/^(?:SK\d{10}|CZ[A-Z0-9]{8,12})$/.test(normalizedIdentifier(supplier.icDph))) {
-    issues.push({ code: 'invalid_supplier_vat_id', field: 'dodavatel.icDph', severity: 'error', message: 'IČ DPH dodávateľa nemá platný slovenský alebo český formát' });
+  if (supplier.icDph) {
+    const supplierVat = checkVatId(supplier.icDph);
+    if (supplierVat === 'invalid') {
+      issues.push({ code: 'invalid_supplier_vat_id', field: 'dodavatel.icDph', severity: 'error', message: 'IČ DPH dodávateľa nemá platný formát' });
+    } else if (supplierVat === 'unknown_country') {
+      issues.push({ code: 'unverified_supplier_vat_id', field: 'dodavatel.icDph', severity: 'warning', message: 'IČ DPH dodávateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
+    }
   }
   if (supplier.ico && !/^\d{8}$/.test(normalizedIdentifier(supplier.ico))) issues.push({ code: 'invalid_supplier_ico', field: 'dodavatel.ico', severity: 'error', message: 'IČO dodávateľa nemá 8 číslic' });
   if (supplier.dic && !validDic(supplier.dic)) issues.push({ code: 'invalid_supplier_dic', field: 'dodavatel.dic', severity: 'error', message: 'DIČ dodávateľa nemá platný formát' });
   if (supplier.iban && !validIban(supplier.iban)) issues.push({ code: 'invalid_iban', field: 'dodavatel.iban', severity: 'error', message: 'IBAN dodávateľa nie je platný' });
   const buyerIco = normalizedIdentifier(buyer.ico);
   const orgIco = normalizedIdentifier(organization.ico);
-  if (buyerIco && buyerIco !== orgIco) issues.push({ code: 'buyer_ico_mismatch', field: 'odberatel.ico', severity: 'error', message: 'IČO odberateľa sa nezhoduje s organizáciou' });
+  // Nesúlad IČO odberateľa posiela doklad do karantény; samotné schválenie po
+  // ľudskom rozhodnutí neblokuje (varovanie zostáva viditeľné v detaile).
+  if (buyerIco && buyerIco !== orgIco) issues.push({ code: 'buyer_ico_mismatch', field: 'odberatel.ico', severity: 'warning', message: 'IČO odberateľa sa nezhoduje s organizáciou' });
   if (buyerIco && !/^\d{8}$/.test(buyerIco)) issues.push({ code: 'invalid_buyer_ico', field: 'odberatel.ico', severity: 'error', message: 'IČO odberateľa nemá 8 číslic' });
   if (buyer.dic && !validDic(buyer.dic)) issues.push({ code: 'invalid_buyer_dic', field: 'odberatel.dic', severity: 'error', message: 'DIČ odberateľa nemá platný formát' });
-  if (buyer.icDph && !/^(?:SK\d{10}|CZ[A-Z0-9]{8,12})$/.test(normalizedIdentifier(buyer.icDph))) issues.push({ code: 'invalid_buyer_vat_id', field: 'odberatel.icDph', severity: 'error', message: 'IČ DPH odberateľa nemá platný slovenský alebo český formát' });
+  if (buyer.icDph) {
+    const buyerVat = checkVatId(buyer.icDph);
+    if (buyerVat === 'invalid') {
+      issues.push({ code: 'invalid_buyer_vat_id', field: 'odberatel.icDph', severity: 'error', message: 'IČ DPH odberateľa nemá platný formát' });
+    } else if (buyerVat === 'unknown_country') {
+      issues.push({ code: 'unverified_buyer_vat_id', field: 'odberatel.icDph', severity: 'warning', message: 'IČ DPH odberateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
+    }
+  }
   if (normalizedIdentifier(supplier.ico) === orgIco && buyerIco && buyerIco !== orgIco) {
-    issues.push({ code: 'supplier_buyer_may_be_inverted', severity: 'error', message: 'Dodávateľ a odberateľ môžu byť zamenení' });
+    issues.push({ code: 'supplier_buyer_may_be_inverted', severity: 'warning', message: 'Dodávateľ a odberateľ môžu byť zamenení' });
   }
   if (!Number.isFinite(normalized.totalAmount) || normalized.totalAmount < 0) issues.push({ code: 'invalid_total', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nie je platná' });
   const rows = extracted.rozpisDph as Array<{ sadzba: number; zaklad: number; dph: number }>;
@@ -216,8 +308,11 @@ export function validateNormalizedExtraction(
       issues.push({ code: 'invalid_line_item_total', field: `polozky.${index}.sumaSpolu`, severity: 'error', message: 'Súčet základu a DPH nesedí so sumou položky' });
     }
   }
-  if (items.length > 0 && items.every((item) => item.sumaSpolu !== undefined)) {
-    const itemTotal = round2(items.reduce((sum, item) => sum + item.sumaSpolu, 0));
+  // Súčet položiek pracuje s efektívnymi sumami — prázdna DPH pri vyplnenej
+  // sadzbe sa dopočíta, aby faktúry s riadkami bez DPH neblokovali schválenie.
+  const effectiveItems = items.map(lineItemEffective);
+  if (effectiveItems.length > 0 && effectiveItems.every((item) => item.spolu !== undefined)) {
+    const itemTotal = round2(effectiveItems.reduce((sum, item) => sum + (item.spolu ?? 0), 0));
     if (Math.abs(itemTotal - normalized.totalAmount) > 0.02) issues.push({ code: 'line_items_total_mismatch', field: 'polozky', severity: 'error', message: 'Súčet položiek nesedí s celkovou sumou' });
   }
   return issues;

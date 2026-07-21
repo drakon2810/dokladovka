@@ -1,7 +1,9 @@
 import type { DocumentItem, Organization } from '../types';
 import {
+  checkVatId,
   isTotalConsistent,
   isVatRowConsistent,
+  lineItemEffective,
   VAT_ROW_TOLERANCE,
   validateIBAN,
   validateICO,
@@ -71,7 +73,9 @@ export function validateDocument(
   if (supplier.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(supplier.dic.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_dic', field: 'dodavatel.dic' });
   }
-  if (supplier.icDph && !/^(?:SK\d{10}|CZ[A-Z0-9]{8,12})$/.test(supplier.icDph.replace(/\s/g, '').toUpperCase())) {
+  // Neznámy kód krajiny schválenie neblokuje (server ho hlási len ako
+  // warning) — issue vzniká iba pre hodnotu s preukázateľne zlým formátom.
+  if (supplier.icDph && checkVatId(supplier.icDph) === 'invalid') {
     issues.push({ code: 'invalid_ic_dph', field: 'dodavatel.icDph' });
   }
   if (supplier.iban && !validateIBAN(supplier.iban)) {
@@ -134,18 +138,21 @@ export function validateDocument(
       issues.push({ code: 'invalid_line_item', field: `polozky.${index}.sumaSpolu` });
     }
   }
+  // Prázdna DPH položky pri vyplnenej sadzbe sa dopočítava (lineItemEffective) —
+  // súčtové kontroly pracujú s efektívnymi sumami, nie s literálnym poľom.
+  const effectiveItems = lineItems.map(lineItemEffective);
   if (
-    lineItems.length > 0 &&
-    lineItems.every(
+    effectiveItems.length > 0 &&
+    effectiveItems.every(
       (item) =>
-        item.sumaBezDph !== undefined &&
-        item.sumaDph !== undefined &&
-        item.sumaSpolu !== undefined,
+        item.bezDph !== undefined &&
+        item.dph !== undefined &&
+        item.spolu !== undefined,
     )
   ) {
-    const lineBase = lineItems.reduce((sum, item) => sum + (item.sumaBezDph ?? 0), 0);
-    const lineVat = lineItems.reduce((sum, item) => sum + (item.sumaDph ?? 0), 0);
-    const lineTotal = lineItems.reduce((sum, item) => sum + (item.sumaSpolu ?? 0), 0);
+    const lineBase = effectiveItems.reduce((sum, item) => sum + (item.bezDph ?? 0), 0);
+    const lineVat = effectiveItems.reduce((sum, item) => sum + (item.dph ?? 0), 0);
+    const lineTotal = effectiveItems.reduce((sum, item) => sum + (item.spolu ?? 0), 0);
     const vatBase = extracted.rozpisDph.reduce((sum, row) => sum + row.zaklad, 0);
     const vatAmount = extracted.rozpisDph.reduce((sum, row) => sum + row.dph, 0);
     if (
@@ -166,7 +173,7 @@ export function validateDocument(
   if (buyer?.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(buyer.dic.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_dic', field: 'odberatel.dic' });
   }
-  if (buyer?.icDph && !/^(?:SK\d{10}|CZ[A-Z0-9]{8,12})$/.test(buyer.icDph.replace(/\s/g, '').toUpperCase())) {
+  if (buyer?.icDph && checkVatId(buyer.icDph) === 'invalid') {
     issues.push({ code: 'invalid_ic_dph', field: 'odberatel.icDph' });
   }
   if (

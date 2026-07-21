@@ -8,6 +8,10 @@ export interface ParsedItem {
   externalId?: string;
   agenda?: string;
   uctovnyRok?: string;
+  /** Číselné rady: najvyššie použité číslo (topNumber / number z POHODY). */
+  posledneCislo?: string;
+  /** Členenie DPH: sekcia KV DPH (sectionInVATLedgerStatement), ak je vyplnená. */
+  kvSekcia?: string;
 }
 
 export interface CodeListImportPreview {
@@ -109,7 +113,9 @@ function sameImportedData(current: CodeListItem, parsed: ParsedItem): boolean {
     current.nazov === parsed.nazov &&
     sameOptional(current.externalId, parsed.externalId) &&
     sameOptional(current.agenda, parsed.agenda) &&
-    sameOptional(current.uctovnyRok, parsed.uctovnyRok)
+    sameOptional(current.uctovnyRok, parsed.uctovnyRok) &&
+    sameOptional(current.posledneCislo, parsed.posledneCislo) &&
+    sameOptional(current.kvSekcia, parsed.kvSekcia)
   );
 }
 
@@ -117,6 +123,27 @@ function responseError(document: Document): string | undefined {
   const root = document.documentElement;
   if (root?.localName === 'responsePack' && root.getAttribute('state') === 'error') {
     return firstText(root, 'note') ?? 'POHODA vrátila chybu bez popisu.';
+  }
+  return undefined;
+}
+
+/**
+ * Používatelia si často pomýlia súbory: namiesto odpovede z POHODY (responsePack)
+ * načítajú náš request/export (dataPack s faktúrami). Rozoznáme to podľa
+ * koreňového elementu, aby chybová hláška bola konkrétna.
+ */
+function wrongFileMessage(document: Document): string | undefined {
+  const root = document.documentElement;
+  if (!root) return undefined;
+  if (root.localName === 'dataPack') {
+    const hasInvoice = Array.from(document.getElementsByTagName('*')).some((element) =>
+      ['invoice', 'receivedInvoice', 'issuedInvoice', 'expense', 'income'].includes(
+        element.localName,
+      ),
+    );
+    return hasInvoice
+      ? 'Načítali ste súbor dataPack s dokladmi (náš export do POHODY), nie odpoveď z POHODY. Spustite request číselníkov v POHODE (XML import/export) a načítajte vytvorený response súbor.'
+      : 'Načítali ste request/dataPack súbor, nie odpoveď z POHODY. V POHODE spustite XML import/export s týmto requestom a načítajte vytvorený response (responsePack).';
   }
   return undefined;
 }
@@ -137,6 +164,8 @@ export function parseCodeListResponse(
   if (parserError) {
     throw new Error('XML súbor nie je platný. Skontrolujte response vytvorený v POHODE.');
   }
+  const wrongFile = wrongFileMessage(document);
+  if (wrongFile) throw new Error(wrongFile);
   const rootError = responseError(document);
   if (rootError) throw new Error(`POHODA vrátila chybu: ${rootError}`);
 
@@ -175,14 +204,26 @@ export function parseCodeListResponse(
       foundKinds.add('cleneniaDph');
       parsedByKind.cleneniaDph.push(
         ...descendants(container, 'classificationVAT')
-          .map((item) => itemFromElements(item, 'code'))
+          .map((item) => {
+            const base = itemFromElements(item, 'code');
+            if (!base) return undefined;
+            // Sekcia Kontrolného výkazu DPH prislúchajúca členeniu DPH v POHODE.
+            const kvSekcia = firstText(item, 'sectionInVATLedgerStatement');
+            return kvSekcia ? { ...base, kvSekcia } : base;
+          })
           .filter((item): item is ParsedItem => Boolean(item)),
       );
     } else if (container.localName === 'listNumericalSeries') {
       foundKinds.add('ciselneRady');
       parsedByKind.ciselneRady.push(
         ...descendants(container, 'numericalSeries')
-          .map((item) => itemFromElements(item, 'prefix'))
+          .map((item) => {
+            const base = itemFromElements(item, 'prefix');
+            if (!base) return undefined;
+            // topNumber = najvyššie použité číslo; number = aktuálne číslo radu.
+            const posledneCislo = firstText(item, 'topNumber') ?? firstText(item, 'number');
+            return posledneCislo ? { ...base, posledneCislo } : base;
+          })
           .filter((item): item is ParsedItem => Boolean(item)),
       );
     } else if (container.localName === 'listNumericSeries') {
@@ -190,7 +231,14 @@ export function parseCodeListResponse(
       foundKinds.add('ciselneRady');
       parsedByKind.ciselneRady.push(
         ...descendants(container, 'itemNumericSeries')
-          .map(itemFromAttributes)
+          .map((item) => {
+            const base = itemFromAttributes(item);
+            if (!base) return undefined;
+            const posledneCislo = clean(
+              item.getAttribute('topNumber') ?? item.getAttribute('number'),
+            );
+            return posledneCislo ? { ...base, posledneCislo } : base;
+          })
           .filter((item): item is ParsedItem => Boolean(item)),
       );
     } else if (container.localName === 'listCentre') {

@@ -115,6 +115,11 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
     if (document.version !== body.expectedVersion) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    // Exportovaný doklad je uzamknutý — PATCH by potichu zmazal approved_snapshot
+    // a rozišiel obsah s už vytvoreným exportom pre POHODU.
+    if (document.status === 'exportovany') {
+      throw new HttpError(409, 'document_exported', 'Exportovaný doklad nie je možné upravovať');
+    }
     const approvedChanged = document.status === 'schvaleny';
     const result = await database.query<Record<string, unknown>>(
       `UPDATE documents SET document_type=$1, extracted=$2::jsonb, accounting=$3::jsonb,
@@ -170,8 +175,16 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       totalAmount: Number(extracted.sumaSpolu),
       currency: extracted.mena,
     }, organization.rows[0]);
-    if (validationIssues.some((issue) => issue.severity === 'error')) {
-      throw new HttpError(409, 'document_validation_failed', 'Doklad obsahuje údaje, ktoré treba opraviť pred schválením');
+    const validationErrors = validationIssues.filter((issue) => issue.severity === 'error');
+    if (validationErrors.length > 0) {
+      // Konkrétne dôvody v message — generická hláška nechala používateľa
+      // hádať, ktoré pole blokuje schválenie.
+      throw new HttpError(
+        409,
+        'document_validation_failed',
+        `Doklad obsahuje údaje, ktoré treba opraviť pred schválením: ${validationErrors.map((issue) => issue.message).join('; ')}`,
+        { issues: validationErrors },
+      );
     }
     const requiredIds = [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
     if (requiredIds.some((value) => !value)) throw new HttpError(409, 'accounting_incomplete', 'Zaúčtovanie nie je kompletné');
@@ -306,6 +319,89 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       return result.rows[0];
     });
   }
+
+  // „Spracovať ručne" — prevzatie problémového dokladu (karanténa/duplicita/
+  // chyba) na ručnú kontrolu. Presunie doklad do stavu „na_kontrole", aby ho
+  // účtovník/admin mohol doplniť a schváliť. Schvaľovateľ toto právo nemá.
+  app.post('/api/documents/:id/process-manually', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (!['chyba', 'karantena', 'duplicita'].includes(document.status)) {
+      throw new HttpError(409, 'not_problematic', 'Ručné spracovanie je dostupné iba pre problémové doklady (karanténa, duplicita, chyba)');
+    }
+    const wasDuplicate = document.status === 'duplicita';
+    const history = [
+      ...document.history,
+      { ts: new Date().toISOString(), user: auth.name, akcia: 'Prevzaté na ručné spracovanie' },
+    ];
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET status='na_kontrole', quarantine_reason=NULL,
+              not_duplicate=CASE WHEN $1 THEN true ELSE not_duplicate END,
+              version=version+1, approved_version=NULL, approved_snapshot=NULL,
+              history=$2::jsonb, updated_at=now()
+        WHERE id=$3 AND tenant_id=$4 RETURNING *`,
+      [wasDuplicate, JSON.stringify(history), id, auth.tenantId],
+    );
+    await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.process_manually', entityType: 'document', entityId: id, correlationId: request.id });
+    return result.rows[0];
+  });
+
+  // „Nie je duplicita" — rozhodnutie, že technicky zhodný doklad je predsa len
+  // samostatný. Uloží sa príznak a doklad ide na kontrolu (SPEC §11.11).
+  app.post('/api/documents/:id/not-duplicate', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.status !== 'duplicita') {
+      throw new HttpError(409, 'not_duplicate_state', 'Rozhodnutie o duplicite je dostupné iba pre doklad označený ako duplicita');
+    }
+    const history = [
+      ...document.history,
+      { ts: new Date().toISOString(), user: auth.name, akcia: 'Rozhodnutie: nie je duplicita' },
+    ];
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET status='na_kontrole', not_duplicate=true,
+              version=version+1, approved_version=NULL, approved_snapshot=NULL,
+              history=$1::jsonb, updated_at=now()
+        WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+      [JSON.stringify(history), id, auth.tenantId],
+    );
+    await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.not_duplicate', entityType: 'document', entityId: id, correlationId: request.id });
+    return result.rows[0];
+  });
+
+  // Bulk presun do pracovnej fronty — exportované/schválené doklady nemení.
+  app.post('/api/documents/:id/move-to-review', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (['schvaleny', 'exportovany'].includes(document.status)) {
+      throw new HttpError(409, 'document_locked', 'Schválený alebo exportovaný doklad nie je možné presunúť');
+    }
+    const history = [
+      ...document.history,
+      { ts: new Date().toISOString(), user: auth.name, akcia: 'Doklad presunutý na kontrolu' },
+    ];
+    const result = await database.query<Record<string, unknown>>(
+      `UPDATE documents SET status='na_kontrole', quarantine_reason=NULL,
+              version=version+1, approved_version=NULL, approved_snapshot=NULL,
+              history=$1::jsonb, updated_at=now()
+        WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+      [JSON.stringify(history), id, auth.tenantId],
+    );
+    await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.moved_to_review', entityType: 'document', entityId: id, correlationId: request.id });
+    return result.rows[0];
+  });
 
   app.post('/api/documents/:id/restore', async (request) => {
     const auth = await requireBrowserAuth(request, database);

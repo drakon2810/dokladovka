@@ -446,6 +446,16 @@ export interface CodeListItem {
   externalId?: string;
   agenda?: string;
   uctovnyRok?: string;
+  /**
+   * Číselné rady: najvyššie použité číslo (topNumber z exportu POHODY). Slúži
+   * na logické pokračovanie číslovania — ďalšie číslo = posledné + 1.
+   */
+  posledneCislo?: string;
+  /**
+   * Členenie DPH: sekcia Kontrolného výkazu DPH (A1…D2) prevzatá z členenia DPH
+   * v POHODE, ak ju export vyplní. POHODA nemá samostatný číselník KV DPH.
+   */
+  kvSekcia?: string;
   syncedAt?: string;
 }
 

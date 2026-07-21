@@ -138,10 +138,11 @@ export async function setRole(role: Role): Promise<void> {
 
 export async function setCurrentOrg(orgId: string): Promise<void> {
   assertCapability(storeApi.get().role, 'tenant.read');
-  if (
-    orgId !== 'all' &&
-    !storeApi.get().organizations.some((o) => o.id === orgId && o.tenantId === MOCK_TENANT_ID)
-  ) {
+  // Filter organizácie je čisto klientský a store obsahuje len organizácie, na
+  // ktoré má používateľ prístup. V REST režime majú organizácie reálne tenant
+  // ID (nie MOCK_TENANT_ID), preto sa kontroluje len existencia podľa id — inak
+  // by výber konkrétnej firmy v prepínači vždy zlyhal.
+  if (orgId !== 'all' && !storeApi.get().organizations.some((o) => o.id === orgId)) {
     throw new Error('Organizácia nie je dostupná');
   }
   storeApi.set({ currentOrgId: orgId });
@@ -855,6 +856,51 @@ export async function regenerateAlias(orgId: string): Promise<OrganizationEmailA
   return newAlias;
 }
 
+/**
+ * Ručne priradí organizácii vlastnú e-mailovú adresu (napr. plus-adresu Gmailu
+ * `firma+ags@gmail.com`). Umožní smerovať doklady na správnu firmu aj z jednej
+ * reálnej schránky. Alias je vždy nepri­márny.
+ */
+export async function addCustomAlias(orgId: string, address: string): Promise<OrganizationEmailAlias> {
+  const s = storeApi.get();
+  assertCapability(s.role, 'alias.manage', 'Alias môže pridať iba admin');
+  const normalized = address.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalized) || normalized.length > 200) {
+    throw new Error('Zadajte platnú e-mailovú adresu');
+  }
+  if (REST_DATA_MODE) {
+    const alias = await restRequest<OrganizationEmailAlias>(
+      `/api/organizations/${encodeURIComponent(orgId)}/email-aliases/custom`,
+      { method: 'POST', body: JSON.stringify({ address: normalized }) },
+    );
+    await refreshRestSnapshot();
+    return alias;
+  }
+  const org = s.organizations.find((o) => o.id === orgId && o.tenantId === MOCK_TENANT_ID);
+  if (!org) throw new Error('Organizácia neexistuje');
+  if (s.aliases.some((a) => a.tenantId === MOCK_TENANT_ID && a.addressNormalized === normalized)) {
+    throw new Error('Táto adresa je už priradená k organizácii');
+  }
+  const atIndex = normalized.lastIndexOf('@');
+  const localPart = normalized.slice(0, atIndex);
+  const alias: OrganizationEmailAlias = {
+    id: newId('alias'),
+    tenantId: MOCK_TENANT_ID,
+    organizationId: orgId,
+    address: normalized,
+    addressNormalized: normalized,
+    localPart,
+    domain: normalized.slice(atIndex + 1),
+    slugAtCreation: '',
+    token: localPart.includes('+') ? localPart.slice(localPart.indexOf('+') + 1) : '',
+    status: 'active',
+    isPrimary: false,
+    createdAt: nowIso(),
+  };
+  storeApi.set({ aliases: [alias, ...s.aliases] });
+  return alias;
+}
+
 // ===== Doklady =====
 
 export async function getDocument(id: string): Promise<DocumentItem | undefined> {
@@ -1265,7 +1311,17 @@ export async function approveDocuments(
   assertCapability(s.role, 'document.approve', 'Doklady nemôžete schváliť');
   if (requests.length === 0) throw new Error('Nie sú vybrané žiadne doklady');
   if (REST_DATA_MODE) {
-    for (const request of requests) await approveDocument(request.id, request.expectedVersion);
+    for (const request of requests) {
+      try {
+        await approveDocument(request.id, request.expectedVersion);
+      } catch (cause) {
+        // Dôvod zlyhania doplníme o číslo dokladu — bez neho používateľ
+        // pri hromadnom výbere nevie, ktorý doklad akciu zastavil.
+        const failed = s.documents.find((item) => item.id === request.id);
+        const label = failed?.extracted.cisloFaktury || failed?.extracted.dodavatel.nazov || request.id.slice(0, 8);
+        throw new Error(`${label}: ${cause instanceof Error ? cause.message : 'chyba'}`);
+      }
+    }
     const snapshot = await refreshRestSnapshot();
     return requests.map((request) => {
       const document = snapshot.documents.find((item) => item.id === request.id);
@@ -1414,6 +1470,12 @@ export async function processManually(id: string): Promise<DocumentItem> {
     'document.workflow.manage',
     'Schvaľovateľ nemôže prevziať doklad na spracovanie',
   );
+  if (REST_DATA_MODE) {
+    await restRequest(`/api/documents/${encodeURIComponent(id)}/process-manually`, { method: 'POST' });
+    const updated = (await refreshRestSnapshot()).documents.find((doc) => doc.id === id);
+    if (!updated) throw new Error('Doklad neexistuje');
+    return updated;
+  }
   return updateDoc(id, (doc) => {
     if (!['chyba', 'karantena', 'duplicita'].includes(doc.status)) {
       throw new Error('Ručné spracovanie je dostupné iba pre problémové doklady');
@@ -1433,6 +1495,12 @@ export async function moveDocumentToReview(id: string): Promise<DocumentItem> {
     'document.workflow.manage',
     'Schvaľovateľ nemôže meniť zaradenie dokladu',
   );
+  if (REST_DATA_MODE) {
+    await restRequest(`/api/documents/${encodeURIComponent(id)}/move-to-review`, { method: 'POST' });
+    const updated = (await refreshRestSnapshot()).documents.find((doc) => doc.id === id);
+    if (!updated) throw new Error('Doklad neexistuje');
+    return updated;
+  }
   return updateDoc(id, (doc) => {
     if (['schvaleny', 'exportovany'].includes(doc.status)) {
       throw new Error('Schválený alebo exportovaný doklad nie je možné presunúť');
@@ -1452,6 +1520,12 @@ export async function markNotDuplicate(id: string): Promise<DocumentItem> {
     'document.workflow.manage',
     'Schvaľovateľ nemôže rozhodnúť o technickej duplicite',
   );
+  if (REST_DATA_MODE) {
+    await restRequest(`/api/documents/${encodeURIComponent(id)}/not-duplicate`, { method: 'POST' });
+    const updated = (await refreshRestSnapshot()).documents.find((doc) => doc.id === id);
+    if (!updated) throw new Error('Doklad neexistuje');
+    return updated;
+  }
   return updateDoc(id, (doc) => ({
     ...doc,
     status: 'na_kontrole',

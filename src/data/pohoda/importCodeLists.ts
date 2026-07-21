@@ -52,6 +52,8 @@ function normalizedItem(item: ParsedItem): ParsedItem {
     externalId: optional(item.externalId),
     agenda: optional(item.agenda),
     uctovnyRok: optional(item.uctovnyRok),
+    posledneCislo: optional(item.posledneCislo),
+    kvSekcia: optional(item.kvSekcia),
   };
 }
 
@@ -62,7 +64,9 @@ function equalsImportedValues(current: CodeListItem, imported: ParsedItem): bool
     current.nazov === imported.nazov &&
     current.externalId === imported.externalId &&
     current.agenda === imported.agenda &&
-    current.uctovnyRok === imported.uctovnyRok
+    current.uctovnyRok === imported.uctovnyRok &&
+    current.posledneCislo === imported.posledneCislo &&
+    current.kvSekcia === imported.kvSekcia
   );
 }
 
@@ -75,6 +79,8 @@ function importedItem(
     externalId: _externalId,
     agenda: _agenda,
     uctovnyRok: _uctovnyRok,
+    posledneCislo: _posledneCislo,
+    kvSekcia: _kvSekcia,
     syncedAt: _syncedAt,
     ...preserved
   } = current ?? {
@@ -97,6 +103,8 @@ function importedItem(
     ...(parsed.externalId ? { externalId: parsed.externalId } : {}),
     ...(parsed.agenda ? { agenda: parsed.agenda } : {}),
     ...(parsed.uctovnyRok ? { uctovnyRok: parsed.uctovnyRok } : {}),
+    ...(parsed.posledneCislo ? { posledneCislo: parsed.posledneCislo } : {}),
+    ...(parsed.kvSekcia ? { kvSekcia: parsed.kvSekcia } : {}),
     syncedAt: options.syncedAt,
   };
 }

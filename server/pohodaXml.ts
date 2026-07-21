@@ -49,6 +49,61 @@ function amount(value: unknown): string {
   return numeric.toFixed(2);
 }
 
+/** Krajina z prefixu IČ DPH — POHODA číselník krajín používa ISO kódy (EL→GR, XI→GB). */
+export function vatCountryIds(icDph: unknown): string | undefined {
+  const prefix = String(icDph ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 2);
+  if (!/^[A-Z]{2}$/.test(prefix)) return undefined;
+  if (prefix === 'EL') return 'GR';
+  if (prefix === 'XI') return 'GB';
+  return prefix;
+}
+
+/**
+ * Heuristický rozklad voľnej adresy z extrakcie na ulicu / mesto / PSČ.
+ * Podporuje viacriadkové adresy aj jeden riadok oddelený „ – “ alebo čiarkou.
+ * Časť v tvare „PSČ Mesto“ určuje mesto; ulica je časť s číslom domu.
+ */
+export function splitPostalAddress(value: unknown): { street?: string; city?: string; zip?: string } {
+  const parts = String(value ?? '')
+    .split(/\r?\n|\s+[–—-]\s+|,/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return {};
+  let city: string | undefined;
+  let zip: string | undefined;
+  const rest: string[] = [];
+  for (const part of parts) {
+    const match = !city && part.match(/^(\d{3}\s?\d{2}|\d{4,6})\s+(\D.*)$/);
+    if (match) {
+      zip = match[1];
+      city = match[2].trim();
+    } else {
+      rest.push(part);
+    }
+  }
+  if (!city && rest.length === 1) return { street: rest[0] };
+  const street = rest.find((part) => /\d/.test(part)) ?? rest[0];
+  return { street, city, zip };
+}
+
+/** typ:address partnera — prázdne prvky sa vynechávajú, krajina sa odvodí z IČ DPH. */
+function partnerAddressXml(supplier: Record<string, any>): string {
+  const address = splitPostalAddress(supplier.adresa);
+  const country = vatCountryIds(supplier.icDph);
+  const lines = [`<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
+  if (address.city) lines.push(`<typ:city>${escapeXml(address.city)}</typ:city>`);
+  if (address.street) lines.push(`<typ:street>${escapeXml(address.street)}</typ:street>`);
+  if (address.zip) lines.push(`<typ:zip>${escapeXml(address.zip)}</typ:zip>`);
+  if (supplier.ico) lines.push(`<typ:ico>${escapeXml(supplier.ico)}</typ:ico>`);
+  if (supplier.dic) lines.push(`<typ:dic>${escapeXml(supplier.dic)}</typ:dic>`);
+  if (supplier.icDph) lines.push(`<typ:icDph>${escapeXml(String(supplier.icDph).replace(/\s+/g, ''))}</typ:icDph>`);
+  // Tuzemsko (SK) sa v POHODE necháva prázdne — krajina len pre zahraničie.
+  if (country && country !== 'SK') lines.push(`<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
+  return `<typ:address>
+          ${lines.join('\n          ')}
+        </typ:address>`;
+}
+
 export function buildServerDataPack(input: {
   id: string;
   ico: string;
@@ -80,11 +135,7 @@ export function buildServerDataPack(input: {
         <typ:price3>${amount(base5)}</typ:price3>
         <typ:price3VAT>${amount(vat5)}</typ:price3VAT>
         <typ:priceNone>${amount(base0)}</typ:priceNone>`;
-    const partner = `<typ:address>
-          <typ:company>${escapeXml(supplier.nazov)}</typ:company>
-          <typ:ico>${escapeXml(supplier.ico)}</typ:ico>
-          <typ:dic>${escapeXml(supplier.dic)}</typ:dic>
-        </typ:address>`;
+    const partner = partnerAddressXml(supplier);
     if (snapshot.typ === 'PD') {
       const cashAccount = snapshot.ucto.pokladnaKod;
       const voucherType = snapshot.ucto.pokladnaTyp;
@@ -143,19 +194,17 @@ export function buildServerDataPack(input: {
       <inv:invoiceHeader>
         <inv:invoiceType>${invoiceType(snapshot.typ)}</inv:invoiceType>
         <inv:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></inv:number>
-        <inv:symVar>${escapeXml(extracted.variabilnySymbol ?? '')}</inv:symVar>
+        <inv:symVar>${escapeXml((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''))}</inv:symVar>
+        ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(extracted.cisloFaktury)}</inv:originalDocument>` : ''}
         <inv:date>${escapeXml(extracted.datumVystavenia)}</inv:date>
         <inv:dateTax>${escapeXml(extracted.datumDodania ?? extracted.datumVystavenia)}</inv:dateTax>
         <inv:dateDue>${escapeXml(extracted.datumSplatnosti ?? extracted.datumVystavenia)}</inv:dateDue>
+        ${extracted.datumDodania ? `<inv:dateDelivery>${escapeXml(extracted.datumDodania)}</inv:dateDelivery>` : ''}
         <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>
         <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
         ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(extracted.cisloObjednavky)}</inv:numberOrder>` : ''}
-        <inv:partnerIdentity><typ:address>
-          <typ:company>${escapeXml(supplier.nazov)}</typ:company>
-          <typ:ico>${escapeXml(supplier.ico)}</typ:ico>
-          <typ:dic>${escapeXml(supplier.dic)}</typ:dic>
-        </typ:address></inv:partnerIdentity>
+        <inv:partnerIdentity>${partner}</inv:partnerIdentity>
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}
       </inv:invoiceHeader>

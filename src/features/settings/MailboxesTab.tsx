@@ -4,6 +4,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  addCustomAlias,
   assignInboundEmailToOrg,
   disableAlias,
   regenerateAlias,
@@ -517,6 +518,8 @@ function MailboxDetail({
         </table>
       </div>
 
+      <AddCustomAliasForm organizationId={organization.id} />
+
       <h4 className="mb-2 text-sm font-semibold">{t('schranky.posledneSpravy')}</h4>
       {emails.length === 0 ? (
         <p className="rounded border border-line bg-app px-3 py-5 text-center text-sm text-ink-soft">
@@ -558,6 +561,53 @@ function MailboxDetail({
         </div>
       )}
     </section>
+  );
+}
+
+function AddCustomAliasForm({ organizationId }: { organizationId: string }) {
+  const [address, setAddress] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = address.trim();
+    if (!value) return;
+    setSaving(true);
+    try {
+      await addCustomAlias(organizationId, value);
+      showToast(t('schranky.vlastnyAlias.pridany'));
+      setAddress('');
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), {
+        tone: 'error',
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mb-5 rounded border border-line bg-app p-3">
+      <h4 className="mb-1 text-sm font-semibold">{t('schranky.vlastnyAlias.titulok')}</h4>
+      <p className="mb-2 text-xs text-ink-soft">{t('schranky.vlastnyAlias.popis')}</p>
+      <form className="flex flex-wrap gap-2" onSubmit={submit}>
+        <input
+          className="input min-w-64 flex-1"
+          type="email"
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+          placeholder={t('schranky.vlastnyAlias.placeholder')}
+          aria-label={t('schranky.vlastnyAlias.titulok')}
+        />
+        <button
+          type="submit"
+          className="btn btn-primary whitespace-nowrap"
+          disabled={saving || !address.trim()}
+        >
+          {t('schranky.vlastnyAlias.pridat')}
+        </button>
+      </form>
+    </div>
   );
 }
 

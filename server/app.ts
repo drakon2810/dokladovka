@@ -81,10 +81,18 @@ export async function buildApp(input: {
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
+      request.log.warn({ code: 'validation_error', url: request.url, issues: error.issues }, 'request_rejected');
       return reply.code(400).send({ code: 'validation_error', message: 'Požiadavka obsahuje neplatné údaje', details: error.issues });
     }
     if (error instanceof HttpError) {
-      return reply.code(error.statusCode).send({ code: error.code, message: error.message });
+      // Dôvod 4xx logujeme — inak sa v prevádzke nedá zistiť, ktorá kontrola
+      // (napr. pri schválení) požiadavku zastavila.
+      request.log.warn({ code: error.code, statusCode: error.statusCode, message: error.message, url: request.url }, 'request_rejected');
+      return reply.code(error.statusCode).send(
+        error.details === undefined
+          ? { code: error.code, message: error.message }
+          : { code: error.code, message: error.message, details: error.details },
+      );
     }
     request.log.error({ err: error, correlationId: request.id }, 'request_failed');
     return reply.code(500).send({ code: 'internal_error', message: 'Nastala neočakávaná chyba', correlationId: request.id });

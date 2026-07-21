@@ -443,10 +443,15 @@ export function DocumentsPage() {
       const updated = await approveDocuments(requests);
       showToast(`${t('toast.schvalene')} (${updated.length})`);
       setSelected(new Set());
-    } catch {
-      // Batch service validates every selected document before a single write,
-      // therefore this error never hides a partial success.
-      showToast(t('doklady.bulk.chybaBezZmien'), { tone: 'error' });
+    } catch (cause) {
+      // Server vracia zrozumiteľný dôvod (karanténa, neúplné zaúčtovanie…) —
+      // zobrazíme ho, generická hláška bez príčiny bola mätúca.
+      showToast(
+        cause instanceof Error && cause.message
+          ? `${t('doklady.bulk.chybaBezZmien')} ${cause.message}`
+          : t('doklady.bulk.chybaBezZmien'),
+        { tone: 'error' },
+      );
     } finally {
       setBulkBusy(false);
     }
@@ -461,8 +466,13 @@ export function DocumentsPage() {
       setSelected(new Set());
       setBulkRejectReason('');
       setBulkRejectOpen(false);
-    } catch {
-      showToast(t('doklady.bulk.chybaBezZmien'), { tone: 'error' });
+    } catch (cause) {
+      showToast(
+        cause instanceof Error && cause.message
+          ? `${t('doklady.bulk.chybaBezZmien')} ${cause.message}`
+          : t('doklady.bulk.chybaBezZmien'),
+        { tone: 'error' },
+      );
     } finally {
       setBulkBusy(false);
     }
@@ -828,7 +838,7 @@ export function DocumentsPage() {
                       {manualProcessingLabel(document) ? (
                         <span className="text-ink-soft">—</span>
                       ) : (
-                        <ConfidenceIndicator value={document.confidence} />
+                        <ConfidenceIndicator value={document.confidence} showPercent />
                       )}
                     </td>
                   </tr>

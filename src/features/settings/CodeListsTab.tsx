@@ -17,9 +17,34 @@ import {
   buildCodeListRequestFileName,
   buildCodeListRequestXml,
 } from '../../data/pohoda/requestTemplates';
+import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
+
+// Prehľadné slovenské názvy agend číselných radov z POHODY (element „agenda").
+const AGENDA_LABELS: Record<string, string> = {
+  vydane_faktury: 'Vydané faktúry',
+  prijate_faktury: 'Prijaté faktúry',
+  vydane_zalohove_faktury: 'Vydané zálohové faktúry',
+  prijate_zalohove_faktury: 'Prijaté zálohové faktúry',
+  interni_doklady: 'Interné doklady',
+  ostatni_zavazky: 'Ostatné záväzky',
+  ostatni_pohledavky: 'Ostatné pohľadávky',
+  pokladna: 'Pokladňa',
+  banka: 'Banka',
+  prijemky: 'Príjemky',
+  vydejky: 'Výdajky',
+  prevod: 'Prevod',
+  vydane_objednavky: 'Vydané objednávky',
+  prijate_objednavky: 'Prijaté objednávky',
+  zakazky: 'Zákazky',
+};
+
+function agendaLabel(agenda: string | undefined): string {
+  if (!agenda) return '—';
+  return AGENDA_LABELS[agenda] ?? agenda;
+}
 
 const KINDS: Array<{ kind: CodeListKind; label: string }> = [
   { kind: 'predkontacie', label: t('nast.cis.predkontacie') },
@@ -100,8 +125,11 @@ export function CodeListsTab() {
     try {
       const xml = decodePohodaXml(await file.arrayBuffer());
       setPreview(parseCodeListResponse(xml, organization.id, codeLists));
-    } catch {
-      showToast(t('nast.cis.importChyba'), { tone: 'error' });
+    } catch (cause) {
+      // Parser vracia konkrétne hlášky (napr. zlý typ súboru) — ukážeme ich
+      // používateľovi, generický text je len záloha.
+      const message = cause instanceof Error && cause.message ? cause.message : t('nast.cis.importChyba');
+      showToast(message, { tone: 'error' });
     } finally {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -317,6 +345,7 @@ function CodeListEditor({
       <h3 className="mb-2 text-sm font-semibold">{label}</h3>
       <CodeListTable
         label={label}
+        kind={kind}
         items={activeItems}
         onUpdate={updateItem}
         onDeactivate={deactivate}
@@ -385,11 +414,13 @@ function CodeListEditor({
 
 function CodeListTable({
   label,
+  kind,
   items,
   onUpdate,
   onDeactivate,
 }: {
   label: string;
+  kind: CodeListKind;
   items: CodeListItem[];
   onUpdate: (
     item: CodeListItem,
@@ -397,6 +428,7 @@ function CodeListTable({
   ) => Promise<void>;
   onDeactivate: (item: CodeListItem) => Promise<void>;
 }) {
+  const showSeries = kind === 'ciselneRady';
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -404,13 +436,20 @@ function CodeListTable({
           <tr className="text-left text-xs text-ink-soft">
             <th className="w-28 py-1 pr-2 font-medium">{t('nast.cis.kod')}</th>
             <th className="py-1 pr-2 font-medium">{t('nast.cis.nazov')}</th>
+            {showSeries && (
+              <>
+                <th className="py-1 pr-2 font-medium">{t('nast.cis.agenda')}</th>
+                <th className="py-1 pr-2 text-right font-medium">{t('nast.cis.posledneCislo')}</th>
+                <th className="py-1 pr-2 text-right font-medium">{t('nast.cis.dalsieCislo')}</th>
+              </>
+            )}
             <th className="w-24" />
           </tr>
         </thead>
         <tbody>
           {items.length === 0 && (
             <tr>
-              <td colSpan={3} className="py-2 text-xs text-ink-soft">
+              <td colSpan={showSeries ? 6 : 3} className="py-2 text-xs text-ink-soft">
                 {t('stav.ziadneData')}
               </td>
             </tr>
@@ -456,6 +495,19 @@ function CodeListTable({
                     </span>
                   )}
                 </td>
+                {showSeries && (
+                  <>
+                    <td className="py-1 pr-2 text-xs text-ink-soft align-middle">
+                      {agendaLabel(item.agenda)}
+                    </td>
+                    <td className="tnum py-1 pr-2 text-right text-xs align-middle">
+                      {item.posledneCislo ?? '—'}
+                    </td>
+                    <td className="tnum py-1 pr-2 text-right text-xs font-medium align-middle">
+                      {nextNumberInSeries(item.posledneCislo) ?? '—'}
+                    </td>
+                  </>
+                )}
                 <td className="py-1 text-right align-top">
                   <button
                     type="button"

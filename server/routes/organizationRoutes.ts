@@ -6,7 +6,7 @@ import { writeAudit } from '../audit.js';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
-import { insertUniqueAlias, type AliasRecord } from '../services/organizationService.js';
+import { insertCustomAlias, insertUniqueAlias, type AliasRecord } from '../services/organizationService.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
 import { loadUctovnyProfil } from '../services/accountingProfileService.js';
 
@@ -555,5 +555,39 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     );
     if (result.rowCount === 0) throw new HttpError(409, 'alias_not_disabled', 'Primárny alias nemožno vypnúť bez náhrady');
     return reply.code(204).send();
+  });
+
+  // Vlastný alias: ručne priradí organizácii ľubovoľnú e-mailovú adresu (napr.
+  // plus-adresu Gmailu firma+ags@gmail.com). Umožní smerovať doklady na správnu
+  // firmu aj z jednej reálnej schránky bez vlastného poštového domény.
+  app.post('/api/organizations/:id/email-aliases/custom', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { address } = z.object({ address: z.string().trim().min(3).max(200) }).strict().parse(request.body);
+    await requireOrganizationAccess(database, auth, id);
+    const organization = await database.query<{ name: string } & Record<string, unknown>>(
+      'SELECT name FROM organizations WHERE id=$1 AND tenant_id=$2',
+      [id, auth.tenantId],
+    );
+    if (!organization.rows[0]) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const alias = await insertCustomAlias(database, {
+      tenantId: auth.tenantId,
+      organizationId: id,
+      organizationName: organization.rows[0].name,
+      address,
+    });
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId: id,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'alias.custom_added',
+      entityType: 'organization',
+      entityId: id,
+      correlationId: request.id,
+    });
+    return reply.code(201).send(alias);
   });
 }

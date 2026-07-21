@@ -22,6 +22,53 @@ export function validateIBAN(iban: string): boolean {
   return remainder === 1;
 }
 
+// IČ DPH podľa krajín: EÚ formáty podľa VIES + XI/GB/CH/NO. Musí zostať
+// v zhode so serverovou tabuľkou v server/extraction/normalize.ts.
+const VAT_ID_FORMATS: Record<string, RegExp> = {
+  AT: /^ATU\d{8}$/,
+  BE: /^BE[01]\d{9}$/,
+  BG: /^BG\d{9,10}$/,
+  CH: /^CHE\d{9}(?:MWST|TVA|IVA)?$/,
+  CY: /^CY\d{8}[A-Z]$/,
+  CZ: /^CZ[A-Z0-9]{8,12}$/,
+  DE: /^DE\d{9}$/,
+  DK: /^DK\d{8}$/,
+  EE: /^EE\d{9}$/,
+  EL: /^EL\d{9}$/,
+  ES: /^ES[A-Z0-9]\d{7}[A-Z0-9]$/,
+  FI: /^FI\d{8}$/,
+  FR: /^FR[A-Z0-9]{2}\d{9}$/,
+  GB: /^GB(?:\d{9}|\d{12}|(?:GD|HA)\d{3})$/,
+  GR: /^GR\d{9}$/,
+  HR: /^HR\d{11}$/,
+  HU: /^HU\d{8}$/,
+  IE: /^IE(?:\d{7}[A-Z]{1,2}|\d[A-Z0-9]\d{5}[A-Z])$/,
+  IT: /^IT\d{11}$/,
+  LT: /^LT(?:\d{9}|\d{12})$/,
+  LU: /^LU\d{8}$/,
+  LV: /^LV\d{11}$/,
+  MT: /^MT\d{8}$/,
+  NL: /^NL[A-Z0-9]{9}B\d{2}$/,
+  NO: /^NO\d{9}(?:MVA)?$/,
+  PL: /^PL\d{10}$/,
+  PT: /^PT\d{9}$/,
+  RO: /^RO\d{2,10}$/,
+  SE: /^SE\d{12}$/,
+  SI: /^SI\d{8}$/,
+  SK: /^SK\d{10}$/,
+  XI: /^XI(?:\d{9}|\d{12}|(?:GD|HA)\d{3})$/,
+};
+
+export type VatIdCheck = 'valid' | 'invalid' | 'unknown_country';
+
+/** IČ DPH: známa krajina sa overí formátom, neznámy kód krajiny neblokuje. */
+export function checkVatId(value: string): VatIdCheck {
+  const normalized = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const format = VAT_ID_FORMATS[normalized.slice(0, 2)];
+  if (format) return format.test(normalized) ? 'valid' : 'invalid';
+  return /^[A-Z]{2}[A-Z0-9]{2,13}$/.test(normalized) ? 'unknown_country' : 'invalid';
+}
+
 export const VAT_ROW_TOLERANCE = 0.02; // € na riadok (SPEC §6.4, §11.14)
 
 /** |základ×sadzba − dph| ≤ 0,02 € (SPEC §6.4). */
@@ -41,4 +88,37 @@ export function isTotalConsistent(rows: VatBreakdownRow[], sumaSpolu: number): b
 
 export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+export interface LineItemAmounts {
+  sadzbaDph?: number;
+  sumaBezDph?: number;
+  sumaDph?: number;
+  sumaSpolu?: number;
+}
+
+/**
+ * Efektívne sumy položky: prázdna DPH pri vyplnenej sadzbe znamená
+ * „dopočítaj zo základu“. Ak extrahované „spolu“ zodpovedá základu (faktúry
+ * uvádzajú riadky bez DPH a daň pridávajú až v súčte), efektívne spolu je
+ * základ + dopočítaná DPH. Musí zostať v zhode so serverom (normalize.ts).
+ */
+export function lineItemEffective(item: LineItemAmounts): {
+  bezDph?: number;
+  dph?: number;
+  spolu?: number;
+} {
+  const bezDph = item.sumaBezDph;
+  let dph = item.sumaDph;
+  let spolu = item.sumaSpolu;
+  if (dph === undefined && item.sadzbaDph !== undefined && bezDph !== undefined) {
+    dph = round2((bezDph * item.sadzbaDph) / 100);
+    if (spolu === undefined || Math.abs(spolu - bezDph) <= VAT_ROW_TOLERANCE) {
+      spolu = round2(bezDph + dph);
+    }
+  }
+  if (spolu === undefined && bezDph !== undefined && dph !== undefined) {
+    spolu = round2(bezDph + dph);
+  }
+  return { bezDph, dph, spolu };
 }

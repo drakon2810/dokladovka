@@ -48,6 +48,92 @@ describe('normalizácia SK/CZ faktúr', () => {
       .toEqual(expect.arrayContaining(['buyer_ico_mismatch', 'invalid_vat_row']));
   });
 
+  it('prijme platné zahraničné IČ DPH dodávateľa (AT, DE, HU)', () => {
+    for (const icDph of ['ATU42597604', 'DE811907980', 'HU12345678']) {
+      const normalized = normalizeExtractionResult({
+        schemaVersion: '2', documentType: 'FP',
+        supplier: { nazov: 'Zahraničný dodávateľ', icDph },
+        buyer: { ico: '87654321' }, invoiceNumber: 'F-1',
+        issueDate: '2026-05-05', taxDate: '2026-05-05', dueDate: '2026-07-15', currency: 'EUR',
+        lineItems: [], vatBreakdown: [{ vatRate: '0', base: '140', vat: '0' }],
+        totalWithoutVat: '140', totalVat: '0', totalAmount: '140',
+        fieldConfidence: {}, evidence: {}, warnings: [],
+      }, 'doc-foreign', '2026-05-05');
+      expect(validateNormalizedExtraction(normalized, { ico: '87654321' })).toEqual([]);
+    }
+  });
+
+  it('nesprávny formát známej krajiny je error, neznámy kód krajiny len warning', () => {
+    const build = (icDph: string) => normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Dodávateľ', icDph },
+      buyer: { ico: '87654321' }, invoiceNumber: 'F-2',
+      issueDate: '2026-05-05', taxDate: '2026-05-05', dueDate: '2026-07-15', currency: 'EUR',
+      lineItems: [], vatBreakdown: [], totalAmount: '140',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-vat', '2026-05-05');
+    // ATU s nesprávnym počtom číslic — známa krajina, zlý formát.
+    expect(validateNormalizedExtraction(build('ATU425976'), { ico: '87654321' }))
+      .toEqual([expect.objectContaining({ code: 'invalid_supplier_vat_id', severity: 'error' })]);
+    // Hodnota, ktorá nie je IČ DPH vôbec.
+    expect(validateNormalizedExtraction(build('12345'), { ico: '87654321' }))
+      .toEqual([expect.objectContaining({ code: 'invalid_supplier_vat_id', severity: 'error' })]);
+    // Neznámy kód krajiny — schválenie neblokuje, len upozorní.
+    expect(validateNormalizedExtraction(build('AE123456789012'), { ico: '87654321' }))
+      .toEqual([expect.objectContaining({ code: 'unverified_supplier_vat_id', severity: 'warning' })]);
+  });
+
+  it('IČ DPH odberateľa akceptuje zahraničný formát a chybný blokuje', () => {
+    const build = (icDph: string) => normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FV',
+      supplier: { nazov: 'Naša firma', ico: '87654321', icDph: 'SK2020254170' },
+      buyer: { nazov: 'Odberateľ AT', icDph }, invoiceNumber: 'V-1',
+      issueDate: '2026-05-05', taxDate: '2026-05-05', dueDate: '2026-07-15', currency: 'EUR',
+      lineItems: [], vatBreakdown: [], totalAmount: '140',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-buyer-vat', '2026-05-05');
+    expect(validateNormalizedExtraction(build('ATU42597604'), { ico: '87654321' })).toEqual([]);
+    expect(validateNormalizedExtraction(build('ATU4259'), { ico: '87654321' }))
+      .toEqual([expect.objectContaining({ code: 'invalid_buyer_vat_id', severity: 'error' })]);
+  });
+
+  it('položky bez DPH so sadzbou sa dopočítajú a neblokujú súčet', () => {
+    // Faktúra uvádza riadky bez DPH (spolu = základ), daň pridáva až v súčte:
+    // 478,98 + 95 + 50 = 623,98 základ; 23 % DPH 143,51; spolu 767,49.
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Alfa Airlines Services spol. s r.o.', ico: '47167998', dic: '2023775083', icDph: 'SK2023775083' },
+      buyer: { ico: '87654321' }, invoiceNumber: '2026006A',
+      issueDate: '2026-03-31', taxDate: '2026-03-31', dueDate: '2026-04-21', currency: 'EUR',
+      lineItems: [
+        { description: 'AWB & labels', vatRate: '23', amountWithoutVat: '478.98', amountTotal: '478.98' },
+        { description: 'Handling', vatRate: '23', amountWithoutVat: '95', amountTotal: '95' },
+        { description: 'Storage', vatRate: '23', amountWithoutVat: '50', amountTotal: '50' },
+      ],
+      vatBreakdown: [{ vatRate: '23', base: '623.98', vat: '143.51' }],
+      totalWithoutVat: '623.98', totalVat: '143.51', totalAmount: '767.49',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-lines', '2026-03-31');
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' })).toEqual([]);
+  });
+
+  it('explicitná DPH položky sa nedopočítava — nesúlad súčtu zostáva chybou', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Dodávateľ SK', ico: '12345678' },
+      buyer: { ico: '87654321' }, invoiceNumber: 'X-1',
+      issueDate: '2026-03-31', taxDate: '2026-03-31', dueDate: '2026-04-21', currency: 'EUR',
+      lineItems: [
+        { description: 'Riadok', vatRate: '23', amountWithoutVat: '100', vatAmount: '23', amountTotal: '123' },
+      ],
+      vatBreakdown: [{ vatRate: '23', base: '623.98', vat: '143.51' }],
+      totalWithoutVat: '623.98', totalVat: '143.51', totalAmount: '767.49',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-lines-explicit', '2026-03-31');
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' }).map((issue) => issue.code))
+      .toContain('line_items_total_mismatch');
+  });
+
   it('historickú sadzbu zachová a označí na kontrolu', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'Historický dodávateľ' }, buyer: { ico: '87654321' },

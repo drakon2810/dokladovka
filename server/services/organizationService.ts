@@ -76,6 +76,59 @@ export async function insertUniqueAlias(
   throw new HttpError(409, 'alias_collision', 'Nepodarilo sa vytvoriť unikátny e-mailový alias');
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * Ručne priradí organizácii vlastnú e-mailovú adresu (napr. plus-adresu Gmailu
+ * `firma+ags@gmail.com`). Umožňuje smerovať doklady na správnu firmu aj z jednej
+ * reálnej schránky bez vlastného poštového domény. Vždy nepr­imárny alias.
+ */
+export async function insertCustomAlias(
+  queryable: Queryable,
+  input: { tenantId: string; organizationId: string; organizationName: string; address: string },
+): Promise<AliasRecord> {
+  const address = input.address.trim().toLowerCase();
+  if (!EMAIL_RE.test(address) || address.length > 200) {
+    throw new HttpError(400, 'invalid_alias_address', 'Zadajte platnú e-mailovú adresu');
+  }
+  const atIndex = address.lastIndexOf('@');
+  const localPart = address.slice(0, atIndex);
+  const domain = address.slice(atIndex + 1);
+  const existing = await queryable.query(
+    'SELECT 1 FROM organization_email_aliases WHERE address_normalized = $1',
+    [address],
+  );
+  if (existing.rowCount > 0) {
+    throw new HttpError(409, 'alias_taken', 'Táto adresa je už priradená k organizácii');
+  }
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+  const slug = organizationSlug(input.organizationName);
+  // token je pri vlastnom aliase len značka (plus-tag za „+"), stĺpec je NOT NULL.
+  const token = (localPart.includes('+') ? localPart.slice(localPart.indexOf('+') + 1) : '').slice(0, 32);
+  await queryable.query(
+    `INSERT INTO organization_email_aliases
+      (id, tenant_id, organization_id, address, address_normalized, local_part, domain,
+       slug_at_creation, token, status, is_primary, created_at)
+     VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,'active',false,$9)`,
+    [id, input.tenantId, input.organizationId, address, localPart, domain, slug, token, createdAt],
+  );
+  return {
+    id,
+    tenantId: input.tenantId,
+    organizationId: input.organizationId,
+    address,
+    addressNormalized: address,
+    localPart,
+    domain,
+    slugAtCreation: slug,
+    token,
+    status: 'active',
+    isPrimary: false,
+    createdAt,
+  };
+}
+
 export async function organizationBelongsToTenant(database: Database, tenantId: string, organizationId: string): Promise<boolean> {
   const result = await database.query(
     'SELECT 1 FROM organizations WHERE id = $1 AND tenant_id = $2',

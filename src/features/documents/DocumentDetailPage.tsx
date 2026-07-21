@@ -46,6 +46,7 @@ import type {
   VatRate,
 } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
+import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import {
   ConfidenceIndicator,
   Modal,
@@ -60,6 +61,7 @@ import {
   isTotalConsistent,
   isVatRowConsistent,
   round2,
+  lineItemEffective,
   validateIBAN,
   validateICO,
   vatBreakdownTotal,
@@ -194,6 +196,9 @@ const WARNING_FIELDS: Record<string, string[]> = {
   invalid_supplier_ico: ['dodavatel.ico'],
   invalid_supplier_dic: ['dodavatel.dic'],
   invalid_supplier_vat_id: ['dodavatel.icDph'],
+  unverified_supplier_vat_id: ['dodavatel.icDph'],
+  invalid_buyer_vat_id: ['odberatel.icDph'],
+  unverified_buyer_vat_id: ['odberatel.icDph'],
   invalid_iban: ['dodavatel.iban'],
   invoice_number_required: ['cisloFaktury'],
   invalid_issue_date: ['datumVystavenia'],
@@ -251,9 +256,34 @@ function Field({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="card p-4">
-      <h2 className="mb-3 text-sm font-semibold">{title}</h2>
+      <h2 className="mb-3 text-[13px] font-semibold">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/** Zelená fajka vnútri poľa pre hodnotu overenú deterministickou validáciou. */
+function ValidTick({ show, children }: { show: boolean; children: ReactNode }) {
+  return (
+    <div className="relative min-w-0 flex-1">
+      {children}
+      {show && (
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#16A34A"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="anim-pop pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2"
+          aria-hidden
+        >
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      )}
+    </div>
   );
 }
 
@@ -625,8 +655,12 @@ export function DocumentDetailPage() {
     ),
   };
   // Kontrola súčtov Celkovo / Na položkách / Rozdiel (pozičné zaúčtovanie).
+  // Prázdna DPH položky pri vyplnenej sadzbe sa dopočítava zo základu.
   const polozkySpolu = round2(
-    (draft.extracted.polozky ?? []).reduce((sum, item) => sum + (item.sumaSpolu ?? 0), 0),
+    (draft.extracted.polozky ?? []).reduce(
+      (sum, item) => sum + (lineItemEffective(item).spolu ?? 0),
+      0,
+    ),
   );
   const polozkyRozdiel = round2((draft.extracted.sumaSpolu ?? 0) - polozkySpolu);
   const orgNoteTemplates = (data.noteTemplates ?? []).filter(
@@ -854,9 +888,23 @@ export function DocumentDetailPage() {
             <StatusBadge status={draft.status} />
             <ProcessingBadge status={draft.processingStatus} label={intakeProcessingLabel} />
             <PaymentStatusBadge status={draft.payment?.status ?? 'unpaid'} />
+            {draft.confidence > 0 && (
+              <span
+                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-app px-2.5 py-0.5 text-xs text-ink-soft"
+                title={t('detail.aiIstotaTooltip')}
+              >
+                {t('detail.aiIstota')}
+                <ConfidenceIndicator value={draft.confidence} showPercent />
+              </span>
+            )}
           </div>
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex items-center gap-2">
+          {queueIndex >= 0 && queueDocuments.length > 1 && (
+            <span className="tnum text-xs text-ink-soft" aria-hidden>
+              {queueIndex + 1} / {queueDocuments.length}
+            </span>
+          )}
           <button
             type="button"
             className="btn"
@@ -877,14 +925,14 @@ export function DocumentDetailPage() {
       </div>
 
       {buyerMismatch && (
-        <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="anim-in rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">{t('detail.icoMismatch')}</p>
           <p>{t('detail.icoMismatchPopis')}</p>
         </div>
       )}
       {(draft.status === 'duplicita' ||
         (draft.duplicateOfDocumentId && !draft.notDuplicate)) && (
-        <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+        <div className="anim-in rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
           <p className="font-semibold">{t('detail.duplicita.banner')}</p>
           <p>{t('detail.duplicita.popis')}</p>
           {draft.duplicateOfDocumentId && (
@@ -899,7 +947,7 @@ export function DocumentDetailPage() {
         </div>
       )}
       {draft.status === 'karantena' && (
-        <div className="rounded border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+        <div className="anim-in rounded-xl border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
           <p className="font-semibold">{t('detail.karantena.banner')}</p>
           {draft.quarantineReason && QUARANTINE_KEYS[draft.quarantineReason] && (
             <p>{t(QUARANTINE_KEYS[draft.quarantineReason])}</p>
@@ -907,13 +955,13 @@ export function DocumentDetailPage() {
         </div>
       )}
       {(draft.status === 'chyba' || draft.processingStatus.startsWith('failed')) && (
-        <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+        <div className="anim-in rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
           <p className="font-semibold">{t('detail.chyba.banner')}</p>
           <ProcessingBadge status={draft.processingStatus} label={intakeProcessingLabel} />
         </div>
       )}
       {dphAdvice && dphAdvice.blokacie.length > 0 && (
-        <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+        <div className="anim-in rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
           <p className="font-semibold">{t('detail.dph.blokacia')} — {t('detail.dph.titulok')}</p>
           {dphAdvice.blokacie.map((zistenie) => (
             <p key={`${zistenie.kod}-${zistenie.sprava}`}>{zistenie.sprava}</p>
@@ -921,7 +969,7 @@ export function DocumentDetailPage() {
         </div>
       )}
       {dphAdvice && dphAdvice.varovania.length > 0 && (
-        <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="anim-in rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">{t('detail.dph.varovanie')}</p>
           {dphAdvice.varovania.map((zistenie) => (
             <p key={`${zistenie.kod}-${zistenie.sprava}`}>{zistenie.sprava}</p>
@@ -929,7 +977,7 @@ export function DocumentDetailPage() {
         </div>
       )}
       {dphAdvice && dphAdvice.navrhy.length > 0 && (
-        <div className="rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+        <div className="anim-in rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
           <p className="font-semibold">{t('detail.dph.navrh')} — {t('detail.dph.titulok')}</p>
           {dphAdvice.navrhy.map((zistenie) => (
             <div key={`${zistenie.kod}-${zistenie.sprava}`} className="mt-1 flex flex-wrap items-center gap-2">
@@ -959,7 +1007,7 @@ export function DocumentDetailPage() {
         className="detail-split grid min-w-0 gap-4"
         style={{ '--detail-left': `${splitPercent}%` } as CSSProperties}
       >
-        <section className="card min-w-0 self-start overflow-hidden 2xl:sticky 2xl:top-4">
+        <section className="card anim-in min-w-0 self-start overflow-hidden xl:sticky xl:top-4">
           <div className="flex flex-wrap items-center gap-2 border-b border-line p-3">
             <button
               type="button"
@@ -979,6 +1027,14 @@ export function DocumentDetailPage() {
               aria-label={`${t('detail.titulok')} +`}
             >
               +
+            </button>
+            <button
+              type="button"
+              className="btn px-2.5 text-xs"
+              disabled={!hasAttachedFile || zoom === 1}
+              onClick={() => setZoom(1)}
+            >
+              {t('detail.naSirku')}
             </button>
             {formatBadgeKey && (
               <span className="ml-2 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] font-semibold text-accent-hover">
@@ -1020,7 +1076,7 @@ export function DocumentDetailPage() {
               </a>
             )}
           </div>
-          <div className="flex min-h-[34rem] justify-center overflow-auto bg-slate-100 p-4">
+          <div className="flex min-h-[34rem] justify-center overflow-auto bg-[#EDF0EE] p-5">
             {xmlPreview ? (
               sepaPreview ? (
                 <BankStatementPreview doklad={draft} zoom={zoom} />
@@ -1080,7 +1136,7 @@ export function DocumentDetailPage() {
           }}
         />
 
-        <div className="min-w-0 space-y-4">
+        <div className="detail-stack min-w-0 space-y-4">
           {draft.typ !== 'BV' && (
             <PaymentCard
               doklad={draft}
@@ -1120,11 +1176,13 @@ export function DocumentDetailPage() {
             <Section title={t('detail.dodavatel')}>
               <div className="grid gap-2 sm:grid-cols-2">
                 <Field label={t('detail.nazov')} {...fieldProps('dodavatel.nazov')}>
-                  <input
-                    className="input"
-                    value={draft.extracted.dodavatel.nazov}
-                    onChange={(event) => updateSupplier('nazov', event.target.value)}
-                  />
+                  <ValidTick show={Boolean(draft.extracted.dodavatel.nazov)}>
+                    <input
+                      className="input pr-8"
+                      value={draft.extracted.dodavatel.nazov}
+                      onChange={(event) => updateSupplier('nazov', event.target.value)}
+                    />
+                  </ValidTick>
                 </Field>
                 <Field
                   label={t('detail.ico')}
@@ -1137,11 +1195,13 @@ export function DocumentDetailPage() {
                   }
                 >
                   <div className="flex gap-2">
-                    <input
-                      className="input tnum"
-                      value={draft.extracted.dodavatel.ico ?? ''}
-                      onChange={(event) => updateSupplier('ico', event.target.value)}
-                    />
+                    <ValidTick show={validateICO(draft.extracted.dodavatel.ico ?? '')}>
+                      <input
+                        className="input tnum pr-8"
+                        value={draft.extracted.dodavatel.ico ?? ''}
+                        onChange={(event) => updateSupplier('ico', event.target.value)}
+                      />
+                    </ValidTick>
                     <button
                       type="button"
                       className="btn whitespace-nowrap"
@@ -1176,11 +1236,13 @@ export function DocumentDetailPage() {
                       : undefined
                   }
                 >
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.dodavatel.iban ?? ''}
-                    onChange={(event) => updateSupplier('iban', event.target.value)}
-                  />
+                  <ValidTick show={validateIBAN(draft.extracted.dodavatel.iban ?? '')}>
+                    <input
+                      className="input tnum pr-8"
+                      value={draft.extracted.dodavatel.iban ?? ''}
+                      onChange={(event) => updateSupplier('iban', event.target.value)}
+                    />
+                  </ValidTick>
                 </Field>
                 <Field label={t('detail.bic')}>
                   <input
@@ -1566,6 +1628,11 @@ export function DocumentDetailPage() {
                             step="0.01"
                             className="input tnum w-28 text-right"
                             value={item.sumaDph ?? ''}
+                            placeholder={
+                              item.sumaDph === undefined
+                                ? lineItemEffective(item).dph?.toFixed(2) ?? ''
+                                : undefined
+                            }
                             onChange={(event) =>
                               updateLineItem(index, {
                                 sumaDph: parseOptionalNumber(event.target.value),
@@ -1679,8 +1746,15 @@ export function DocumentDetailPage() {
 
             <Section title={t('detail.zauctovanie')}>
               {suggestion && suggestion.source !== 'none' && (
-                <div className="mb-3 rounded border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
-                  <p className="font-semibold">{t('detail.navrh')}</p>
+                <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+                  <p className="font-semibold">
+                    {t('detail.navrh')}
+                    {suggestion.confidence > 0 && (
+                      <span className="tnum ml-1.5 font-normal text-sky-800">
+                        ({t('detail.aiIstota')} {Math.round(suggestion.confidence * 100)} %)
+                      </span>
+                    )}
+                  </p>
                   <p>{t(`detail.navrhZdroj.${suggestion.source}` as SkKey)}</p>
                   <button
                     type="button"
@@ -1722,23 +1796,50 @@ export function DocumentDetailPage() {
                     ['cinnostId', t('detail.cinnost'), codeLists.cinnosti],
                     ['projektId', t('detail.projekt'), codeLists.projekty],
                   ] as const
-                ).map(([key, label, items]) => (
-                  <label key={key} className="block">
-                    <span className="label">{label}</span>
-                    <select
-                      className="input"
-                      value={draft.ucto[key] ?? ''}
-                      onChange={(event) => updateUcto({ [key]: event.target.value || undefined })}
-                    >
-                      <option value="">{t('detail.nevybrane')}</option>
-                      {items.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.kod} · {item.nazov}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
+                ).map(([key, label, items]) => {
+                  const selected = items.find((item) => item.id === draft.ucto[key]);
+                  const nextNumber =
+                    key === 'ciselnyRadId' ? nextNumberInSeries(selected?.posledneCislo) : undefined;
+                  return (
+                    <label key={key} className="block">
+                      <span className="label">{label}</span>
+                      <select
+                        className="input"
+                        value={draft.ucto[key] ?? ''}
+                        onChange={(event) => {
+                          const value = event.target.value || undefined;
+                          if (key === 'clenenieDphId') {
+                            // Členenie DPH z POHODY môže niesť sekciu KV DPH —
+                            // ak KV ešte nie je zvolené, predvyplníme ju (človek
+                            // ju môže prepísať).
+                            const picked = items.find((item) => item.id === value);
+                            updateUcto({
+                              clenenieDphId: value,
+                              ...(picked?.kvSekcia && !draft.ucto.clenenieKvKod
+                                ? { clenenieKvKod: picked.kvSekcia }
+                                : {}),
+                            });
+                          } else {
+                            updateUcto({ [key]: value });
+                          }
+                        }}
+                      >
+                        <option value="">{t('detail.nevybrane')}</option>
+                        {items.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.kod} · {item.nazov}
+                          </option>
+                        ))}
+                      </select>
+                      {nextNumber && (
+                        <span className="mt-1 block text-[11px] text-ink-soft">
+                          {t('detail.dalsieCislo')}:{' '}
+                          <span className="tnum font-medium text-ink">{nextNumber}</span>
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
                 <label className="block">
                   <span className="label">{t('detail.clenenieKv')}</span>
                   <select
@@ -1977,7 +2078,13 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
-      <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-line bg-surface/95 px-4 py-3 shadow-card backdrop-blur">
+      <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-line/80 bg-surface/75 px-4 py-3 shadow-[0_-8px_24px_-16px_rgba(27,31,29,0.12)] backdrop-blur-md">
+        {dirty && (
+          <span className="anim-in mr-auto inline-flex items-center gap-1.5 text-xs text-amber-800">
+            <span className="h-[7px] w-[7px] rounded-full bg-amber-600" aria-hidden />
+            {t('detail.neulozeneZmeny')}
+          </span>
+        )}
         {draft.status === 'schvaleny' && role !== 'schvalovatel' && (
           <button
             type="button"

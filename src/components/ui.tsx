@@ -5,24 +5,27 @@ import type { DocumentStatus, DocumentType, Organization, PaymentStatus, Process
 import { t, type SkKey } from '../i18n/sk';
 import { dismissToast, useToastStore } from './toast';
 
-// Farby statusov zo SPEC §8 — svetlé pozadie + tmavý text, nie plná výplň.
-const STATUS_STYLES: Record<DocumentStatus, string> = {
-  novy: 'bg-slate-100 text-slate-700 border-slate-200',
-  extrahovany: 'bg-sky-50 text-sky-800 border-sky-200',
-  na_kontrole: 'bg-amber-50 text-amber-800 border-amber-200',
-  schvaleny: 'bg-green-50 text-green-800 border-green-200',
-  exportovany: 'bg-slate-200 text-slate-800 border-slate-300',
-  chyba: 'bg-red-50 text-red-800 border-red-200',
-  karantena: 'bg-yellow-50 text-yellow-800 border-yellow-300',
-  duplicita: 'bg-red-50 text-red-800 border-red-200',
-  zamietnuty: 'bg-gray-100 text-gray-600 border-gray-200',
+// Farby statusov zo SPEC §8 — svetlé pozadie + tmavý text + farebná bodka
+// (vzor Claude Design „Detail dokladu“), nie plná výplň.
+const STATUS_STYLES: Record<DocumentStatus, { pill: string; dot: string }> = {
+  novy: { pill: 'bg-slate-100 text-slate-700 border-slate-200', dot: 'bg-slate-400' },
+  extrahovany: { pill: 'bg-sky-50 text-sky-800 border-sky-200', dot: 'bg-sky-600' },
+  na_kontrole: { pill: 'bg-amber-50 text-amber-800 border-amber-200', dot: 'bg-amber-600' },
+  schvaleny: { pill: 'bg-green-50 text-green-800 border-green-200', dot: 'bg-green-600' },
+  exportovany: { pill: 'bg-slate-200 text-slate-800 border-slate-300', dot: 'bg-slate-500' },
+  chyba: { pill: 'bg-red-50 text-red-800 border-red-200', dot: 'bg-red-600' },
+  karantena: { pill: 'bg-yellow-50 text-yellow-800 border-yellow-300', dot: 'bg-yellow-600' },
+  duplicita: { pill: 'bg-red-50 text-red-800 border-red-200', dot: 'bg-red-600' },
+  zamietnuty: { pill: 'bg-gray-100 text-gray-600 border-gray-200', dot: 'bg-gray-400' },
 };
 
 export function StatusBadge({ status }: { status: DocumentStatus }) {
+  const style = STATUS_STYLES[status];
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${STATUS_STYLES[status]}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${style.pill}`}
     >
+      <span className={`h-[7px] w-[7px] shrink-0 rounded-full ${style.dot}`} aria-hidden />
       {t(`status.${status}` as SkKey)}
     </span>
   );
@@ -50,16 +53,17 @@ export function ProcessingBadge({ status, label }: { status: ProcessingStatus; l
 }
 
 export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
-  const style =
+  const [pill, dot] =
     status === 'paid'
-      ? 'border-green-200 bg-green-50 text-green-800'
+      ? ['border-green-200 bg-green-50 text-green-800', 'bg-green-600']
       : status === 'partially_paid'
-        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        ? ['border-amber-200 bg-amber-50 text-amber-800', 'bg-amber-600']
         : status === 'payment_order'
-          ? 'border-sky-200 bg-sky-50 text-sky-800'
-          : 'border-line bg-app text-ink-soft';
+          ? ['border-sky-200 bg-sky-50 text-sky-800', 'bg-sky-600']
+          : ['border-line bg-app text-ink-soft', 'bg-gray-400'];
   return (
-    <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs ${style}`}>
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${pill}`}>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} aria-hidden />
       {t(`platba.status.${status}` as SkKey)}
     </span>
   );
@@ -76,8 +80,8 @@ export function TypBadge({ typ }: { typ: DocumentType }) {
   );
 }
 
-/** ✓ ≥0.9, ~ 0.7–0.9, ! <0.7 (SPEC §6.3). */
-export function ConfidenceIndicator({ value }: { value: number }) {
+/** ✓ ≥0.9, ~ 0.7–0.9, ! <0.7 (SPEC §6.3). `showPercent` doplní číselnú istotu. */
+export function ConfidenceIndicator({ value, showPercent }: { value: number; showPercent?: boolean }) {
   const [symbol, cls, label] =
     value >= 0.9
       ? ['✓', 'text-green-700', `${Math.round(value * 100)} %`]
@@ -86,11 +90,12 @@ export function ConfidenceIndicator({ value }: { value: number }) {
         : ['!', 'text-red-700', `${Math.round(value * 100)} %`];
   return (
     <span
-      className={`tnum inline-block w-5 text-center font-bold ${cls}`}
+      className={`tnum inline-flex items-center gap-1 font-bold ${cls} ${showPercent ? '' : 'w-5 justify-center'}`}
       title={`${t('detail.confidence')}: ${label}`}
       aria-label={`${t('detail.confidence')} ${label}`}
     >
       {symbol}
+      {showPercent && <span className="font-semibold">{label}</span>}
     </span>
   );
 }

@@ -12,6 +12,8 @@ const itemSchema = z.object({
   externalId: z.string().trim().max(100).optional(),
   agenda: z.string().trim().max(100).optional(),
   uctovnyRok: z.string().trim().max(20).optional(),
+  posledneCislo: z.string().trim().max(50).optional(),
+  kvSekcia: z.string().trim().max(20).optional(),
 }).strict();
 const removedSchema = z.object({ id: z.string().min(1), kod: z.string().min(1) }).passthrough();
 const kindSchema = z.object({
@@ -57,9 +59,9 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           seen.add(item.kod);
           const existing = await tx.query<{
             id: string; name: string; source: string; active: boolean; external_id?: string;
-            agenda?: string; accounting_year?: string;
+            agenda?: string; accounting_year?: string; last_number?: string; kv_section?: string;
           } & Record<string, unknown>>(
-            `SELECT id,name,source,active,external_id,agenda,accounting_year FROM code_list_items
+            `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section FROM code_list_items
               WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND code=$4`,
             [auth.tenantId, id, kind, item.kod],
           );
@@ -67,20 +69,23 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           const unchanged = row && row.source === 'pohoda' && row.active && row.name === item.nazov
             && (row.external_id ?? undefined) === item.externalId
             && (row.agenda ?? undefined) === item.agenda
-            && (row.accounting_year ?? undefined) === item.uctovnyRok;
+            && (row.accounting_year ?? undefined) === item.uctovnyRok
+            && (row.last_number ?? undefined) === item.posledneCislo
+            && (row.kv_section ?? undefined) === item.kvSekcia;
           if (unchanged) {
             perKind[kind].bezZmeny += 1;
             continue;
           }
           await tx.query(
             `INSERT INTO code_list_items
-              (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,synced_at)
-             VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10)
+              (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,synced_at)
+             VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (tenant_id,organization_id,kind,code) DO UPDATE SET
                name=EXCLUDED.name,source='pohoda',active=true,external_id=EXCLUDED.external_id,
-               agenda=EXCLUDED.agenda,accounting_year=EXCLUDED.accounting_year,synced_at=EXCLUDED.synced_at,updated_at=now()`,
+               agenda=EXCLUDED.agenda,accounting_year=EXCLUDED.accounting_year,last_number=EXCLUDED.last_number,
+               kv_section=EXCLUDED.kv_section,synced_at=EXCLUDED.synced_at,updated_at=now()`,
             [randomUUID(), auth.tenantId, id, kind, item.kod, item.nazov, item.externalId ?? null,
-              item.agenda ?? null, item.uctovnyRok ?? null, syncedAt],
+              item.agenda ?? null, item.uctovnyRok ?? null, item.posledneCislo ?? null, item.kvSekcia ?? null, syncedAt],
           );
           if (row) perKind[kind].aktualizovane += 1;
           else perKind[kind].nove += 1;

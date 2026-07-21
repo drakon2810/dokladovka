@@ -55,11 +55,11 @@ export function paymentStateFor(doklad: DocumentItem, payments: DocumentPayment[
   };
 }
 
-const STATUS_STYLES: Record<PaymentState['status'], string> = {
-  uhradena: 'bg-accent/10 text-accent-hover border-accent/30',
-  ciastocna: 'bg-amber-50 text-amber-800 border-amber-300',
-  neuhradena: 'bg-app text-ink-soft border-line',
-  po_splatnosti: 'bg-red-50 text-red-700 border-red-200',
+const STATUS_STYLES: Record<PaymentState['status'], { pill: string; dot: string }> = {
+  uhradena: { pill: 'bg-accent/10 text-accent-hover border-accent/30', dot: 'bg-accent' },
+  ciastocna: { pill: 'bg-amber-50 text-amber-800 border-amber-300', dot: 'bg-amber-600' },
+  neuhradena: { pill: 'bg-app text-ink-soft border-line', dot: 'bg-gray-400' },
+  po_splatnosti: { pill: 'bg-red-50 text-red-700 border-red-200', dot: 'bg-red-600' },
 };
 
 export function PaymentCard({
@@ -96,7 +96,8 @@ export function PaymentCard({
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-ink">{t('platby.titulok')}</h2>
-          <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${STATUS_STYLES[state.status]}`}>
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${STATUS_STYLES[state.status].pill}`}>
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_STYLES[state.status].dot}`} aria-hidden />
             {t(`platby.stav.${state.status}`)}
           </span>
         </div>
@@ -104,7 +105,7 @@ export function PaymentCard({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div>
             <p className="text-xs text-ink-soft">{t('platby.zostava')}</p>
-            <p className="tnum text-xl font-bold text-ink">{money(state.remaining, mena)}</p>
+            <p className="tnum text-[22px] font-bold tracking-tight text-ink">{money(state.remaining, mena)}</p>
           </div>
           <div className="text-right">
             <p className="text-xs text-ink-soft">{t('platby.splatnost')}</p>

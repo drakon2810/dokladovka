@@ -145,6 +145,69 @@ describe('parseCodeListResponse', () => {
     );
   });
 
+  it('načíta topNumber ako posledné číslo a agendu číselného radu', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+      <rsp:responsePack state="ok" xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd">
+        <rsp:responsePackItem state="ok">
+          <lst:listNumericalSeries version="2.0" state="ok">
+            <lst:numericalSeries version="2.0">
+              <nms:numericalSeriesHeader>
+                <nms:id>500</nms:id>
+                <nms:prefix>26PK</nms:prefix>
+                <nms:number>0001</nms:number>
+                <nms:topNumber>0042</nms:topNumber>
+                <nms:name>Pokladňa príjem</nms:name>
+                <nms:agenda>pokladna</nms:agenda>
+                <nms:year>2026</nms:year>
+              </nms:numericalSeriesHeader>
+            </lst:numericalSeries>
+          </lst:listNumericalSeries>
+        </rsp:responsePackItem>
+      </rsp:responsePack>`;
+    const preview = parseCodeListResponse(xml, 'org-1', emptyLists());
+    expect(preview.perKind.ciselneRady.nove[0]).toEqual({
+      kod: '26PK',
+      nazov: 'Pokladňa príjem',
+      externalId: '500',
+      agenda: 'pokladna',
+      uctovnyRok: '2026',
+      posledneCislo: '0042',
+    });
+  });
+
+  it('načíta sekciu KV DPH z členenia DPH (sectionInVATLedgerStatement)', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+      <rsp:responsePack state="ok" xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:vat="http://www.stormware.cz/schema/version_2/classificationVAT.xsd">
+        <rsp:responsePackItem state="ok">
+          <lst:listClassificationVAT version="2.0" state="ok">
+            <lst:classificationVAT version="2.0">
+              <vat:classificationVATHeader>
+                <vat:id>210</vat:id>
+                <vat:code>B2odp</vat:code>
+                <vat:name>Prijaté faktúry — odpočet DPH</vat:name>
+                <vat:sectionInVATLedgerStatement>B2</vat:sectionInVATLedgerStatement>
+              </vat:classificationVATHeader>
+            </lst:classificationVAT>
+          </lst:listClassificationVAT>
+        </rsp:responsePackItem>
+      </rsp:responsePack>`;
+    const preview = parseCodeListResponse(xml, 'org-1', emptyLists());
+    expect(preview.perKind.cleneniaDph.nove[0]).toMatchObject({
+      kod: 'B2odp',
+      kvSekcia: 'B2',
+    });
+  });
+
+  it('rozpozná omylom načítaný dataPack (náš export) namiesto odpovede z POHODY', () => {
+    const xml = `<?xml version="1.0" encoding="Windows-1250"?>
+      <dat:dataPack version="2.0" xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd">
+        <dat:dataPackItem version="2.0">
+          <inv:invoice version="2.0"><inv:invoiceHeader/></inv:invoice>
+        </dat:dataPackItem>
+      </dat:dataPack>`;
+    expect(() => parseCodeListResponse(xml, 'org-1', emptyLists())).toThrow(/dataPack/);
+  });
+
   it('syntetické kódy sú podmnožinou bezpečného MDB fixture', () => {
     const preview = parseCodeListResponse(responseFixture, 'org-1', emptyLists());
     const fixtureByKind = mdbFixture as Record<
