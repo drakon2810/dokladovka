@@ -1059,6 +1059,57 @@ export async function createDocument(input: CreateDocumentInput): Promise<Docume
   return document;
 }
 
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('file_read_failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export interface UploadDocumentResult {
+  status: 'queued' | 'quarantine' | 'duplicate';
+  reason?: string;
+}
+
+/**
+ * Ručné nahratie jedného súboru (drag & drop / výber). V REST režime prejde
+ * rovnakou AI pipeline ako e-mailová príloha; v mock režime vytvorí doklad
+ * lokálne cez createDocument (rovnako ako DocumentCreateModal).
+ */
+export async function uploadDocumentFile(
+  organizationId: string,
+  file: File,
+): Promise<UploadDocumentResult> {
+  if (REST_DATA_MODE) {
+    const contentBase64 = await fileToBase64(file);
+    const response = await restRequest<{ results: UploadDocumentResult[] }>('/api/documents/upload', {
+      method: 'POST',
+      body: JSON.stringify({
+        organizationId,
+        files: [{ fileName: file.name, mimeType: file.type || 'application/octet-stream', contentBase64 }],
+      }),
+    });
+    return response.results[0] ?? { status: 'quarantine', reason: 'unknown' };
+  }
+  await createDocument({
+    organizationId,
+    typ: 'FP',
+    mode: 'upload',
+    issueDate: new Date().toISOString().slice(0, 10),
+    currency: 'EUR',
+    totalAmount: 0,
+    vatRate: 23,
+    file,
+  });
+  return { status: 'queued' };
+}
+
 export async function updatePaymentStatus(
   id: string,
   status: PaymentStatus,
@@ -1923,6 +1974,112 @@ export async function importPohodaCodeLists(
   });
   if (!result) throw new Error('Import číselníkov sa nepodarilo dokončiť');
   return result;
+}
+
+// ===== Tréning AI (pamäť rozhodnutí) =====
+
+export interface AiTrainingRow {
+  supplierIco?: string;
+  supplierName?: string;
+  lineText?: string;
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  ciselnyRadKod?: string;
+  strediskoKod?: string;
+  clenenieKvKod?: string;
+}
+
+export interface AiTrainingImportResult {
+  imported: number;
+  duplicates: number;
+  rejected: Array<{ index: number; dovod: string }>;
+}
+
+export async function importAiTraining(orgId: string, rows: AiTrainingRow[]): Promise<AiTrainingImportResult> {
+  if (!REST_DATA_MODE) throw new Error('Tréning AI je dostupný len s pripojeným serverom');
+  return restRequest<AiTrainingImportResult>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/import`,
+    { method: 'PUT', body: JSON.stringify({ rows }) },
+  );
+}
+
+export async function getAiTrainingStats(orgId: string): Promise<{ schvalene: number; importovane: number }> {
+  if (!REST_DATA_MODE) return { schvalene: 0, importovane: 0 };
+  return restRequest<{ schvalene: number; importovane: number }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/stats`,
+    { method: 'GET' },
+  );
+}
+
+// Etapa 4: AI navrhne pravidlá z pamäte, účtovník potvrdzuje.
+
+export interface AiRuleProposal {
+  supplierIco: string | null;
+  supplierName: string | null;
+  klucoveSlova: string[];
+  predkontaciaId: string | null;
+  clenenieDphId: string | null;
+  ciselnyRadId: string | null;
+  strediskoId: string | null;
+  clenenieKvKod: string | null;
+  dovod: string;
+}
+
+export interface AiRule {
+  id: string;
+  supplierIco?: string;
+  supplierName?: string;
+  klucoveSlova: string[];
+  clenenieKvKod?: string;
+  predkontaciaId?: string;
+  clenenieDphId?: string;
+  ciselnyRadId?: string;
+  strediskoId?: string;
+  origin: 'manual' | 'ai';
+  active: boolean;
+  needsReview: boolean;
+  correctionsCount: number;
+}
+
+export async function analyzeAiTraining(orgId: string): Promise<AiRuleProposal[]> {
+  if (!REST_DATA_MODE) throw new Error('AI analýza je dostupná len s pripojeným serverom');
+  const result = await restRequest<{ pravidla: AiRuleProposal[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/analyze`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+  return result.pravidla;
+}
+
+export async function listAiRules(orgId: string): Promise<AiRule[]> {
+  if (!REST_DATA_MODE) return [];
+  const result = await restRequest<{ pravidla: AiRule[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/rules`,
+    { method: 'GET' },
+  );
+  return result.pravidla;
+}
+
+export async function confirmAiRules(orgId: string, pravidla: AiRuleProposal[]): Promise<number> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
+  const result = await restRequest<{ created: number }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/rules`,
+    { method: 'POST', body: JSON.stringify({ pravidla }) },
+  );
+  return result.created;
+}
+
+export async function activateAiRule(orgId: string, ruleId: string): Promise<void> {
+  await restRequest(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/rules/${encodeURIComponent(ruleId)}/activate`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export async function deleteAiRule(orgId: string, ruleId: string): Promise<void> {
+  await restRequest(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/rules/${encodeURIComponent(ruleId)}`,
+    { method: 'DELETE' },
+  );
 }
 
 // ===== Používatelia =====

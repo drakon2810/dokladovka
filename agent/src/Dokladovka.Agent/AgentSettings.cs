@@ -5,10 +5,14 @@ namespace Dokladovka.Agent;
 public sealed record MServerEndpointSettings
 {
     public required string Id { get; init; }
-    public required string BaseUrl { get; init; }
+    public string? BaseUrl { get; init; }
     public required string CompanyIco { get; init; }
     public string? InstanceName { get; init; }
     public string? PohodaExePath { get; init; }
+    public string Mode { get; init; } = "mserver";
+    public string? Database { get; init; }
+
+    public bool IsCli => Mode.Equals("cli", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record AgentSettings
@@ -32,7 +36,23 @@ public sealed record AgentSettings
             throw new InvalidOperationException("Identifikátory mServerov musia byť jedinečné.");
         foreach (var endpoint in settings.MServers)
         {
-            ValidateNetworkUrl(endpoint.BaseUrl, allowLocalHttp: true, "URL mServera");
+            if (!endpoint.Mode.Equals("mserver", StringComparison.OrdinalIgnoreCase) && !endpoint.IsCli)
+                throw new InvalidOperationException($"Režim endpointu {endpoint.Id} musí byť mserver alebo cli.");
+            if (endpoint.IsCli)
+            {
+                if (string.IsNullOrWhiteSpace(endpoint.Database))
+                    throw new InvalidOperationException($"Pre režim cli endpointu {endpoint.Id} je povinný názov databázy POHODA.");
+                if (string.IsNullOrWhiteSpace(endpoint.PohodaExePath))
+                    throw new InvalidOperationException($"Pre režim cli endpointu {endpoint.Id} je povinná cesta k pohoda.exe.");
+                // Rok sa v cli režime odvodzuje z názvu databázy (niet /status). Ak sa nedá odvodiť, heartbeat by poslal prázdny
+                // uctovnyRok a server (zod min(1)) by odmietol celú dávku – fail-closed už pri konfigurácii.
+                if (string.IsNullOrEmpty(PohodaCliClient.YearFromDatabase(endpoint.Database)))
+                    throw new InvalidOperationException($"Názov databázy endpointu {endpoint.Id} musí obsahovať účtovný rok, napr. StwPh_12345678_2026.");
+            }
+            else
+            {
+                ValidateNetworkUrl(endpoint.BaseUrl ?? string.Empty, allowLocalHttp: true, "URL mServera");
+            }
             if (!System.Text.RegularExpressions.Regex.IsMatch(endpoint.CompanyIco, "^[0-9]{8}$"))
                 throw new InvalidOperationException("IČO mServera musí mať presne 8 číslic.");
         }

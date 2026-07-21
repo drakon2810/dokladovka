@@ -66,6 +66,7 @@ import {
   validateICO,
   vatBreakdownTotal,
 } from '../../lib/validate';
+import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { t, type SkKey } from '../../i18n/sk';
 import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
@@ -342,6 +343,8 @@ export function DocumentDetailPage() {
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [mostikStatus, setMostikStatus] = useState<OrganizationMostikStatus>();
+  const [autoFilled, setAutoFilled] = useState(false);
+  const autoFilledFor = useRef<string>();
   const splitRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -351,6 +354,8 @@ export function DocumentDetailPage() {
     }
     setDraft(cloneDocument(sourceDocument));
     setDirty(false);
+    setAutoFilled(false);
+    autoFilledFor.current = undefined;
     setPageNumber(1);
     setPageCount(0);
     setZoom(1);
@@ -406,6 +411,34 @@ export function DocumentDetailPage() {
       active = false;
     };
   }, [id]);
+
+  // Automatické predvyplnenie: návrh s vysokou istotou (pravidlo, pamäť
+  // rozhodnutí, predvoľby partnera) sa vpíše do konceptu hneď pri otvorení —
+  // účtovník ho len skontroluje a schváli. Nižšia istota (história, AI)
+  // ostáva na tlačidle „Použiť návrh". Nikdy sa nič neschvaľuje samo.
+  useEffect(() => {
+    if (!draft || !suggestion || suggestion.source === 'none' || suggestion.confidence < 0.9) return;
+    if (suggestion.documentId !== draft.id || autoFilledFor.current === draft.id) return;
+    if (role === 'schvalovatel') return; // read-only rola koncept nemení
+    if (!['extrahovany', 'na_kontrole'].includes(draft.status)) return;
+    // Nič sa neprepisuje: koncept musí byť nedotknutý a zaúčtovanie úplne prázdne.
+    if (dirty || draft.ucto.predkontaciaId || draft.ucto.clenenieDphId || draft.ucto.ciselnyRadId
+      || draft.ucto.strediskoId || draft.ucto.clenenieKvKod) return;
+    autoFilledFor.current = draft.id;
+    setDraft((current) => current && {
+      ...current,
+      ucto: {
+        ...current.ucto,
+        ...(suggestion.predkontaciaId ? { predkontaciaId: suggestion.predkontaciaId } : {}),
+        ...(suggestion.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
+        ...(suggestion.ciselnyRadId ? { ciselnyRadId: suggestion.ciselnyRadId } : {}),
+        ...(suggestion.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
+        ...(suggestion.clenenieKvKod ? { clenenieKvKod: suggestion.clenenieKvKod } : {}),
+      },
+    });
+    setDirty(true);
+    setAutoFilled(true);
+  }, [draft, dirty, role, suggestion]);
 
   // DPH poradca sa prepočítava na serveri — po každej uloženej verzii dokladu
   // sa načíta znova, aby varovania zodpovedali aktuálnemu zaúčtovaniu.
@@ -631,6 +664,7 @@ export function DocumentDetailPage() {
   const buyerMismatch =
     Boolean(draft.extracted.odberatel?.ico) &&
     draft.extracted.odberatel?.ico !== organization.ico;
+  const foreignSupplier = isForeignSupplier(draft.extracted.dodavatel);
   const codeLists = {
     predkontacie: data.codeLists.predkontacie.filter(
       (item) => item.orgId === draft.orgId && item.active,
@@ -1189,6 +1223,7 @@ export function DocumentDetailPage() {
                   {...fieldProps('dodavatel.ico')}
                   error={
                     draft.extracted.dodavatel.ico &&
+                    !foreignSupplier &&
                     !validateICO(draft.extracted.dodavatel.ico)
                       ? t('detail.icoNeplatne')
                       : undefined
@@ -1756,20 +1791,25 @@ export function DocumentDetailPage() {
                     )}
                   </p>
                   <p>{t(`detail.navrhZdroj.${suggestion.source}` as SkKey)}</p>
-                  <button
-                    type="button"
-                    className="btn mt-2"
-                    onClick={() =>
-                      updateUcto({
-                        predkontaciaId: suggestion.predkontaciaId,
-                        clenenieDphId: suggestion.clenenieDphId,
-                        ciselnyRadId: suggestion.ciselnyRadId,
-                        strediskoId: suggestion.strediskoId,
-                      })
-                    }
-                  >
-                    {t('detail.pouzitNavrh')}
-                  </button>
+                  {autoFilled ? (
+                    <p className="mt-2 font-medium">{t('detail.autoVyplnene')}</p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn mt-2"
+                      onClick={() =>
+                        updateUcto({
+                          predkontaciaId: suggestion.predkontaciaId,
+                          clenenieDphId: suggestion.clenenieDphId,
+                          ciselnyRadId: suggestion.ciselnyRadId,
+                          strediskoId: suggestion.strediskoId,
+                          clenenieKvKod: suggestion.clenenieKvKod,
+                        })
+                      }
+                    >
+                      {t('detail.pouzitNavrh')}
+                    </button>
+                  )}
                 </div>
               )}
               {lastUsed && (

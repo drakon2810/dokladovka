@@ -276,7 +276,7 @@ export function DocumentCreateModal({
             <input
               className="mx-auto mt-3 block max-w-full text-sm"
               type="file"
-              accept="application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp"
+              accept="application/pdf,image/jpeg,image/png,image/webp,application/xml,.pdf,.jpg,.jpeg,.png,.webp,.xml"
               aria-required="true"
               onChange={(event) => setFile(event.target.files?.[0])}
             />

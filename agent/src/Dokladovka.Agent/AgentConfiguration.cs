@@ -4,13 +4,15 @@ public sealed record AgentConfigurationRequest
 {
     public required string CloudBaseUrl { get; init; }
     public required string PairingCode { get; init; }
-    public required string MServerUrl { get; init; }
+    public string? MServerUrl { get; init; }
     public required string CompanyIco { get; init; }
     public required string UserName { get; init; }
     public required string Password { get; init; }
     public string EndpointId { get; init; } = "mserver-1";
     public string? InstanceName { get; init; }
     public string? PohodaExePath { get; init; }
+    public string Mode { get; init; } = "mserver";
+    public string? Database { get; init; }
     public string? AllowedPublisherThumbprint { get; init; }
     public string? InstallationName { get; init; }
 }
@@ -38,6 +40,8 @@ public static class AgentConfiguration
             CompanyIco = request.CompanyIco,
             InstanceName = request.InstanceName,
             PohodaExePath = request.PohodaExePath,
+            Mode = request.Mode,
+            Database = request.Database,
         };
         var settings = new AgentSettings
         {
@@ -56,7 +60,15 @@ public static class AgentConfiguration
             UserName = request.UserName,
             Password = request.Password,
         };
-        var company = await new MServerClient(endpoint, mServerSecret, log).GetCompanyAsync(cancellationToken);
+        IPohodaClient client = endpoint.IsCli
+            ? new PohodaCliClient(endpoint, mServerSecret, log)
+            : new MServerClient(endpoint, mServerSecret, log);
+        var company = await client.GetCompanyAsync(cancellationToken);
+        if (endpoint.IsCli)
+        {
+            var probeXml = PohodaXml.BuildCodeListRequest(request.CompanyIco, $"konfiguracia-test-{Guid.NewGuid():N}");
+            PohodaXml.ParseCodeLists(await client.PostXmlAsync(probeXml, "konfiguracia-test", false, cancellationToken));
+        }
         var paired = await BackendClient.PairAsync(
             request.CloudBaseUrl,
             request.PairingCode,

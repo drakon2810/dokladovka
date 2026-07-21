@@ -43,11 +43,22 @@ public static class Program
     {
         var cloud = Option(args, "--cloud") ?? Prompt("URL cloudu", Environment.GetEnvironmentVariable("DOKLADOVKA_CLOUD_URL") ?? "https://app.dokladorpro.sk");
         var pairingCode = Option(args, "--pairing-code") ?? Prompt("Párovací kód");
-        var mServerUrl = Option(args, "--mserver-url") ?? Prompt("URL POHODA mServer", "http://localhost:444");
+        var mode = (Option(args, "--mode") ?? Prompt("Režim pripojenia (mserver/cli)", "mserver")).Trim().ToLowerInvariant();
+        var isCli = mode == "cli";
+        var mServerUrl = isCli
+            ? Option(args, "--mserver-url")
+            : Option(args, "--mserver-url") ?? Prompt("URL POHODA mServer", "http://localhost:444");
+        var database = isCli
+            ? Option(args, "--database") ?? Prompt("Názov databázy POHODA (napr. StwPh_12345678_2026.mdb)")
+            : Option(args, "--database");
+        var pohodaExe = isCli
+            ? Option(args, "--pohoda-exe") ?? Prompt("Cesta k pohoda.exe")
+            : Option(args, "--pohoda-exe");
         var ico = Option(args, "--ico") ?? Prompt("IČO firmy v otvorenej databáze POHODA");
-        var user = Option(args, "--mserver-user") ?? Prompt("Používateľ mServer");
-        var password = Environment.GetEnvironmentVariable("DOKLADOVKA_MSERVER_PASSWORD") ?? ReadPassword("Heslo mServer");
+        var user = Option(args, "--mserver-user") ?? Prompt("Používateľ POHODA");
+        var password = Environment.GetEnvironmentVariable("DOKLADOVKA_MSERVER_PASSWORD") ?? ReadPassword("Heslo POHODA");
         var log = new RollingFileAgentLog();
+        if (isCli) Console.WriteLine("Kontrola spustí POHODA na pozadí a môže trvať aj minútu…");
         var configured = await AgentConfiguration.ConfigureAsync(new AgentConfigurationRequest
         {
             CloudBaseUrl = cloud,
@@ -56,13 +67,17 @@ public static class Program
             CompanyIco = ico,
             UserName = user,
             Password = password,
-            EndpointId = Option(args, "--endpoint-id") ?? "mserver-1",
+            EndpointId = Option(args, "--endpoint-id") ?? (isCli ? "pohoda-1" : "mserver-1"),
             InstanceName = Option(args, "--instance"),
-            PohodaExePath = Option(args, "--pohoda-exe"),
+            PohodaExePath = pohodaExe,
+            Mode = mode,
+            Database = database,
             InstallationName = Option(args, "--name"),
             AllowedPublisherThumbprint = Option(args, "--publisher-thumbprint"),
         }, log, cancellationToken);
-        Console.WriteLine($"mServer je dostupný: {configured.Company.Company}, databáza {configured.Company.DatabaseName}, rok {configured.Company.Year}.");
+        Console.WriteLine(isCli
+            ? $"POHODA /XML je overená: databáza {configured.Company.DatabaseName}, rok {configured.Company.Year}."
+            : $"mServer je dostupný: {configured.Company.Company}, databáza {configured.Company.DatabaseName}, rok {configured.Company.Year}.");
         Console.WriteLine($"Agent bol úspešne nakonfigurovaný. Konfigurácia: {AgentPaths.Settings}");
         return 0;
     }
@@ -130,8 +145,8 @@ public static class Program
 
     private static void PrintUsage() => Console.WriteLine("""
         Dokladovka.Agent
-          configure [--cloud URL] [--pairing-code CODE] [--mserver-url URL] [--ico ICO]
-                    [--mserver-user USER] [--instance NAME] [--pohoda-exe PATH]
+          configure [--cloud URL] [--pairing-code CODE] [--mode mserver|cli] [--mserver-url URL]
+                    [--database DB] [--ico ICO] [--mserver-user USER] [--instance NAME] [--pohoda-exe PATH]
           diagnose
           run-once
           pohoda start|stop|restart [--endpoint ID]

@@ -31,6 +31,7 @@ import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import { formatDate, formatMoney } from '../../lib/format';
 import { DocumentCreateModal } from './DocumentCreateModal';
+import { UploadModal } from './UploadModal';
 
 const PaymentQrModal = lazy(() =>
   import('../payments/PaymentQrModal').then((module) => ({ default: module.PaymentQrModal })),
@@ -184,6 +185,7 @@ export function DocumentsPage() {
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const value = searchParams.get('zoradit') as SortKey | null;
@@ -504,9 +506,14 @@ export function DocumentsPage() {
       <div className="mb-4 flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">{t('doklady.titulok')}</h1>
         {data.role !== 'schvalovatel' && (
-          <button type="button" className="btn btn-primary" onClick={() => setCreateModalOpen(true)}>
-            + {t('doklady.pridat')}
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn" onClick={() => setUploadModalOpen(true)}>
+              {t('doklady.nahrat.tlacidlo')}
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => setCreateModalOpen(true)}>
+              + {t('doklady.pridat')}
+            </button>
+          </div>
         )}
       </div>
 
@@ -858,6 +865,14 @@ export function DocumentsPage() {
             setCreateModalOpen(false);
             navigate(detailHref(document.id, document.queueId));
           }}
+        />
+      )}
+
+      {uploadModalOpen && (
+        <UploadModal
+          organizations={organizations}
+          currentOrgId={currentOrgId}
+          onClose={() => setUploadModalOpen(false)}
         />
       )}
 

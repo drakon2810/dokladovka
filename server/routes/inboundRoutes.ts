@@ -7,7 +7,8 @@ import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { constantTimeStringEqual, sha256 } from '../security.js';
-import { classifyXml, looksLikeXml } from '../inbound/xmlClassifier.js';
+import { classifyXml } from '../inbound/xmlClassifier.js';
+import { detectedMimeType, mimeMatchesDeclared, safeName } from '../inbound/attachmentMime.js';
 import type { ObjectStorage } from '../storage.js';
 
 const attachmentSchema = z.object({
@@ -32,29 +33,6 @@ interface AliasResolution extends Record<string, unknown> {
   tenant_id: string;
   organization_id: string;
   address_normalized: string;
-}
-
-function detectedMimeType(bytes: Uint8Array): string | undefined {
-  if (bytes.length >= 5 && Buffer.from(bytes.slice(0, 5)).toString('ascii') === '%PDF-') return 'application/pdf';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 8 && Buffer.from(bytes.slice(0, 8)).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
-  if (bytes.length >= 12 && Buffer.from(bytes.slice(0, 4)).toString('ascii') === 'RIFF'
-    && Buffer.from(bytes.slice(8, 12)).toString('ascii') === 'WEBP') return 'image/webp';
-  if (looksLikeXml(bytes)) return 'application/xml';
-  return undefined;
-}
-
-// Deklarované MIME pre XML sa v e-mailových klientoch líši; obsahová detekcia rozhoduje.
-const XML_DECLARED_MIME_TYPES = ['application/xml', 'text/xml', 'application/octet-stream'];
-
-function mimeMatchesDeclared(actualMime: string, declaredMime: string): boolean {
-  if (actualMime === declaredMime) return true;
-  return actualMime === 'application/xml' && XML_DECLARED_MIME_TYPES.includes(declaredMime);
-}
-
-function safeName(value: string): string {
-  const base = value.replaceAll('\\', '/').split('/').pop() ?? 'attachment';
-  return base.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'attachment';
 }
 
 export function registerInboundRoutes(
@@ -243,6 +221,7 @@ export function registerInboundRoutes(
          FROM inbound_emails
         WHERE (tenant_id=$1 OR ($3 AND tenant_id IS NULL AND status='quarantine'))
           AND ($2::text IS NULL OR organization_id=$2)
+          AND provider <> 'manual-upload'
         ORDER BY created_at DESC LIMIT 200`,
       [auth.tenantId, query.organizationId ?? null, auth.role === 'admin'],
     );

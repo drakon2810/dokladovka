@@ -745,6 +745,7 @@ export interface ExtractionRun {
 export type SuggestionSource =
   | 'manual_rule'
   | 'partner_default'
+  | 'decision_memory'
   | 'supplier_history'
   | 'organization_default'
   | 'ai'
@@ -758,6 +759,7 @@ export interface AccountingSuggestion {
   clenenieDphId?: string;
   ciselnyRadId?: string;
   strediskoId?: string;
+  clenenieKvKod?: string;
   source: SuggestionSource;
   confidence: number;
   reason: string;

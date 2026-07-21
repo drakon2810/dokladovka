@@ -39,6 +39,23 @@ export interface DocumentValidationIssue {
   field?: string;
 }
 
+/**
+ * Zahraničný dodávateľ: IČ DPH alebo DIČ nesie 2-písmenový kód krajiny ≠ SK
+ * (napr. rakúske „ATU…", nemecké „DE…"). Slovenské formáty IČO (8 číslic) a DIČ
+ * (10 číslic) preň neplatia — zahraničné identifikátory by inak blokovali
+ * schválenie faktúry od EÚ dodávateľa.
+ */
+export function isForeignSupplier(supplier: { ico?: string; dic?: string; icDph?: string }): boolean {
+  for (const value of [supplier.icDph, supplier.dic]) {
+    if (!value) continue;
+    const normalized = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (/^[A-Z]{2}/.test(normalized) && !normalized.startsWith('SK') && checkVatId(value) !== 'invalid') {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isValidIsoDate(value: string | undefined): boolean {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -67,10 +84,13 @@ export function validateDocument(
   if (!extracted.cisloFaktury.trim() && !['BV', 'MZDY'].includes(doc.typ)) {
     issues.push({ code: 'invoice_number_required', field: 'cisloFaktury' });
   }
-  if (supplier.ico && !validateICO(supplier.ico)) {
+  // Zahraničný dodávateľ nemá slovenské IČO/DIČ — formátové kontroly by falošne
+  // blokovali schválenie; IČ DPH sa aj tak overuje cez checkVatId nižšie.
+  const foreignSupplier = isForeignSupplier(supplier);
+  if (!foreignSupplier && supplier.ico && !validateICO(supplier.ico)) {
     issues.push({ code: 'invalid_ico', field: 'dodavatel.ico' });
   }
-  if (supplier.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(supplier.dic.replace(/\s/g, '').toUpperCase())) {
+  if (!foreignSupplier && supplier.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(supplier.dic.replace(/\s/g, '').toUpperCase())) {
     issues.push({ code: 'invalid_dic', field: 'dodavatel.dic' });
   }
   // Neznámy kód krajiny schválenie neblokuje (server ho hlási len ako

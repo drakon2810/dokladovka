@@ -13,7 +13,10 @@ public sealed class WizardForm : Form
     private readonly Button _next = new() { Text = "Pokračovať", AutoSize = true };
     private readonly TextBox _cloud = new() { Dock = DockStyle.Top };
     private readonly TextBox _pairing = new() { Dock = DockStyle.Top, CharacterCasing = CharacterCasing.Upper };
+    private readonly RadioButton _modeMServer = new() { Text = "POHODA mServer (HTTP, beží trvalo)", AutoSize = true, Checked = true };
+    private readonly RadioButton _modeCli = new() { Text = "Priamy XML import (pohoda.exe /XML, bez mServera)", AutoSize = true };
     private readonly TextBox _mServer = new() { Dock = DockStyle.Top };
+    private readonly TextBox _database = new() { Dock = DockStyle.Top };
     private readonly TextBox _pohodaExe = new() { Dock = DockStyle.Top };
     private readonly TextBox _user = new() { Dock = DockStyle.Top };
     private readonly TextBox _password = new() { Dock = DockStyle.Top, UseSystemPasswordChar = true };
@@ -83,13 +86,17 @@ public sealed class WizardForm : Form
 
     private TabPage BuildDiscoveryPage()
     {
-        var page = Page("Vyhľadanie POHODA", "Sprievodca skúsi nájsť nainštalovanú POHODU. Adresu mServera môžete vždy zadať ručne.");
-        var detect = new Button { Text = "Vyhľadať POHODU", AutoSize = true };
+        var page = Page("Vyhľadanie POHODA", "Sprievodca skúsi nájsť nainštalovanú POHODU. Vyberte spôsob prepojenia: mServer beží trvalo ako služba, priamy XML import spúšťa POHODU iba počas prenosu.");
+        var panel = (FlowLayoutPanel)page.Controls[0];
+        panel.Controls.Add(_modeMServer);
+        panel.Controls.Add(_modeCli);
+        var detect = new Button { Text = "Vyhľadať POHODU", AutoSize = true, Margin = new Padding(3, 12, 3, 3) };
         detect.Click += (_, _) => DiscoverPohoda();
-        page.Controls.Add(detect);
-        page.Controls.Add(_discovery);
-        AddField(page, "Adresa POHODA mServer", _mServer);
-        AddField(page, "Cesta k pohoda.exe (voliteľné)", _pohodaExe);
+        panel.Controls.Add(detect);
+        panel.Controls.Add(_discovery);
+        AddField(page, "Adresa POHODA mServer (iba pre režim mServer)", _mServer);
+        AddField(page, "Databáza firmy (iba pre priamy import, napr. StwPh_12345678_2026.mdb)", _database);
+        AddField(page, "Cesta k pohoda.exe (povinná pre priamy import)", _pohodaExe);
         return page;
     }
 
@@ -112,7 +119,7 @@ public sealed class WizardForm : Form
 
     private TabPage BuildTestPage()
     {
-        var page = Page("Test spojenia", "Overí sa POHODA mServer, prihlásenie, firma, účtovný rok, cloud, párovanie a dostupnosť XSD schém.");
+        var page = Page("Test spojenia", "Overí sa POHODA, prihlásenie, firma, účtovný rok, cloud, párovanie a dostupnosť XSD schém. Pri priamom XML importe sa POHODA spustí na pozadí a test môže trvať aj minútu.");
         page.Controls.Add(_test);
         page.Controls.Add(_testResult);
         page.Controls.Add(_copyDiagnostics);
@@ -160,16 +167,20 @@ public sealed class WizardForm : Form
         {
             1 when !Uri.TryCreate(_cloud.Text.Trim(), UriKind.Absolute, out _) => "Zadajte platnú URL Dokladovka.",
             1 when string.IsNullOrWhiteSpace(_pairing.Text) => "Zadajte párovací kód.",
-            2 when !Uri.TryCreate(_mServer.Text.Trim(), UriKind.Absolute, out _) => "Zadajte platnú adresu mServera.",
-            3 when string.IsNullOrWhiteSpace(_user.Text) => "Zadajte používateľa mServer.",
-            3 when string.IsNullOrEmpty(_password.Text) => "Zadajte heslo mServer.",
+            2 when !_modeCli.Checked && !Uri.TryCreate(_mServer.Text.Trim(), UriKind.Absolute, out _) => "Zadajte platnú adresu mServera.",
+            2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_database.Text) => "Zadajte názov databázy POHODA (napr. StwPh_12345678_2026.mdb).",
+            2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_pohodaExe.Text) => "Zadajte cestu k pohoda.exe.",
+            3 when string.IsNullOrWhiteSpace(_user.Text) => "Zadajte používateľa POHODA.",
+            3 when string.IsNullOrEmpty(_password.Text) => "Zadajte heslo POHODA.",
             3 when !System.Text.RegularExpressions.Regex.IsMatch(_ico.Text.Trim(), "^[0-9]{8}$") => "IČO musí mať presne 8 číslic.",
             5 when !_configured => "Najprv úspešne vykonajte kontrolu spojenia.",
             _ => null,
         };
         if (error is null)
         {
-            if (_pages.SelectedIndex == 3) _companySummary.Text = $"Firma s IČO: {_ico.Text.Trim()}\nAdresa mServera: {_mServer.Text.Trim()}";
+            if (_pages.SelectedIndex == 3) _companySummary.Text = _modeCli.Checked
+                ? $"Firma s IČO: {_ico.Text.Trim()}\nDatabáza POHODA: {_database.Text.Trim()}"
+                : $"Firma s IČO: {_ico.Text.Trim()}\nAdresa mServera: {_mServer.Text.Trim()}";
             return true;
         }
         MessageBox.Show(error, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -188,12 +199,15 @@ public sealed class WizardForm : Form
             {
                 CloudBaseUrl = _cloud.Text.Trim(),
                 PairingCode = _pairing.Text.Trim(),
-                MServerUrl = _mServer.Text.Trim(),
+                MServerUrl = NullIfBlank(_mServer.Text),
                 CompanyIco = _ico.Text.Trim(),
                 UserName = _user.Text.Trim(),
                 Password = _password.Text,
                 InstanceName = NullIfBlank(_instance.Text),
                 PohodaExePath = NullIfBlank(_pohodaExe.Text),
+                Mode = _modeCli.Checked ? "cli" : "mserver",
+                Database = NullIfBlank(_database.Text),
+                EndpointId = _modeCli.Checked ? "pohoda-1" : "mserver-1",
                 AllowedPublisherThumbprint = _defaults.PublisherThumbprint,
             }, new RollingFileAgentLog(), CancellationToken.None);
             _configured = true;

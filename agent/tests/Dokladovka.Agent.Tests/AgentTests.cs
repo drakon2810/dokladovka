@@ -115,6 +115,112 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void CliSettingsRequireDatabaseAndExe()
+    {
+        var withoutDatabase = Settings("http://localhost:3001") with
+        {
+            MServers = [new MServerEndpointSettings { Id = "one", CompanyIco = "12345678", Mode = "cli", PohodaExePath = @"C:\Pohoda\Pohoda.exe" }],
+        };
+        Assert.Contains("databázy", Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(withoutDatabase)).Message);
+
+        var withoutExe = Settings("http://localhost:3001") with
+        {
+            MServers = [new MServerEndpointSettings { Id = "one", CompanyIco = "12345678", Mode = "cli", Database = "StwPh_12345678_2026.mdb" }],
+        };
+        Assert.Contains("pohoda.exe", Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(withoutExe)).Message);
+
+        AgentSettings.Validate(Settings("http://localhost:3001") with
+        {
+            MServers = [new MServerEndpointSettings { Id = "one", CompanyIco = "12345678", Mode = "cli", Database = "StwPh_12345678_2026.mdb", PohodaExePath = @"C:\Pohoda\Pohoda.exe" }],
+        });
+    }
+
+    [Fact]
+    public void CliSettingsRejectDatabaseWithoutYear()
+    {
+        var withoutYear = Settings("http://localhost:3001") with
+        {
+            MServers = [new MServerEndpointSettings { Id = "one", CompanyIco = "12345678", Mode = "cli", Database = "Ucto", PohodaExePath = @"C:\Pohoda\Pohoda.exe" }],
+        };
+        Assert.Contains("rok", Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(withoutYear)).Message);
+    }
+
+    [Fact]
+    public async Task CliGetCompanyFailsWhenPohodaExeMissing()
+    {
+        var endpoint = new MServerEndpointSettings
+        {
+            Id = "one", CompanyIco = "12345678", Mode = "cli",
+            Database = "StwPh_12345678_2026.mdb", PohodaExePath = @"C:\does-not-exist\Pohoda.exe",
+        };
+        var client = new PohodaCliClient(endpoint, new MServerSecret { EndpointId = "one", UserName = "Admin", Password = "x" }, new NullLog());
+        await Assert.ThrowsAsync<FileNotFoundException>(() => client.GetCompanyAsync(CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("StwPh_12345678_2026.mdb", "2026")]
+    [InlineData("StwPh_12345678_2026", "2026")]
+    [InlineData("Ucto", "")]
+    public void YearFromDatabaseParses(string database, string expected) =>
+        Assert.Equal(expected, PohodaCliClient.YearFromDatabase(database));
+
+    [Fact]
+    public async Task CliClientWritesWindows1250FilesAndReadsResponse()
+    {
+        var previous = Environment.GetEnvironmentVariable("DOKLADOVKA_AGENT_DATA_DIR");
+        var temporary = Path.Combine(Path.GetTempPath(), $"dokladovka-cli-test-{Guid.NewGuid():N}");
+        Environment.SetEnvironmentVariable("DOKLADOVKA_AGENT_DATA_DIR", temporary);
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            var windows1250 = Encoding.GetEncoding(1250);
+            Directory.CreateDirectory(temporary);
+            var pohodaExe = Path.Combine(temporary, "Pohoda.exe");
+            File.WriteAllText(pohodaExe, string.Empty);
+            var endpoint = new MServerEndpointSettings
+            {
+                Id = "one", CompanyIco = "12345678", Mode = "cli",
+                Database = "StwPh_12345678_2026.mdb", PohodaExePath = pohodaExe,
+            };
+            var secret = new MServerSecret { EndpointId = "one", UserName = "Admin", Password = "tajné" };
+            const string requestXml = "<?xml version=\"1.0\" encoding=\"Windows-1250\"?><dataPack>Faktúra č. 1</dataPack>";
+            const string responseXml = "<?xml version=\"1.0\" encoding=\"Windows-1250\"?><responsePack state=\"ok\">Doklad založený – číslo FV2600123</responsePack>";
+            string? iniContent = null;
+            string? inputContent = null;
+            List<string>? arguments = null;
+
+            var client = new PohodaCliClient(endpoint, secret, new NullLog(), (start, _) =>
+            {
+                arguments = start.ArgumentList.ToList();
+                var iniPath = start.ArgumentList[3];
+                iniContent = windows1250.GetString(File.ReadAllBytes(iniPath));
+                var responsePath = iniContent.Split("\r\n").Single(line => line.StartsWith("response_xml=", StringComparison.Ordinal))["response_xml=".Length..];
+                var inputPath = iniContent.Split("\r\n").Single(line => line.StartsWith("input_xml=", StringComparison.Ordinal))["input_xml=".Length..];
+                inputContent = windows1250.GetString(File.ReadAllBytes(inputPath));
+                File.WriteAllBytes(responsePath, windows1250.GetBytes(responseXml));
+                return Task.FromResult(0);
+            });
+
+            var response = await client.PostXmlAsync(requestXml, "job/1", true, CancellationToken.None);
+
+            Assert.Equal(responseXml, response);
+            Assert.Equal(requestXml, inputContent);
+            Assert.Equal(["/XML", "Admin", "tajné"], arguments!.Take(3));
+            Assert.Contains("database=StwPh_12345678_2026.mdb", iniContent);
+            Assert.Contains("check_duplicity=1", iniContent);
+            Assert.False(Directory.EnumerateFiles(Path.Combine(temporary, "xml")).Any(), "Pracovné súbory sa musia po behu upratať.");
+
+            var company = await client.GetCompanyAsync(CancellationToken.None);
+            Assert.Equal(new MServerCompany("12345678", "StwPh_12345678_2026.mdb", "2026", string.Empty), company);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOKLADOVKA_AGENT_DATA_DIR", previous);
+            try { Directory.Delete(temporary, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void ParsesExistingCodeListResponseFixture()
     {
         var xml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "code-lists-response-synthetic.xml"));

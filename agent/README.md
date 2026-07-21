@@ -1,6 +1,11 @@
 # Dokladovka Agent pre Windows
 
-Agent je odchádzajúci most medzi cloud backendom a lokálnym POHODA mServer. Cloud nemá priamy prístup do siete zákazníka. Token agenta a mServer heslá sa ukladajú cez Windows DPAPI (`LocalMachine`) do `%ProgramData%\Dokladovka`.
+Agent je odchádzajúci most medzi cloud backendom a lokálnou POHODOU. Cloud nemá priamy prístup do siete zákazníka. Token agenta a POHODA heslá sa ukladajú cez Windows DPAPI (`LocalMachine`) do `%ProgramData%\Dokladovka`.
+
+Agent podporuje dva režimy prepojenia s POHODOU (pole `mode` endpointu v `agent.json`):
+
+- **`mserver`** (predvolený) – HTTP komunikácia s trvalo bežiacim POHODA mServer.
+- **`cli`** – priamy XML import bez mServera: agent zapíše dataPack a INI súbor do `%ProgramData%\Dokladovka\xml` a spustí `pohoda.exe /XML "user" "heslo" job.ini`. POHODA sa spustí bez okna, spracuje import, zapíše responsePack a skončí. Licencia je obsadená iba počas behu. Režim vyžaduje `database` (názov databázy firmy, napr. `StwPh_12345678_2026.mdb`; pri SQL/E1 názov SQL databázy) a `pohodaExePath`. Účtovný rok sa odvodzuje z názvu databázy – **pri prechode na nový rok treba `database` v konfigurácii aktualizovať**. Beh má timeout 10 minút a na stroji beží vždy iba jeden import naraz (medziprocesový zámok, takže sa serializuje aj beh služby vs. `configure`/`run-once`). **Bezpečnostné upozornenie:** POHODA vyžaduje prihlasovacie údaje ako argumenty príkazového riadku (oficiálny mechanizmus STORMWARE), takže počas behu je heslo viditeľné v zozname procesov (`Win32_Process.CommandLine`) – a to nielen lokálnemu správcovi, ale na predvolenom Windowse aj bežným (neadministrátorským) používateľom prihláseným na tom istom stroji, plus sa zaznamená do auditu vytvárania procesov (Event ID 4688 / Sysmon 1). Preto: službu spúšťajte pod vyhradeným účtom s minimom práv, na zdieľanom (RDP) serveri, kde sa prihlasuje viac ľudí, uprednostnite režim `mserver`, a prístup interaktívneho/RDP prihlásenia obmedzte len na nevyhnutné účty.
 
 ## Inštalácia používateľom
 

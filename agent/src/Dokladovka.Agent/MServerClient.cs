@@ -12,7 +12,7 @@ public sealed class MServerException(HttpStatusCode statusCode, string message, 
     public bool IsTransient { get; } = transient;
 }
 
-public sealed class MServerClient
+public sealed class MServerClient : IPohodaClient
 {
     private readonly HttpClient _http;
     private readonly string _authorization;
@@ -27,7 +27,8 @@ public sealed class MServerClient
         _http = handler is null
             ? new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate })
             : new HttpClient(handler, disposeHandler: false);
-        _http.BaseAddress = new Uri(endpoint.BaseUrl.TrimEnd('/') + "/");
+        var baseUrl = endpoint.BaseUrl ?? throw new InvalidOperationException($"Endpoint {endpoint.Id} nemá nastavenú URL mServera.");
+        _http.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
         _http.Timeout = TimeSpan.FromMinutes(2);
         _authorization = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{secret.UserName}:{secret.Password}"));
     }

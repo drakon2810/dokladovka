@@ -8,9 +8,12 @@ import { HttpError } from '../http.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import type { ObjectStorage } from '../storage.js';
 import type { ServerConfig } from '../config.js';
+import { sha256 } from '../security.js';
+import { classifyXml } from '../inbound/xmlClassifier.js';
+import { detectedMimeType, safeName } from '../inbound/attachmentMime.js';
 import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
-import { rebuildAccountingSuggestion } from '../services/accountingSuggestionService.js';
+import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback } from '../services/accountingSuggestionService.js';
 import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
 
@@ -129,6 +132,9 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         JSON.stringify(body.accounting ?? document.accounting), approvedChanged ? 'na_kontrole' : document.status,
         id, auth.tenantId, body.expectedVersion],
     );
+    if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    // Úprava schváleného dokladu ruší potvrdenie — rozhodnutie sa vyradí z pamäte.
+    if (approvedChanged) await forgetUctoDecision(database, auth.tenantId, id);
     return result.rows[0];
   });
 
@@ -218,6 +224,17 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         WHERE id=$3 AND tenant_id=$4 AND version=$5 RETURNING *`,
       [approvedVersion, JSON.stringify(snapshot), id, auth.tenantId, expectedVersion],
     );
+    if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    // Pamäť rozhodnutí: potvrdené zaúčtovanie sa uloží ako vzor pre budúce návrhy.
+    await recordUctoDecision(database, {
+      tenantId: auth.tenantId,
+      organizationId: document.organization_id,
+      documentId: id,
+      extracted: document.extracted,
+      accounting: document.accounting,
+    });
+    // Samokontrola pravidiel: zhoda so schváleným = potvrdenie, rozdiel = oprava.
+    await updateRuleFeedback(database, { tenantId: auth.tenantId, documentId: id, accounting: document.accounting });
     await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
     return result.rows[0];
   });
@@ -315,6 +332,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           WHERE id=$3 AND tenant_id=$4 RETURNING *`,
         [status, JSON.stringify(history), id, auth.tenantId],
       );
+      // Zamietnutie/karanténa ruší prípadné schválenie — rozhodnutie von z pamäte.
+      await forgetUctoDecision(database, auth.tenantId, id);
       await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action, entityType: 'document', entityId: id, correlationId: request.id });
       return result.rows[0];
     });
@@ -455,6 +474,110 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     return reply.code(202).send({ queued: true });
   });
 
+  // Ručné nahratie dokladov (drag & drop / výber súborov). Súbory prejdú tou
+  // istou pipeline ako e-mailové prílohy: uložia sa do object storage a založí
+  // sa extract_document job, ktorý AI extrakciou vytvorí doklad. Zdrojový e-mail
+  // je syntetický (provider 'manual-upload') — worker cezeň číta kontext prílohy.
+  app.post('/api/documents/upload', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const body = z.object({
+      organizationId: z.string().uuid(),
+      files: z.array(z.object({
+        fileName: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(120),
+        contentBase64: z.string().min(1),
+      }).strict()).min(1).max(20),
+    }).strict().parse(request.body);
+    await requireOrganizationAccess(database, auth, body.organizationId);
+
+    const emailId = randomUUID();
+    const correlationId = request.id;
+    const maxAttempts = config.extractionProvider === 'openai' ? config.openai.maxRetries + 1 : 5;
+    await database.query(
+      `INSERT INTO inbound_emails
+        (id, tenant_id, organization_id, alias_id, provider, provider_message_id, envelope_recipients,
+         sender_email, sender_name, subject, received_at, status, attachment_count, correlation_id)
+       VALUES ($1,$2,$3,NULL,'manual-upload',$4,'[]'::jsonb,$5,$6,'Ručné nahratie',now(),'received',$7,$8)`,
+      [emailId, auth.tenantId, body.organizationId, randomUUID(), auth.email, auth.name,
+        body.files.length, correlationId],
+    );
+
+    const results: Array<{ fileName: string; status: string; reason?: string }> = [];
+    let queued = 0;
+    for (const file of body.files) {
+      const attachmentId = randomUUID();
+      const bytes = Buffer.from(file.contentBase64, 'base64');
+      // Magic-byte detekcia je autorita; deklarovaný MIME z prehliadača je len záznam.
+      const actualMime = detectedMimeType(bytes);
+      const hash = sha256(bytes);
+      let status: 'queued' | 'quarantine' | 'duplicate' = 'quarantine';
+      let reason: string | undefined;
+      let storageKey: string | undefined;
+
+      if (bytes.byteLength === 0) reason = 'empty_file';
+      if (!reason && bytes.byteLength > config.extractionMaxFileBytes) reason = 'attachment_too_large';
+      if (!reason && !actualMime) reason = 'unsupported_or_corrupted_file';
+      if (!reason && actualMime === 'application/xml' && classifyXml(bytes) === 'unknown_xml') reason = 'unsupported_xml';
+      if (!reason) {
+        const duplicate = await database.query(
+          `SELECT 1 FROM inbound_attachments
+            WHERE tenant_id=$1 AND organization_id=$2 AND sha256=$3
+              AND status IN ('queued','processing','document_created','duplicate')`,
+          [auth.tenantId, body.organizationId, hash],
+        );
+        if (duplicate.rowCount > 0) {
+          status = 'duplicate';
+          reason = 'technical_duplicate';
+        } else {
+          storageKey = `upload/${auth.tenantId}/${body.organizationId}/${emailId}/${attachmentId}/${safeName(file.fileName)}`;
+          await storage.put(storageKey, bytes, actualMime!);
+          status = 'queued';
+          queued += 1;
+        }
+      }
+
+      await database.query(
+        `INSERT INTO inbound_attachments
+          (id, tenant_id, inbound_email_id, organization_id, original_file_name, safe_file_name,
+           declared_mime_type, detected_mime_type, byte_size, sha256, storage_key, status, quarantine_reason)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [attachmentId, auth.tenantId, emailId, body.organizationId, file.fileName, safeName(file.fileName),
+          file.mimeType, actualMime ?? null, bytes.byteLength, hash, storageKey ?? null, status, reason ?? null],
+      );
+      if (status === 'queued') {
+        await database.query(
+          `INSERT INTO processing_jobs
+            (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id, payload, max_attempts)
+           VALUES ($1,$2,$3,$4,'extract_document','queued',$5,'{}'::jsonb,$6)`,
+          [randomUUID(), auth.tenantId, body.organizationId, attachmentId, correlationId, maxAttempts],
+        );
+      }
+      results.push({ fileName: file.fileName, status, reason });
+    }
+
+    await database.query(
+      'UPDATE inbound_emails SET status=$1 WHERE id=$2',
+      [queued > 0 ? 'queued' : 'quarantine', emailId],
+    );
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId: body.organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'document.uploaded',
+      entityType: 'inbound_email',
+      entityId: emailId,
+      correlationId,
+      metadata: { attachmentCount: body.files.length, queued },
+    });
+    return reply.code(202).send({ emailId, queued, results });
+  });
+
   app.get('/api/documents/:id/extraction-runs', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -526,6 +649,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           id, auth.tenantId, document.organization_id, expectedVersion],
       );
       if (!changed.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+      // Aplikovanie extrakcie ruší prípadné schválenie — rozhodnutie von z pamäte.
+      await forgetUctoDecision(tx, auth.tenantId, id);
       await rebuildAccountingSuggestion(tx, {
         tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
         supplierIco: result.supplier.ico, supplierName: result.supplier.nazov,

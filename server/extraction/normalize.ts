@@ -43,6 +43,31 @@ export function parseDecimal(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+// AI vracia menu v rôznych podobách (EURO, €, Kč, $). Kanonizujeme na ISO kód,
+// inak doklad spadne na 'unsupported_currency', hoci mena je reálne EUR.
+const CURRENCY_ALIASES: Record<string, string> = {
+  EUR: 'EUR', EURO: 'EUR', EUROS: 'EUR', '€': 'EUR',
+  CZK: 'CZK', 'KČ': 'CZK', KC: 'CZK',
+  USD: 'USD', 'US$': 'USD', '$': 'USD',
+};
+
+export function canonicalCurrency(raw: string | undefined): string {
+  const key = (raw ?? '').trim().toUpperCase();
+  if (!key) return 'EUR';
+  return CURRENCY_ALIASES[key] ?? key;
+}
+
+// AI občas skopíruje zahraničné IČ DPH aj do poľa DIČ (napr. ATU… u rakúskeho
+// dodávateľa). DIČ je SK/CZ identifikátor; keď sa zhoduje s IČ DPH, je to
+// duplikát — zhodíme ho, inak doklad spadne na invalid_dic pri schvaľovaní.
+function withoutForeignDicCopy(supplier: ExtractionResult['supplier']): ExtractionResult['supplier'] {
+  if (supplier.dic && supplier.icDph
+    && supplier.dic.replace(/\s/g, '').toUpperCase() === supplier.icDph.replace(/\s/g, '').toUpperCase()) {
+    return { ...supplier, dic: undefined };
+  }
+  return supplier;
+}
+
 function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -68,7 +93,7 @@ export function normalizeExtractionResult(
 ): NormalizedExtraction {
   const result = extractionResultSchema.parse(raw);
   const totalAmount = round2(parseDecimal(result.totalAmount) ?? 0);
-  const currency = result.currency?.trim().toUpperCase() || 'EUR';
+  const currency = canonicalCurrency(result.currency);
   const mappedConfidence = Object.fromEntries(Object.entries(result.fieldConfidence).map(([path, value]) => [
     FIELD_PATHS[path] ?? path
       .replace(/^supplier\./, 'dodavatel.')
@@ -81,7 +106,7 @@ export function normalizeExtractionResult(
   return {
     documentType: result.documentType === 'UNKNOWN' ? 'FP' : result.documentType,
     extracted: {
-      dodavatel: { ...result.supplier, nazov: result.supplier.nazov ?? '' },
+      dodavatel: { ...withoutForeignDicCopy(result.supplier), nazov: result.supplier.nazov ?? '' },
       odberatel: { ...result.buyer },
       cisloFaktury: result.invoiceNumber ?? '',
       cisloObjednavky: result.orderNumber,

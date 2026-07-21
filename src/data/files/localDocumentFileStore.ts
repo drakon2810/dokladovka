@@ -4,7 +4,12 @@
 
 export const MAX_DOCUMENT_FILE_SIZE = 20 * 1024 * 1024;
 
-export type SupportedDocumentMime = 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp';
+export type SupportedDocumentMime =
+  | 'application/pdf'
+  | 'image/jpeg'
+  | 'image/png'
+  | 'image/webp'
+  | 'application/xml';
 
 export interface StoredDocumentFile {
   key: string;
@@ -38,9 +43,19 @@ function bytesStartWith(bytes: Uint8Array, signature: number[]): boolean {
   return signature.every((value, index) => bytes[index] === value);
 }
 
+/** Rozpozná PEPPOL BIS / UBL e-faktúru podľa začiatku obsahu (XML deklarácia
+ *  alebo koreňový element). HTML (`<!DOCTYPE`, `<!--`) sa vylučuje. */
+function looksLikeXml(bytes: Uint8Array): boolean {
+  const start = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  const head = new TextDecoder('utf-8', { fatal: false })
+    .decode(bytes.slice(start))
+    .replace(/^\s+/, '');
+  return head.startsWith('<?xml') || /^<[A-Za-z]/.test(head);
+}
+
 /** MIME sa určuje podľa magic bytes; browserom deklarovaný typ nie je autorita. */
 export async function detectDocumentMime(file: Blob): Promise<SupportedDocumentMime | undefined> {
-  const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  const bytes = new Uint8Array(await file.slice(0, 256).arrayBuffer());
   if (bytesStartWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
   if (bytesStartWith(bytes, [0xff, 0xd8, 0xff])) return 'image/jpeg';
   if (bytesStartWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
@@ -48,6 +63,7 @@ export async function detectDocumentMime(file: Blob): Promise<SupportedDocumentM
   }
   if (String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF'
     && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
+  if (looksLikeXml(bytes)) return 'application/xml';
   return undefined;
 }
 

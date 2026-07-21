@@ -13,6 +13,27 @@ import {
   mapFieldConfidenceToDocument,
 } from './extractionProvider';
 
+// Kanonizácia meny (EURO/€/Kč/$ → ISO) — musí zostať v zhode so serverom
+// (server/extraction/normalize.ts). Bez nej doklad spadne na unsupported_currency.
+const CURRENCY_ALIASES: Record<string, string> = {
+  EUR: 'EUR', EURO: 'EUR', EUROS: 'EUR', '€': 'EUR',
+  CZK: 'CZK', 'KČ': 'CZK', KC: 'CZK',
+  USD: 'USD', 'US$': 'USD', '$': 'USD',
+};
+
+function canonicalCurrency(raw: string | undefined): DocumentExtractedData['mena'] {
+  const key = (raw ?? '').trim().toUpperCase();
+  if (!key) return 'EUR';
+  return (CURRENCY_ALIASES[key] ?? key) as DocumentExtractedData['mena'];
+}
+
+// AI občas skopíruje zahraničné IČ DPH aj do DIČ — DIČ je SK/CZ identifikátor,
+// pri zhode s IČ DPH ide o duplikát. Musí zostať v zhode so serverom (normalize.ts).
+function dicWithoutForeignVatCopy(dic: string | undefined, icDph: string | undefined): string | undefined {
+  if (dic && icDph && dic.replace(/\s/g, '').toUpperCase() === icDph.replace(/\s/g, '').toUpperCase()) return undefined;
+  return dic;
+}
+
 function vatRows(result: ExtractionResult): VatBreakdownRow[] {
   return result.vatBreakdown.flatMap((row) => {
     const rate = Number(row.vatRate);
@@ -41,7 +62,7 @@ export function normalizeExtractionResult(
       dodavatel: {
         nazov: result.supplier.nazov ?? '',
         ico: result.supplier.ico,
-        dic: result.supplier.dic,
+        dic: dicWithoutForeignVatCopy(result.supplier.dic, result.supplier.icDph),
         icDph: result.supplier.icDph,
         adresa: result.supplier.adresa,
         iban: result.supplier.iban,
@@ -54,7 +75,7 @@ export function normalizeExtractionResult(
       datumVystavenia: result.issueDate ?? fallbackDate,
       datumSplatnosti: result.dueDate,
       datumDodania: result.taxDate,
-      mena: (result.currency as DocumentExtractedData['mena']) ?? 'EUR',
+      mena: canonicalCurrency(result.currency),
       rozpisDph: vatRows(result),
       sumaSpolu: round2(parseDecimalString(result.totalAmount) ?? 0),
       polozky: result.lineItems.map((item, index) => ({

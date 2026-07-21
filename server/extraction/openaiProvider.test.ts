@@ -94,6 +94,8 @@ describe('OpenAIDocumentExtractionProvider', () => {
   it.each([
     [Object.assign(new Error('timeout'), { name: 'APIConnectionTimeoutError' }), 'openai_timeout'],
     [Object.assign(new Error('temporary'), { status: 503 }), 'openai_unavailable'],
+    [Object.assign(new Error('Connection error.'), { name: 'APIConnectionError' }), 'openai_unavailable'],
+    [Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }), 'openai_unavailable'],
   ])('opakuje iba dočasnú provider chybu %#', async (error, code) => {
     const parse = vi.fn().mockRejectedValue(error);
     const provider = new OpenAIDocumentExtractionProvider(config, { parse });

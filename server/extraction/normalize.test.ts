@@ -19,6 +19,45 @@ describe('normalizácia SK/CZ faktúr', () => {
     expect(validateNormalizedExtraction(normalized, { ico: '87654321' })).toEqual([]);
   });
 
+  it('zahodí DIČ skopírované z IČ DPH u zahraničného dodávateľa (ATU…)', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'MUNDUS Spedition', dic: 'ATU42597604', icDph: 'ATU42597604' },
+      buyer: { ico: '87654321' }, invoiceNumber: '1039', issueDate: '2026-02-03', taxDate: '2026-02-03',
+      dueDate: '2026-07-08', currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '383.15', vat: '0' }],
+      totalAmount: '383.15', fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-at', '2026-02-03');
+    expect((normalized.extracted as any).dodavatel.dic).toBeUndefined();
+    expect((normalized.extracted as any).dodavatel.icDph).toBe('ATU42597604');
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' }).map((issue) => issue.code))
+      .not.toContain('invalid_dic');
+  });
+
+  it('zachová platný SK DIČ (nie je kópia IČ DPH)', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'SK Dodávateľ', dic: '2020254170', icDph: 'SK2020254170' },
+      buyer: { ico: '87654321' }, invoiceNumber: '1', issueDate: '2026-02-03', taxDate: '2026-02-03',
+      dueDate: '2026-02-10', currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '100', vat: '0' }], totalAmount: '100',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-sk2', '2026-02-03');
+    expect((normalized.extracted as any).dodavatel.dic).toBe('2020254170');
+  });
+
+  it('kanonizuje menu "EURO" na EUR (mena nezablokuje schválenie)', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'MUNDUS Spedition', icDph: 'ATU42597604' },
+      buyer: { ico: '87654321' }, invoiceNumber: '1102', issueDate: '2026-03-11', taxDate: '2026-03-11',
+      dueDate: '2026-03-25', currency: 'EURO', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '455.38', vat: '0' }],
+      totalAmount: '455.38', fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-eur', '2026-03-11');
+    expect(normalized.currency).toBe('EUR');
+    expect((normalized.extracted as any).mena).toBe('EUR');
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' }).map((issue) => issue.code))
+      .not.toContain('unsupported_currency');
+  });
+
   it('zachová české sadzby 21 % a 12 % a overí súčty', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP',

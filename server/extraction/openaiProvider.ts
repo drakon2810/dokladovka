@@ -54,6 +54,13 @@ function classifyError(error: unknown): ExtractionProviderError {
     || candidate.name === 'APITimeoutError' || candidate.code === 'ETIMEDOUT') {
     return new ExtractionProviderError('openai_timeout', 'Časový limit AI extrakcie vypršal', true);
   }
+  // Prechodné sieťové chyby (reset spojenia, DNS, odmietnuté spojenie) hlási SDK
+  // ako APIConnectionError — sú retryable, inak jeden výpadok siete zmení doklad
+  // na trvalú chybu bez jediného pokusu o opakovanie.
+  if (candidate.name === 'APIConnectionError'
+    || (candidate.code !== undefined && ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'EAI_AGAIN'].includes(candidate.code))) {
+    return new ExtractionProviderError('openai_unavailable', 'AI služba je dočasne nedostupná', true);
+  }
   if (candidate.status === 429) {
     return new ExtractionProviderError('openai_rate_limited', 'AI služba je dočasne vyťažená', true);
   }
@@ -126,6 +133,13 @@ export class OpenAIDocumentExtractionProvider implements ServerDocumentExtractio
         } : undefined,
       };
     } catch (error) {
+      // Surová chyba providera sa do dokladu neukladá (ide tam len safeMessage),
+      // preto ju zalogujeme — inak sa generické 'AI extrakcia zlyhala' nedá
+      // diagnostikovať (odlíšiť sieťový výpadok od 4xx/refusalu/truncation).
+      const raw = error as { name?: string; status?: number; code?: string; message?: string };
+      console.error('[openai-extraction] raw provider error:', {
+        name: raw?.name, status: raw?.status, code: raw?.code, message: raw?.message,
+      });
       throw classifyError(error);
     }
   }

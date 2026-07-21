@@ -329,7 +329,7 @@ export const sk = {
   'doklady.pridat.vyberOrganizaciu': 'Vyberte organizáciu',
   'doklady.pridat.pevnaOrganizacia': 'Doklad sa uloží do tejto organizácie.',
   'doklady.pridat.subor': 'Dokument',
-  'doklady.pridat.povoleneSubory': 'PDF, JPG, PNG alebo WEBP, najviac 20 MB',
+  'doklady.pridat.povoleneSubory': 'PDF, JPG, PNG, WEBP alebo XML (PEPPOL BIS), najviac 20 MB',
   'doklady.pridat.dodavatel': 'Dodávateľ / partner (voliteľné)',
   'doklady.pridat.cisloDokladu': 'Číslo dokladu (voliteľné)',
   'doklady.pridat.vytvorit': 'Vytvoriť doklad',
@@ -338,6 +338,16 @@ export const sk = {
   'doklady.pridat.chybaFormatSuboru':
     'Súbor musí byť platný PDF, JPG alebo PNG a nesmie byť väčší ako 20 MB.',
   'doklady.pridat.chybaVytvorenie': 'Doklad sa nepodarilo vytvoriť. Skúste to znova.',
+  'doklady.nahrat.tlacidlo': 'Ručné nahratie',
+  'doklady.nahrat.zavriet': 'Zavrieť',
+  'doklady.nahrat.titulok': 'Rýchle nahratie dokladov',
+  'doklady.nahrat.vyzva': 'Presuňte súbory sem alebo',
+  'doklady.nahrat.vybrat': 'vyberte súbory',
+  'doklady.nahrat.formaty': 'Bločky, faktúry, PDF/JPG/PNG/WEBP alebo XML (PEPPOL BIS), do 20 MB',
+  'doklady.nahrat.organizacia': 'Organizácia:',
+  'doklady.nahrat.chyba': 'Nepodarilo sa',
+  'doklady.nahrat.duplicita': 'Súbor už bol nahratý',
+  'doklady.nahrat.odstranit': 'Odstrániť',
 
   // ===== Detail dokladu =====
   'detail.titulok': 'Detail dokladu',
@@ -433,6 +443,10 @@ export const sk = {
   'detail.sucty.rozdiel': 'Rozdiel',
   'detail.navrhZdroj.manual_rule': 'Navrhnuté podľa pravidla pre dodávateľa.',
   'detail.navrhZdroj.partner_default': 'Navrhnuté podľa predvolieb partnera.',
+  'detail.navrhZdroj.decision_memory':
+    'Navrhnuté z pamäte potvrdených zaúčtovaní tohto dodávateľa.',
+  'detail.autoVyplnene':
+    'Zaúčtovanie bolo predvyplnené automaticky — skontrolujte pred schválením.',
   'detail.navrhZdroj.supplier_history':
     'Navrhnuté podľa posledných schválených faktúr od tohto dodávateľa.',
   'detail.navrhZdroj.organization_default':
@@ -633,6 +647,37 @@ export const sk = {
   'nast.tab.pouzivatelia': 'Používatelia',
   'nast.tab.schranky': 'E-mailové schránky',
   'nast.tab.mostik': 'Mostík',
+  'nast.tab.trening': 'Tréning AI',
+  'trening.popis':
+    'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — systém si ich zapamätá a nové faktúry rovnakých dodávateľov navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',
+  'trening.pamat': 'V pamäti rozhodnutí',
+  'trening.schvalene': 'zo schválených dokladov',
+  'trening.importovane': 'z importu histórie',
+  'trening.nahrat': 'Nahrať Excel',
+  'trening.stlpce':
+    'Očakávané stĺpce: IČO, Dodávateľ, Text, Predkontácia, Členenie DPH, Členenie KV, Číselný rad, Stredisko. Funguje aj priamy export agendy z POHODY (Firma, ČlDPH, ČlKV DPH). Povinný je dodávateľ (IČO alebo názov) a predkontácia alebo členenie DPH.',
+  'trening.riadkovOk': 'riadkov v poriadku',
+  'trening.riadkovChyba': 'riadkov s chybou',
+  'trening.importovat': 'Importovať platné riadky',
+  'trening.ziadneRiadky': 'Súbor neobsahuje použiteľné riadky.',
+  'trening.hotovo': 'Import hotový',
+  'trening.analyzovat': 'Analyzovať pamäť (AI)',
+  'trening.navrhy': 'Návrhy pravidiel od AI',
+  'trening.navrhyPopis':
+    'AI našla v pamäti opakujúce sa vzory. Zaškrtnite pravidlá, ktoré majú platiť — navrhovať začnú až po potvrdení.',
+  'trening.ziadneNavrhy': 'AI nenašla žiadne nové vzory.',
+  'trening.potvrdit': 'Aktivovať vybrané pravidlá',
+  'trening.pravidlaVytvorene': 'Pravidlá aktivované',
+  'trening.pravidla': 'Pravidlá organizácie',
+  'trening.dodavatel': 'Dodávateľ',
+  'trening.klucoveSlova': 'Kľúčové slová',
+  'trening.stavAktivne': 'Aktívne',
+  'trening.stavNaKontrolu': 'Na kontrolu — 3× opravené',
+  'trening.stavNeaktivne': 'Neaktívne',
+  'trening.obnovit': 'Obnoviť',
+  'trening.zmazat': 'Zmazať',
+  'trening.pravidloObnovene': 'Pravidlo obnovené',
+  'trening.pravidloZmazane': 'Pravidlo zmazané',
   'nast.resetDemo': 'Reset demo dát',
   'nast.resetDemoPotvrdenie':
     'Naozaj obnoviť demo dáta? Všetky zmeny sa stratia.',

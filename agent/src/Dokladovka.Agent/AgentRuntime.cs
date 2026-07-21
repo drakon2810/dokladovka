@@ -12,8 +12,12 @@ public sealed class AgentCycleRunner
     private readonly PendingJobStore _pendingJobs;
     private readonly RuntimeStateStore _stateStore;
     private readonly RuntimeState _state;
-    private readonly Dictionary<string, MServerClient> _mServers;
+    private readonly Dictionary<string, IPohodaClient> _mServers;
     private readonly Dictionary<string, MServerEndpointSettings> _endpoints;
+    // ponytail: počítadlo pokusov v pamäti procesu (reset pri reštarte služby). Perzistovať sa nedá – pending .bin sa každý cyklus
+    // prepíše z fronty. Pri reštarte sa pokusy vynulujú, čo je prijateľné. Slúži len na cli režim (mserver má vlastnú permanent chybu).
+    private const int CliMaxAttempts = 5;
+    private readonly Dictionary<string, int> _cliExportAttempts = new(StringComparer.Ordinal);
 
     public AgentCycleRunner(AgentSettings settings, AgentSecrets secrets, IAgentLog log)
     {
@@ -28,16 +32,28 @@ public sealed class AgentCycleRunner
         var secretByEndpoint = secrets.MServers.ToDictionary(item => item.EndpointId, StringComparer.OrdinalIgnoreCase);
         _mServers = settings.MServers.ToDictionary(
             endpoint => endpoint.Id,
-            endpoint => new MServerClient(endpoint, secretByEndpoint.TryGetValue(endpoint.Id, out var secret)
-                ? secret
-                : throw new InvalidOperationException($"Chýbajú prihlasovacie údaje pre mServer {endpoint.Id}."), log),
+            IPohodaClient (endpoint) =>
+            {
+                var secret = secretByEndpoint.TryGetValue(endpoint.Id, out var value)
+                    ? value
+                    : throw new InvalidOperationException($"Chýbajú prihlasovacie údaje pre mServer {endpoint.Id}.");
+                return endpoint.IsCli ? new PohodaCliClient(endpoint, secret, log) : new MServerClient(endpoint, secret, log);
+            },
             StringComparer.OrdinalIgnoreCase);
     }
 
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
         var live = await ReadCompaniesAsync(cancellationToken);
-        await _backend.SendHeartbeatAsync(live.Select(item => new HeartbeatCompany(item.Endpoint.CompanyIco, item.Company.DatabaseName, item.Company.Year)).ToArray(), cancellationToken);
+        // Heartbeat oddelený od zvyšku cyklu: jeho zlyhanie (napr. odmietnutá dávka) nesmie zablokovať spracovanie exportov.
+        try
+        {
+            await _backend.SendHeartbeatAsync(live.Select(item => new HeartbeatCompany(item.Endpoint.CompanyIco, item.Company.DatabaseName, item.Company.Year)).ToArray(), cancellationToken);
+        }
+        catch (Exception error)
+        {
+            _log.Error("heartbeat_failed", error);
+        }
         var organizations = await _backend.GetOrganizationsAsync(cancellationToken);
 
         foreach (var pending in _pendingJobs.LoadAll())
@@ -196,6 +212,7 @@ public sealed class AgentCycleRunner
                 endpoint = endpoint.Id,
             }, cancellationToken);
             _pendingJobs.Delete(pending.Job.ExportJobId);
+            _cliExportAttempts.Remove(pending.Job.ExportJobId);
             _log.Info("export_completed", new { pending.Job.ExportJobId, durationMs = stopwatch.ElapsedMilliseconds, parsed.PackState });
         }
         catch (MServerException error) when (!error.IsTransient)
@@ -204,6 +221,20 @@ public sealed class AgentCycleRunner
         }
         catch (Exception error)
         {
+            // Cli režim nemá netransientnú MServerException, takže trvalá chyba (zlá cesta k exe, zlé prihlásenie, chýbajúce právo,
+            // zlý názov databázy) by inak donekonečna spúšťala POHODU a cloud by sa chybu nikdy nedozvedel. Po CliMaxAttempts to nahlásime.
+            if (endpoint.IsCli)
+            {
+                var attempts = _cliExportAttempts.GetValueOrDefault(pending.Job.ExportJobId) + 1;
+                if (attempts >= CliMaxAttempts)
+                {
+                    await SendPermanentFailureAsync(pending, documentIds, $"POHODA /XML export zlyhal {attempts}× po sebe; posledná chyba: {error.Message}", stopwatch, cancellationToken);
+                    return;
+                }
+                _cliExportAttempts[pending.Job.ExportJobId] = attempts;
+                _log.Error("export_deferred", error, new { pending.Job.ExportJobId, attempts, durationMs = stopwatch.ElapsedMilliseconds });
+                return;
+            }
             _log.Error("export_deferred", error, new { pending.Job.ExportJobId, durationMs = stopwatch.ElapsedMilliseconds });
         }
     }
@@ -218,6 +249,7 @@ public sealed class AgentCycleRunner
             durationMs = stopwatch.ElapsedMilliseconds,
         }, cancellationToken);
         _pendingJobs.Delete(pending.Job.ExportJobId);
+        _cliExportAttempts.Remove(pending.Job.ExportJobId);
         _log.Info("export_rejected", new { pending.Job.ExportJobId, durationMs = stopwatch.ElapsedMilliseconds });
     }
 

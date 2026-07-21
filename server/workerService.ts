@@ -48,6 +48,7 @@ interface AttachmentContext extends Record<string, unknown> {
   byte_size: number;
   storage_key: string;
   original_file_name: string;
+  email_provider: string;
   sender_email?: string;
   subject?: string;
   received_at: string | Date;
@@ -94,7 +95,7 @@ async function claimJob(database: Database, workerId: string): Promise<JobRow | 
 async function attachmentContext(database: Database, job: JobRow): Promise<AttachmentContext> {
   const result = await database.query<AttachmentContext>(
     `SELECT a.id, a.document_id, a.inbound_email_id, a.detected_mime_type, a.byte_size, a.storage_key,
-            a.original_file_name, e.sender_email, e.subject, e.received_at,
+            a.original_file_name, e.provider AS email_provider, e.sender_email, e.subject, e.received_at,
             o.name AS organization_name, o.ico AS organization_ico, o.dic AS organization_dic,
             o.ic_dph AS organization_ic_dph
        FROM inbound_attachments a
@@ -117,9 +118,10 @@ async function prepareRun(
   const documentId = job.document_id ?? context.document_id ?? randomUUID();
   const runId = randomUUID();
   const isReprocess = job.kind === 'reprocess_document';
+  const isUpload = context.email_provider === 'manual-upload';
   const fallbackDate = new Date(context.received_at).toISOString().slice(0, 10);
   const source = {
-    typ: 'email',
+    typ: isUpload ? 'upload' : 'email',
     inboundEmailId: context.inbound_email_id,
     attachmentId: context.id,
     mimeType: context.detected_mime_type,
@@ -148,7 +150,8 @@ async function prepareRun(
          'FP','novy','extracting',$4::jsonb,$5::jsonb,'{}'::jsonb,'{}'::jsonb,0,0,'EUR',$6::jsonb)
        ON CONFLICT (id) DO NOTHING`,
       [documentId, job.tenant_id, job.organization_id, JSON.stringify(source), JSON.stringify(emptyExtracted),
-        JSON.stringify([{ ts: new Date().toISOString(), user: 'Systém', akcia: 'Doklad vytvorený z prijatého e-mailu' }])],
+        JSON.stringify([{ ts: new Date().toISOString(), user: 'Systém',
+          akcia: isUpload ? 'Doklad vytvorený z ručne nahratého súboru' : 'Doklad vytvorený z prijatého e-mailu' }])],
     );
     await tx.query(
       `UPDATE documents SET processing_status='extracting', updated_at=now()
