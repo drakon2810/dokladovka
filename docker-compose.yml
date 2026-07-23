@@ -95,7 +95,9 @@ services:
         condition: service_started
     environment:
       NODE_ENV: production
-      # Poller nepotrebuje DB ani storage — parsuje poštu a volá inbound webhook API.
+      # Poller DB reálne nepoužíva (len parsuje poštu a volá inbound webhook), ale
+      # zdieľaný loadConfig() v produkcii DATABASE_URL vyžaduje — inak spadne na štarte.
+      DATABASE_URL: postgresql://dokladovka:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/dokladovka
       API_BASE_URL: http://api:3001
       INBOUND_WEBHOOK_SECRET: ${INBOUND_WEBHOOK_SECRET:-local-only-change-me}
       MAIL_RECEIVING_DOMAIN: ${MAIL_RECEIVING_DOMAIN:-doklady.localhost.test}
