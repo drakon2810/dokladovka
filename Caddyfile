@@ -1,0 +1,22 @@
+# Reverse proxy + hosting SPA + automatické HTTPS (Let's Encrypt).
+# Doména sa berie z env APP_DOMAIN. Lokálne nechaj "localhost" (Caddy použije
+# interný certifikát); na serveri nastav skutočnú doménu (dokladovka.site).
+{$APP_DOMAIN} {
+	encode gzip zstd
+
+	# API a stiahnutia agenta smerujú na backend (Fastify na porte 3001).
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+	handle /downloads/* {
+		reverse_proxy api:3001
+	}
+
+	# Zvyšok = staticky zbuildený React SPA s fallbackom na index.html
+	# (kvôli client-side routingu React Routera).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

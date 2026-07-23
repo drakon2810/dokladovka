@@ -15,3 +15,9 @@ COPY --from=build /app/server/db/migrations ./server/db/migrations
 USER node
 EXPOSE 3001
 CMD ["node", "build/server/index.js"]
+
+# Frontend: zbuildený React SPA (dist/) servírovaný Caddym, ktorý zároveň
+# robí reverse proxy na /api a automatické HTTPS. Znovu použije build stage.
+FROM caddy:2-alpine AS web
+COPY --from=build /app/dist /srv
+COPY Caddyfile /etc/caddy/Caddyfile

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: dokladovka
       POSTGRES_USER: dokladovka
@@ -15,6 +16,7 @@ services:
 
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dokladovka-local}
@@ -38,6 +40,7 @@ services:
 
   api:
     build: .
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,11 +68,30 @@ services:
       OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
       OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      # Len pre jednorazový `docker compose run api node build/server/db/seed.js`.
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+    # Port nie je publikovaný von — chodí sa naň iba cez Caddy (web).
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
     ports:
-      - "3001:3001"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
 
   worker:
     build: .
+    restart: unless-stopped
     command: ["node", "build/server/worker.js"]
     depends_on:
       postgres:
@@ -98,6 +120,7 @@ services:
 
   imap:
     build: .
+    restart: unless-stopped
     command: ["node", "build/server/imap.js"]
     depends_on:
       api:
@@ -117,6 +140,7 @@ services:
 
   monitor:
     build: .
+    restart: unless-stopped
     command: ["node", "build/server/monitor.js"]
     depends_on:
       postgres:
@@ -140,3 +164,5 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  caddy-data:
+  caddy-config:
