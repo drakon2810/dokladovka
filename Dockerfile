@@ -12,6 +12,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/build/server ./build/server
 COPY --from=build /app/server/db/migrations ./server/db/migrations
+# Priečinok pre filesystem object storage — vlastní ho node, aby naň sadol
+# prázdny named volume s rovnakými právami (inak by USER node nemal write).
+RUN mkdir -p /data/objects && chown -R node:node /data
 USER node
 EXPOSE 3001
 CMD ["node", "build/server/index.js"]

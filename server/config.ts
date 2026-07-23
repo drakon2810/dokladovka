@@ -85,8 +85,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (nodeEnv === 'production' && !env.DATABASE_URL) {
     throw new Error('DATABASE_URL je v produkcii povinné');
   }
-  if (nodeEnv === 'production' && storageMode !== 's3') {
-    throw new Error('OBJECT_STORAGE_MODE=s3 je v produkcii povinné');
+  if (nodeEnv === 'production' && storageMode === 'memory') {
+    // memory = neperzistentné (po reštarte sa dáta stratia). filesystem (na
+    // perzistentnom volume) aj s3 sú v produkcii v poriadku.
+    throw new Error('OBJECT_STORAGE_MODE nesmie byť "memory" v produkcii');
   }
 
   const extractionProvider = env.DOCUMENT_EXTRACTION_PROVIDER === 'openai' ? 'openai' : 'mock';

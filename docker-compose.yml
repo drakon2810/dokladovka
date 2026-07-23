@@ -14,38 +14,12 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dokladovka-local}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
-    volumes:
-      - minio-data:/data
-
-  minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
-    depends_on:
-      - minio
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 2; done;
-        mc mb --ignore-existing local/dokladovka-private;
-        mc anonymous set none local/dokladovka-private
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dokladovka-local}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
-
   api:
     build: .
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3001
@@ -60,17 +34,16 @@ services:
       OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
       EXTRACTION_MAX_FILE_BYTES: ${EXTRACTION_MAX_FILE_BYTES:-20971520}
       EXTRACTION_MAX_PDF_PAGES: ${EXTRACTION_MAX_PDF_PAGES:-50}
-      OBJECT_STORAGE_MODE: s3
-      OBJECT_STORAGE_ENDPOINT: http://minio:9000
-      OBJECT_STORAGE_REGION: eu-central-1
-      OBJECT_STORAGE_BUCKET: dokladovka-private
-      OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-dokladovka-local}
-      OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
-      OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+      # Filesystem object storage na perzistentnom volume (MinIO/S3 netreba pri
+      # single-node nasadení). Zdieľané s worker/monitor cez rovnaký volume.
+      OBJECT_STORAGE_MODE: filesystem
+      OBJECT_STORAGE_FILESYSTEM_ROOT: /data/objects
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       # Len pre jednorazový `docker compose run api node build/server/db/seed.js`.
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+    volumes:
+      - objects-data:/data/objects
     # Port nie je publikovaný von — chodí sa naň iba cez Caddy (web).
 
   web:
@@ -96,8 +69,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://dokladovka:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/dokladovka
@@ -110,13 +81,10 @@ services:
       OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
       EXTRACTION_MAX_FILE_BYTES: ${EXTRACTION_MAX_FILE_BYTES:-20971520}
       EXTRACTION_MAX_PDF_PAGES: ${EXTRACTION_MAX_PDF_PAGES:-50}
-      OBJECT_STORAGE_MODE: s3
-      OBJECT_STORAGE_ENDPOINT: http://minio:9000
-      OBJECT_STORAGE_REGION: eu-central-1
-      OBJECT_STORAGE_BUCKET: dokladovka-private
-      OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-dokladovka-local}
-      OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
-      OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+      OBJECT_STORAGE_MODE: filesystem
+      OBJECT_STORAGE_FILESYSTEM_ROOT: /data/objects
+    volumes:
+      - objects-data:/data/objects
 
   imap:
     build: .
@@ -145,24 +113,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://dokladovka:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/dokladovka
       MAIL_RECEIVING_DOMAIN: ${MAIL_RECEIVING_DOMAIN:-doklady.localhost.test}
-      OBJECT_STORAGE_MODE: s3
-      OBJECT_STORAGE_ENDPOINT: http://minio:9000
-      OBJECT_STORAGE_REGION: eu-central-1
-      OBJECT_STORAGE_BUCKET: dokladovka-private
-      OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-dokladovka-local}
-      OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-local-only-change-me}
+      OBJECT_STORAGE_MODE: filesystem
+      OBJECT_STORAGE_FILESYSTEM_ROOT: /data/objects
       AGENT_OFFLINE_ALERT_HOURS: ${AGENT_OFFLINE_ALERT_HOURS:-2}
       EXPORT_FAILURE_ALERT_PERCENT: ${EXPORT_FAILURE_ALERT_PERCENT:-20}
       MONITOR_INTERVAL_MS: ${MONITOR_INTERVAL_MS:-60000}
+    volumes:
+      - objects-data:/data/objects
 
 volumes:
   postgres-data:
-  minio-data:
+  objects-data:
   caddy-data:
   caddy-config:
