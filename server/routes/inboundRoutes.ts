@@ -20,7 +20,17 @@ const attachmentSchema = z.object({
 
 const inboundSchema = z.object({
   providerMessageId: z.string().min(1).max(300),
-  envelopeRecipients: z.array(z.string().email()).min(1).max(20),
+  // Neplatné adresy (napr. divné Delivered-To/X-Original-To od poštového servera)
+  // odfiltrujeme namiesto odmietnutia celého e-mailu — inak jeden pokazený
+  // príjemca zablokuje doručenie dokladu na platný alias a poller to opakuje donekonečna.
+  envelopeRecipients: z.preprocess(
+    (val) => (Array.isArray(val)
+      ? val
+          .map((e) => (typeof e === 'string' ? e.trim().toLowerCase() : e))
+          .filter((e) => z.string().email().safeParse(e).success)
+      : val),
+    z.array(z.string().email()).min(1).max(20),
+  ),
   senderEmail: z.string().email().optional(),
   senderName: z.string().max(200).optional(),
   subject: z.string().max(500).optional(),
