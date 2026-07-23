@@ -342,6 +342,28 @@ async function completeRun(
   };
 }
 
+/**
+ * Backoff pred ďalším pokusom. Prechodné chyby (rate limit, timeout, 5xx)
+ * potrebujú desiatky sekúnd, kým sa API zotaví; pôvodné 2^attempts (2s, 4s)
+ * minulo všetky pokusy za pár sekúnd a z dočasného výpadku spravilo trvalú
+ * chybu. Rastúci backoff (20/40/80/160/320s, strop 600s) + jitter dá API čas
+ * a rozhodí dávku opakovaní, aby znova nenarazila na ten istý rate limit.
+ */
+export function retryDelaySeconds(attempts: number, rand: number = Math.random()): number {
+  const base = Math.min(600, 20 * 2 ** (attempts - 1));
+  return Math.round(base * (0.5 + rand * 0.5));
+}
+
+/**
+ * Má vstup aspoň základnú štruktúru PDF (ukazovateľ na xref v závere súboru)?
+ * pdf-lib odmietne aj množstvo platných PDF (šifrovanie vlastníckym heslom,
+ * nezvyčajné objekty) — tie ale OpenAI prečíta, tak ich nezhadzujeme. Za
+ * poškodené považujeme len dáta bez `startxref`, kde nemá zmysel volať OpenAI.
+ */
+export function looksLikePdfStructure(bytes: Uint8Array): boolean {
+  return /startxref/.test(Buffer.from(bytes.slice(-2048)).toString('latin1'));
+}
+
 async function failJob(
   tx: Queryable,
   job: JobRow,
@@ -352,7 +374,7 @@ async function failJob(
   const exhausted = job.attempts >= job.max_attempts;
   const retry = error.retryable && !exhausted;
   const jobStatus = retry ? 'queued' : exhausted && error.retryable ? 'dead_letter' : 'failed';
-  const delaySeconds = Math.min(300, 2 ** job.attempts);
+  const delaySeconds = retryDelaySeconds(job.attempts);
   await tx.query(
     `UPDATE processing_jobs SET status=$1, available_at=now() + ($2 * interval '1 second'),
             locked_at=NULL,locked_by=NULL,error_code=$3,error_message=$4,updated_at=now()
@@ -424,18 +446,18 @@ export async function processNextJob(
       bytes = await dependencies.storage.get(context.storage_key);
       if (context.detected_mime_type === 'application/pdf') {
         try {
-          const pdf = await PDFDocument.load(bytes, { ignoreEncryption: false, updateMetadata: false });
+          const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
           if (pdf.getPageCount() > config.extractionMaxPdfPages) {
             throw new ExtractionProviderError('pdf_too_many_pages', 'PDF prekračuje povolený počet strán', false);
           }
         } catch (error) {
           if (error instanceof ExtractionProviderError) throw error;
-          const encrypted = /encrypt|password/i.test(error instanceof Error ? error.message : '');
-          throw new ExtractionProviderError(
-            encrypted ? 'password_protected_pdf' : 'corrupted_file',
-            encrypted ? 'PDF je chránené heslom' : 'PDF súbor je poškodený alebo nečitateľný',
-            false,
-          );
+          // pdf-lib nezvládne časť platných PDF — kontrolu počtu strán preto len
+          // preskočíme (limit napokon vynúti aj OpenAI) a doklad pošleme na
+          // extrakciu. Odmietneme iba dáta bez štruktúry PDF ako poškodené.
+          if (!looksLikePdfStructure(bytes)) {
+            throw new ExtractionProviderError('corrupted_file', 'PDF súbor je poškodený alebo nečitateľný', false);
+          }
         }
       }
     }

@@ -32,11 +32,32 @@ const HEADER_FIELDS: Array<[keyof AiTrainingRow, string[]]> = [
   ['strediskoKod', ['stredisko']],
 ];
 
+/** Validácia typovaného riadku proti číselníkom firmy — spoločná pre Excel aj
+ *  priamy import POHODA .mdb (obidve cesty končia rovnakým náhľadom + importom). */
+export function validateTrainingRow(row: ParsedTrainingRow, kody: TrainingKody): ParsedTrainingRow {
+  const validated = { ...row };
+  delete validated.chyba;
+  if (!validated.supplierIco && !validated.supplierName) validated.chyba = 'Chýba dodávateľ (IČO alebo názov)';
+  else if (!validated.predkontaciaKod && !validated.clenenieDphKod) validated.chyba = 'Chýba predkontácia aj členenie DPH';
+  else if (validated.predkontaciaKod && !kody.predkontacie.has(validated.predkontaciaKod)) validated.chyba = `Predkontácia „${validated.predkontaciaKod}" nie je v číselníku`;
+  else if (validated.clenenieDphKod && !kody.cleneniaDph.has(validated.clenenieDphKod)) validated.chyba = `Členenie DPH „${validated.clenenieDphKod}" nie je v číselníku`;
+  else if (validated.ciselnyRadKod && !kody.ciselneRady.has(validated.ciselnyRadKod)) validated.chyba = `Číselný rad „${validated.ciselnyRadKod}" nie je v číselníku`;
+  else if (validated.strediskoKod && !kody.strediska.has(validated.strediskoKod)) validated.chyba = `Stredisko „${validated.strediskoKod}" nie je v číselníku`;
+  else if (validated.clenenieKvKod && !CLENENIE_KV_KODY.includes(validated.clenenieKvKod.toUpperCase() as (typeof CLENENIE_KV_KODY)[number])) {
+    validated.chyba = `Neplatné členenie KV „${validated.clenenieKvKod}"`;
+  }
+  return validated;
+}
+
+export function validateTrainingRows(rows: ParsedTrainingRow[], kody: TrainingKody): ParsedTrainingRow[] {
+  return rows.map((row) => validateTrainingRow(row, kody));
+}
+
 export function parseTrainingRows(
   raw: Array<Record<string, unknown>>,
   kody: TrainingKody,
 ): ParsedTrainingRow[] {
-  return raw
+  const mapped = raw
     .map((cells) => {
       const row: ParsedTrainingRow = {};
       for (const [rawHeader, value] of Object.entries(cells)) {
@@ -45,16 +66,8 @@ export function parseTrainingRows(
         const text = String(value ?? '').trim();
         if (field && text) row[field] = text;
       }
-      if (!row.supplierIco && !row.supplierName) row.chyba = 'Chýba dodávateľ (IČO alebo názov)';
-      else if (!row.predkontaciaKod && !row.clenenieDphKod) row.chyba = 'Chýba predkontácia aj členenie DPH';
-      else if (row.predkontaciaKod && !kody.predkontacie.has(row.predkontaciaKod)) row.chyba = `Predkontácia „${row.predkontaciaKod}" nie je v číselníku`;
-      else if (row.clenenieDphKod && !kody.cleneniaDph.has(row.clenenieDphKod)) row.chyba = `Členenie DPH „${row.clenenieDphKod}" nie je v číselníku`;
-      else if (row.ciselnyRadKod && !kody.ciselneRady.has(row.ciselnyRadKod)) row.chyba = `Číselný rad „${row.ciselnyRadKod}" nie je v číselníku`;
-      else if (row.strediskoKod && !kody.strediska.has(row.strediskoKod)) row.chyba = `Stredisko „${row.strediskoKod}" nie je v číselníku`;
-      else if (row.clenenieKvKod && !CLENENIE_KV_KODY.includes(row.clenenieKvKod.toUpperCase() as (typeof CLENENIE_KV_KODY)[number])) {
-        row.chyba = `Neplatné členenie KV „${row.clenenieKvKod}"`;
-      }
       return row;
     })
-    .filter((row) => Object.keys(row).some((key) => key !== 'chyba'));
+    .filter((row) => Object.keys(row).length > 0);
+  return validateTrainingRows(mapped, kody);
 }

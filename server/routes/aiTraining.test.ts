@@ -105,7 +105,7 @@ describe('Tréning AI', () => {
       parse: vi.fn().mockResolvedValue({
         output_parsed: {
           pravidla: [
-            { supplierIco: null, supplierName: null, klucoveSlova: ['PHM', 'nafta'], predkontaciaId: pred, clenenieDphId: dph, ciselnyRadId: null, strediskoId: null, clenenieKvKod: 'KN', dovod: 'Palivo sa účtuje rovnako' },
+            { supplierIco: null, supplierName: ':null', klucoveSlova: ['PHM', 'nafta', '(null)'], predkontaciaId: pred, clenenieDphId: dph, ciselnyRadId: null, strediskoId: null, clenenieKvKod: 'KN', dovod: 'Palivo sa účtuje rovnako' },
             { supplierIco: null, supplierName: null, klucoveSlova: ['obed'], predkontaciaId: 'vymyslene-id', clenenieDphId: null, ciselnyRadId: null, strediskoId: null, clenenieKvKod: null, dovod: 'Neplatné' },
           ],
         },
@@ -121,7 +121,17 @@ describe('Tréning AI', () => {
     expect(analyze.statusCode).toBe(200);
     const proposals = analyze.json().pravidla;
     expect(proposals).toHaveLength(1);
-    expect(proposals[0]).toMatchObject({ klucoveSlova: ['PHM', 'nafta'], predkontaciaId: pred, clenenieKvKod: 'KN' });
+    // Doslovné „null" (dodávateľ aj kľúčové slovo) sa vyčistí na skutočné null.
+    expect(proposals[0]).toMatchObject({ supplierName: null, klucoveSlova: ['PHM', 'nafta'], predkontaciaId: pred, clenenieKvKod: 'KN' });
+
+    // Analýza beží na routovanom modeli a dostane PREDAGREGOVANÉ dáta per dodávateľa
+    // (nie surové riadky): jeden dodávateľ, 3 doklady, jedna kombinácia.
+    const analyzeCall = parser.parse.mock.calls[0][0] as any;
+    expect(analyzeCall.model).toBe('gpt-5.6-sol');
+    const analyzePayload = JSON.parse(analyzeCall.input[0].content[0].text);
+    expect(analyzePayload.rozhodnutia).toBeUndefined();
+    expect(analyzePayload.dodavatelia).toHaveLength(1);
+    expect(analyzePayload.dodavatelia[0]).toMatchObject({ ico: '31322832', pocet: 3, roznychKombinacii: 1 });
 
     const confirm = await app.inject({
       method: 'POST', url: `/api/organizations/${seeded.organizationId}/ai-training/rules`, headers, payload: { pravidla: proposals },
@@ -172,5 +182,71 @@ describe('Tréning AI', () => {
     expect((await database.query<Record<string, any>>(
       'SELECT source FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0].source).toBe('manual_rule');
+  }, 120_000);
+
+  it('vylúčenie dodávateľa z učenia: zoznam ho označí a pamäť ho prestane navrhovať', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const pred = randomUUID();
+    const dph = randomUUID();
+    for (const [id, kind, code] of [[pred, 'predkontacie', '518/321'], [dph, 'cleneniaDph', 'PD']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'manual')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    await database.query(
+      `INSERT INTO ucto_decisions
+        (id,tenant_id,organization_id,supplier_ico,supplier_name_normalized,line_text_normalized,predkontacia_id,clenenie_dph_id,source)
+       VALUES ($1,$2,$3,'35763469','telekom','mesacny poplatok',$4,$5,'import')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, pred, dph],
+    );
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    const suppliers = await app.inject({
+      method: 'GET', url: `/api/organizations/${seeded.organizationId}/ai-training/suppliers`, headers: { cookie: headers.cookie },
+    });
+    expect(suppliers.json().dodavatelia).toMatchObject([{ supplierIco: '35763469', pocet: 1, vylucene: false }]);
+
+    // Schválený doklad toho istého dodávateľa — zdroj pre supplier_history.
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','schvaleny','ready_for_review',$4::jsonb,$5::jsonb,30,'EUR')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Telekom', ico: '35763469' }, polozky: [{ popis: 'Mesačný poplatok' }] }),
+        JSON.stringify({ predkontaciaId: pred, clenenieDphId: dph })],
+    );
+
+    // Pred vylúčením: nový doklad Telekomu dostane návrh z pamäte.
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,30,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Telekom', ico: '35763469' }, polozky: [{ popis: 'Mesačný poplatok' }] })],
+    );
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '35763469', supplierName: 'Telekom' };
+    await rebuildAccountingSuggestion(database, input);
+    expect((await database.query<Record<string, any>>('SELECT source FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0].source).toBe('decision_memory');
+
+    const exclude = await app.inject({
+      method: 'POST', url: `/api/organizations/${seeded.organizationId}/ai-training/exclude`, headers,
+      payload: { supplierIco: '35763469', excluded: true },
+    });
+    expect(exclude.statusCode).toBe(200);
+    expect(exclude.json()).toMatchObject({ updated: 1 });
+
+    // Po vylúčení: pamäť už dodávateľa nenavrhne.
+    await rebuildAccountingSuggestion(database, input);
+    expect((await database.query<Record<string, any>>('SELECT source FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0].source).toBe('none');
+
+    const suppliersAfter = await app.inject({
+      method: 'GET', url: `/api/organizations/${seeded.organizationId}/ai-training/suppliers`, headers: { cookie: headers.cookie },
+    });
+    expect(suppliersAfter.json().dodavatelia[0]).toMatchObject({ supplierIco: '35763469', vylucene: true });
   }, 120_000);
 });

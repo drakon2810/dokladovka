@@ -23,53 +23,63 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       `SELECT * FROM ${table} WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ORDER BY ${order}`,
       [auth.tenantId, organizationIds],
     );
-    const queues = await inScope('document_queues', 'name');
-    const bankAccounts = await inScope('organization_bank_accounts', 'label');
-    const aliases = await inScope('organization_email_aliases');
-    const documents = await inScope('documents');
     // Nezaradené karanténne e-maily (tenant_id IS NULL) patria do snapshotu
     // iba pre admina — sekcia priradenia v Nastavenia → Schránky.
     const includeUnassigned = auth.role === 'admin';
-    const inboundEmails = await database.query<Record<string, any>>(
-      `SELECT * FROM inbound_emails
-        WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))
-           OR ($3 AND tenant_id IS NULL AND status='quarantine')
-        ORDER BY created_at DESC`,
-      [auth.tenantId, organizationIds, includeUnassigned],
-    );
-    const inboundAttachments = await database.query<Record<string, any>>(
-      `SELECT * FROM inbound_attachments
-        WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))
-           OR ($3 AND tenant_id IS NULL)
-        ORDER BY created_at DESC`,
-      [auth.tenantId, organizationIds, includeUnassigned],
-    );
-    const extractionRuns = await inScope('extraction_runs');
-    const suggestions = await inScope('accounting_suggestions', 'created_at DESC');
-    const payments = await inScope('document_payments', 'paid_on DESC');
-    const approvalRules = await inScope('approval_rules', 'organization_id');
-    const dphProfiles = await inScope('organization_dph_profiles', 'organization_id');
-    const accountingProfiles = await inScope('organization_accounting_profiles', 'organization_id');
-    const partners = await inScope('partners', 'name');
-    const noteTemplates = await inScope('note_templates', 'created_at');
-    const emailTemplates = await inScope('email_templates', 'name');
-    const codeListRows = await inScope('code_list_items', 'code');
-    const users = await database.query<Record<string, any>>(
-      'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
-      [auth.tenantId],
-    );
-    const batches = await database.query<Record<string, any>>(
-      `SELECT e.*, u.name AS user_name FROM export_batches e JOIN users u ON u.id=e.created_by
-        WHERE e.tenant_id=$1 AND e.organization_id=ANY($2::text[]) ORDER BY e.created_at DESC`, [auth.tenantId, organizationIds],
-    );
-    const integration = await database.query<Record<string, any>>('SELECT mostik_enabled FROM tenant_integrations WHERE tenant_id=$1', [auth.tenantId]);
-    const installations = await database.query<Record<string, any>>('SELECT * FROM agent_installations WHERE tenant_id=$1 ORDER BY created_at DESC', [auth.tenantId]);
-    const links = await database.query<Record<string, any>>('SELECT * FROM pohoda_company_links WHERE tenant_id=$1 ORDER BY organization_id', [auth.tenantId]);
-    const jobs = await database.query<Record<string, any>>(
-      `SELECT id,tenant_id,organization_id,document_ids,status,idempotency_key,request_xml_hash,response_meta,
-              attempt,created_at,created_by,sent_at,completed_at,retry_of_job_id
-         FROM export_jobs WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ORDER BY created_at DESC`, [auth.tenantId, organizationIds],
-    );
+    // Všetky dopyty tela závisia len od tenantId/organizationIds (žiadny nezávisí
+    // od výsledku iného) — bežia paralelne namiesto ~22 sériových round-tripov.
+    // Pool (max 10) prebytočné zaradí do fronty; PGlite serializuje interne.
+    const [
+      queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
+      extractionRuns, suggestions, payments, approvalRules, dphProfiles,
+      accountingProfiles, partners, noteTemplates, emailTemplates, codeListRows,
+      users, batches, integration, installations, links, jobs,
+    ] = await Promise.all([
+      inScope('document_queues', 'name'),
+      inScope('organization_bank_accounts', 'label'),
+      inScope('organization_email_aliases'),
+      inScope('documents'),
+      database.query<Record<string, any>>(
+        `SELECT * FROM inbound_emails
+          WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))
+             OR ($3 AND tenant_id IS NULL AND status='quarantine')
+          ORDER BY created_at DESC`,
+        [auth.tenantId, organizationIds, includeUnassigned],
+      ),
+      database.query<Record<string, any>>(
+        `SELECT * FROM inbound_attachments
+          WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))
+             OR ($3 AND tenant_id IS NULL)
+          ORDER BY created_at DESC`,
+        [auth.tenantId, organizationIds, includeUnassigned],
+      ),
+      inScope('extraction_runs'),
+      inScope('accounting_suggestions', 'created_at DESC'),
+      inScope('document_payments', 'paid_on DESC'),
+      inScope('approval_rules', 'organization_id'),
+      inScope('organization_dph_profiles', 'organization_id'),
+      inScope('organization_accounting_profiles', 'organization_id'),
+      inScope('partners', 'name'),
+      inScope('note_templates', 'created_at'),
+      inScope('email_templates', 'name'),
+      inScope('code_list_items', 'code'),
+      database.query<Record<string, any>>(
+        'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
+        [auth.tenantId],
+      ),
+      database.query<Record<string, any>>(
+        `SELECT e.*, u.name AS user_name FROM export_batches e JOIN users u ON u.id=e.created_by
+          WHERE e.tenant_id=$1 AND e.organization_id=ANY($2::text[]) ORDER BY e.created_at DESC`, [auth.tenantId, organizationIds],
+      ),
+      database.query<Record<string, any>>('SELECT mostik_enabled FROM tenant_integrations WHERE tenant_id=$1', [auth.tenantId]),
+      database.query<Record<string, any>>('SELECT * FROM agent_installations WHERE tenant_id=$1 ORDER BY created_at DESC', [auth.tenantId]),
+      database.query<Record<string, any>>('SELECT * FROM pohoda_company_links WHERE tenant_id=$1 ORDER BY organization_id', [auth.tenantId]),
+      database.query<Record<string, any>>(
+        `SELECT id,tenant_id,organization_id,document_ids,status,idempotency_key,request_xml_hash,response_meta,
+                attempt,created_at,created_by,sent_at,completed_at,retry_of_job_id
+           FROM export_jobs WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ORDER BY created_at DESC`, [auth.tenantId, organizationIds],
+      ),
+    ]);
 
     const codeLists = {
       predkontacie: [], cleneniaDph: [], ciselneRady: [], strediska: [],

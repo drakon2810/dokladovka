@@ -103,8 +103,52 @@ async function restRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// ===== Zdieľaná klientská cache snapshotu (REST režim) =====
+// Jeden poller a jeden in-flight fetch pre VŠETKÝCH odberateľov useDataQuery.
+// Posledná hodnota ostáva v pamäti, takže navigácia (prepnutie firmy, otvorenie
+// dokladu/faktúry) vykreslí okamžite z cache a obnoví sa na pozadí — namiesto
+// toho, aby každý komponent sťahoval celý tenantový snapshot nanovo.
+let snapshotCache: AppDataState | undefined;
+let snapshotInflight: Promise<AppDataState> | undefined;
+type SnapshotChangeListener = (pushed?: AppDataState) => void;
+const snapshotChangeListeners = new Set<SnapshotChangeListener>();
+let snapshotPollTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Posledný známy snapshot bez siete — na okamžité vykreslenie pri mountnutí. */
+export function getCachedSnapshot(): AppDataState | undefined {
+  return snapshotCache;
+}
+
+function notifySnapshotChange(pushed?: AppDataState): void {
+  snapshotChangeListeners.forEach((listener) => listener(pushed));
+}
+
+/** Skutočný sieťový fetch snapshotu (bez dedup) — aktualizuje store aj cache. */
+async function fetchRestSnapshot(): Promise<AppDataState> {
+  const response = await fetch('/api/data/snapshot', { credentials: 'include' });
+  if (!response.ok) throw new Error('Backend dáta nie sú dostupné');
+  const snapshot = await response.json() as AppDataState;
+  const previousOrgId = storeApi.get().currentOrgId;
+  snapshot.currentOrgId =
+    previousOrgId === 'all' ||
+    snapshot.organizations.some((organization) => organization.id === previousOrgId)
+      ? previousOrgId
+      : 'all';
+  storeApi.set(snapshot);
+  snapshotCache = snapshot;
+  return snapshot;
+}
+
+/**
+ * Obnovenie po mutácii — VŽDY ide na sieť (obchádza in-flight dedup), aby
+ * volajúci po zápise nikdy nedostal predmutačný výsledok z prebiehajúceho pollu.
+ * Zmenu rovno pushne odberateľom, takže UI sa obnoví bez čakania na ďalší tik.
+ */
 async function refreshRestSnapshot(): Promise<AppDataState> {
-  return getDataSnapshot();
+  if (!REST_DATA_MODE) return getDataSnapshot();
+  const snapshot = await fetchRestSnapshot();
+  notifySnapshotChange(snapshot);
+  return snapshot;
 }
 
 function currentUserName(): string {
@@ -146,6 +190,13 @@ export async function setCurrentOrg(orgId: string): Promise<void> {
     throw new Error('Organizácia nie je dostupná');
   }
   storeApi.set({ currentOrgId: orgId });
+  // Prepnutie firmy je čisto klientský filter — patchneme zdieľanú cache a
+  // okamžite ju pushneme odberateľom. Prepnutie je tak bez siete a bez čakania
+  // (predtým sa nová hodnota prejavila až pri ďalšom polle / remounte, až ~5 s).
+  if (REST_DATA_MODE && snapshotCache) {
+    snapshotCache = { ...snapshotCache, currentOrgId: orgId };
+    notifySnapshotChange(snapshotCache);
+  }
 }
 
 // ===== Organizácie (SPEC §11.1, §11.19) =====
@@ -1698,7 +1749,9 @@ export async function reprocessDocument(id: string): Promise<ExtractionRun> {
 export async function listExtractionRuns(documentId: string): Promise<ExtractionRun[]> {
   assertCapability(storeApi.get().role, 'tenant.read');
   if (REST_DATA_MODE) {
-    return (await refreshRestSnapshot()).extractionRuns.filter((run) => run.documentId === documentId);
+    // Číta zo zdieľanej cache (bez siete, keď je teplá); pri studenom štarte
+    // getDataSnapshot() dedupne s fetchom, ktorý useDataQuery aj tak spustil.
+    return (snapshotCache ?? await getDataSnapshot()).extractionRuns.filter((run) => run.documentId === documentId);
   }
   return storeApi
     .get()
@@ -1792,7 +1845,7 @@ export async function getSuggestion(documentId: string): Promise<AccountingSugge
   const s = storeApi.get();
   assertCapability(s.role, 'tenant.read');
   if (REST_DATA_MODE) {
-    return (await refreshRestSnapshot()).suggestions.find((item) => item.documentId === documentId);
+    return (snapshotCache ?? await getDataSnapshot()).suggestions.find((item) => item.documentId === documentId);
   }
   const stored = s.suggestions.find(
     (x) => x.tenantId === MOCK_TENANT_ID && x.documentId === documentId,
@@ -2009,6 +2062,34 @@ export async function getAiTrainingStats(orgId: string): Promise<{ schvalene: nu
     `/api/organizations/${encodeURIComponent(orgId)}/ai-training/stats`,
     { method: 'GET' },
   );
+}
+
+export interface AiTrainingSupplier {
+  supplierIco?: string;
+  supplierName?: string;
+  pocet: number;
+  vylucene: boolean;
+}
+
+export async function listAiTrainingSuppliers(orgId: string): Promise<AiTrainingSupplier[]> {
+  if (!REST_DATA_MODE) return [];
+  const result = await restRequest<{ dodavatelia: AiTrainingSupplier[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/suppliers`,
+    { method: 'GET' },
+  );
+  return result.dodavatelia;
+}
+
+export async function excludeAiTrainingSupplier(
+  orgId: string,
+  supplier: { supplierIco?: string; supplierName?: string; excluded: boolean },
+): Promise<number> {
+  if (!REST_DATA_MODE) throw new Error('Pamäť je dostupná len s pripojeným serverom');
+  const result = await restRequest<{ updated: number }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ai-training/exclude`,
+    { method: 'POST', body: JSON.stringify(supplier) },
+  );
+  return result.updated;
 }
 
 // Etapa 4: AI navrhne pravidlá z pamäte, účtovník potvrdzuje.
@@ -2343,15 +2424,14 @@ export async function resetDemoData(): Promise<void> {
  */
 export async function getDataSnapshot(): Promise<AppDataState> {
   if (REST_DATA_MODE) {
-    const response = await fetch('/api/data/snapshot', { credentials: 'include' });
-    if (!response.ok) throw new Error('Backend dáta nie sú dostupné');
-    const snapshot = await response.json() as AppDataState;
-    const previousOrgId = storeApi.get().currentOrgId;
-    snapshot.currentOrgId = previousOrgId === 'all' || snapshot.organizations.some((organization) => organization.id === previousOrgId)
-      ? previousOrgId
-      : 'all';
-    storeApi.set(snapshot);
-    return structuredClone(snapshot);
+    // In-flight dedup: súbežné volania (napr. Layout + práve mountnutá stránka
+    // pri navigácii, alebo N odberateľov na jednom pollovacom tiku) sa spoja do
+    // jedinej sieťovej požiadavky namiesto N paralelných celotenantových fetchov.
+    if (snapshotInflight) return snapshotInflight;
+    snapshotInflight = fetchRestSnapshot().finally(() => {
+      snapshotInflight = undefined;
+    });
+    return snapshotInflight;
   }
   assertCapability(storeApi.get().role, 'tenant.read');
   expireGraceAliases();
@@ -2520,12 +2600,29 @@ export async function removeDocumentPayment(documentId: string, paymentId: strin
   await refreshRestSnapshot();
 }
 
-export function subscribeDataChanges(listener: () => void): () => void {
+export function subscribeDataChanges(listener: SnapshotChangeListener): () => void {
   if (REST_DATA_MODE) {
     if (typeof window === 'undefined') return () => undefined;
-    const interval = window.setInterval(listener, 5_000);
-    return () => window.clearInterval(interval);
+    // Jeden zdieľaný časovač pre VŠETKÝCH odberateľov (nie jeden interval na
+    // komponent, ako predtým — N komponentov = N intervalov = N celotenantových
+    // fetchov každých 5 s). Tik sa preskočí, keď je záložka na pozadí.
+    snapshotChangeListeners.add(listener);
+    if (snapshotPollTimer === undefined) {
+      snapshotPollTimer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        notifySnapshotChange();
+      }, 5_000);
+    }
+    return () => {
+      snapshotChangeListeners.delete(listener);
+      if (snapshotChangeListeners.size === 0 && snapshotPollTimer !== undefined) {
+        clearInterval(snapshotPollTimer);
+        snapshotPollTimer = undefined;
+      }
+    };
   }
   assertCapability(storeApi.get().role, 'tenant.read');
-  return useAppStore.subscribe(listener);
+  // Mock režim: Zustand odovzdáva (state, prevState) — argumenty zahodíme, aby
+  // sa surový nefiltrovaný store nikdy nedostal do query.ts ako „pushed".
+  return useAppStore.subscribe(() => listener());
 }

@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   lazy,
@@ -11,8 +10,6 @@ import {
   type ReactNode,
 } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   addComment,
@@ -37,13 +34,11 @@ import type {
   AccountingSuggestion,
   DocumentExtractedData,
   DocumentItem,
-  DocumentLineItem,
   DocumentType,
   DocumentUcto,
   DphPosudok,
   ExtractionRun,
   VatBreakdownRow,
-  VatRate,
 } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
@@ -56,12 +51,11 @@ import {
   StatusBadge,
 } from '../../components/ui';
 import { showToast } from '../../components/toast';
-import { formatDateTime, formatMoney } from '../../lib/format';
+import { formatDateTime } from '../../lib/format';
 import {
   isTotalConsistent,
   isVatRowConsistent,
   round2,
-  lineItemEffective,
   validateIBAN,
   validateICO,
   vatBreakdownTotal,
@@ -72,6 +66,7 @@ import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { PaymentCard } from './PaymentCard';
+import { InvoicePanel } from './InvoicePanel';
 import { useAuth } from '../../auth/AuthContext';
 import {
   createMostikExportJob,
@@ -120,7 +115,6 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const DOCUMENT_TYPES: DocumentType[] = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'];
-const VAT_RATES: VatRate[] = [23, 21, 19, 12, 5, 0];
 
 const FIELD_ALIASES: Record<string, string[]> = {
   'dodavatel.nazov': ['dodavatel.nazov', 'supplier.nazov'],
@@ -156,15 +150,6 @@ const QUARANTINE_KEYS: Record<string, SkKey> = {
 
 function cloneDocument(document: DocumentItem): DocumentItem {
   return structuredClone(document);
-}
-
-function parseNumber(value: string): number {
-  const parsed = Number(value.replace(',', '.'));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function parseOptionalNumber(value: string): number | undefined {
-  return value.trim() ? parseNumber(value) : undefined;
 }
 
 function confidenceFor(document: DocumentItem, field: string): number | undefined {
@@ -339,7 +324,6 @@ export function DocumentDetailPage() {
   const [localFileLoading, setLocalFileLoading] = useState(false);
   const [splitPercent, setSplitPercent] = useState(50);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
-  const [pozicneUcto, setPozicneUcto] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [mostikStatus, setMostikStatus] = useState<OrganizationMostikStatus>();
@@ -688,15 +672,6 @@ export function DocumentDetailPage() {
       (item) => item.orgId === draft.orgId && item.active,
     ),
   };
-  // Kontrola súčtov Celkovo / Na položkách / Rozdiel (pozičné zaúčtovanie).
-  // Prázdna DPH položky pri vyplnenej sadzbe sa dopočítava zo základu.
-  const polozkySpolu = round2(
-    (draft.extracted.polozky ?? []).reduce(
-      (sum, item) => sum + (lineItemEffective(item).spolu ?? 0),
-      0,
-    ),
-  );
-  const polozkyRozdiel = round2((draft.extracted.sumaSpolu ?? 0) - polozkySpolu);
   const orgNoteTemplates = (data.noteTemplates ?? []).filter(
     (template) => template.organizationId === draft.orgId,
   );
@@ -734,15 +709,6 @@ export function DocumentDetailPage() {
       'rozpisDph',
       draft.extracted.rozpisDph.map((row, rowIndex) =>
         rowIndex === index ? { ...row, ...patch } : row,
-      ),
-    );
-  };
-
-  const updateLineItem = (index: number, patch: Partial<DocumentLineItem>) => {
-    updateExtracted(
-      'polozky',
-      (draft.extracted.polozky ?? []).map((item, itemIndex) =>
-        itemIndex === index ? { ...item, ...patch } : item,
       ),
     );
   };
@@ -1148,7 +1114,13 @@ export function DocumentDetailPage() {
                 }}
                 onLoadError={() => setPdfError(true)}
               >
-                <Page pageNumber={pageNumber} scale={zoom} width={520} />
+                <Page
+                  pageNumber={pageNumber}
+                  scale={zoom}
+                  width={520}
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                />
               </Document>
             )}
           </div>
@@ -1179,769 +1151,24 @@ export function DocumentDetailPage() {
             />
           )}
           <fieldset disabled={readOnly} className="space-y-4 disabled:opacity-75">
-            <Section title={t('detail.hlavicka')}>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label={t('detail.typDokladu')}>
-                  <select
-                    className="input"
-                    value={draft.typ}
-                    onChange={(event) =>
-                      markDirty((current) => ({
-                        ...current,
-                        typ: event.target.value as DocumentType,
-                      }))
-                    }
-                  >
-                    {DOCUMENT_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {t(`typ.${type}.dlhy` as SkKey)}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label={t('detail.organizacia')}>
-                  <div className="input flex items-center">
-                    <OrgChip org={organization} />
-                  </div>
-                </Field>
-              </div>
-            </Section>
-
-            <Section title={t('detail.dodavatel')}>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Field label={t('detail.nazov')} {...fieldProps('dodavatel.nazov')}>
-                  <ValidTick show={Boolean(draft.extracted.dodavatel.nazov)}>
-                    <input
-                      className="input pr-8"
-                      value={draft.extracted.dodavatel.nazov}
-                      onChange={(event) => updateSupplier('nazov', event.target.value)}
-                    />
-                  </ValidTick>
-                </Field>
-                <Field
-                  label={t('detail.ico')}
-                  {...fieldProps('dodavatel.ico')}
-                  error={
-                    draft.extracted.dodavatel.ico &&
-                    !foreignSupplier &&
-                    !validateICO(draft.extracted.dodavatel.ico)
-                      ? t('detail.icoNeplatne')
-                      : undefined
-                  }
-                >
-                  <div className="flex gap-2">
-                    <ValidTick show={validateICO(draft.extracted.dodavatel.ico ?? '')}>
-                      <input
-                        className="input tnum pr-8"
-                        value={draft.extracted.dodavatel.ico ?? ''}
-                        onChange={(event) => updateSupplier('ico', event.target.value)}
-                      />
-                    </ValidTick>
-                    <button
-                      type="button"
-                      className="btn whitespace-nowrap"
-                      disabled
-                      title={t('detail.overitTooltip')}
-                    >
-                      {t('detail.overit')}
-                    </button>
-                  </div>
-                </Field>
-                <Field label={t('detail.dic')} {...fieldProps('dodavatel.dic')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.dodavatel.dic ?? ''}
-                    onChange={(event) => updateSupplier('dic', event.target.value)}
-                  />
-                </Field>
-                <Field label={t('detail.icDph')} {...fieldProps('dodavatel.icDph')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.dodavatel.icDph ?? ''}
-                    onChange={(event) => updateSupplier('icDph', event.target.value)}
-                  />
-                </Field>
-                <Field
-                  label={t('detail.iban')}
-                  {...fieldProps('dodavatel.iban')}
-                  error={
-                    draft.extracted.dodavatel.iban &&
-                    !validateIBAN(draft.extracted.dodavatel.iban)
-                      ? t('detail.ibanNeplatny')
-                      : undefined
-                  }
-                >
-                  <ValidTick show={validateIBAN(draft.extracted.dodavatel.iban ?? '')}>
-                    <input
-                      className="input tnum pr-8"
-                      value={draft.extracted.dodavatel.iban ?? ''}
-                      onChange={(event) => updateSupplier('iban', event.target.value)}
-                    />
-                  </ValidTick>
-                </Field>
-                <Field label={t('detail.bic')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.dodavatel.bic ?? ''}
-                    onChange={(event) => updateSupplier('bic', event.target.value)}
-                  />
-                  {(() => {
-                    // Kód banky a číslo účtu sú v SK IBAN — zobrazujeme odvodené, needitovateľné.
-                    const iban = (draft.extracted.dodavatel.iban ?? '').replace(/\s/g, '').toUpperCase();
-                    if (!/^SK\d{22}$/.test(iban)) return null;
-                    const prefix = iban.slice(8, 14).replace(/^0+/, '');
-                    const account = iban.slice(14, 24).replace(/^0+/, '') || '0';
-                    return (
-                      <p className="tnum mt-1 text-xs text-ink-soft">
-                        {t('detail.kodBanky')}: {iban.slice(4, 8)} · {t('detail.cisloUctu')}: {prefix ? `${prefix}-${account}` : account}
-                      </p>
-                    );
-                  })()}
-                </Field>
-                <Field label={t('detail.adresa')} {...fieldProps('dodavatel.adresa')}>
-                  <input
-                    className="input"
-                    value={draft.extracted.dodavatel.adresa ?? ''}
-                    onChange={(event) => updateSupplier('adresa', event.target.value)}
-                  />
-                </Field>
-              </div>
-            </Section>
-
-            <Section title={t('detail.doklad')}>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <Field label={t('detail.cisloFaktury')} {...fieldProps('cisloFaktury')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.cisloFaktury}
-                    onChange={(event) => updateExtracted('cisloFaktury', event.target.value)}
-                  />
-                </Field>
-                <Field label={t('detail.vs')} {...fieldProps('variabilnySymbol')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.variabilnySymbol ?? ''}
-                    onChange={(event) =>
-                      updateExtracted('variabilnySymbol', event.target.value || undefined)
-                    }
-                  />
-                </Field>
-                <Field label={t('detail.ks')} {...fieldProps('konstantnySymbol')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.konstantnySymbol ?? ''}
-                    onChange={(event) =>
-                      updateExtracted('konstantnySymbol', event.target.value || undefined)
-                    }
-                  />
-                </Field>
-                <Field label={t('detail.ss')} {...fieldProps('specifickySymbol')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.specifickySymbol ?? ''}
-                    onChange={(event) =>
-                      updateExtracted('specifickySymbol', event.target.value || undefined)
-                    }
-                  />
-                </Field>
-                <Field label={t('detail.interneCislo')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.interneCislo ?? ''}
-                    onChange={(event) => updateExtracted('interneCislo', event.target.value || undefined)}
-                  />
-                </Field>
-                <Field label={t('detail.cisloObjednavky')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.cisloObjednavky ?? ''}
-                    onChange={(event) => updateExtracted('cisloObjednavky', event.target.value || undefined)}
-                  />
-                </Field>
-                <Field label={t('detail.cisloDodacieho')}>
-                  <input
-                    className="input tnum"
-                    value={draft.extracted.cisloDodaciehoListu ?? ''}
-                    onChange={(event) => updateExtracted('cisloDodaciehoListu', event.target.value || undefined)}
-                  />
-                </Field>
-                <Field label={t('detail.datumVystavenia')} {...fieldProps('datumVystavenia')}>
-                  <input
-                    type="date"
-                    className="input tnum"
-                    value={draft.extracted.datumVystavenia}
-                    onChange={(event) => updateExtracted('datumVystavenia', event.target.value)}
-                  />
-                </Field>
-                <Field label={t('detail.datumDodania')} {...fieldProps('datumDodania')}>
-                  <input
-                    type="date"
-                    className="input tnum"
-                    value={draft.extracted.datumDodania ?? ''}
-                    onChange={(event) =>
-                      updateExtracted('datumDodania', event.target.value || undefined)
-                    }
-                  />
-                </Field>
-                <Field label={t('detail.datumSplatnosti')} {...fieldProps('datumSplatnosti')}>
-                  <input
-                    type="date"
-                    className="input tnum"
-                    value={draft.extracted.datumSplatnosti ?? ''}
-                    onChange={(event) =>
-                      updateExtracted('datumSplatnosti', event.target.value || undefined)
-                    }
-                  />
-                </Field>
-                <Field label={t('detail.mena')} {...fieldProps('mena')}>
-                  <select
-                    className="input"
-                    value={draft.extracted.mena}
-                    onChange={(event) =>
-                      updateExtracted('mena', event.target.value as DocumentExtractedData['mena'])
-                    }
-                  >
-                    {(['EUR', 'CZK', 'USD'] as const).map((currency) => (
-                      <option key={currency} value={currency}>
-                        {currency}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-            </Section>
-
-            <Section title={t('detail.rozpisDph')}>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[40rem] text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-left text-xs text-ink-soft">
-                      <th className="px-2 py-2 font-medium">{t('detail.sadzba')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.zaklad')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.dph')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.spolu')}</th>
-                      <th className="px-2 py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {draft.extracted.rozpisDph.map((row, index) => {
-                      const valid = isVatRowConsistent(row);
-                      return (
-                        <tr
-                          key={`${index}-${row.sadzba}`}
-                          className={`border-b border-line ${valid ? '' : 'bg-red-50'}`}
-                        >
-                          <td className="px-2 py-2">
-                            <select
-                              className="input tnum"
-                              value={row.sadzba}
-                              onChange={(event) =>
-                                updateVatRow(index, { sadzba: Number(event.target.value) as VatRate })
-                              }
-                            >
-                              {VAT_RATES.map((rate) => (
-                                <option key={rate} value={rate}>
-                                  {rate} %
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="px-2 py-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="input tnum text-right"
-                              value={row.zaklad}
-                              onChange={(event) =>
-                                updateVatRow(index, { zaklad: parseNumber(event.target.value) })
-                              }
-                            />
-                          </td>
-                          <td className="px-2 py-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="input tnum text-right"
-                              value={row.dph}
-                              onChange={(event) =>
-                                updateVatRow(index, { dph: parseNumber(event.target.value) })
-                              }
-                            />
-                            {!valid && (
-                              <p className="mt-1 text-xs text-red-700">{t('detail.dphNesedi')}</p>
-                            )}
-                          </td>
-                          <td className="tnum px-2 py-2 text-right">
-                            {formatMoney(row.zaklad + row.dph, draft.extracted.mena)}
-                          </td>
-                          <td className="px-2 py-2">
-                            <div className="flex justify-end gap-1">
-                              {!valid && (
-                                <button
-                                  type="button"
-                                  className="btn px-2 py-1 text-xs"
-                                  onClick={() =>
-                                    updateVatRow(index, {
-                                      dph: round2(row.zaklad * (row.sadzba / 100)),
-                                    })
-                                  }
-                                >
-                                  {t('detail.prepocitat')}
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="btn btn-danger px-2 py-1 text-xs"
-                                onClick={() =>
-                                  updateExtracted(
-                                    'rozpisDph',
-                                    draft.extracted.rozpisDph.filter(
-                                      (_, rowIndex) => rowIndex !== index,
-                                    ),
-                                  )
-                                }
-                                aria-label={t('akcia.vymazat')}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-3 flex flex-wrap items-end gap-3">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() =>
-                    updateExtracted('rozpisDph', [
-                      ...draft.extracted.rozpisDph,
-                      { sadzba: 23, zaklad: 0, dph: 0 },
-                    ])
-                  }
-                >
-                  + {t('detail.pridatRiadok')}
-                </button>
-                <Field label={t('detail.sumaSpolu')} {...fieldProps('sumaSpolu')}>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="input tnum w-40 text-right"
-                    value={draft.extracted.sumaSpolu}
-                    onChange={(event) =>
-                      updateExtracted('sumaSpolu', parseNumber(event.target.value))
-                    }
-                  />
-                </Field>
-                <div className="ml-auto text-right text-sm">
-                  <p className="text-ink-soft">{t('detail.spolu')}</p>
-                  <p className="tnum text-base font-semibold">
-                    {formatMoney(
-                      vatBreakdownTotal(draft.extracted.rozpisDph),
-                      draft.extracted.mena,
-                    )}
-                  </p>
-                  {!isTotalConsistent(
-                    draft.extracted.rozpisDph,
-                    draft.extracted.sumaSpolu,
-                  ) && <p className="text-xs text-red-700">{t('detail.sumaNesedi')}</p>}
-                </div>
-              </div>
-            </Section>
-
-            <Section title={t('detail.polozky')}>
-              <label className="mb-2 flex items-center gap-2 text-sm text-ink-soft">
-                <input
-                  type="checkbox"
-                  checked={pozicneUcto}
-                  onChange={(event) => setPozicneUcto(event.target.checked)}
-                />
-                {t('detail.pozicne')}
-              </label>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[55rem] text-sm">
-                  <thead>
-                    <tr className="border-b border-line text-left text-xs text-ink-soft">
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.popis')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.mnozstvo')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.jednotka')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.cena')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.sadzba')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.bezDph')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.dph')}</th>
-                      <th className="px-2 py-2 font-medium">{t('detail.polozka.sDph')}</th>
-                      <th className="px-2 py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(draft.extracted.polozky ?? []).map((item, index) => (
-                      <Fragment key={item.id}>
-                      <tr className="border-b border-line">
-                        <td className="px-2 py-2">
-                          <input
-                            className="input min-w-48"
-                            value={item.popis}
-                            onChange={(event) =>
-                              updateLineItem(index, { popis: event.target.value })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            className="input tnum w-24 text-right"
-                            value={item.mnozstvo ?? ''}
-                            onChange={(event) =>
-                              updateLineItem(index, {
-                                mnozstvo: parseOptionalNumber(event.target.value),
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            className="input w-20"
-                            value={item.jednotka ?? ''}
-                            onChange={(event) =>
-                              updateLineItem(index, { jednotka: event.target.value || undefined })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            className="input tnum w-28 text-right"
-                            value={item.jednotkovaCenaBezDph ?? ''}
-                            onChange={(event) =>
-                              updateLineItem(index, {
-                                jednotkovaCenaBezDph: parseOptionalNumber(event.target.value),
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <select
-                            className="input tnum w-24"
-                            value={item.sadzbaDph ?? ''}
-                            onChange={(event) =>
-                              updateLineItem(index, {
-                                sadzbaDph: event.target.value
-                                  ? (Number(event.target.value) as VatRate)
-                                  : undefined,
-                              })
-                            }
-                          >
-                            <option value="">{t('detail.nevybrane')}</option>
-                            {VAT_RATES.map((rate) => (
-                              <option key={rate} value={rate}>
-                                {rate} %
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            className="input tnum w-28 text-right"
-                            value={item.sumaBezDph ?? ''}
-                            onChange={(event) =>
-                              updateLineItem(index, {
-                                sumaBezDph: parseOptionalNumber(event.target.value),
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            className="input tnum w-28 text-right"
-                            value={item.sumaDph ?? ''}
-                            placeholder={
-                              item.sumaDph === undefined
-                                ? lineItemEffective(item).dph?.toFixed(2) ?? ''
-                                : undefined
-                            }
-                            onChange={(event) =>
-                              updateLineItem(index, {
-                                sumaDph: parseOptionalNumber(event.target.value),
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            className="input tnum w-28 text-right"
-                            value={item.sumaSpolu ?? ''}
-                            onChange={(event) =>
-                              updateLineItem(index, {
-                                sumaSpolu: parseOptionalNumber(event.target.value),
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <button
-                            type="button"
-                            className="btn btn-danger px-2 py-1"
-                            onClick={() =>
-                              updateExtracted(
-                                'polozky',
-                                (draft.extracted.polozky ?? []).filter(
-                                  (_, itemIndex) => itemIndex !== index,
-                                ),
-                              )
-                            }
-                            aria-label={t('akcia.vymazat')}
-                          >
-                            ×
-                          </button>
-                        </td>
-                      </tr>
-                      {pozicneUcto && (
-                        <tr className="border-b border-line bg-app/60">
-                          <td colSpan={9} className="px-2 py-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-medium text-ink-soft">
-                                {t('detail.pozicne.riadok')}
-                              </span>
-                              {(
-                                [
-                                  ['predkontaciaId', t('detail.predkontacia'), codeLists.predkontacie],
-                                  ['clenenieDphId', t('detail.clenenieDph'), codeLists.cleneniaDph],
-                                  ['strediskoId', t('detail.stredisko'), codeLists.strediska],
-                                ] as const
-                              ).map(([key, label, items]) => (
-                                <select
-                                  key={key}
-                                  className="input w-52"
-                                  aria-label={label}
-                                  value={item.ucto?.[key] ?? ''}
-                                  onChange={(event) =>
-                                    updateLineItem(index, {
-                                      ucto: { ...item.ucto, [key]: event.target.value || undefined },
-                                    })
-                                  }
-                                >
-                                  <option value="">{label}: {t('detail.nevybrane')}</option>
-                                  {items.map((cli) => (
-                                    <option key={cli.id} value={cli.id}>
-                                      {cli.kod} · {cli.nazov}
-                                    </option>
-                                  ))}
-                                </select>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* Kontrola súčtov: hlavička dokladu vs. súčet položiek. */}
-              <div className="mt-3 grid max-w-lg grid-cols-3 gap-2 text-sm">
-                <div className="rounded border border-line p-2">
-                  <span className="block text-xs text-ink-soft">{t('detail.sucty.celkovo')}</span>
-                  <strong className="tnum">{formatMoney(draft.extracted.sumaSpolu ?? 0, draft.extracted.mena)}</strong>
-                </div>
-                <div className="rounded border border-line p-2">
-                  <span className="block text-xs text-ink-soft">{t('detail.sucty.naPolozkach')}</span>
-                  <strong className="tnum">{formatMoney(polozkySpolu, draft.extracted.mena)}</strong>
-                </div>
-                <div className={`rounded border p-2 ${Math.abs(polozkyRozdiel) > 0.01 ? 'border-amber-300 bg-amber-50' : 'border-line'}`}>
-                  <span className="block text-xs text-ink-soft">{t('detail.sucty.rozdiel')}</span>
-                  <strong className={`tnum ${Math.abs(polozkyRozdiel) > 0.01 ? 'text-amber-800' : 'text-emerald-700'}`}>
-                    {formatMoney(polozkyRozdiel, draft.extracted.mena)}
-                  </strong>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn mt-3"
-                onClick={() =>
-                  updateExtracted('polozky', [
-                    ...(draft.extracted.polozky ?? []),
-                    { id: crypto.randomUUID(), popis: '' },
-                  ])
-                }
-              >
-                + {t('akcia.pridat')}
-              </button>
-            </Section>
-
-            <Section title={t('detail.zauctovanie')}>
-              {suggestion && suggestion.source !== 'none' && (
-                <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
-                  <p className="font-semibold">
-                    {t('detail.navrh')}
-                    {suggestion.confidence > 0 && (
-                      <span className="tnum ml-1.5 font-normal text-sky-800">
-                        ({t('detail.aiIstota')} {Math.round(suggestion.confidence * 100)} %)
-                      </span>
-                    )}
-                  </p>
-                  <p>{t(`detail.navrhZdroj.${suggestion.source}` as SkKey)}</p>
-                  {autoFilled ? (
-                    <p className="mt-2 font-medium">{t('detail.autoVyplnene')}</p>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn mt-2"
-                      onClick={() =>
-                        updateUcto({
-                          predkontaciaId: suggestion.predkontaciaId,
-                          clenenieDphId: suggestion.clenenieDphId,
-                          ciselnyRadId: suggestion.ciselnyRadId,
-                          strediskoId: suggestion.strediskoId,
-                          clenenieKvKod: suggestion.clenenieKvKod,
-                        })
-                      }
-                    >
-                      {t('detail.pouzitNavrh')}
-                    </button>
-                  )}
-                </div>
-              )}
-              {lastUsed && (
-                <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-line bg-app p-3 text-sm">
-                  <span className="text-ink-soft">{t('detail.naposledy')}</span>
-                  <strong className="tnum">{lastUsed.label}</strong>
-                  <button
-                    type="button"
-                    className="btn ml-auto"
-                    onClick={() => updateUcto(lastUsed.ucto)}
-                  >
-                    {t('akcia.pouzit')}
-                  </button>
-                </div>
-              )}
-              <div className="grid gap-3 sm:grid-cols-2">
-                {(
-                  [
-                    ['predkontaciaId', t('detail.predkontacia'), codeLists.predkontacie],
-                    ['clenenieDphId', t('detail.clenenieDph'), codeLists.cleneniaDph],
-                    ['ciselnyRadId', t('detail.ciselnyRad'), codeLists.ciselneRady],
-                    ['strediskoId', t('detail.stredisko'), codeLists.strediska],
-                    ['zakazkaId', t('detail.zakazka'), codeLists.zakazky],
-                    ['cinnostId', t('detail.cinnost'), codeLists.cinnosti],
-                    ['projektId', t('detail.projekt'), codeLists.projekty],
-                  ] as const
-                ).map(([key, label, items]) => {
-                  const selected = items.find((item) => item.id === draft.ucto[key]);
-                  const nextNumber =
-                    key === 'ciselnyRadId' ? nextNumberInSeries(selected?.posledneCislo) : undefined;
-                  return (
-                    <label key={key} className="block">
-                      <span className="label">{label}</span>
-                      <select
-                        className="input"
-                        value={draft.ucto[key] ?? ''}
-                        onChange={(event) => {
-                          const value = event.target.value || undefined;
-                          if (key === 'clenenieDphId') {
-                            // Členenie DPH z POHODY môže niesť sekciu KV DPH —
-                            // ak KV ešte nie je zvolené, predvyplníme ju (človek
-                            // ju môže prepísať).
-                            const picked = items.find((item) => item.id === value);
-                            updateUcto({
-                              clenenieDphId: value,
-                              ...(picked?.kvSekcia && !draft.ucto.clenenieKvKod
-                                ? { clenenieKvKod: picked.kvSekcia }
-                                : {}),
-                            });
-                          } else {
-                            updateUcto({ [key]: value });
-                          }
-                        }}
-                      >
-                        <option value="">{t('detail.nevybrane')}</option>
-                        {items.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.kod} · {item.nazov}
-                          </option>
-                        ))}
-                      </select>
-                      {nextNumber && (
-                        <span className="mt-1 block text-[11px] text-ink-soft">
-                          {t('detail.dalsieCislo')}:{' '}
-                          <span className="tnum font-medium text-ink">{nextNumber}</span>
-                        </span>
-                      )}
-                    </label>
-                  );
-                })}
-                <label className="block">
-                  <span className="label">{t('detail.clenenieKv')}</span>
-                  <select
-                    className="input"
-                    value={draft.ucto.clenenieKvKod ?? ''}
-                    onChange={(event) => updateUcto({ clenenieKvKod: event.target.value || undefined })}
-                  >
-                    <option value="">{t('detail.nevybrane')}</option>
-                    {CLENENIE_KV_KODY.map((kod) => (
-                      <option key={kod} value={kod}>
-                        {kod} · {t(`kv.${kod}` as SkKey)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {draft.typ === 'PD' && (
-                  <>
-                    <label className="block">
-                      <span className="label">{t('detail.pokladnaKod')}</span>
-                      <input
-                        className="input tnum"
-                        value={draft.ucto.pokladnaKod ?? ''}
-                        onChange={(event) => updateUcto({ pokladnaKod: event.target.value || undefined })}
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="label">{t('detail.pokladnaTyp')}</span>
-                      <select className="input" value={draft.ucto.pokladnaTyp ?? ''} onChange={(event) => updateUcto({ pokladnaTyp: (event.target.value || undefined) as DocumentUcto['pokladnaTyp'] })}>
-                        <option value="">{t('detail.nevybrane')}</option>
-                        <option value="receipt">{t('detail.pokladnaPrijem')}</option>
-                        <option value="expense">{t('detail.pokladnaVydaj')}</option>
-                      </select>
-                    </label>
-                  </>
-                )}
-                <label className="block sm:col-span-2">
-                  <span className="label">{t('detail.poznamka')}</span>
-                  {orgNoteTemplates.length > 0 && (
-                    <select
-                      className="input mb-1"
-                      value=""
-                      aria-label={t('detail.poznamkaSablona')}
-                      onChange={(event) => {
-                        if (!event.target.value) return;
-                        const existing = draft.ucto.poznamka?.trim();
-                        updateUcto({ poznamka: existing ? `${existing}\n${event.target.value}` : event.target.value });
-                      }}
-                    >
-                      <option value="">{t('detail.poznamkaSablona')}</option>
-                      {orgNoteTemplates.map((template) => (
-                        <option key={template.id} value={template.text}>{template.text}</option>
-                      ))}
-                    </select>
-                  )}
-                  <textarea
-                    className="input min-h-20"
-                    value={draft.ucto.poznamka ?? ''}
-                    onChange={(event) => updateUcto({ poznamka: event.target.value || undefined })}
-                  />
-                </label>
-              </div>
-            </Section>
+            <InvoicePanel
+              draft={draft}
+              readOnly={readOnly}
+              busy={busy}
+              codeLists={{
+                predkontacie: codeLists.predkontacie,
+                cleneniaDph: codeLists.cleneniaDph,
+                ciselneRady: codeLists.ciselneRady,
+                strediska: codeLists.strediska,
+              }}
+              suggestion={suggestion}
+              autoFilled={autoFilled}
+              setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
+              updateUcto={updateUcto}
+              updateExtracted={updateExtracted}
+              updateSupplier={updateSupplier}
+              onSave={handleSave}
+            />
           </fieldset>
 
           <Section title={t('detail.zdroj')}>

@@ -22,7 +22,11 @@ export interface ServerConfig {
   };
   openai: {
     apiKey?: string;
+    // Rozdelené role modelov: extrakcia (lacný, každý doklad), fallback
+    // zaúčtovania (len neznáme prípady) a analýza pravidiel (zriedka, silný).
     model: string;
+    accountingModel: string;
+    ruleAnalysisModel: string;
     storeResponses: boolean;
     timeoutMs: number;
     maxRetries: number;
@@ -112,13 +116,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       pollIntervalSeconds: positiveInteger(env.IMAP_POLL_INTERVAL, 30),
       mailbox: env.IMAP_MAILBOX?.trim() || 'INBOX',
     },
-    openai: {
-      apiKey: openaiApiKey,
-      model: env.OPENAI_MODEL?.trim() || 'gpt-5.6-terra',
-      storeResponses: env.OPENAI_STORE_RESPONSES === 'true',
-      timeoutMs: positiveInteger(env.OPENAI_API_TIMEOUT_MS || env.OPENAI_TIMEOUT_MS, 120_000),
-      maxRetries: nonNegativeInteger(env.OPENAI_MAX_RETRIES, 2),
-    },
+    // Fallback aj analýza defaultne bežia na overenom extrakčnom modeli
+    // (gpt-5-mini) — silnejšie modely sú OPT-IN cez env, až keď účet potvrdí
+    // prístup k nim (inak volanie na neznámy model spadne na timeout).
+    openai: (() => {
+      const extractionModel = env.OPENAI_MODEL?.trim() || 'gpt-5-mini';
+      return {
+        apiKey: openaiApiKey,
+        model: extractionModel,
+        accountingModel: env.OPENAI_ACCOUNTING_FALLBACK_MODEL?.trim() || extractionModel,
+        ruleAnalysisModel: env.OPENAI_RULE_ANALYSIS_MODEL?.trim() || extractionModel,
+        storeResponses: env.OPENAI_STORE_RESPONSES === 'true',
+        timeoutMs: positiveInteger(env.OPENAI_API_TIMEOUT_MS || env.OPENAI_TIMEOUT_MS, 120_000),
+        // Počet pokusov spracovania = maxRetries + 1. Prechodné chyby (429/5xx/
+        // timeout) pri dávke dokladov potrebujú viac pokusov v dlhšom okne, inak
+        // sa z dočasného výpadku stane trvalá chyba. Riadi len durable job retry;
+        // samotné OpenAI SDK beží s maxRetries: 0.
+        maxRetries: nonNegativeInteger(env.OPENAI_MAX_RETRIES, 5),
+      };
+    })(),
     extractionMaxFileBytes: positiveInteger(env.EXTRACTION_MAX_FILE_BYTES, 20 * 1024 * 1024),
     extractionMaxPdfPages: positiveInteger(env.EXTRACTION_MAX_PDF_PAGES, 50),
     workerPollIntervalMs: positiveInteger(env.WORKER_POLL_INTERVAL_MS, 1500),

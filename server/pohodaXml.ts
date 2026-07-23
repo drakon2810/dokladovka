@@ -97,8 +97,8 @@ function partnerAddressXml(supplier: Record<string, any>): string {
   if (supplier.ico) lines.push(`<typ:ico>${escapeXml(supplier.ico)}</typ:ico>`);
   if (supplier.dic) lines.push(`<typ:dic>${escapeXml(supplier.dic)}</typ:dic>`);
   if (supplier.icDph) lines.push(`<typ:icDph>${escapeXml(String(supplier.icDph).replace(/\s+/g, ''))}</typ:icDph>`);
-  // Tuzemsko (SK) sa v POHODE necháva prázdne — krajina len pre zahraničie.
-  if (country && country !== 'SK') lines.push(`<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
+  // Krajina sa vypĺňa vždy (aj tuzemsko SK) — POHODA ju pri importe páruje na číselník krajín.
+  if (country) lines.push(`<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
   return `<typ:address>
           ${lines.join('\n          ')}
         </typ:address>`;

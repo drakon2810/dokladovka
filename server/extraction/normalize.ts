@@ -58,14 +58,15 @@ export function canonicalCurrency(raw: string | undefined): string {
 }
 
 // AI občas skopíruje zahraničné IČ DPH aj do poľa DIČ (napr. ATU… u rakúskeho
-// dodávateľa). DIČ je SK/CZ identifikátor; keď sa zhoduje s IČ DPH, je to
-// duplikát — zhodíme ho, inak doklad spadne na invalid_dic pri schvaľovaní.
-function withoutForeignDicCopy(supplier: ExtractionResult['supplier']): ExtractionResult['supplier'] {
-  if (supplier.dic && supplier.icDph
-    && supplier.dic.replace(/\s/g, '').toUpperCase() === supplier.icDph.replace(/\s/g, '').toUpperCase()) {
-    return { ...supplier, dic: undefined };
+// dodávateľa alebo SK… u odberateľa). DIČ je SK/CZ identifikátor; keď sa zhoduje
+// s IČ DPH, je to duplikát — zhodíme ho, inak doklad spadne na invalid_dic pri
+// schvaľovaní. Platí pre dodávateľa aj odberateľa.
+function withoutForeignDicCopy<T extends { dic?: string; icDph?: string }>(entity: T): T {
+  if (entity.dic && entity.icDph
+    && entity.dic.replace(/\s/g, '').toUpperCase() === entity.icDph.replace(/\s/g, '').toUpperCase()) {
+    return { ...entity, dic: undefined };
   }
-  return supplier;
+  return entity;
 }
 
 function round2(value: number): number {
@@ -107,7 +108,7 @@ export function normalizeExtractionResult(
     documentType: result.documentType === 'UNKNOWN' ? 'FP' : result.documentType,
     extracted: {
       dodavatel: { ...withoutForeignDicCopy(result.supplier), nazov: result.supplier.nazov ?? '' },
-      odberatel: { ...result.buyer },
+      odberatel: withoutForeignDicCopy({ ...result.buyer }),
       cisloFaktury: result.invoiceNumber ?? '',
       cisloObjednavky: result.orderNumber,
       cisloDodaciehoListu: result.deliveryNoteNumber,
@@ -116,7 +117,10 @@ export function normalizeExtractionResult(
       specifickySymbol: result.specificSymbol,
       datumVystavenia: result.issueDate ?? fallbackDate,
       datumSplatnosti: result.dueDate,
-      datumDodania: result.taxDate,
+      // DUZP: keď ho faktúra neuvádza (bežné pri zahraničných službách), odvodí
+      // sa z dátumu vystavenia — rovnako ako to robí dphAdvisor. Inak by správny
+      // návrh zaúčtovania blokovala validácia „chýba dátum dodania".
+      datumDodania: result.taxDate ?? result.issueDate ?? fallbackDate,
       mena: currency,
       rozpisDph: result.vatBreakdown.flatMap((row) => {
         const sadzba = Number(row.vatRate.replace(',', '.'));
@@ -167,7 +171,11 @@ function normalizedIdentifier(value: unknown): string {
 }
 
 function validDic(value: unknown): boolean {
-  return /^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(normalizedIdentifier(value));
+  if (/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(normalizedIdentifier(value))) return true;
+  // AI často skopíruje IČ DPH (SK2020254170, ATU12345678) do poľa DIČ — je to
+  // platný daňový identifikátor, len iného typu; blokovať schválenie netreba.
+  const vat = checkVatId(value);
+  return vat === 'valid' || vat === 'unknown_country';
 }
 
 // IČ DPH podľa krajín: EÚ formáty podľa VIES + XI/GB/CH/NO, ktoré sa na
@@ -273,7 +281,9 @@ export function validateNormalizedExtraction(
   if (invoiceType && !String(extracted.cisloFaktury ?? '').trim()) issues.push({ code: 'invoice_number_required', field: 'cisloFaktury', severity: 'error', message: 'Chýba číslo faktúry' });
   if (!isIsoDate(extracted.datumVystavenia)) issues.push({ code: 'invalid_issue_date', field: 'datumVystavenia', severity: 'error', message: 'Dátum vystavenia nie je platný' });
   if (invoiceType && !isIsoDate(extracted.datumDodania)) issues.push({ code: 'tax_date_required', field: 'datumDodania', severity: 'error', message: 'Chýba platný dátum dodania' });
-  if (invoiceType && !isIsoDate(extracted.datumSplatnosti)) issues.push({ code: 'due_date_required', field: 'datumSplatnosti', severity: 'error', message: 'Chýba platný dátum splatnosti' });
+  // Dátum splatnosti nie je účtovný údaj (slúži na sledovanie úhrad) — keď chýba,
+  // stačí varovanie, aby neblokoval schválenie správne zaúčtovaného dokladu.
+  if (invoiceType && !isIsoDate(extracted.datumSplatnosti)) issues.push({ code: 'due_date_required', field: 'datumSplatnosti', severity: 'warning', message: 'Chýba platný dátum splatnosti' });
   // Splatnosť pred vystavením je nezvyčajná, ale legitímna (napr. zálohové
   // faktúry) — varovanie, o schválení rozhoduje človek.
   if (isIsoDate(extracted.datumSplatnosti) && isIsoDate(extracted.datumVystavenia) && extracted.datumSplatnosti < extracted.datumVystavenia) {
@@ -287,20 +297,34 @@ export function validateNormalizedExtraction(
       issues.push({ code: 'unverified_supplier_vat_id', field: 'dodavatel.icDph', severity: 'warning', message: 'IČ DPH dodávateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
     }
   }
-  if (supplier.ico && !/^\d{8}$/.test(normalizedIdentifier(supplier.ico))) issues.push({ code: 'invalid_supplier_ico', field: 'dodavatel.ico', severity: 'error', message: 'IČO dodávateľa nemá 8 číslic' });
-  if (supplier.dic && !validDic(supplier.dic)) issues.push({ code: 'invalid_supplier_dic', field: 'dodavatel.dic', severity: 'error', message: 'DIČ dodávateľa nemá platný formát' });
+  // Zahraničný dodávateľ nemá slovenské 8-miestne IČO ani SK/CZ DIČ — formálne
+  // odchýlky sú len varovanie, o doklade rozhoduje človek. Slovenský dodávateľ
+  // ostáva blokujúca chyba. „Zahraničný" = zahraničný daňový identifikátor v poli
+  // icDph ALEBO dic (AI ho často dá do dic, napr. ATU… u rakúskeho dodávateľa).
+  const foreignVatLike = (value: unknown): boolean => {
+    const n = normalizedIdentifier(value);
+    return /^[A-Z]{2}/.test(n) && n.slice(0, 2) !== 'SK';
+  };
+  const supplierForeign = foreignVatLike(supplier.icDph) || foreignVatLike(supplier.dic);
+  if (supplier.ico && !/^\d{8}$/.test(normalizedIdentifier(supplier.ico))) issues.push({ code: 'invalid_supplier_ico', field: 'dodavatel.ico', severity: supplierForeign ? 'warning' : 'error', message: 'IČO dodávateľa nemá 8 číslic' });
+  if (supplier.dic && !validDic(supplier.dic)) issues.push({ code: 'invalid_supplier_dic', field: 'dodavatel.dic', severity: supplierForeign ? 'warning' : 'error', message: 'DIČ dodávateľa nemá platný formát' });
   if (supplier.iban && !validIban(supplier.iban)) issues.push({ code: 'invalid_iban', field: 'dodavatel.iban', severity: 'error', message: 'IBAN dodávateľa nie je platný' });
   const buyerIco = normalizedIdentifier(buyer.ico);
   const orgIco = normalizedIdentifier(organization.ico);
   // Nesúlad IČO odberateľa posiela doklad do karantény; samotné schválenie po
   // ľudskom rozhodnutí neblokuje (varovanie zostáva viditeľné v detaile).
   if (buyerIco && buyerIco !== orgIco) issues.push({ code: 'buyer_ico_mismatch', field: 'odberatel.ico', severity: 'warning', message: 'IČO odberateľa sa nezhoduje s organizáciou' });
-  if (buyerIco && !/^\d{8}$/.test(buyerIco)) issues.push({ code: 'invalid_buyer_ico', field: 'odberatel.ico', severity: 'error', message: 'IČO odberateľa nemá 8 číslic' });
-  if (buyer.dic && !validDic(buyer.dic)) issues.push({ code: 'invalid_buyer_dic', field: 'odberatel.dic', severity: 'error', message: 'DIČ odberateľa nemá platný formát' });
+  // Na prijatej faktúre (FP) je odberateľom naša organizácia, ktorej reálne
+  // identifikátory poznáme — chybne prečítané IČO/DIČ/IČ DPH odberateľa z faktúry
+  // je len šum, nemá blokovať schválenie (varovanie). Na vydanej faktúre (FV) je
+  // odberateľ zákazník a jeho identifikátory sú podstatné → blokujúca chyba.
+  const buyerSeverity: 'warning' | 'error' = normalized.documentType === 'FV' ? 'error' : 'warning';
+  if (buyerIco && !/^\d{8}$/.test(buyerIco)) issues.push({ code: 'invalid_buyer_ico', field: 'odberatel.ico', severity: buyerSeverity, message: 'IČO odberateľa nemá 8 číslic' });
+  if (buyer.dic && !validDic(buyer.dic)) issues.push({ code: 'invalid_buyer_dic', field: 'odberatel.dic', severity: buyerSeverity, message: 'DIČ odberateľa nemá platný formát' });
   if (buyer.icDph) {
     const buyerVat = checkVatId(buyer.icDph);
     if (buyerVat === 'invalid') {
-      issues.push({ code: 'invalid_buyer_vat_id', field: 'odberatel.icDph', severity: 'error', message: 'IČ DPH odberateľa nemá platný formát' });
+      issues.push({ code: 'invalid_buyer_vat_id', field: 'odberatel.icDph', severity: buyerSeverity, message: 'IČ DPH odberateľa nemá platný formát' });
     } else if (buyerVat === 'unknown_country') {
       issues.push({ code: 'unverified_buyer_vat_id', field: 'odberatel.icDph', severity: 'warning', message: 'IČ DPH odberateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
     }

@@ -649,11 +649,14 @@ export const sk = {
   'nast.tab.mostik': 'Mostík',
   'nast.tab.trening': 'Tréning AI',
   'trening.popis':
-    'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — systém si ich zapamätá a nové faktúry rovnakých dodávateľov navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',
+    'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — alebo priamo databázu POHODA (.mdb), z ktorej systém sám vytiahne prijaté faktúry vrátane IČO. Nové faktúry rovnakých dodávateľov potom navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',
   'trening.pamat': 'V pamäti rozhodnutí',
   'trening.schvalene': 'zo schválených dokladov',
   'trening.importovane': 'z importu histórie',
-  'trening.nahrat': 'Nahrať Excel',
+  'trening.nahrat': 'Nahrať Excel / POHODA .mdb',
+  'trening.mdbNacitane': 'Z databázy POHODA načítané',
+  'trening.prijatych': 'prijatých',
+  'trening.vydanychPreskocene': 'vydaných preskočených',
   'trening.stlpce':
     'Očakávané stĺpce: IČO, Dodávateľ, Text, Predkontácia, Členenie DPH, Členenie KV, Číselný rad, Stredisko. Funguje aj priamy export agendy z POHODY (Firma, ČlDPH, ČlKV DPH). Povinný je dodávateľ (IČO alebo názov) a predkontácia alebo členenie DPH.',
   'trening.riadkovOk': 'riadkov v poriadku',
@@ -678,6 +681,11 @@ export const sk = {
   'trening.zmazat': 'Zmazať',
   'trening.pravidloObnovene': 'Pravidlo obnovené',
   'trening.pravidloZmazane': 'Pravidlo zmazané',
+  'trening.dodavateliaVPamati': 'Dodávatelia v pamäti',
+  'trening.vylucitPopis':
+    'Vylúčený dodávateľ ostáva v pamäti, ale nepoužíva sa na návrhy ani na analýzu pravidiel (napr. starý plán účtov alebo chybný import).',
+  'trening.vylucit': 'Vylúčiť z učenia',
+  'trening.zaradit': 'Zaradiť do učenia',
   'nast.resetDemo': 'Reset demo dát',
   'nast.resetDemoPotvrdenie':
     'Naozaj obnoviť demo dáta? Všetky zmeny sa stratia.',

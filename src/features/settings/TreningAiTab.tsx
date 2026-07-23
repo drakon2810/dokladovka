@@ -5,14 +5,16 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   activateAiRule, analyzeAiTraining, confirmAiRules, deleteAiRule,
-  getAiTrainingStats, importAiTraining, listAiRules,
-  type AiRule, type AiRuleProposal,
+  excludeAiTrainingSupplier, getAiTrainingStats, importAiTraining,
+  listAiRules, listAiTrainingSuppliers,
+  type AiRule, type AiRuleProposal, type AiTrainingSupplier,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import type { CodeListKind } from '../../data/types';
-import { parseTrainingRows, type ParsedTrainingRow } from './treningImport';
+import { parseTrainingRows, validateTrainingRows, type ParsedTrainingRow, type TrainingKody } from './treningImport';
+import { extractPohodaDecisions } from './pohodaMdbImport';
 
 export function TreningAiTab() {
   const { data, loading, error } = useDataQuery();
@@ -23,6 +25,7 @@ export function TreningAiTab() {
   const [proposals, setProposals] = useState<AiRuleProposal[]>();
   const [checked, setChecked] = useState<boolean[]>([]);
   const [rules, setRules] = useState<AiRule[]>([]);
+  const [suppliers, setSuppliers] = useState<AiTrainingSupplier[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const organizations = data?.organizations.filter((org) => !org.archived) ?? [];
@@ -36,11 +39,20 @@ export function TreningAiTab() {
     }
   }
 
+  async function refreshSuppliers(id: string) {
+    try {
+      setSuppliers(await listAiTrainingSuppliers(id));
+    } catch {
+      setSuppliers([]);
+    }
+  }
+
   useEffect(() => {
     let active = true;
     if (!orgId) return undefined;
     setStats(undefined);
     setRules([]);
+    setSuppliers([]);
     void getAiTrainingStats(orgId)
       .then((next) => {
         if (active) setStats(next);
@@ -49,6 +61,11 @@ export function TreningAiTab() {
     void listAiRules(orgId)
       .then((next) => {
         if (active) setRules(next);
+      })
+      .catch(() => undefined);
+    void listAiTrainingSuppliers(orgId)
+      .then((next) => {
+        if (active) setSuppliers(next);
       })
       .catch(() => undefined);
     return () => {
@@ -64,22 +81,53 @@ export function TreningAiTab() {
       .filter((item) => item.orgId === orgId && item.active)
       .map((item) => item.kod.trim()));
 
+  const kodyFirmy = (): TrainingKody => ({
+    predkontacie: aktivneKody('predkontacie'),
+    cleneniaDph: aktivneKody('cleneniaDph'),
+    ciselneRady: aktivneKody('ciselneRady'),
+    strediska: aktivneKody('strediska'),
+  });
+
   async function handleFile(file: File) {
     if (!orgId) return;
     setBusy(true);
     try {
+      if (/\.(mdb|accdb)$/i.test(file.name)) {
+        // Priamy import celej agendy z POHODA databázy (mdb-reader v prehliadači).
+        // mdb-reader a jeho krypto závislosti (browserify-aes, create-hash) čakajú
+        // Node globály Buffer/process/global, ktoré v prehliadači nie sú — pred
+        // importom ich doplníme (inak padne „process is not defined"). Dynamické
+        // importy držia mdb-reader aj polyfill mimo hlavného balíka.
+        const { Buffer: BufferPolyfill } = await import('buffer');
+        const g = globalThis as unknown as Record<string, unknown>;
+        if (!g.Buffer) g.Buffer = BufferPolyfill;
+        if (!g.global) g.global = globalThis;
+        if (!g.process) {
+          const noop = () => undefined;
+          g.process = {
+            env: {}, browser: true, version: '', versions: {}, platform: 'browser', argv: [],
+            nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) => queueMicrotask(() => fn(...args)),
+            emitWarning: noop, on: noop, once: noop, off: noop, removeListener: noop, cwd: () => '/',
+          };
+        }
+        const { default: MDBReader } = await import('mdb-reader');
+        const bytes = BufferPolyfill.from(new Uint8Array(await file.arrayBuffer())) as unknown as ConstructorParameters<typeof MDBReader>[0];
+        const reader = new MDBReader(bytes);
+        const { rows: extracted, summary } = extractPohodaDecisions(reader);
+        setRows(validateTrainingRows(extracted, kodyFirmy()));
+        showToast(
+          `${t('trening.mdbNacitane')}: ${summary.unikatne} (${summary.prijate} ${t('trening.prijatych')}, ${summary.vydane} ${t('trening.vydanychPreskocene')})`,
+        );
+        if (extracted.length === 0) showToast(t('trening.ziadneRiadky'), { tone: 'error' });
+        return;
+      }
       const XLSX = await import('xlsx');
       const workbook = XLSX.read(await file.arrayBuffer());
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const raw: Array<Record<string, unknown>> = sheet
         ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
         : [];
-      const parsed = parseTrainingRows(raw, {
-        predkontacie: aktivneKody('predkontacie'),
-        cleneniaDph: aktivneKody('cleneniaDph'),
-        ciselneRady: aktivneKody('ciselneRady'),
-        strediska: aktivneKody('strediska'),
-      });
+      const parsed = parseTrainingRows(raw, kodyFirmy());
       setRows(parsed);
       if (parsed.length === 0) showToast(t('trening.ziadneRiadky'), { tone: 'error' });
     } catch (cause) {
@@ -100,6 +148,7 @@ export function TreningAiTab() {
       showToast(`${t('trening.hotovo')}: ${result.imported} nových, ${result.duplicates} duplicít, ${result.rejected.length} odmietnutých`);
       setRows([]);
       setStats(await getAiTrainingStats(orgId));
+      await refreshSuppliers(orgId);
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
     } finally {
@@ -201,7 +250,7 @@ export function TreningAiTab() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.xls,.csv"
+          accept=".xlsx,.xls,.csv,.mdb,.accdb"
           className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -357,6 +406,45 @@ export function TreningAiTab() {
                 </button>
               </li>
             ))}
+          </ul>
+        </section>
+      )}
+
+      {suppliers.length > 0 && (
+        <section className="card p-4">
+          <h3 className="mb-1 text-sm font-semibold">{t('trening.dodavateliaVPamati')}</h3>
+          <p className="mb-3 max-w-3xl text-xs text-ink-soft">{t('trening.vylucitPopis')}</p>
+          <ul className="space-y-1">
+            {suppliers.map((supplier) => {
+              const key = supplier.supplierIco ? `ico:${supplier.supplierIco}` : `name:${supplier.supplierName ?? ''}`;
+              return (
+                <li key={key} className="flex items-center gap-3 rounded border border-line p-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <p className={`truncate ${supplier.vylucene ? 'text-ink-soft line-through' : ''}`}>
+                      {supplier.supplierName ?? '—'}{supplier.supplierIco ? ` · ${supplier.supplierIco}` : ''}
+                    </p>
+                  </div>
+                  <span className="tnum text-xs text-ink-soft">{supplier.pocet}</span>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!orgId) return;
+                      void excludeAiTrainingSupplier(orgId, {
+                        supplierIco: supplier.supplierIco,
+                        supplierName: supplier.supplierName,
+                        excluded: !supplier.vylucene,
+                      })
+                        .then(() => refreshSuppliers(orgId))
+                        .catch(() => showToast(t('chyba.vseobecna'), { tone: 'error' }));
+                    }}
+                  >
+                    {supplier.vylucene ? t('trening.zaradit') : t('trening.vylucit')}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

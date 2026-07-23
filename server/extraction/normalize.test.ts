@@ -173,6 +173,65 @@ describe('normalizácia SK/CZ faktúr', () => {
       .toContain('line_items_total_mismatch');
   });
 
+  it('DUZP sa odvodí z dátumu vystavenia, keď na faktúre chýba (neblokuje)', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'Geschwandtner GmbH', icDph: 'ATU12345678' },
+      buyer: { ico: '87654321' }, invoiceNumber: '06-2026-00355', issueDate: '2026-06-09',
+      dueDate: '2026-07-09', currency: 'EUR', lineItems: [], vatBreakdown: [{ vatRate: '0', base: '210', vat: '0' }], totalAmount: '210',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-noduzp', '2026-06-09');
+    expect((normalized.extracted as any).datumDodania).toBe('2026-06-09');
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' }).map((i) => i.code)).not.toContain('tax_date_required');
+  });
+
+  it('DIČ odberateľa skopírované z jeho IČ DPH (SK…) sa zahodí a neblokuje schválenie', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'ASECO', ico: '12345678', icDph: 'SK2020123456' },
+      buyer: { nazov: 'AGS Bratislava', ico: '87654321', dic: 'SK2020254170', icDph: 'SK2020254170' },
+      invoiceNumber: '517655', issueDate: '2026-06-04', taxDate: '2026-06-04', dueDate: '2026-06-18', currency: 'EUR',
+      lineItems: [], vatBreakdown: [{ vatRate: '0', base: '500', vat: '0' }], totalAmount: '500',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-buyerdic', '2026-06-04');
+    expect((normalized.extracted as any).odberatel.dic).toBeUndefined();
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' }).map((i) => i.code)).not.toContain('invalid_buyer_dic');
+  });
+
+  it('na FP je chybný DIČ/IČO odberateľa (naša firma) len varovanie, na FV blokuje', () => {
+    const build = (documentType: 'FP' | 'FV') => normalizeExtractionResult({
+      schemaVersion: '2', documentType, supplier: { nazov: 'ASECO', ico: '12345678', icDph: 'SK2020123456' },
+      buyer: { nazov: 'AGS', ico: '87654321', dic: '4024' }, invoiceNumber: '1', issueDate: '2026-06-04', taxDate: '2026-06-04',
+      dueDate: '2026-06-18', currency: 'EUR', lineItems: [], vatBreakdown: [{ vatRate: '0', base: '500', vat: '0' }], totalAmount: '500',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-bd', '2026-06-04');
+    expect(validateNormalizedExtraction(build('FP'), { ico: '87654321' }).find((i) => i.code === 'invalid_buyer_dic')?.severity).toBe('warning');
+    expect(validateNormalizedExtraction(build('FV'), { ico: '87654321' }).find((i) => i.code === 'invalid_buyer_dic')?.severity).toBe('error');
+  });
+
+  it('zahraničný VAT dodávateľa v poli dic (ATU…) sa berie ako zahraničný — IČO len varovanie', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'Geschwandtner GmbH', ico: '252338', dic: 'ATU61252600' },
+      buyer: { ico: '87654321' }, invoiceNumber: '391', issueDate: '2026-06-18', taxDate: '2026-06-18', dueDate: '2026-07-18', currency: 'EUR',
+      lineItems: [], vatBreakdown: [{ vatRate: '0', base: '210', vat: '0' }], totalAmount: '210',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-gd', '2026-06-18');
+    const issues = validateNormalizedExtraction(normalized, { ico: '87654321' });
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(issues.find((i) => i.code === 'invalid_supplier_ico')?.severity).toBe('warning');
+  });
+
+  it('zahraničný dodávateľ bez SK IČO/DIČ = varovanie; chýbajúca splatnosť = varovanie (žiadna blokujúca chyba)', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'AGS-MUDANÇAS LDA', ico: '123456', dic: 'PT999999', icDph: 'PT501234567' },
+      buyer: { ico: '87654321' }, invoiceNumber: 'FT-284', issueDate: '2026-06-10', taxDate: '2026-06-10',
+      currency: 'EUR', lineItems: [], vatBreakdown: [{ vatRate: '0', base: '561', vat: '0' }], totalAmount: '561',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-foreign2', '2026-06-10');
+    const issues = validateNormalizedExtraction(normalized, { ico: '87654321' });
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(issues.find((i) => i.code === 'due_date_required')?.severity).toBe('warning');
+    expect(issues.find((i) => i.code === 'invalid_supplier_ico')?.severity).toBe('warning');
+  });
+
   it('historickú sadzbu zachová a označí na kontrolu', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'Historický dodávateľ' }, buyer: { ico: '87654321' },
