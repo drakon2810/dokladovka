@@ -1,6 +1,7 @@
 // Generovanie XML POHODA dataPack — SPEC §7. Produkčný agent vykoná fail-closed XSD validáciu.
-import type { CodeListItem, DocumentItem, Organization, VatBreakdownRow } from '../types';
+import type { CodeListItem, DocumentItem, DocumentLineItem, Organization, VatBreakdownRow } from '../types';
 import { slugifyOrganizationName } from '../alias/aliasGenerator';
+import { lineItemEffective } from '../../lib/validate';
 
 /**
  * Escapovanie XML špeciálnych znakov + všetky ne-ASCII znaky ako numerické
@@ -93,8 +94,8 @@ function partnerAddressLines(
   if (supplier.ico) lines.push(`${indent}<typ:ico>${escapeXml(supplier.ico)}</typ:ico>`);
   if (supplier.dic) lines.push(`${indent}<typ:dic>${escapeXml(supplier.dic)}</typ:dic>`);
   if (supplier.icDph) lines.push(`${indent}<typ:icDph>${escapeXml(supplier.icDph.replace(/\s+/g, ''))}</typ:icDph>`);
-  // Tuzemsko (SK) sa v POHODE necháva prázdne — krajina len pre zahraničie.
-  if (country && country !== 'SK') lines.push(`${indent}<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
+  // Krajina sa vypĺňa vždy (aj tuzemsko SK) — POHODA ju pri importe páruje na číselník krajín.
+  if (country) lines.push(`${indent}<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
   return lines;
 }
 
@@ -140,6 +141,58 @@ export interface DataPackCodeLists {
   predkontacie: CodeListItem[];
   cleneniaDph: CodeListItem[];
   ciselneRady: CodeListItem[];
+  strediska?: CodeListItem[];
+}
+
+/** Sadzba DPH → POHODA rateVAT. Zhodné s rozdelením súhrnu (23→high, 19→low, 5→third). */
+function vatRateName(sadzba: number | undefined): 'high' | 'low' | 'third' | 'none' {
+  if (sadzba === 23) return 'high';
+  if (sadzba === 19) return 'low';
+  if (sadzba === 5) return 'third';
+  return 'none';
+}
+
+/**
+ * Riadky <inv:invoiceDetail> z položiek dokladu. Zaúčtovanie/členenie položky
+ * s návratom na hlavičku; členenie KV DPH z hlavičky. Prázdne pole = bez rozpisu.
+ */
+function invoiceDetailLines(
+  polozky: DocumentLineItem[] | undefined,
+  kodOf: (list: CodeListItem[], id: string | undefined) => string | undefined,
+  codeLists: DataPackCodeLists,
+  header: { accounting?: string; clenenie?: string; kv?: string },
+): string[] {
+  if (!polozky || polozky.length === 0) return [];
+  const lines = ['      <inv:invoiceDetail>'];
+  for (const item of polozky) {
+    const eff = lineItemEffective(item);
+    const bezDph = eff.bezDph ?? 0;
+    const unitPrice = item.jednotkovaCenaBezDph ?? bezDph;
+    const accounting = kodOf(codeLists.predkontacie, item.ucto?.predkontaciaId) ?? header.accounting;
+    const clenenie = kodOf(codeLists.cleneniaDph, item.ucto?.clenenieDphId) ?? header.clenenie;
+    const centre = kodOf(codeLists.strediska ?? [], item.ucto?.strediskoId);
+    lines.push('        <inv:invoiceItem>');
+    lines.push(`          <inv:text>${escapeXml(item.popis ?? '')}</inv:text>`);
+    lines.push(`          <inv:quantity>${escapeXml(String(item.mnozstvo ?? 1))}</inv:quantity>`);
+    if (item.jednotka) lines.push(`          <inv:unit>${escapeXml(item.jednotka)}</inv:unit>`);
+    lines.push('          <inv:coefficient>1.0</inv:coefficient>');
+    lines.push('          <inv:payVAT>false</inv:payVAT>');
+    lines.push(`          <inv:rateVAT>${vatRateName(item.sadzbaDph)}</inv:rateVAT>`);
+    lines.push('          <inv:discountPercentage>0.0</inv:discountPercentage>');
+    lines.push('          <inv:homeCurrency>');
+    lines.push(`            <typ:unitPrice>${formatXmlAmount(unitPrice)}</typ:unitPrice>`);
+    lines.push(`            <typ:price>${formatXmlAmount(bezDph)}</typ:price>`);
+    lines.push(`            <typ:priceVAT>${formatXmlAmount(eff.dph ?? 0)}</typ:priceVAT>`);
+    lines.push(`            <typ:priceSum>${formatXmlAmount(eff.spolu ?? bezDph)}</typ:priceSum>`);
+    lines.push('          </inv:homeCurrency>');
+    if (accounting) lines.push(`          <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>`);
+    if (clenenie) lines.push(`          <inv:classificationVAT><typ:ids>${escapeXml(clenenie)}</typ:ids></inv:classificationVAT>`);
+    if (header.kv) lines.push(`          <inv:classificationKVDPH><typ:ids>${escapeXml(header.kv)}</typ:ids></inv:classificationKVDPH>`);
+    if (centre) lines.push(`          <inv:centre><typ:ids>${escapeXml(centre)}</typ:ids></inv:centre>`);
+    lines.push('        </inv:invoiceItem>');
+  }
+  lines.push('      </inv:invoiceDetail>');
+  return lines;
 }
 
 /**
@@ -267,6 +320,12 @@ export function buildDataPack(
         if (account) lines.push(`        <inv:paymentAccount><typ:accountNo>${escapeXml(account.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(account.bankCode)}</typ:bankCode></inv:paymentAccount>`);
       }
       lines.push('      </inv:invoiceHeader>');
+      lines.push(...invoiceDetailLines(
+        d.polozky,
+        kodOf,
+        codeLists,
+        { accounting: predkontacia, clenenie, kv: doc.ucto.clenenieKvKod },
+      ));
       lines.push('      <inv:invoiceSummary>');
       lines.push('        <inv:homeCurrency>');
       lines.push(...currencyLines);

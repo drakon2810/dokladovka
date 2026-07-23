@@ -49,6 +49,72 @@ function amount(value: unknown): string {
   return numeric.toFixed(2);
 }
 
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** Sadzba DPH → POHODA rateVAT. Zhodné s rozdelením súhrnu (23→high, 19→low, 5→third). */
+function vatRateName(sadzba: unknown): 'high' | 'low' | 'third' | 'none' {
+  const rate = Number(sadzba);
+  if (rate === 23) return 'high';
+  if (rate === 19) return 'low';
+  if (rate === 5) return 'third';
+  return 'none';
+}
+
+/** Efektívne sumy položky — prázdna DPH pri vyplnenej sadzbe sa dopočíta zo základu (zhoda s normalize.ts). */
+function lineItemAmounts(item: any): { bezDph: number; dph: number; spolu: number; unitPrice: number } {
+  const bezDph = Number(item.sumaBezDph ?? 0);
+  let dph = item.sumaDph !== undefined ? Number(item.sumaDph) : undefined;
+  let spolu = item.sumaSpolu !== undefined ? Number(item.sumaSpolu) : undefined;
+  if (dph === undefined && item.sadzbaDph !== undefined && item.sumaBezDph !== undefined) {
+    dph = round2((bezDph * Number(item.sadzbaDph)) / 100);
+    if (spolu === undefined || Math.abs(spolu - bezDph) <= 0.02) spolu = round2(bezDph + dph);
+  }
+  dph = dph ?? 0;
+  spolu = spolu ?? round2(bezDph + dph);
+  const unitPrice = item.jednotkovaCenaBezDph !== undefined ? Number(item.jednotkovaCenaBezDph) : bezDph;
+  return { bezDph, dph, spolu, unitPrice };
+}
+
+/**
+ * <inv:invoiceDetail> z položiek dokladu (SPEC — rozpis na položky).
+ * Zaúčtovanie/členenie položky s návratom na hlavičku; členenie KV DPH z hlavičky.
+ * Vráti prázdny reťazec, ak doklad nemá položky (vtedy sa importuje len súhrn).
+ */
+function invoiceDetailXml(
+  polozky: unknown,
+  header: { accounting: string; classificationVat: string; kv?: string },
+  codeLists: PohodaCodeLookup,
+): string {
+  if (!Array.isArray(polozky) || polozky.length === 0) return '';
+  const items = polozky.map((item: any) => {
+    const { bezDph, dph, spolu, unitPrice } = lineItemAmounts(item);
+    const accounting = codeLists.predkontacie.get(item.ucto?.predkontaciaId ?? '') ?? header.accounting;
+    const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
+    const centre = codeLists.strediska.get(item.ucto?.strediskoId ?? '');
+    const lines = [
+      `        <inv:text>${escapeXml(item.popis ?? '')}</inv:text>`,
+      `        <inv:quantity>${escapeXml(item.mnozstvo ?? 1)}</inv:quantity>`,
+      ...(item.jednotka ? [`        <inv:unit>${escapeXml(item.jednotka)}</inv:unit>`] : []),
+      `        <inv:coefficient>1.0</inv:coefficient>`,
+      `        <inv:payVAT>false</inv:payVAT>`,
+      `        <inv:rateVAT>${vatRateName(item.sadzbaDph)}</inv:rateVAT>`,
+      `        <inv:discountPercentage>0.0</inv:discountPercentage>`,
+      `        <inv:homeCurrency>`,
+      `          <typ:unitPrice>${amount(unitPrice)}</typ:unitPrice>`,
+      `          <typ:price>${amount(bezDph)}</typ:price>`,
+      `          <typ:priceVAT>${amount(dph)}</typ:priceVAT>`,
+      `          <typ:priceSum>${amount(spolu)}</typ:priceSum>`,
+      `        </inv:homeCurrency>`,
+      ...(accounting ? [`        <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>`] : []),
+      ...(classificationVat ? [`        <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>`] : []),
+      ...(header.kv ? [`        <inv:classificationKVDPH><typ:ids>${escapeXml(header.kv)}</typ:ids></inv:classificationKVDPH>`] : []),
+      ...(centre ? [`        <inv:centre><typ:ids>${escapeXml(centre)}</typ:ids></inv:centre>`] : []),
+    ];
+    return `      <inv:invoiceItem>\n${lines.join('\n')}\n      </inv:invoiceItem>`;
+  });
+  return `\n      <inv:invoiceDetail>\n${items.join('\n')}\n      </inv:invoiceDetail>`;
+}
+
 /** Krajina z prefixu IČ DPH — POHODA číselník krajín používa ISO kódy (EL→GR, XI→GB). */
 export function vatCountryIds(icDph: unknown): string | undefined {
   const prefix = String(icDph ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 2);
@@ -207,7 +273,7 @@ export function buildServerDataPack(input: {
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}
-      </inv:invoiceHeader>
+      </inv:invoiceHeader>${invoiceDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists)}
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}
       </inv:homeCurrency></inv:invoiceSummary>

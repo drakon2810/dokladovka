@@ -264,6 +264,62 @@ describe('buildDataPack', () => {
   });
 });
 
+describe('buildDataPack — krajina a rozpis na položky', () => {
+  const STREDISKA = [{ id: 'st-1', tenantId: 'tenant-demo', kod: 'CENTRALA', nazov: 'Centrála', orgId: 'org-1', source: 'manual', active: true }] as CodeListItem[];
+  const CODE_LISTS_S = { ...CODE_LISTS, strediska: STREDISKA };
+
+  it('slovenský dodávateľ dostane krajinu SK z prefixu IČ DPH', () => {
+    const doc = mkDoc();
+    doc.extracted.dodavatel.icDph = 'SK2020273893';
+    const xml = buildDataPack(ORG, [doc], CODE_LISTS);
+    expect(xml).toContain('<typ:country><typ:ids>SK</typ:ids></typ:country>');
+  });
+
+  it('doklad bez položiek nemá invoiceDetail', () => {
+    const xml = buildDataPack(ORG, [mkDoc()], CODE_LISTS_S);
+    expect(xml).not.toContain('<inv:invoiceDetail>');
+  });
+
+  it('položky sa importujú s DPH, jednotkou, počtom a pozičným zaúčtovaním', () => {
+    const doc = mkDoc();
+    doc.ucto.clenenieKvKod = 'B2';
+    doc.extracted.polozky = [
+      {
+        id: 'li-1', popis: 'Baliaci material', mnozstvo: 2, jednotka: 'ks', sadzbaDph: 23,
+        jednotkovaCenaBezDph: 35, sumaBezDph: 70, sumaDph: 16.1, sumaSpolu: 86.1,
+        ucto: { strediskoId: 'st-1' },
+      },
+    ];
+    const xml = buildDataPack(ORG, [doc], CODE_LISTS_S);
+    expect(xml).toContain('<inv:invoiceDetail>');
+    expect(xml).toContain('<inv:text>Baliaci material</inv:text>');
+    expect(xml).toContain('<inv:quantity>2</inv:quantity>');
+    expect(xml).toContain('<inv:unit>ks</inv:unit>');
+    expect(xml).toContain('<inv:rateVAT>high</inv:rateVAT>');
+    expect(xml).toContain('<typ:unitPrice>35.00</typ:unitPrice>');
+    expect(xml).toContain('<typ:price>70.00</typ:price>');
+    expect(xml).toContain('<typ:priceVAT>16.10</typ:priceVAT>');
+    expect(xml).toContain('<typ:priceSum>86.10</typ:priceSum>');
+    // Bez vlastnej predkontácie/členenia sa dedia z hlavičky; KV DPH z hlavičky; stredisko z položky.
+    expect(xml).toContain('<inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>');
+    expect(xml).toContain('<inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>');
+    expect(xml).toContain('<inv:classificationKVDPH><typ:ids>B2</typ:ids></inv:classificationKVDPH>');
+    expect(xml).toContain('<inv:centre><typ:ids>CENTRALA</typ:ids></inv:centre>');
+  });
+
+  it('položky zachovajú vyvážené tagy (well-formed)', () => {
+    const doc = mkDoc();
+    doc.extracted.polozky = [{ id: 'li-1', popis: 'Služba', mnozstvo: 1, sadzbaDph: 19, sumaBezDph: 100, sumaDph: 19, sumaSpolu: 119 }];
+    const xml = buildDataPack(ORG, [doc], CODE_LISTS_S);
+    for (const tag of ['inv:invoiceDetail', 'inv:invoiceItem', 'inv:homeCurrency']) {
+      const open = xml.match(new RegExp(`<${tag}[ >]`, 'g'))?.length ?? 0;
+      const close = xml.match(new RegExp(`</${tag}>`, 'g'))?.length ?? 0;
+      expect(open, tag).toBe(close);
+    }
+    expect(xml).toContain('<inv:rateVAT>low</inv:rateVAT>');
+  });
+});
+
 describe('buildExportFileName', () => {
   it('generuje pohoda-{orgKod}-{YYYYMMDD-HHmm}.xml (SPEC §6.5)', () => {
     const name = buildExportFileName(ORG, new Date(2026, 6, 10, 14, 5));
