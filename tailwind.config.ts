@@ -5,13 +5,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        app: '#F6F7F5',
+        app: '#F4F6F4',
         surface: '#FFFFFF',
-        line: '#E3E6E2',
-        ink: '#1B1F1D',
-        'ink-soft': '#5C645F',
+        'surface-2': '#FBFCFA',
+        line: '#E4E8E4',
+        'line-soft': '#F0F2EF',
+        ink: '#16201B',
+        'ink-soft': '#5A635D',
+        'ink-faint': '#8A928C',
+        'ink-mute': '#9AA39C',
         accent: '#0E7A5F',
         'accent-hover': '#0A6650',
+        'accent-bright': '#16A37B',
+        tint: '#E7F2ED',
       },
       // Осовременено: было 6px
       borderRadius: {

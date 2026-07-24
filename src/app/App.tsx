@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react';
+import { MotionConfig } from 'framer-motion';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Layout } from './Layout';
 import { LandingPage } from '../features/landing/LandingPage';
@@ -48,6 +49,7 @@ export function App() {
     <BrowserRouter
       future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
     >
+      <MotionConfig reducedMotion="user">
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -82,6 +84,7 @@ export function App() {
           </Route>
         </Routes>
       </AuthProvider>
+      </MotionConfig>
     </BrowserRouter>
   );
 }
