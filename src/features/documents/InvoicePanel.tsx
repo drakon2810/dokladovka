@@ -67,9 +67,6 @@ const KV_LABEL: Record<string, string> = {
 const CaretIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
 );
-const CalIcon = () => (
-  <svg className="dv-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="3" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>
-);
 
 export function InvoicePanel({
   draft, readOnly, busy, codeLists, suggestion, autoFilled,
@@ -328,19 +325,16 @@ export function InvoicePanel({
             <div className="dv-grid-2">
               <div className="dv-field">
                 <label className="dv-label">Dátum vydania</label>
-                <input className="dv-input dv-has-icon" value={ex.datumVystavenia ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumVystavenia', e.target.value)} placeholder="RRRR-MM-DD" />
-                <CalIcon />
+                <input type="date" className="dv-input" value={ex.datumVystavenia ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumVystavenia', e.target.value)} />
               </div>
               <div className="dv-field">
                 <label className="dv-label">Dátum splatnosti</label>
-                <input className="dv-input dv-has-icon" value={ex.datumSplatnosti ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumSplatnosti', e.target.value || undefined)} placeholder="RRRR-MM-DD" />
-                <CalIcon />
+                <input type="date" className="dv-input" value={ex.datumSplatnosti ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumSplatnosti', e.target.value || undefined)} />
               </div>
             </div>
             <div className="dv-field">
               <label className="dv-label">Dátum dodania (DUZP)</label>
-              <input className="dv-input dv-has-icon" value={ex.datumDodania ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumDodania', e.target.value || undefined)} placeholder="RRRR-MM-DD" />
-              <CalIcon />
+              <input type="date" className="dv-input" value={ex.datumDodania ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumDodania', e.target.value || undefined)} />
             </div>
 
             <div className={`dv-expand${rozOpen ? ' dv-open' : ''}`}>
