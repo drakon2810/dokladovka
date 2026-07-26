@@ -65,6 +65,12 @@ export interface AssistantParser {
   parse(body: unknown): Promise<{ output_parsed?: unknown; usage?: { input_tokens?: number; output_tokens?: number } }>;
 }
 
+/** Názov vlákna z prvej otázky — bez ďalšieho volania modelu. */
+function nazovZOtazky(otazka: string): string {
+  const text = otazka.trim().replace(/\s+/g, ' ');
+  return (text.length > 70 ? `${text.slice(0, 67)}…` : text) || 'Nový chat';
+}
+
 export function registerAssistantRoutes(
   app: FastifyInstance,
   database: Database,
@@ -72,6 +78,61 @@ export function registerAssistantRoutes(
   config: ServerConfig,
   injectedParser?: AssistantParser,
 ): void {
+  const orgParams = z.object({ organizationId: z.string().uuid() });
+  const threadParams = z.object({ organizationId: z.string().uuid(), threadId: z.string().uuid() });
+
+  // Zoznam vlákien firmy — bez správ, len hlavičky pre prepínač histórie.
+  app.get('/api/organizations/:organizationId/assistant/threads', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { organizationId } = orgParams.parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const result = await database.query<Record<string, any>>(
+      `SELECT id, title, updated_at, jsonb_array_length(messages) AS pocet_sprav
+         FROM assistant_threads
+        WHERE tenant_id=$1 AND organization_id=$2
+        ORDER BY updated_at DESC LIMIT 50`,
+      [auth.tenantId, organizationId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      updatedAt: new Date(String(row.updated_at)).toISOString(),
+      pocetSprav: Number(row.pocet_sprav ?? 0),
+    }));
+  });
+
+  // Jedno vlákno aj so správami — otvorenie staršieho chatu.
+  app.get('/api/organizations/:organizationId/assistant/threads/:threadId', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { organizationId, threadId } = threadParams.parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const row = (await database.query<Record<string, any>>(
+      `SELECT id, title, messages, updated_at FROM assistant_threads
+        WHERE id=$1 AND tenant_id=$2 AND organization_id=$3`,
+      [threadId, auth.tenantId, organizationId],
+    )).rows[0];
+    if (!row) throw new HttpError(404, 'thread_not_found', 'Chat neexistuje');
+    return {
+      id: row.id,
+      title: row.title,
+      updatedAt: new Date(String(row.updated_at)).toISOString(),
+      spravy: Array.isArray(row.messages) ? row.messages : [],
+    };
+  });
+
+  app.delete('/api/organizations/:organizationId/assistant/threads/:threadId', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik', 'schvalovatel']);
+    const { organizationId, threadId } = threadParams.parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const result = await database.query(
+      'DELETE FROM assistant_threads WHERE id=$1 AND tenant_id=$2 AND organization_id=$3 RETURNING id',
+      [threadId, auth.tenantId, organizationId],
+    );
+    if (result.rowCount === 0) throw new HttpError(404, 'thread_not_found', 'Chat neexistuje');
+    return { ok: true };
+  });
   // Najdrahšie volanie v systéme — globálny limit 300/min je preň príliš voľný.
   app.post('/api/organizations/:organizationId/assistant/ask', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
@@ -86,11 +147,22 @@ export function registerAssistantRoutes(
       otazka: z.string().trim().min(2).max(1000),
       documentId: z.string().uuid().optional(),
       prilohaId: z.string().uuid().optional(),
-      historia: z.array(z.object({
-        rola: z.enum(['pouzivatel', 'asistent']),
-        text: z.string().max(2500),
-      })).max(6).optional(),
+      // Bez threadId sa založí nové vlákno. História sa NEBERIE od klienta —
+      // číta sa z uloženého vlákna, takže sa nedá podvrhnúť.
+      threadId: z.string().uuid().optional(),
     }).strict().parse(request.body);
+
+    let threadId = body.threadId;
+    let historia: Array<{ rola: string; text: string }> = [];
+    if (threadId) {
+      const vlakno = (await database.query<Record<string, any>>(
+        'SELECT messages FROM assistant_threads WHERE id=$1 AND tenant_id=$2 AND organization_id=$3',
+        [threadId, auth.tenantId, organizationId],
+      )).rows[0];
+      if (!vlakno) throw new HttpError(404, 'thread_not_found', 'Chat neexistuje');
+      const spravy = Array.isArray(vlakno.messages) ? vlakno.messages : [];
+      historia = spravy.slice(-6).map((sprava: any) => ({ rola: sprava.rola, text: String(sprava.text ?? '') }));
+    }
 
     if (!injectedParser && !config.openai.apiKey) {
       throw new HttpError(503, 'assistant_unavailable', 'Asistent nie je nakonfigurovaný (chýba API kľúč).');
@@ -128,7 +200,7 @@ export function registerAssistantRoutes(
       text: JSON.stringify({
         otazka: body.otazka,
         prilozenyDokument: prilohaNazov,
-        historia: body.historia ?? [],
+        historia,
         dokazy,
       }),
     });
@@ -173,7 +245,34 @@ export function registerAssistantRoutes(
     // Server-side poistka: odkaz mimo bieleho zoznamu sa zahodí — model nemôže
     // podsunúť cudziu ani vymyslenú doménu.
     const zdroje = parsed.zdroje.filter((zdroj) => domenaPovolena(zdroj.url));
+
+    // Uloženie do histórie: nové vlákno alebo pripojenie k existujúcemu.
+    const noveSpravy = [
+      { rola: 'pouzivatel', text: body.otazka, createdAt: new Date().toISOString() },
+      {
+        rola: 'asistent', text: parsed.odpoved, createdAt: new Date().toISOString(),
+        answerability: parsed.answerability, istota: parsed.istota, zdroje,
+        pouzitaPriloha: prilohaNazov ?? null,
+      },
+    ];
+    if (threadId) {
+      await database.query(
+        `UPDATE assistant_threads
+            SET messages = messages || $1::jsonb, updated_at=now()
+          WHERE id=$2 AND tenant_id=$3 AND organization_id=$4`,
+        [JSON.stringify(noveSpravy), threadId, auth.tenantId, organizationId],
+      );
+    } else {
+      threadId = randomUUID();
+      await database.query(
+        `INSERT INTO assistant_threads (id,tenant_id,organization_id,title,created_by,messages)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+        [threadId, auth.tenantId, organizationId, nazovZOtazky(body.otazka), auth.userId, JSON.stringify(noveSpravy)],
+      );
+    }
+
     return {
+      threadId,
       odpoved: parsed.odpoved,
       answerability: parsed.answerability,
       istota: parsed.istota,

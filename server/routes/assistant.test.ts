@@ -122,11 +122,12 @@ describe('Asistent — odpoveď', () => {
       method: 'POST',
       url: `/api/organizations/${seeded.organizationId}/assistant/ask`,
       headers,
-      payload: { otazka: 'Ako účtujeme Hapag-Lloyd?', historia: [{ rola: 'pouzivatel', text: 'ahoj' }] },
+      payload: { otazka: 'Ako účtujeme Hapag-Lloyd?' },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.odpoved).toContain('518200');
+    expect(body.threadId).toBeTruthy();
     expect(body.answerability).toBe('grounded');
     expect(body.zdroje).toHaveLength(1);
     expect(body.zdroje[0].url).toContain('financnasprava.sk');
@@ -164,6 +165,93 @@ describe('Asistent — odpoveď', () => {
       payload: { otazka: 'Ako účtuje táto firma?' },
     });
     expect(response.statusCode).toBe(404);
+  }, 120_000);
+
+  it('história: prvá otázka založí vlákno, druhá doň pribudne a model dostane predošlé správy', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await seedZnalosti(database, seeded, { dodavatel: 'hapag lloyd', predkontacia: '518200' });
+
+    const videneHistorie: unknown[] = [];
+    let poradie = 0;
+    const app = await buildApp({
+      database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false,
+      assistantParser: {
+        parse: async (payload: any) => {
+          videneHistorie.push(JSON.parse(payload.input[0].content.at(-1).text).historia);
+          poradie += 1;
+          return {
+            output_parsed: { odpoved: `odpoveď ${poradie}`, answerability: 'grounded', istota: 'vysoka', zdroje: [] },
+          };
+        },
+      },
+    });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+    const url = `/api/organizations/${seeded.organizationId}/assistant/ask`;
+
+    const prva = await app.inject({ method: 'POST', url, headers, payload: { otazka: 'Prvá otázka o preprave?' } });
+    const threadId = prva.json().threadId;
+    expect(videneHistorie[0]).toEqual([]);
+
+    const druha = await app.inject({ method: 'POST', url, headers, payload: { otazka: 'A druhá otázka?', threadId } });
+    expect(druha.json().threadId).toBe(threadId);
+    // Históriu berie server z vlákna, nie od klienta.
+    expect(videneHistorie[1]).toEqual([
+      { rola: 'pouzivatel', text: 'Prvá otázka o preprave?' },
+      { rola: 'asistent', text: 'odpoveď 1' },
+    ]);
+
+    const zoznam = await app.inject({ method: 'GET', url: `/api/organizations/${seeded.organizationId}/assistant/threads`, headers });
+    expect(zoznam.json()).toHaveLength(1);
+    expect(zoznam.json()[0].title).toBe('Prvá otázka o preprave?');
+    expect(zoznam.json()[0].pocetSprav).toBe(4);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/organizations/${seeded.organizationId}/assistant/threads/${threadId}`, headers });
+    expect(detail.json().spravy.map((s: any) => s.text)).toEqual(['Prvá otázka o preprave?', 'odpoveď 1', 'A druhá otázka?', 'odpoveď 2']);
+
+    const zmazanie = await app.inject({ method: 'DELETE', url: `/api/organizations/${seeded.organizationId}/assistant/threads/${threadId}`, headers });
+    expect(zmazanie.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `/api/organizations/${seeded.organizationId}/assistant/threads`, headers })).json()).toHaveLength(0);
+  }, 120_000);
+
+  it('história: vlákno cudzej organizácie sa nedá otvoriť ani použiť', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const orgB = randomUUID();
+    await database.query(
+      `INSERT INTO organizations (id,tenant_id,name,ico,dic,color) VALUES ($1,$2,'Cudzia s.r.o.','87654321','2020654321','#333')`,
+      [orgB, seeded.tenantId],
+    );
+    const cudzieVlakno = randomUUID();
+    await database.query(
+      `INSERT INTO assistant_threads (id,tenant_id,organization_id,title,messages)
+       VALUES ($1,$2,$3,'Cudzi chat','[{"rola":"pouzivatel","text":"TAJNE"}]'::jsonb)`,
+      [cudzieVlakno, seeded.tenantId, orgB],
+    );
+    const app = await buildApp({
+      database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false,
+      assistantParser: { parse: async () => ({ output_parsed: { odpoved: 'x', answerability: 'grounded', istota: 'vysoka', zdroje: [] } }) },
+    });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    // Cez vlastnú (dostupnú) organizáciu sa cudzie vlákno nenájde.
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/organizations/${seeded.organizationId}/assistant/threads/${cudzieVlakno}`,
+      headers,
+    });
+    expect(detail.statusCode).toBe(404);
+    const pouzitie = await app.inject({
+      method: 'POST',
+      url: `/api/organizations/${seeded.organizationId}/assistant/ask`,
+      headers,
+      payload: { otazka: 'Pokračuj', threadId: cudzieVlakno },
+    });
+    expect(pouzitie.statusCode).toBe(404);
   }, 120_000);
 
   it('priložený firemný dokument ide modelu ako input_file', async () => {

@@ -2601,6 +2601,7 @@ export async function getPrecoVysvetlenie(
 
 /** Asistent firmy — odpoveď je vždy zúžená na jednu organizáciu (server). */
 export interface AssistantOdpoved {
+  threadId: string;
   odpoved: string;
   answerability: 'grounded' | 'insufficient_evidence' | 'out_of_scope';
   istota: 'vysoka' | 'nizka';
@@ -2609,18 +2610,54 @@ export interface AssistantOdpoved {
   pouzitaPriloha?: string;
 }
 
+export interface AssistantSprava {
+  rola: 'pouzivatel' | 'asistent';
+  text: string;
+  createdAt?: string;
+  answerability?: AssistantOdpoved['answerability'];
+  istota?: AssistantOdpoved['istota'];
+  zdroje?: Array<{ nazov: string; url: string }>;
+  pouzitaPriloha?: string | null;
+}
+
+export interface AssistantThreadHead {
+  id: string;
+  title: string;
+  updatedAt: string;
+  pocetSprav: number;
+}
+
 export async function askAssistant(
   organizationId: string,
-  input: {
-    otazka: string;
-    documentId?: string;
-    prilohaId?: string;
-    historia?: Array<{ rola: 'pouzivatel' | 'asistent'; text: string }>;
-  },
+  input: { otazka: string; documentId?: string; prilohaId?: string; threadId?: string },
 ): Promise<AssistantOdpoved> {
   return restRequest<AssistantOdpoved>(
     `/api/organizations/${encodeURIComponent(organizationId)}/assistant/ask`,
     { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+/** História chatov firmy — hlavičky vlákien pre prepínač. */
+export async function listAssistantThreads(organizationId: string): Promise<AssistantThreadHead[]> {
+  if (!REST_DATA_MODE) return [];
+  return await restRequest<AssistantThreadHead[]>(
+    `/api/organizations/${encodeURIComponent(organizationId)}/assistant/threads`,
+  ) ?? [];
+}
+
+export async function getAssistantThread(
+  organizationId: string,
+  threadId: string,
+): Promise<{ id: string; title: string; spravy: AssistantSprava[] }> {
+  return restRequest(
+    `/api/organizations/${encodeURIComponent(organizationId)}/assistant/threads/${encodeURIComponent(threadId)}`,
+  );
+}
+
+export async function deleteAssistantThread(organizationId: string, threadId: string): Promise<void> {
+  await restRequest(
+    `/api/organizations/${encodeURIComponent(organizationId)}/assistant/threads/${encodeURIComponent(threadId)}`,
+    { method: 'DELETE' },
   );
 }
 
