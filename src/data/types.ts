@@ -767,6 +767,29 @@ export interface AccountingSuggestion {
   createdAt: string;
 }
 
+/** „Prečo?" — pôvod zaúčtovania dokladu (GET /api/documents/:id/preco). */
+export interface DocumentPrecoPravidlo {
+  id: string;
+  supplierIco?: string;
+  supplierName?: string;
+  klucoveSlova: string[];
+  dovod?: string;
+  dovodSource?: 'human' | 'ai_draft';
+  navrhnutePre: number;
+}
+
+export interface DocumentPreco {
+  organizationId: string;
+  source: SuggestionSource;
+  confidence: number;
+  reason?: string;
+  createdAt?: string;
+  navrh: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string };
+  aktualne: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string };
+  polozky: Record<string, { kod: string; nazov: string }>;
+  pravidlo: DocumentPrecoPravidlo | null;
+}
+
 // ===== Simulácia prijatého e-mailu (SPEC §11.20) =====
 
 export type SimulationScenario =

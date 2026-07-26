@@ -441,12 +441,13 @@ export function registerAiTrainingRoutes(
         await tx.query(
           `INSERT INTO accounting_rules
             (id,tenant_id,organization_id,supplier_ico,supplier_name_normalized,keywords,clenenie_kv_kod,
-             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,origin)
-           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,'ai')`,
+             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,origin,dovod,dovod_source,dovod_updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,'ai',$12,CASE WHEN $12::text IS NULL THEN NULL ELSE 'ai_draft' END,CASE WHEN $12::text IS NULL THEN NULL ELSE now() END)`,
           [randomUUID(), auth.tenantId, id, rule.supplierIco,
             normalizeName(rule.supplierName ?? undefined) || null,
             JSON.stringify(rule.klucoveSlova), rule.clenenieKvKod,
-            rule.predkontaciaId, rule.clenenieDphId, rule.ciselnyRadId, rule.strediskoId],
+            rule.predkontaciaId, rule.clenenieDphId, rule.ciselnyRadId, rule.strediskoId,
+            rule.dovod.trim() || null],
         );
       }
       await writeAudit(tx, {
@@ -467,7 +468,8 @@ export function registerAiTrainingRoutes(
     const rules = await database.query<Record<string, any>>(
       `SELECT id, supplier_ico, supplier_name_normalized, keywords, clenenie_kv_kod,
               predkontacia_id, clenenie_dph_id, ciselny_rad_id, stredisko_id,
-              origin, active, needs_review, corrections_count, created_at
+              origin, active, needs_review, corrections_count, created_at,
+              dovod, dovod_source
          FROM accounting_rules
         WHERE tenant_id=$1 AND organization_id=$2
         ORDER BY needs_review DESC, created_at DESC`,
@@ -488,8 +490,29 @@ export function registerAiTrainingRoutes(
         active: row.active,
         needsReview: row.needs_review,
         correctionsCount: Number(row.corrections_count ?? 0),
+        dovod: row.dovod ?? undefined,
+        dovodSource: row.dovod_source ?? undefined,
       })),
     };
+  });
+
+  // Dôvod pravidla napísaný/upravený človekom — od tej chvíle je to prax firmy
+  // (dovod_source='human'), nie AI návrh.
+  app.post('/api/organizations/:id/ai-training/rules/:ruleId/dovod', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id, ruleId } = z.object({ id: z.string().uuid(), ruleId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, id);
+    const { dovod } = z.object({ dovod: z.string().trim().min(1).max(500) }).strict().parse(request.body);
+    const result = await database.query(
+      `UPDATE accounting_rules
+          SET dovod=$1, dovod_source='human', dovod_updated_at=now(), dovod_updated_by=$2, updated_at=now()
+        WHERE id=$3 AND tenant_id=$4 AND organization_id=$5`,
+      [dovod, auth.userId, ruleId, auth.tenantId, id],
+    );
+    if (result.rowCount === 0) throw new HttpError(404, 'rule_not_found', 'Pravidlo neexistuje');
+    return { ok: true };
   });
 
   // Obnovenie pravidla po kontrole: počítadlo opráv sa nuluje.

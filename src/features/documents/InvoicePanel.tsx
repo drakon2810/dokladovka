@@ -1,12 +1,25 @@
 // Panel úpravy faktúry — dizajn 1b (karty) z Claude Design, napojený na reálne
 // dáta dokladu (draft.extracted + draft.ucto + číselníky + návrh AI). Sekcie:
 // Základné údaje · Čiastka a DPH · Dodávateľ · Platobné údaje.
-import { useState } from 'react';
-import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentType, DocumentUcto } from '../../data/types';
+import { useState, type ReactNode } from 'react';
+import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentPreco, DocumentType, DocumentUcto } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
+import { getDocumentPreco, saveRuleDovod } from '../../data/api';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
 import './invoicePanel.css';
+
+// „Prečo?" — pôvod zaúčtovania pre tri polia: predkontácia, členenie DPH, KV.
+type PrecoField = 'predkontacia' | 'dph' | 'kv';
+const SOURCE_LABEL: Record<string, string> = {
+  manual_rule: 'Pravidlo firmy',
+  partner_default: 'Predvoľba partnera',
+  decision_memory: 'Pamäť rozhodnutí',
+  supplier_history: 'História dodávateľa',
+  organization_default: 'Predvoľba organizácie',
+  ai: 'Návrh AI',
+  none: 'Bez návrhu',
+};
 
 interface InvoicePanelProps {
   draft: DocumentItem;
@@ -66,6 +79,127 @@ export function InvoicePanel({
   const [rozDodOpen, setRozDodOpen] = useState(false);
   const [fyzickaOsoba, setFyzickaOsoba] = useState(false);
   const [aiApplied, setAiApplied] = useState(false);
+
+  // „Prečo?" — jeden zdieľaný stav: dáta sa načítajú raz na doklad, panel sa
+  // otvára pod polom, na ktorom bol klik.
+  const [precoOpen, setPrecoOpen] = useState<PrecoField | null>(null);
+  const [preco, setPreco] = useState<DocumentPreco | null>(null);
+  const [precoState, setPrecoState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [dovodDraft, setDovodDraft] = useState('');
+  const [dovodEditing, setDovodEditing] = useState(false);
+  const [dovodSaving, setDovodSaving] = useState(false);
+
+  const togglePreco = (field: PrecoField) => {
+    if (precoOpen === field) { setPrecoOpen(null); return; }
+    setPrecoOpen(field);
+    setDovodEditing(false);
+    if (precoState === 'idle' || precoState === 'error') {
+      setPrecoState('loading');
+      getDocumentPreco(draft.id)
+        .then((data) => { if (data) { setPreco(data); setPrecoState('ready'); } else { setPrecoState('error'); } })
+        .catch(() => setPrecoState('error'));
+    }
+  };
+
+  const ulozDovod = async () => {
+    if (!preco?.pravidlo || !dovodDraft.trim() || dovodSaving) return;
+    setDovodSaving(true);
+    try {
+      await saveRuleDovod(preco.organizationId, preco.pravidlo.id, dovodDraft.trim());
+      setPreco({ ...preco, pravidlo: { ...preco.pravidlo, dovod: dovodDraft.trim(), dovodSource: 'human' } });
+      setDovodEditing(false);
+    } catch {
+      // Uloženie zlyhalo — editor ostáva otvorený, text sa nestratí.
+    }
+    setDovodSaving(false);
+  };
+
+  const renderPreco = (field: PrecoField) => {
+    if (precoState !== 'ready' || !preco) {
+      return (
+        <div className="dv-preco-panel dv-preco-muted">
+          {precoState === 'error' ? 'Pôvod zaúčtovania sa nepodarilo načítať.' : 'Načítavam pôvod zaúčtovania…'}
+        </div>
+      );
+    }
+    if (preco.source === 'none') {
+      return <div className="dv-preco-panel dv-preco-muted">Pre tento doklad nevznikol žiadny návrh — hodnotu vybral účtovník ručne.</div>;
+    }
+    // Porovnáva sa so ŽIVOU hodnotou na obrazovke (ucto.*), nie so snapshotom
+    // z času fetchu — inak by poznámka „zmenil účtovník" po úprave poľa klamala.
+    const navrhId = field === 'kv' ? preco.navrh.clenenieKvKod
+      : field === 'predkontacia' ? preco.navrh.predkontaciaId : preco.navrh.clenenieDphId;
+    const aktualneId = field === 'kv' ? ucto.clenenieKvKod
+      : field === 'predkontacia' ? ucto.predkontaciaId : ucto.clenenieDphId;
+    const lisiSa = Boolean(navrhId) && navrhId !== aktualneId;
+    const navrhVal = navrhId ? (field === 'kv' ? navrhId : preco.polozky[navrhId]?.kod ?? navrhId) : undefined;
+    const pravidlo = preco.pravidlo;
+    return (
+      <div className="dv-preco-panel">
+        <div className="dv-preco-badges">
+          <span className="dv-preco-badge dv-preco-src">{SOURCE_LABEL[preco.source] ?? preco.source}</span>
+          <span className="dv-preco-badge">istota {Math.round(preco.confidence * 100)} %</span>
+          {pravidlo != null && <span className="dv-preco-badge">{pravidlo.navrhnutePre}× použité</span>}
+        </div>
+        {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
+        {lisiSa && <div className="dv-preco-note">Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</div>}
+        {pravidlo != null && (dovodEditing ? (
+          <div className="dv-preco-edit">
+            <textarea
+              className="dv-textarea" value={dovodDraft} maxLength={500}
+              onChange={(e) => setDovodDraft(e.target.value)}
+              placeholder="Prečo firma účtuje tohto dodávateľa takto? Jedna–dve vety…"
+            />
+            <div className="dv-preco-actions">
+              <button type="button" className="dv-preco-save" disabled={dovodSaving || !dovodDraft.trim()} onClick={ulozDovod}>Uložiť dôvod</button>
+              <button type="button" className="dv-preco-cancel" onClick={() => setDovodEditing(false)}>Zrušiť</button>
+            </div>
+          </div>
+        ) : pravidlo.dovod && pravidlo.dovodSource === 'human' ? (
+          <div className="dv-preco-quote">
+            „{pravidlo.dovod}"
+            {!readOnly && (
+              <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(pravidlo.dovod ?? ''); setDovodEditing(true); }}>Upraviť</button>
+            )}
+          </div>
+        ) : pravidlo.dovod ? (
+          <div className="dv-preco-draft">
+            <span className="dv-preco-draft-badge">návrh AI — nepotvrdené</span>
+            „{pravidlo.dovod}"
+            {!readOnly && (
+              <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(pravidlo.dovod ?? ''); setDovodEditing(true); }}>Upraviť a potvrdiť</button>
+            )}
+          </div>
+        ) : (
+          <div className="dv-preco-missing">
+            Dôvod firmy zatiaľ nie je zapísaný — doplň ho raz a zobrazí sa pri každom ďalšom doklade tohto pravidla.
+            {!readOnly && (
+              <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(''); setDovodEditing(true); }}>Doplniť dôvod</button>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Zámerne span, nie <button>: InvoicePanel býva vnútri <fieldset disabled>
+  // (readOnly pre schvaľovateľa/exportované doklady) a disabled fieldset by
+  // form control umŕtvil — pritom čítanie pôvodu má fungovať aj read-only.
+  const precoWrap = (field: PrecoField, dropdown: ReactNode) => (
+    <div className="dv-preco-field">
+      {dropdown}
+      <span
+        role="button" tabIndex={0}
+        className={`dv-preco-btn${precoOpen === field ? ' dv-open' : ''}`}
+        onClick={() => togglePreco(field)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePreco(field); } }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 .3c0 1.6-2.5 2.2-2.5 3.7" /><path d="M12 17h.01" /></svg>
+        Prečo?
+      </span>
+      {precoOpen === field && renderPreco(field)}
+    </div>
+  );
 
   const ex = draft.extracted;
   const dod = ex.dodavatel;
@@ -135,15 +269,18 @@ export function InvoicePanel({
           <div className="dv-h3-row"><div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Základné údaje</h3></div></div>
           <div className="dv-fields">
             <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
-            <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />
+            {precoWrap('predkontacia',
+              <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />)}
             <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
             <DcDropdown label="Nákladové stredisko" mode="simple" searchable value={ucto.strediskoId} options={toOpts(codeLists.strediska)} disabled={readOnly} onChange={(v) => updateUcto({ strediskoId: v })} />
-            <DcDropdown label="Členenie DPH" mode="simple" searchable value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
-              onChange={(v) => {
-                const picked = codeLists.cleneniaDph.find((item) => item.id === v);
-                updateUcto({ clenenieDphId: v, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
-              }} />
-            <DcDropdown label="Členenie kontrolný výkaz" mode="simple" searchable value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(v) => updateUcto({ clenenieKvKod: v })} />
+            {precoWrap('dph',
+              <DcDropdown label="Členenie DPH" mode="simple" searchable value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
+                onChange={(v) => {
+                  const picked = codeLists.cleneniaDph.find((item) => item.id === v);
+                  updateUcto({ clenenieDphId: v, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
+                }} />)}
+            {precoWrap('kv',
+              <DcDropdown label="Členenie kontrolný výkaz" mode="simple" searchable value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(v) => updateUcto({ clenenieKvKod: v })} />)}
 
             <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}`}>
               <label className="dv-label">Číslo faktúry</label>

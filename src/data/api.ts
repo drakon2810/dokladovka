@@ -9,6 +9,7 @@ import type {
   CodeListItem,
   CodeListKind,
   DocumentItem,
+  DocumentPreco,
   DocumentQueue,
   DocumentStatus,
   DocumentType,
@@ -2572,6 +2573,20 @@ export async function getDphAdvice(documentId: string): Promise<DphPosudok> {
   if (!REST_DATA_MODE) return { navrhy: [], varovania: [], blokacie: [] };
   return await restRequest<DphPosudok>(`/api/documents/${encodeURIComponent(documentId)}/dph-advisor`)
     ?? { navrhy: [], varovania: [], blokacie: [] };
+}
+
+/** „Prečo?" — pôvod zaúčtovania dokladu: zdroj návrhu, istota, pravidlo, dôvod. */
+export async function getDocumentPreco(documentId: string): Promise<DocumentPreco | undefined> {
+  if (!REST_DATA_MODE) return undefined;
+  return restRequest<DocumentPreco>(`/api/documents/${encodeURIComponent(documentId)}/preco`);
+}
+
+/** Zápis/úprava dôvodu pravidla človekom — od tej chvíle je to prax firmy. */
+export async function saveRuleDovod(organizationId: string, ruleId: string, dovod: string): Promise<void> {
+  await restRequest(
+    `/api/organizations/${encodeURIComponent(organizationId)}/ai-training/rules/${encodeURIComponent(ruleId)}/dovod`,
+    { method: 'POST', body: JSON.stringify({ dovod }) },
+  );
 }
 
 /** Úhrada dokladu (bez sumy = celý zvyšok). Reálna funkcia backendu; mock režim ju nemá. */

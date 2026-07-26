@@ -301,6 +301,83 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     }, profil);
   });
 
+  // „Prečo?" — pôvod zaúčtovania dokladu: zdroj návrhu, istota, dôvod a
+  // pravidlo, ktoré ho vytvorilo (vrátane ľudského dôvodu pravidla). Čisto
+  // deterministické — žiadne LLM, len provenience z accounting_suggestions.
+  app.get('/api/documents/:id/preco', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+
+    const suggestion = (await database.query<Record<string, any>>(
+      `SELECT source, confidence, reason, rule_id, predkontacia_id, clenenie_dph_id, clenenie_kv_kod, created_at
+         FROM accounting_suggestions
+        WHERE document_id=$1 AND tenant_id=$2 AND organization_id=$3`,
+      [id, auth.tenantId, document.organization_id],
+    )).rows[0];
+
+    const navrh = {
+      predkontaciaId: suggestion?.predkontacia_id ?? undefined,
+      clenenieDphId: suggestion?.clenenie_dph_id ?? undefined,
+      clenenieKvKod: suggestion?.clenenie_kv_kod ?? undefined,
+    };
+    const aktualne = {
+      predkontaciaId: document.accounting.predkontaciaId ?? undefined,
+      clenenieDphId: document.accounting.clenenieDphId ?? undefined,
+      clenenieKvKod: document.accounting.clenenieKvKod ?? undefined,
+    };
+
+    // Názvy kódov pre všetky zúčastnené ID (návrh aj aktuálna hodnota).
+    const ids = [...new Set([navrh.predkontaciaId, navrh.clenenieDphId, aktualne.predkontaciaId, aktualne.clenenieDphId].filter(Boolean))] as string[];
+    const polozky: Record<string, { kod: string; nazov: string }> = {};
+    if (ids.length > 0) {
+      const rows = await database.query<{ id: string; code: string; name: string }>(
+        `SELECT id, code, name FROM code_list_items
+          WHERE tenant_id=$1 AND organization_id=$2 AND id=ANY($3::text[])`,
+        [auth.tenantId, document.organization_id, ids],
+      );
+      for (const row of rows.rows) polozky[row.id] = { kod: row.code, nazov: row.name };
+    }
+
+    let pravidlo: Record<string, unknown> | null = null;
+    if (suggestion?.rule_id) {
+      const rule = (await database.query<Record<string, any>>(
+        `SELECT id, supplier_ico, supplier_name_normalized, keywords, dovod, dovod_source
+           FROM accounting_rules WHERE id=$1 AND tenant_id=$2 AND organization_id=$3`,
+        [suggestion.rule_id, auth.tenantId, document.organization_id],
+      )).rows[0];
+      if (rule) {
+        const pouzite = await database.query<{ n: string }>(
+          `SELECT count(*) AS n FROM accounting_suggestions
+            WHERE rule_id=$1 AND tenant_id=$2 AND organization_id=$3`,
+          [rule.id, auth.tenantId, document.organization_id],
+        );
+        pravidlo = {
+          id: rule.id,
+          supplierIco: rule.supplier_ico ?? undefined,
+          supplierName: rule.supplier_name_normalized ?? undefined,
+          klucoveSlova: Array.isArray(rule.keywords) ? rule.keywords : [],
+          dovod: rule.dovod ?? undefined,
+          dovodSource: rule.dovod_source ?? undefined,
+          navrhnutePre: Number(pouzite.rows[0]?.n ?? 0),
+        };
+      }
+    }
+
+    return {
+      organizationId: document.organization_id,
+      source: suggestion?.source ?? 'none',
+      confidence: Number(suggestion?.confidence ?? 0),
+      reason: suggestion?.reason ?? undefined,
+      createdAt: suggestion?.created_at ? new Date(String(suggestion.created_at)).toISOString() : undefined,
+      navrh,
+      aktualne,
+      polozky,
+      pravidlo,
+    };
+  });
+
   for (const [route, status, action] of [
     ['reject', 'zamietnuty', 'document.rejected'],
     ['quarantine', 'karantena', 'document.quarantined'],

@@ -1152,6 +1152,7 @@ export function DocumentDetailPage() {
           )}
           <fieldset disabled={readOnly} className="space-y-4 disabled:opacity-75">
             <InvoicePanel
+              key={draft.id}
               draft={draft}
               readOnly={readOnly}
               busy={busy}
