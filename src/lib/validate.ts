@@ -61,6 +61,20 @@ const VAT_ID_FORMATS: Record<string, RegExp> = {
 
 export type VatIdCheck = 'valid' | 'invalid' | 'unknown_country';
 
+/**
+ * DIČ: 8–10 číslic (SK) alebo české „CZ…". AI však často skopíruje do poľa DIČ
+ * IČ DPH (SK2020254170, ATU61252600) — je to platný daňový identifikátor, len
+ * iného typu, a blokovať schválenie kvôli tomu netreba. Musí zostať v zhode so
+ * serverom (validDic v server/extraction/normalize.ts), inak klient zablokuje
+ * doklad, ktorý by server schválil.
+ */
+export function validateDic(value: string): boolean {
+  const normalized = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(normalized)) return true;
+  const vat = checkVatId(value);
+  return vat === 'valid' || vat === 'unknown_country';
+}
+
 /** IČ DPH: známa krajina sa overí formátom, neznámy kód krajiny neblokuje. */
 export function checkVatId(value: string): VatIdCheck {
   const normalized = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();

@@ -4,8 +4,9 @@ import { buildServerDataPack, type PohodaCodeLookup, type PohodaXmlDocument } fr
 
 interface CodeListRow extends Record<string, unknown> {
   id: string;
-  kind: keyof PohodaCodeLookup;
+  kind: 'predkontacie' | 'cleneniaDph' | 'ciselneRady' | 'strediska';
   code: string;
+  name: string;
 }
 
 interface DocumentRow extends Record<string, unknown> {
@@ -35,7 +36,7 @@ export async function buildApprovedDocumentsXml(
     throw new HttpError(409, 'document_not_approved', 'Exportovať možno iba aktuálnu schválenú verziu dokladu');
   }
   const rows = await database.query<CodeListRow>(
-    `SELECT id, kind, code FROM code_list_items
+    `SELECT id, kind, code, name FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true`,
     [input.tenantId, input.organizationId],
   );
@@ -44,8 +45,13 @@ export async function buildApprovedDocumentsXml(
     cleneniaDph: new Map(),
     ciselneRady: new Map(),
     strediska: new Map(),
+    predkontacieNazvy: new Map(),
   };
-  for (const row of rows.rows) codeLists[row.kind].set(row.id, row.code);
+  for (const row of rows.rows) {
+    codeLists[row.kind].set(row.id, row.code);
+    // Názov predkontácie ide do <inv:text> dokladu.
+    if (row.kind === 'predkontacie') codeLists.predkontacieNazvy!.set(row.id, row.name);
+  }
   return buildServerDataPack({
     id: input.packId,
     ico: input.ico,

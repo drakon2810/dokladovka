@@ -25,6 +25,8 @@ export interface PohodaCodeLookup {
   cleneniaDph: Map<string, string>;
   ciselneRady: Map<string, string>;
   strediska: Map<string, string>;
+  /** Názvy predkontácií (id → názov) pre <inv:text>; kódy sú v `predkontacie`. */
+  predkontacieNazvy?: Map<string, string>;
 }
 
 function invoiceType(type: string): string {
@@ -155,7 +157,10 @@ export function splitPostalAddress(value: unknown): { street?: string; city?: st
 /** typ:address partnera — prázdne prvky sa vynechávajú, krajina sa odvodí z IČ DPH. */
 function partnerAddressXml(supplier: Record<string, any>): string {
   const address = splitPostalAddress(supplier.adresa);
-  const country = vatCountryIds(supplier.icDph);
+  // Krajina sa odvodí z IČ DPH, a keď je prázdne, z DIČ — extrakcia zahraničný
+  // daňový identifikátor (DE813960018, ATU61252600) často uloží do poľa DIČ.
+  // Bez tohto fallbacku POHODA importovala dodávateľa bez krajiny.
+  const country = vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic);
   const lines = [`<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
   if (address.city) lines.push(`<typ:city>${escapeXml(address.city)}</typ:city>`);
   if (address.street) lines.push(`<typ:street>${escapeXml(address.street)}</typ:street>`);
@@ -255,6 +260,11 @@ export function buildServerDataPack(input: {
   </dat:dataPackItem>`;
     }
     const paymentAccount = skIbanAccount(supplier.iban);
+    // Text dokladu = názov vybranej predkontácie (účtovník ho vidí v POHODE
+    // namiesto predvoleného „Import FA z XML"); fallback na číslo faktúry.
+    const headerText = input.codeLists.predkontacieNazvy?.get(snapshot.ucto.predkontaciaId ?? '')
+      ?? extracted.cisloFaktury
+      ?? '';
     return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
@@ -270,6 +280,7 @@ export function buildServerDataPack(input: {
         <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
         ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(extracted.cisloObjednavky)}</inv:numberOrder>` : ''}
+        ${headerText ? `<inv:text>${escapeXml(headerText)}</inv:text>` : ''}
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}

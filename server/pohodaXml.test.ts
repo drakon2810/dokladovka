@@ -6,6 +6,9 @@ const codeLists: PohodaCodeLookup = {
   cleneniaDph: new Map([['c1', 'PD']]),
   ciselneRady: new Map([['r1', '26FP']]),
   strediska: new Map(),
+  // Bez diakritiky — escapeXml ju kóduje na číselné entity (Windows-1250),
+  // čo testujú vlastné testy escapeXml; tu ide o samotný obsah <inv:text>.
+  predkontacieNazvy: new Map([['p1', 'Preprava zahranicna 69']]),
 };
 
 function invoiceDocument(extra: Record<string, unknown>) {
@@ -49,6 +52,56 @@ describe('buildServerDataPack — variabilný symbol', () => {
       codeLists,
     });
     expect(xml).toContain('<inv:symVar>9990001</inv:symVar>');
+  });
+});
+
+describe('buildServerDataPack — krajina a text hlavičky', () => {
+  // Extrakcia zahraničný daňový identifikátor často uloží do DIČ (icDph zostane
+  // prázdne) — POHODA potom importovala dodávateľa bez krajiny.
+  it('krajina sa odvodí z DIČ, keď je IČ DPH prázdne', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-country',
+      ico: '35761571',
+      documents: [invoiceDocument({
+        dodavatel: {
+          nazov: 'Hapag-Lloyd AG',
+          dic: 'DE813960018',
+          adresa: 'Ballindamm 25, 20095 Hamburg, Germany',
+        },
+      })],
+      codeLists,
+    });
+    expect(xml).toContain('<typ:country><typ:ids>DE</typ:ids></typ:country>');
+  });
+
+  it('slovenské číselné DIČ nevyrobí falošnú krajinu', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-country-sk',
+      ico: '35761571',
+      documents: [invoiceDocument({})],
+      codeLists,
+    });
+    expect(xml).not.toContain('<typ:country>');
+  });
+
+  it('text dokladu je názov vybranej predkontácie', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-text',
+      ico: '35761571',
+      documents: [invoiceDocument({})],
+      codeLists,
+    });
+    expect(xml).toContain('<inv:text>Preprava zahranicna 69</inv:text>');
+  });
+
+  it('bez názvu predkontácie sa použije číslo faktúry', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-text-fallback',
+      ico: '35761571',
+      documents: [invoiceDocument({})],
+      codeLists: { ...codeLists, predkontacieNazvy: undefined },
+    });
+    expect(xml).toContain('<inv:text>FA-202610845</inv:text>');
   });
 });
 

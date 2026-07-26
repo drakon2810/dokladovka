@@ -86,7 +86,9 @@ function partnerAddressLines(
   indent: string,
 ): string[] {
   const address = splitPostalAddress(supplier.adresa);
-  const country = vatCountryIds(supplier.icDph);
+  // Krajina z IČ DPH, a keď je prázdne, z DIČ — extrakcia zahraničný daňový
+  // identifikátor (DE813960018) často uloží do DIČ. Zhoda so server/pohodaXml.ts.
+  const country = vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic);
   const lines = [`${indent}<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
   if (address.city) lines.push(`${indent}<typ:city>${escapeXml(address.city)}</typ:city>`);
   if (address.street) lines.push(`${indent}<typ:street>${escapeXml(address.street)}</typ:street>`);
@@ -230,6 +232,14 @@ export function buildDataPack(
           : undefined;
       const vat = summarizeVat(doc.extracted.rozpisDph);
       const predkontacia = kodOf(codeLists.predkontacie, doc.ucto.predkontaciaId);
+      // Text dokladu = názov vybranej predkontácie (zhoda so server/pohodaXml.ts).
+      const predkontaciaNazov = codeLists.predkontacie.find(
+        (c) =>
+          c.id === doc.ucto.predkontaciaId &&
+          c.tenantId === doc.tenantId &&
+          c.orgId === doc.orgId &&
+          c.active,
+      )?.nazov;
       const clenenie = kodOf(codeLists.cleneniaDph, doc.ucto.clenenieDphId);
       const rad = kodOf(codeLists.ciselneRady, doc.ucto.ciselnyRadId);
       if (!rad) {
@@ -309,7 +319,7 @@ export function buildDataPack(
           `        <inv:classificationVAT><typ:ids>${escapeXml(clenenie)}</typ:ids></inv:classificationVAT>`,
         );
       }
-      lines.push(`        <inv:text>${escapeXml(d.textPolozky ?? `Faktúra ${d.cisloFaktury}`)}</inv:text>`);
+      lines.push(`        <inv:text>${escapeXml(predkontaciaNazov ?? d.textPolozky ?? `Faktúra ${d.cisloFaktury}`)}</inv:text>`);
       lines.push('        <inv:partnerIdentity>');
       lines.push('          <typ:address>');
       lines.push(...partnerAddressLines(d.dodavatel, '            '));

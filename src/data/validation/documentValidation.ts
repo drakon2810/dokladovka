@@ -5,6 +5,7 @@ import {
   isVatRowConsistent,
   lineItemEffective,
   VAT_ROW_TOLERANCE,
+  validateDic,
   validateIBAN,
   validateICO,
 } from '../../lib/validate';
@@ -90,7 +91,7 @@ export function validateDocument(
   if (!foreignSupplier && supplier.ico && !validateICO(supplier.ico)) {
     issues.push({ code: 'invalid_ico', field: 'dodavatel.ico' });
   }
-  if (!foreignSupplier && supplier.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(supplier.dic.replace(/\s/g, '').toUpperCase())) {
+  if (!foreignSupplier && supplier.dic && !validateDic(supplier.dic)) {
     issues.push({ code: 'invalid_dic', field: 'dodavatel.dic' });
   }
   // Neznámy kód krajiny schválenie neblokuje (server ho hlási len ako
@@ -190,7 +191,7 @@ export function validateDocument(
   if (buyer?.ico && !validateICO(buyer.ico)) {
     issues.push({ code: 'invalid_ico', field: 'odberatel.ico' });
   }
-  if (buyer?.dic && !/^(?:\d{8,10}|CZ[A-Z0-9]{8,12})$/.test(buyer.dic.replace(/\s/g, '').toUpperCase())) {
+  if (buyer?.dic && !validateDic(buyer.dic)) {
     issues.push({ code: 'invalid_dic', field: 'odberatel.dic' });
   }
   if (buyer?.icDph && checkVatId(buyer.icDph) === 'invalid') {

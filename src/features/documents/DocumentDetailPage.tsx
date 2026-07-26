@@ -1166,7 +1166,6 @@ export function DocumentDetailPage() {
               key={draft.id}
               draft={draft}
               readOnly={readOnly}
-              busy={busy}
               codeLists={{
                 predkontacie: codeLists.predkontacie,
                 cleneniaDph: codeLists.cleneniaDph,
@@ -1179,7 +1178,6 @@ export function DocumentDetailPage() {
               updateUcto={updateUcto}
               updateExtracted={updateExtracted}
               updateSupplier={updateSupplier}
-              onSave={handleSave}
             />
           </fieldset>
 

@@ -1,7 +1,7 @@
 // Panel úpravy faktúry — dizajn 1b (karty) z Claude Design, napojený na reálne
 // dáta dokladu (draft.extracted + draft.ucto + číselníky + návrh AI). Sekcie:
 // Základné údaje · Čiastka a DPH · Dodávateľ · Platobné údaje.
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentPreco, DocumentType, DocumentUcto } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
@@ -24,7 +24,6 @@ const SOURCE_LABEL: Record<string, string> = {
 interface InvoicePanelProps {
   draft: DocumentItem;
   readOnly: boolean;
-  busy: boolean;
   codeLists: {
     predkontacie: CodeListItem[];
     cleneniaDph: CodeListItem[];
@@ -37,7 +36,6 @@ interface InvoicePanelProps {
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
   updateSupplier: (key: keyof DocumentExtractedData['dodavatel'], value: string) => void;
-  onSave: () => void;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -67,10 +65,42 @@ const KV_LABEL: Record<string, string> = {
 const CaretIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
 );
+const AiIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.7 5.6L19.4 9l-5.7 1.4L12 16l-1.7-5.6L4.6 9l5.7-1.4z" /><path d="M19 13.5l.9 2.9 2.9.9-2.9.9-.9 2.9-.9-2.9-2.9-.9 2.9-.9z" /></svg>
+);
+
+/**
+ * Priebeh prípravy AI vysvetlenia. Server vracia odpoveď jednou požiadavkou bez
+ * streamu, takže skutočné percento neexistuje — krivka sa zámerne spomaľuje a
+ * zastaví na 95 %, aby nikdy netvrdila „hotovo" pred odpoveďou. Po dorazení
+ * odpovede sa komponent odmontuje a pruh zmizne.
+ * ponytail: odhadované percento; nahradiť skutočným priebehom, ak server začne streamovať
+ */
+function VysvetlenieProgress() {
+  const [pct, setPct] = useState(8);
+  useEffect(() => {
+    const timer = setInterval(
+      () => setPct((current) => (current >= 95 ? 95 : current + Math.max(0.5, (95 - current) / 14))),
+      220,
+    );
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="dv-preco-vys dv-preco-muted">
+      <div className="dv-prog-row">
+        <span>Pripravujem vysvetlenie…</span>
+        <span className="dv-prog-pct">{Math.round(pct)} %</span>
+      </div>
+      <div className="dv-prog-track">
+        <div className="dv-prog-bar" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
 
 export function InvoicePanel({
-  draft, readOnly, busy, codeLists, suggestion, autoFilled,
-  setTyp, updateUcto, updateExtracted, updateSupplier, onSave,
+  draft, readOnly, codeLists, suggestion, autoFilled,
+  setTyp, updateUcto, updateExtracted, updateSupplier,
 }: InvoicePanelProps) {
   const [rozOpen, setRozOpen] = useState(false);
   const [rozDodOpen, setRozDodOpen] = useState(false);
@@ -160,7 +190,7 @@ export function InvoicePanel({
         </div>
         {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
         {lisiSa && <div className="dv-preco-note">Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</div>}
-        {vysMap[field]?.stav === 'loading' && <div className="dv-preco-vys dv-preco-muted">Pripravujem vysvetlenie…</div>}
+        {vysMap[field]?.stav === 'loading' && <VysvetlenieProgress />}
         {vysMap[field]?.stav === 'done' && vysMap[field]?.data && (
           <div className="dv-preco-vys">
             <span className="dv-preco-vys-badge">vysvetlenie AI</span>
@@ -299,7 +329,15 @@ export function InvoicePanel({
 
         {/* Základné údaje */}
         <section className="dv-section">
-          <div className="dv-h3-row"><div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Základné údaje</h3></div></div>
+          <div className="dv-h3-row">
+            <div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Základné údaje</h3></div>
+            {/* Automatické zaúčtovanie patrí k poliam, ktoré vypĺňa — dole pod
+                položkami sa naň muselo skrolovať. */}
+            <button type="button" className="dv-btn-ai dv-btn-ai-inline" disabled={!canAi} onClick={applyAi}>
+              <AiIcon />
+              Použiť automatické účtovanie
+            </button>
+          </div>
           <div className="dv-fields">
             <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
             {precoWrap('predkontacia',
@@ -471,20 +509,15 @@ export function InvoicePanel({
           onChange={(polozky) => updateExtracted('polozky', polozky)}
         />
 
-        {/* Akcie */}
-        <div className="dv-actions">
-          {(autoFilled || aiApplied) && (
+        {/* Akcie — „Uložiť" je len v spodnej lište detailu, nie duplicitne tu. */}
+        {(autoFilled || aiApplied) && (
+          <div className="dv-actions">
             <div className="dv-ai-done">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
               Zaúčtované z pamäte{predkConfidence != null ? ` · istota ${predkConfidence} %` : ''}
             </div>
-          )}
-          <button type="button" className="dv-btn-ai" disabled={!canAi} onClick={applyAi}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.7 5.6L19.4 9l-5.7 1.4L12 16l-1.7-5.6L4.6 9l5.7-1.4z" /><path d="M19 13.5l.9 2.9 2.9.9-2.9.9-.9 2.9-.9-2.9-2.9-.9 2.9-.9z" /></svg>
-            Použiť automatické účtovanie
-          </button>
-          <button type="button" className="dv-btn-primary" disabled={busy || readOnly} onClick={onSave}>Uložiť</button>
-        </div>
+          </div>
+        )}
 
       </div>
     </div>
