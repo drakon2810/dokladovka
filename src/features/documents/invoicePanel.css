@@ -302,73 +302,167 @@
 .dv-card-pills { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
 .dv-pill { font-size: 11px; color: var(--dv-soft); background: #F1F4F1; border: 1px solid #E7EBE7; border-radius: 999px; padding: 2px 8px; }
 
-/* ===== „Prečo?" — pôvod zaúčtovania poľa ===== */
+/* ===== „Prečo?" — pôvod zaúčtovania poľa =====
+   Redizajn podľa makety „Prečo - redesign" z Claude Design: pilulka pod poľom,
+   panel s hlavičkou, pruh istoty, čipy, AI vysvetlenie so zeleným pásikom
+   a tri stavy firemného dôvodu. dvShimmer je globálny (src/index.css). */
 .dv-preco-field { display: flex; flex-direction: column; }
 .dv-preco-btn {
-  align-self: flex-end; margin-top: 5px; display: inline-flex; align-items: center; gap: 4px;
-  border: 0; background: none; padding: 2px 4px; font-size: 11.5px; font-weight: 500;
-  color: var(--dv-soft); cursor: pointer; font-family: inherit; border-radius: 6px;
-  transition: color .15s ease;
+  align-self: flex-end; margin-top: 6px; display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px 3px 8px; border-radius: 999px; border: 1px solid #E4E8E4; background: #fff;
+  color: #5A635D; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+  transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
-.dv-preco-btn:hover, .dv-preco-btn.dv-open { color: var(--dv-accent); }
+.dv-preco-btn:hover { border-color: rgba(14, 122, 95, .32); color: var(--dv-accent-dark); }
+.dv-preco-btn.dv-open {
+  background: #E7F2ED; border-color: rgba(14, 122, 95, .3); color: var(--dv-accent-dark);
+}
+
+@keyframes dvPrecoIn { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes dvPrecoRow { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
 .dv-preco-panel {
-  margin-top: 8px; border: 1.5px solid var(--dv-border); border-radius: 12px;
-  padding: 12px 14px; font-size: 12.5px; line-height: 1.65; background: #FAFBFA;
-  display: flex; flex-direction: column; gap: 10px;
+  margin-top: 8px; background: #fff; border: 1px solid #E4E8E4; border-radius: 12px;
+  overflow: hidden; transform-origin: top center;
+  box-shadow: 0 1px 2px rgba(27, 31, 29, .04), 0 10px 26px -14px rgba(27, 31, 29, .16);
+  animation: dvPrecoIn .22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
-.dv-preco-muted { color: var(--dv-soft); }
-.dv-preco-badges { display: flex; flex-wrap: wrap; gap: 6px; }
-.dv-preco-badge {
-  border-radius: 999px; padding: 2px 10px; font-size: 11px; font-weight: 500;
-  background: #EEF1EE; color: var(--dv-soft);
+.dv-preco-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px; background: #FBFCFA; border-bottom: 1px solid #F0F2EF;
 }
-.dv-preco-src { background: rgba(14, 122, 95, .1); color: var(--dv-accent-dark); }
-.dv-preco-reason { color: var(--dv-ink); }
-.dv-preco-note { font-size: 11.5px; color: var(--dv-warn); }
-.dv-preco-quote, .dv-preco-draft, .dv-preco-missing { border-radius: 10px; padding: 9px 11px; }
-.dv-preco-quote { background: rgba(14, 122, 95, .08); color: var(--dv-accent-dark); }
-.dv-preco-draft { background: #F4F5F4; color: var(--dv-soft); }
+.dv-preco-head-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8A928C;
+}
+.dv-preco-src {
+  flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--dv-accent-dark);
+  background: rgba(14, 122, 95, .1); border-radius: 999px; padding: 3px 9px;
+}
+.dv-preco-body { padding: 12px; display: flex; flex-direction: column; gap: 11px; }
+.dv-preco-muted { font-size: 12.5px; line-height: 1.65; color: var(--dv-soft); }
+
+/* Skeleton (shimmer) počas načítania pôvodu aj AI vysvetlenia. */
+.dv-preco-skel { padding: 12px; display: flex; flex-direction: column; gap: 7px; }
+.dv-skel {
+  height: 9px; border-radius: 7px;
+  /* Poradie je dôležité: skratka `background` resetuje background-size na auto,
+     takže šírka pásu sa musí nastaviť až po nej (inak shimmer nebeží). */
+  background: linear-gradient(90deg, #f0f2ef 25%, #e4e8e4 37%, #f0f2ef 63%);
+  background-size: 760px 100%;
+  animation: dvShimmer 1.25s linear infinite;
+}
+
+/* Pruh istoty — dorastie z 0 % po otvorení panelu. */
+.dv-preco-conf { display: flex; align-items: center; gap: 9px; }
+.dv-preco-conf-label { font-size: 11px; color: #8A928C; }
+.dv-preco-conf-track {
+  flex: 1; height: 5px; border-radius: 999px; background: #EFF2EF; overflow: hidden;
+}
+.dv-preco-conf-bar {
+  display: block; height: 100%; border-radius: 999px; transition: width .45s ease-out;
+}
+.dv-preco-conf-pct { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.dv-preco-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dv-preco-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500;
+  color: #5A635D; background: #F1F4F1; border: 1px solid #E7EBE7; border-radius: 999px;
+  padding: 3px 9px; font-variant-numeric: tabular-nums;
+}
+.dv-preco-reason { font-size: 12.5px; line-height: 1.65; color: var(--dv-ink); text-wrap: pretty; }
+.dv-preco-note {
+  display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px; border-radius: 10px;
+  background: rgba(180, 83, 9, .08); border: 1px solid rgba(180, 83, 9, .2);
+  font-size: 11.5px; line-height: 1.5; color: #92400E;
+}
+.dv-preco-note svg { flex-shrink: 0; margin-top: 1px; }
+
+/* AI vysvetlenie */
+.dv-preco-vys {
+  border-left: 2.5px solid var(--dv-accent); padding: 1px 0 1px 11px;
+  animation: dvPrecoRow .26s ease both;
+}
+.dv-preco-vys-badge {
+  display: inline-flex; align-items: center; gap: 4px; margin-bottom: 4px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #8A928C;
+}
+.dv-preco-vys-text { font-size: 12.5px; line-height: 1.7; color: var(--dv-ink); text-wrap: pretty; }
+.dv-preco-vys-load {
+  border-left: 2.5px solid #E4E8E4; padding: 2px 0 2px 11px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.dv-preco-vys-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dv-preco-vys-head .dv-preco-vys-badge { margin-bottom: 0; }
+.dv-preco-vys-pct { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--dv-accent); }
+
+.dv-preco-zdroje { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.dv-preco-zdroj {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500;
+  color: var(--dv-accent); text-decoration: none; background: rgba(14, 122, 95, .07);
+  border: 1px solid rgba(14, 122, 95, .18); border-radius: 999px; padding: 3px 10px;
+  transition: transform .16s ease, background .16s ease, border-color .16s ease;
+  animation: dvPrecoRow .26s ease both;
+}
+.dv-preco-zdroj:hover {
+  text-decoration: underline; text-underline-offset: 2px; transform: translateY(-1px);
+  background: rgba(14, 122, 95, .12); border-color: rgba(14, 122, 95, .4);
+}
+
+/* Tri stavy firemného dôvodu: potvrdený · návrh AI · chýbajúci. */
+.dv-preco-quote {
+  border: 1px solid rgba(14, 122, 95, .22); background: rgba(14, 122, 95, .06);
+  border-radius: 11px; padding: 10px 11px; animation: dvPrecoRow .26s ease 40ms both;
+}
+.dv-preco-quote-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: 10.5px;
+  font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--dv-accent-dark);
+}
+.dv-preco-quote-text { font-size: 12.5px; line-height: 1.65; color: var(--dv-accent-dark); text-wrap: pretty; }
+.dv-preco-draft {
+  border: 1px solid #E7EBE7; background: #F7F8F7; border-radius: 11px; padding: 10px 11px;
+  animation: dvPrecoRow .26s ease 40ms both;
+}
 .dv-preco-draft-badge {
-  display: inline-block; margin-right: 6px; font-size: 10.5px; font-weight: 600;
-  color: var(--dv-warn); text-transform: uppercase; letter-spacing: .03em;
+  display: inline-block; margin-bottom: 5px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--dv-warn);
+  background: rgba(180, 83, 9, .1); border-radius: 999px; padding: 2px 8px;
 }
-.dv-preco-missing { background: rgba(180, 83, 9, .08); color: var(--dv-warn); }
+.dv-preco-draft-text { font-size: 12.5px; line-height: 1.65; color: #5A635D; text-wrap: pretty; }
+.dv-preco-missing {
+  display: flex; align-items: flex-start; gap: 8px; border: 1px solid rgba(180, 83, 9, .22);
+  background: rgba(180, 83, 9, .07); border-radius: 11px; padding: 10px 11px;
+  animation: dvPrecoRow .26s ease 40ms both;
+}
+.dv-preco-missing > svg { flex-shrink: 0; margin-top: 1px; color: var(--dv-warn); }
+.dv-preco-missing-text { font-size: 12.5px; line-height: 1.6; color: #92400E; text-wrap: pretty; }
 .dv-preco-link {
-  border: 0; background: none; padding: 0; margin-left: 8px; font-size: 12px; font-weight: 600;
-  color: var(--dv-accent); cursor: pointer; font-family: inherit; text-decoration: underline;
-  text-underline-offset: 2px;
+  display: block; border: 0; background: none; padding: 0; margin-top: 7px; font-size: 12px;
+  font-weight: 600; color: var(--dv-accent); cursor: pointer; font-family: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
 }
+.dv-preco-link:hover { color: var(--dv-accent-dark); }
+
+/* Editor dôvodu */
 .dv-preco-edit { display: flex; flex-direction: column; gap: 8px; }
-.dv-preco-actions { display: flex; gap: 8px; }
+.dv-preco-ta {
+  width: 100%; min-height: 76px; border: 1.5px solid var(--dv-border); border-radius: 12px;
+  padding: 10px 12px; font-size: 13px; line-height: 1.6; color: var(--dv-ink); outline: none;
+  resize: vertical; font-family: inherit; transition: border-color .18s ease, box-shadow .18s ease;
+}
+.dv-preco-ta:focus { border-color: var(--dv-accent); box-shadow: 0 0 0 3px rgba(14, 122, 95, .15); }
+.dv-preco-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dv-preco-actions-left { display: flex; gap: 8px; }
+.dv-preco-count { font-size: 11px; color: #8A928C; font-variant-numeric: tabular-nums; }
 .dv-preco-save {
   border: 0; border-radius: 9px; padding: 8px 14px; font-size: 12.5px; font-weight: 600;
   background: var(--dv-accent); color: #fff; cursor: pointer; font-family: inherit;
+  transition: background .16s ease, box-shadow .2s ease;
 }
+.dv-preco-save:hover:not(:disabled) { background: var(--dv-accent-dark); box-shadow: 0 6px 14px -6px rgba(14, 122, 95, .55); }
 .dv-preco-save:disabled { opacity: .5; cursor: default; }
 .dv-preco-cancel {
   border: 1.5px solid var(--dv-border); border-radius: 9px; padding: 8px 14px; font-size: 12.5px;
-  background: #fff; color: var(--dv-soft); cursor: pointer; font-family: inherit;
+  background: #fff; color: #5A635D; cursor: pointer; font-family: inherit;
+  transition: border-color .16s ease;
 }
-
-.dv-preco-vys {
-  border-left: 2.5px solid var(--dv-border-hover); padding: 2px 0 2px 11px;
-  font-size: 12.5px; line-height: 1.7; color: var(--dv-ink);
-}
-/* Priebeh prípravy AI vysvetlenia — pruh zmizne s odpoveďou (komponent sa odmontuje). */
-.dv-prog-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.dv-prog-pct { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--dv-accent); }
-.dv-prog-track {
-  margin-top: 7px; height: 4px; border-radius: 999px; overflow: hidden;
-  background: rgba(14, 122, 95, .14);
-}
-.dv-prog-bar { height: 100%; border-radius: 999px; background: var(--dv-accent); transition: width .22s linear; }
-.dv-preco-vys-badge {
-  display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 600;
-  color: var(--dv-muted); text-transform: uppercase; letter-spacing: .04em;
-}
-
-.dv-preco-zdroje { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; }
-.dv-preco-zdroj {
-  font-size: 11.5px; font-weight: 500; color: var(--dv-accent); text-decoration: none;
-}
-.dv-preco-zdroj:hover { text-decoration: underline; text-underline-offset: 2px; }
+.dv-preco-cancel:hover { border-color: var(--dv-border-hover); }

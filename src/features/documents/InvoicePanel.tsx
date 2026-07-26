@@ -69,6 +69,50 @@ const AiIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.7 5.6L19.4 9l-5.7 1.4L12 16l-1.7-5.6L4.6 9l5.7-1.4z" /><path d="M19 13.5l.9 2.9 2.9.9-2.9.9-.9 2.9-.9-2.9-2.9-.9 2.9-.9z" /></svg>
 );
 
+// Ikony panelu „Prečo?" podľa makety — malé, dedia currentColor.
+const IcoCheck = ({ s = 11, w = 2 }: { s?: number; w?: number }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+);
+const IcoLines = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M4 12h16M4 17h10" /></svg>
+);
+const IcoWarn = ({ s = 13 }: { s?: number }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
+);
+const IcoSpark = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.6 5.2L19 10l-5.4 1.8L12 17l-1.6-5.2L5 10l5.4-1.8z" /></svg>
+);
+const IcoExternal = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M9 7h8v8" /></svg>
+);
+const IcoQuestion = ({ s = 12 }: { s?: number }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 .3c0 1.6-2.5 2.2-2.5 3.7" /><path d="M12 17h.01" /></svg>
+);
+const Shimmer = ({ w }: { w: string }) => <span className="dv-skel" style={{ width: w }} />;
+
+/** Farba istoty podľa makety: od 80 % zelená, od 50 % jantárová, inak šedá. */
+const confColor = (confidence: number) => (confidence >= 0.8 ? '#0E7A5F' : confidence >= 0.5 ? '#B45309' : '#8A928C');
+
+/** Pruh istoty — po otvorení panelu dorastie z 0 % na cieľovú hodnotu. */
+function PrecoIstota({ confidence }: { confidence: number }) {
+  const [grown, setGrown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setGrown(true), 40);
+    return () => clearTimeout(timer);
+  }, []);
+  const pct = Math.round(confidence * 100);
+  const color = confColor(confidence);
+  return (
+    <div className="dv-preco-conf">
+      <span className="dv-preco-conf-label">istota</span>
+      <span className="dv-preco-conf-track">
+        <span className="dv-preco-conf-bar" style={{ width: grown ? `${pct}%` : '0%', background: color }} />
+      </span>
+      <span className="dv-preco-conf-pct" style={{ color }}>{pct} %</span>
+    </div>
+  );
+}
+
 /**
  * Priebeh prípravy AI vysvetlenia. Server vracia odpoveď jednou požiadavkou bez
  * streamu, takže skutočné percento neexistuje — krivka sa zámerne spomaľuje a
@@ -86,14 +130,13 @@ function VysvetlenieProgress() {
     return () => clearInterval(timer);
   }, []);
   return (
-    <div className="dv-preco-vys dv-preco-muted">
-      <div className="dv-prog-row">
-        <span>Pripravujem vysvetlenie…</span>
-        <span className="dv-prog-pct">{Math.round(pct)} %</span>
+    <div className="dv-preco-vys-load">
+      <div className="dv-preco-vys-head">
+        <span className="dv-preco-vys-badge"><IcoSpark />vysvetlenie AI</span>
+        <span className="dv-preco-vys-pct">{Math.round(pct)} %</span>
       </div>
-      <div className="dv-prog-track">
-        <div className="dv-prog-bar" style={{ width: `${pct}%` }} />
-      </div>
+      <Shimmer w="96%" />
+      <Shimmer w="68%" />
     </div>
   );
 }
@@ -161,16 +204,38 @@ export function InvoicePanel({
     setDovodSaving(false);
   };
 
+  // Hlavička panelu je rovnaká vo všetkých stavoch (maketa „Prečo - redesign").
+  const precoHead = (chip?: ReactNode) => (
+    <div className="dv-preco-head">
+      <span className="dv-preco-head-label">Pôvod zaúčtovania</span>
+      {chip}
+    </div>
+  );
+
   const renderPreco = (field: PrecoField) => {
     if (precoState !== 'ready' || !preco) {
       return (
-        <div className="dv-preco-panel dv-preco-muted">
-          {precoState === 'error' ? 'Pôvod zaúčtovania sa nepodarilo načítať.' : 'Načítavam pôvod zaúčtovania…'}
+        <div className="dv-preco-panel">
+          {precoHead()}
+          {precoState === 'error' ? (
+            <div className="dv-preco-body dv-preco-muted">Pôvod zaúčtovania sa nepodarilo načítať.</div>
+          ) : (
+            <div className="dv-preco-skel">
+              <Shimmer w="58%" />
+              <Shimmer w="92%" />
+              <Shimmer w="74%" />
+            </div>
+          )}
         </div>
       );
     }
     if (preco.source === 'none') {
-      return <div className="dv-preco-panel dv-preco-muted">Pre tento doklad nevznikol žiadny návrh — hodnotu vybral účtovník ručne.</div>;
+      return (
+        <div className="dv-preco-panel">
+          {precoHead()}
+          <div className="dv-preco-body dv-preco-muted">Pre tento doklad nevznikol žiadny návrh — hodnotu vybral účtovník ručne.</div>
+        </div>
+      );
     }
     // Porovnáva sa so ŽIVOU hodnotou na obrazovke (ucto.*), nie so snapshotom
     // z času fetchu — inak by poznámka „zmenil účtovník" po úprave poľa klamala.
@@ -181,66 +246,93 @@ export function InvoicePanel({
     const lisiSa = Boolean(navrhId) && navrhId !== aktualneId;
     const navrhVal = navrhId ? (field === 'kv' ? navrhId : preco.polozky[navrhId]?.kod ?? navrhId) : undefined;
     const pravidlo = preco.pravidlo;
+    const zdroj = SOURCE_LABEL[preco.source] ?? preco.source;
+    const vysvetlenie = vysMap[field];
     return (
       <div className="dv-preco-panel">
-        <div className="dv-preco-badges">
-          <span className="dv-preco-badge dv-preco-src">{SOURCE_LABEL[preco.source] ?? preco.source}</span>
-          <span className="dv-preco-badge">istota {Math.round(preco.confidence * 100)} %</span>
-          {pravidlo != null && <span className="dv-preco-badge">{pravidlo.navrhnutePre}× použité</span>}
-        </div>
-        {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
-        {lisiSa && <div className="dv-preco-note">Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</div>}
-        {vysMap[field]?.stav === 'loading' && <VysvetlenieProgress />}
-        {vysMap[field]?.stav === 'done' && vysMap[field]?.data && (
-          <div className="dv-preco-vys">
-            <span className="dv-preco-vys-badge">vysvetlenie AI</span>
-            {vysMap[field]!.data!.vysvetlenie}
-            {vysMap[field]!.data!.zdroje.length > 0 && (
-              <div className="dv-preco-zdroje">
-                {vysMap[field]!.data!.zdroje.map((zdroj) => (
-                  <a key={zdroj.url} href={zdroj.url} target="_blank" rel="noopener noreferrer" className="dv-preco-zdroj">
-                    {zdroj.nazov} ↗
-                  </a>
-                ))}
-              </div>
+        {precoHead(<span className="dv-preco-src">{zdroj}</span>)}
+        <div className="dv-preco-body">
+          <PrecoIstota confidence={preco.confidence} />
+          <div className="dv-preco-chips">
+            {pravidlo != null && (
+              <span className="dv-preco-chip"><IcoCheck />{pravidlo.navrhnutePre}× použité</span>
             )}
+            <span className="dv-preco-chip"><IcoLines />{zdroj}</span>
           </div>
-        )}
-        {pravidlo != null && (dovodEditing ? (
-          <div className="dv-preco-edit">
-            <textarea
-              className="dv-textarea" value={dovodDraft} maxLength={500}
-              onChange={(e) => setDovodDraft(e.target.value)}
-              placeholder="Prečo firma účtuje tohto dodávateľa takto? Jedna–dve vety…"
-            />
-            <div className="dv-preco-actions">
-              <button type="button" className="dv-preco-save" disabled={dovodSaving || !dovodDraft.trim()} onClick={ulozDovod}>Uložiť dôvod</button>
-              <button type="button" className="dv-preco-cancel" onClick={() => setDovodEditing(false)}>Zrušiť</button>
+          {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
+          {lisiSa && (
+            <div className="dv-preco-note">
+              <IcoWarn />
+              <span>Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</span>
             </div>
-          </div>
-        ) : pravidlo.dovod && pravidlo.dovodSource === 'human' ? (
-          <div className="dv-preco-quote">
-            „{pravidlo.dovod}"
-            {!readOnly && (
-              <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(pravidlo.dovod ?? ''); setDovodEditing(true); }}>Upraviť</button>
-            )}
-          </div>
-        ) : pravidlo.dovod ? (
-          <div className="dv-preco-draft">
-            <span className="dv-preco-draft-badge">návrh AI — nepotvrdené</span>
-            „{pravidlo.dovod}"
-            {!readOnly && (
-              <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(pravidlo.dovod ?? ''); setDovodEditing(true); }}>Upraviť a potvrdiť</button>
-            )}
-          </div>
-        ) : (
-          <div className="dv-preco-missing">
-            Dôvod firmy zatiaľ nie je zapísaný — doplň ho raz a zobrazí sa pri každom ďalšom doklade tohto pravidla.
-            {!readOnly && (
-              <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(''); setDovodEditing(true); }}>Doplniť dôvod</button>
-            )}
-          </div>
-        ))}
+          )}
+          {vysvetlenie?.stav === 'loading' && <VysvetlenieProgress />}
+          {vysvetlenie?.stav === 'done' && vysvetlenie.data && (
+            <div className="dv-preco-vys">
+              <span className="dv-preco-vys-badge"><IcoSpark />vysvetlenie AI</span>
+              <div className="dv-preco-vys-text">{vysvetlenie.data.vysvetlenie}</div>
+              {vysvetlenie.data.zdroje.length > 0 && (
+                <div className="dv-preco-zdroje">
+                  {vysvetlenie.data.zdroje.map((odkaz, index) => (
+                    <a
+                      key={odkaz.url}
+                      href={odkaz.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="dv-preco-zdroj"
+                      style={{ animationDelay: `${index * 50}ms` }}
+                    >
+                      {odkaz.nazov}
+                      <IcoExternal />
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {pravidlo != null && (dovodEditing ? (
+            <div className="dv-preco-edit">
+              <textarea
+                className="dv-preco-ta" value={dovodDraft} maxLength={500}
+                onChange={(e) => setDovodDraft(e.target.value)}
+                placeholder="Prečo firma účtuje tohto dodávateľa takto? Jedna–dve vety…"
+              />
+              <div className="dv-preco-actions">
+                <div className="dv-preco-actions-left">
+                  <button type="button" className="dv-preco-save" disabled={dovodSaving || !dovodDraft.trim()} onClick={ulozDovod}>Uložiť dôvod</button>
+                  <button type="button" className="dv-preco-cancel" onClick={() => setDovodEditing(false)}>Zrušiť</button>
+                </div>
+                <span className="dv-preco-count">{dovodDraft.length} / 500</span>
+              </div>
+            </div>
+          ) : pravidlo.dovod && pravidlo.dovodSource === 'human' ? (
+            <div className="dv-preco-quote">
+              <div className="dv-preco-quote-head"><IcoCheck s={12} w={2.6} />dôvod potvrdený účtovníkom</div>
+              <div className="dv-preco-quote-text">„{pravidlo.dovod}"</div>
+              {!readOnly && (
+                <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(pravidlo.dovod ?? ''); setDovodEditing(true); }}>Upraviť</button>
+              )}
+            </div>
+          ) : pravidlo.dovod ? (
+            <div className="dv-preco-draft">
+              <span className="dv-preco-draft-badge">návrh AI — nepotvrdené</span>
+              <div className="dv-preco-draft-text">„{pravidlo.dovod}"</div>
+              {!readOnly && (
+                <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(pravidlo.dovod ?? ''); setDovodEditing(true); }}>Upraviť a potvrdiť</button>
+              )}
+            </div>
+          ) : (
+            <div className="dv-preco-missing">
+              <IcoQuestion s={14} />
+              <div>
+                <div className="dv-preco-missing-text">Dôvod firmy zatiaľ nie je zapísaný — doplň ho raz a zobrazí sa pri každom ďalšom doklade tohto pravidla.</div>
+                {!readOnly && (
+                  <button type="button" className="dv-preco-link" onClick={() => { setDovodDraft(''); setDovodEditing(true); }}>Doplniť dôvod</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -257,7 +349,7 @@ export function InvoicePanel({
         onClick={() => togglePreco(field)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePreco(field); } }}
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 .3c0 1.6-2.5 2.2-2.5 3.7" /><path d="M12 17h.01" /></svg>
+        <IcoQuestion />
         Prečo?
       </span>
       {precoOpen === field && renderPreco(field)}
