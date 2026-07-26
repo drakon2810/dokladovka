@@ -67,6 +67,7 @@ import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { PaymentCard } from './PaymentCard';
 import { InvoicePanel } from './InvoicePanel';
+import { AssistantPanel } from '../assistant/AssistantPanel';
 import { useAuth } from '../../auth/AuthContext';
 import {
   createMostikExportJob,
@@ -310,6 +311,7 @@ export function DocumentDetailPage() {
   const [draft, setDraft] = useState<DocumentItem>();
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [asistentOpen, setAsistentOpen] = useState(false);
   const [runs, setRuns] = useState<ExtractionRun[]>([]);
   const [suggestion, setSuggestion] = useState<AccountingSuggestion>();
   const [dphAdvice, setDphAdvice] = useState<DphPosudok>();
@@ -1346,7 +1348,25 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
+      {asistentOpen && draft.orgId && (
+        <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[420px] flex-col p-3 sm:p-4">
+          <AssistantPanel
+            organizationId={draft.orgId}
+            organizationName={organization?.nazov}
+            documentId={draft.id}
+            onClose={() => setAsistentOpen(false)}
+          />
+        </div>
+      )}
+
       <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-line/80 bg-surface/75 px-4 py-3 shadow-[0_-8px_24px_-16px_rgba(27,31,29,0.12)] backdrop-blur-md">
+        <button
+          type="button"
+          className="btn mr-auto"
+          onClick={() => setAsistentOpen((open) => !open)}
+        >
+          Spýtať sa asistenta
+        </button>
         {dirty && (
           <span className="anim-in mr-auto inline-flex items-center gap-1.5 text-xs text-amber-800">
             <span className="h-[7px] w-[7px] rounded-full bg-amber-600" aria-hidden />

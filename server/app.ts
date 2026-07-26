@@ -16,6 +16,7 @@ import { registerOrgDocumentRoutes } from './routes/orgDocumentRoutes.js';
 import { registerPaymentRoutes } from './routes/paymentRoutes.js';
 import { registerPartnerRoutes } from './routes/partnerRoutes.js';
 import { registerAiTrainingRoutes } from './routes/aiTrainingRoutes.js';
+import { registerAssistantRoutes } from './routes/assistantRoutes.js';
 import type { ObjectStorage } from './storage.js';
 
 export async function buildApp(input: {
@@ -24,6 +25,7 @@ export async function buildApp(input: {
   config: ServerConfig;
   logger?: boolean;
   aiRulesParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown }> };
+  assistantParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown; usage?: { input_tokens?: number; output_tokens?: number } }> };
 }): Promise<FastifyInstance> {
   const app = Fastify({
     logger: input.logger ?? input.config.nodeEnv !== 'test',
@@ -81,6 +83,7 @@ export async function buildApp(input: {
   registerPaymentRoutes(app, input.database);
   registerPartnerRoutes(app, input.database);
   registerAiTrainingRoutes(app, input.database, input.config, input.aiRulesParser);
+  registerAssistantRoutes(app, input.database, input.storage, input.config, input.assistantParser);
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {

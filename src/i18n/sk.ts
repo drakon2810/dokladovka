@@ -10,6 +10,7 @@ export const sk = {
   'nav.export': 'Export',
   'nav.uhrady': 'Úhrady',
   'nav.partneri': 'Partneri',
+  'nav.asistent': 'Asistent',
   'nav.nastavenia': 'Nastavenia',
   'nav.zbalit': 'Zbaliť panel',
   'nav.rozbalit': 'Rozbaliť panel',

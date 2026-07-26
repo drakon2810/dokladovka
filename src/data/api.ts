@@ -2599,6 +2599,47 @@ export async function getPrecoVysvetlenie(
   return { vysvetlenie: response.vysvetlenie, zdroje: response.zdroje ?? [] };
 }
 
+/** Asistent firmy — odpoveď je vždy zúžená na jednu organizáciu (server). */
+export interface AssistantOdpoved {
+  odpoved: string;
+  answerability: 'grounded' | 'insufficient_evidence' | 'out_of_scope';
+  istota: 'vysoka' | 'nizka';
+  zdroje: Array<{ nazov: string; url: string }>;
+  pouzityDoklad: boolean;
+  pouzitaPriloha?: string;
+}
+
+export async function askAssistant(
+  organizationId: string,
+  input: {
+    otazka: string;
+    documentId?: string;
+    prilohaId?: string;
+    historia?: Array<{ rola: 'pouzivatel' | 'asistent'; text: string }>;
+  },
+): Promise<AssistantOdpoved> {
+  return restRequest<AssistantOdpoved>(
+    `/api/organizations/${encodeURIComponent(organizationId)}/assistant/ask`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+export interface OrgDocumentSummary {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  note?: string;
+}
+
+/** Firemné dokumenty (usmernenia a pod.) — na priloženie k otázke asistenta. */
+export async function listOrgDocuments(organizationId: string): Promise<OrgDocumentSummary[]> {
+  if (!REST_DATA_MODE) return [];
+  return await restRequest<OrgDocumentSummary[]>(
+    `/api/organizations/${encodeURIComponent(organizationId)}/documents`,
+  ) ?? [];
+}
+
 /** Zápis/úprava dôvodu pravidla človekom — od tej chvíle je to prax firmy. */
 export async function saveRuleDovod(organizationId: string, ruleId: string, dovod: string): Promise<void> {
   await restRequest(
