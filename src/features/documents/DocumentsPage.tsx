@@ -22,7 +22,6 @@ import { OrgDot, TypBadge, Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import { formatDate, formatMoney } from '../../lib/format';
-import { DocumentCreateModal } from './DocumentCreateModal';
 import { UploadModal } from './UploadModal';
 
 const PaymentQrModal = lazy(() =>
@@ -281,7 +280,6 @@ export function DocumentsPage() {
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [qrDocId, setQrDocId] = useState<string | null>(null);
@@ -725,11 +723,8 @@ export function DocumentsPage() {
         </div>
         {data.role !== 'schvalovatel' && (
           <div className="flex items-center gap-2">
-            <button type="button" className="btn" onClick={() => setUploadModalOpen(true)}>
+            <button type="button" className="btn btn-primary" onClick={() => setUploadModalOpen(true)}>
               {t('doklady.nahrat.tlacidlo')}
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => setCreateModalOpen(true)}>
-              + {t('doklady.pridat')}
             </button>
           </div>
         )}
@@ -862,8 +857,8 @@ export function DocumentsPage() {
           {emptyAlias && <code className="tnum mt-1 rounded-md bg-app px-2 py-1 text-xs text-ink">{emptyAlias}</code>}
           <div className="mt-4 flex gap-2.5">
             {data.role !== 'schvalovatel' && (
-              <button type="button" className="btn btn-primary" onClick={() => setCreateModalOpen(true)}>
-                + {t('doklady.pridat')}
+              <button type="button" className="btn btn-primary" onClick={() => setUploadModalOpen(true)}>
+                {t('doklady.nahrat.tlacidlo')}
               </button>
             )}
             <button type="button" className="btn" onClick={resetAll}>
@@ -1175,18 +1170,6 @@ export function DocumentsPage() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {createModalOpen && (
-        <DocumentCreateModal
-          initialOrganizationId={currentOrgId === 'all' ? undefined : currentOrgId}
-          initialQueueId={queueFilter || undefined}
-          onClose={() => setCreateModalOpen(false)}
-          onCreated={(document) => {
-            setCreateModalOpen(false);
-            navigate(detailHref(document.id, document.queueId));
-          }}
-        />
-      )}
 
       {uploadModalOpen && (
         <UploadModal

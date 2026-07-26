@@ -39,7 +39,6 @@ interface CommandPaletteProps {
   documents: DocumentItem[];
   role: Role;
   onPickOrg: (organizationId: string) => void;
-  onAddDocument: () => void;
 }
 
 const IconSearch = (
@@ -56,7 +55,6 @@ export function CommandPalette({
   documents,
   role,
   onPickOrg,
-  onAddDocument,
 }: CommandPaletteProps) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -95,24 +93,6 @@ export function CommandPalette({
     );
     const list: PaletteItem[] = [];
 
-    if (role !== 'schvalovatel') {
-      list.push({
-        id: 'a-add',
-        group: t('pal.akcie'),
-        title: t('pal.pridatDoklad'),
-        subtitle: t('pal.pridatPopis'),
-        icon: (
-          <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} strokeWidth={2.2}>
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
-          </svg>
-        ),
-        run: () => {
-          onAddDocument();
-          onClose();
-        },
-      });
-    }
     list.push({
       id: 'a-export',
       group: t('pal.akcie'),

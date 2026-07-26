@@ -10,7 +10,6 @@ import { useDataQuery } from '../data/query';
 import { t } from '../i18n/sk';
 import { OrgDot, ToastViewport } from '../components/ui';
 import { showToast } from '../components/toast';
-import { DocumentCreateModal } from '../features/documents/DocumentCreateModal';
 import { OrganizationFormModal } from '../features/settings/OrganizationsTab';
 import { useAuth } from '../auth/AuthContext';
 import { AUTH_MODE } from '../auth/config';
@@ -159,8 +158,6 @@ function timeAgo(iso: string): string {
 export function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
-  const [documentModalOpen, setDocumentModalOpen] = useState(false);
-  const [documentModalOrganizationId, setDocumentModalOrganizationId] = useState<string>();
   const [organizationModalOpen, setOrganizationModalOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -371,21 +368,6 @@ export function Layout() {
                         {countNaKontrolu(org.id)}
                       </span>
                     </button>
-                    {role !== 'schvalovatel' && (
-                      <button
-                        type="button"
-                        className="mr-1 rounded px-2 py-1 text-accent transition hover:bg-tint"
-                        aria-label={`${t('doklady.pridat')}: ${org.nazov}`}
-                        title={t('doklady.pridat')}
-                        onClick={() => {
-                          setDocumentModalOrganizationId(org.id);
-                          setDocumentModalOpen(true);
-                          setOrgMenuOpen(false);
-                        }}
-                      >
-                        +
-                      </button>
-                    )}
                   </div>
                 ))}
               </motion.div>
@@ -659,20 +641,6 @@ export function Layout() {
           </div>
 
           <div className="ml-auto flex items-center gap-2.5">
-            {role !== 'schvalovatel' && activeOrgs.length > 0 && (
-              <button
-                type="button"
-                className="inline-flex h-[38px] items-center gap-1.5 whitespace-nowrap rounded-[10px] bg-gradient-to-br from-accent-bright to-accent px-3.5 text-[13px] font-semibold text-white shadow-glow transition hover:brightness-[1.06] active:translate-y-px"
-                aria-label={t('topbar.pridatDoklad')}
-                onClick={() => {
-                  setDocumentModalOrganizationId(currentOrgId === 'all' ? undefined : currentOrgId);
-                  setDocumentModalOpen(true);
-                }}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" {...stroke} strokeWidth={2.2} aria-hidden><path d="M12 5v14" /><path d="M5 12h14" /></svg>
-                <span className="hidden xl:inline">{t('topbar.pridatDoklad')}</span>
-              </button>
-            )}
             {role === 'admin' && (
               <button
                 type="button"
@@ -901,27 +869,7 @@ export function Layout() {
         documents={documents}
         role={role}
         onPickOrg={(id) => void setCurrentOrg(id)}
-        onAddDocument={() => {
-          setDocumentModalOrganizationId(currentOrgId === 'all' ? undefined : currentOrgId);
-          setDocumentModalOpen(true);
-        }}
       />
-
-      {documentModalOpen && (
-        <DocumentCreateModal
-          initialOrganizationId={documentModalOrganizationId}
-          onClose={() => {
-            setDocumentModalOpen(false);
-            setDocumentModalOrganizationId(undefined);
-          }}
-          onCreated={(document) => {
-            setDocumentModalOpen(false);
-            setDocumentModalOrganizationId(undefined);
-            void setCurrentOrg(document.orgId);
-            navigate(`/doklady/${document.id}`);
-          }}
-        />
-      )}
 
       {organizationModalOpen && (
         <OrganizationFormModal

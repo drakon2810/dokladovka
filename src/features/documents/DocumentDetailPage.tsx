@@ -902,6 +902,15 @@ export function DocumentDetailPage() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            className={`btn ${asistentOpen ? 'btn-primary' : ''}`}
+            onClick={() => setAsistentOpen((open) => !open)}
+            title="Opýtať sa asistenta na tento doklad"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+            Asistent
+          </button>
           {queueIndex >= 0 && queueDocuments.length > 1 && (
             <span className="tnum text-xs text-ink-soft" aria-hidden>
               {queueIndex + 1} / {queueDocuments.length}
@@ -1360,13 +1369,6 @@ export function DocumentDetailPage() {
       )}
 
       <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-line/80 bg-surface/75 px-4 py-3 shadow-[0_-8px_24px_-16px_rgba(27,31,29,0.12)] backdrop-blur-md">
-        <button
-          type="button"
-          className="btn mr-auto"
-          onClick={() => setAsistentOpen((open) => !open)}
-        >
-          Spýtať sa asistenta
-        </button>
         {dirty && (
           <span className="anim-in mr-auto inline-flex items-center gap-1.5 text-xs text-amber-800">
             <span className="h-[7px] w-[7px] rounded-full bg-amber-600" aria-hidden />

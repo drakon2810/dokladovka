@@ -15,7 +15,6 @@ import type { Organization } from '../../data/types';
 import { t } from '../../i18n/sk';
 import { ConfirmDialog, CopyButton, Modal, OrgDot } from '../../components/ui';
 import { showToast } from '../../components/toast';
-import { DocumentCreateModal } from '../documents/DocumentCreateModal';
 import { BankAccountsModal } from './BankAccountsModal';
 
 const DEFAULT_COLORS = ['#0E7A5F', '#B45309', '#4338CA', '#0369A1', '#B91C1C', '#334155'];
@@ -54,7 +53,6 @@ export function OrganizationsTab() {
   const navigate = useNavigate();
   const organizations = useDataQuery().data?.organizations ?? [];
   const [modal, setModal] = useState<'new' | Organization | null>(null);
-  const [documentOrganization, setDocumentOrganization] = useState<Organization | null>(null);
   const [bankOrganization, setBankOrganization] = useState<Organization | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Organization | null>(null);
   const [created, setCreated] = useState<CreateOrganizationResult | null>(null);
@@ -77,13 +75,6 @@ export function OrganizationsTab() {
               {created.primaryEmailAlias.address}
             </code>
             <CopyButton value={created.primaryEmailAlias.address} label={t('nast.org.kopirovatAdresu')} />
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => setDocumentOrganization(created.organization)}
-            >
-              {t('doklady.pridatPrvy')}
-            </button>
             <button
               type="button"
               className="ml-auto rounded px-1 text-ink-soft hover:text-ink"
@@ -141,13 +132,6 @@ export function OrganizationsTab() {
                       >
                         {t('nast.org.bankoveUcty')}
                       </button>
-                      <button
-                        type="button"
-                        className="btn mr-1 px-2 py-1 text-xs"
-                        onClick={() => setDocumentOrganization(org)}
-                      >
-                        + {t('nast.org.pridatDoklad')}
-                      </button>
                     </>
                   )}
                   <button type="button" className="btn mr-1 px-2 py-1 text-xs" onClick={() => setModal(org)}>
@@ -190,17 +174,6 @@ export function OrganizationsTab() {
         />
       )}
 
-      {documentOrganization && (
-        <DocumentCreateModal
-          initialOrganizationId={documentOrganization.id}
-          fixedOrganization
-          onClose={() => setDocumentOrganization(null)}
-          onCreated={(document) => {
-            setDocumentOrganization(null);
-            navigate(`/doklady/${document.id}`);
-          }}
-        />
-      )}
 
       {bankOrganization && (
         <BankAccountsModal
