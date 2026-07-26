@@ -16,7 +16,7 @@ import { normalizeExtractionResult, validateExtractionResult, validateNormalized
 import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback } from '../services/accountingSuggestionService.js';
 import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
-import { precoVysvetlenie } from '../services/precoVysvetlenieService.js';
+import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -380,16 +380,17 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
   });
 
   // AI vysvetlenie k „Prečo?" — druhá rýchlosť panelu: fakty prídu okamžite
-  // z /preco, vysvetlenie sa dogeneruje (a kešuje) tu. Best-effort: null je
-  // platná odpoveď (bez API kľúča, bez návrhu, chyba LLM).
+  // z /preco, vysvetlenie sa dogeneruje (a kešuje) tu, zvlášť pre každé pole.
+  // Best-effort: null je platná odpoveď (bez API kľúča, bez návrhu, chyba LLM).
   app.get('/api/documents/:id/preco/vysvetlenie', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { pole } = z.object({ pole: z.enum(PRECO_POLIA) }).parse(request.query);
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
     const vysledok = await precoVysvetlenie(database, config, {
       tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
-    });
+    }, pole);
     return { vysvetlenie: vysledok?.vysvetlenie ?? null, zdroje: vysledok?.zdroje ?? [] };
   });
 

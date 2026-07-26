@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { MemoryObjectStorage } from '../storage.js';
-import { precoVysvetlenie } from '../services/precoVysvetlenieService.js';
+import { ocistiVysvetlenie, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -160,13 +160,13 @@ describe('Prečo? — AI vysvetlenie', () => {
       },
     };
 
-    const first = await precoVysvetlenie(database, testConfig(), scope, parser);
+    const first = await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
     expect(first?.vysvetlenie).toContain('518');
     // Server-side poistka: odkaz mimo bieleho zoznamu domén sa zahodí.
     expect(first?.zdroje).toHaveLength(1);
     expect(first?.zdroje[0].url).toContain('ako-uctovat.sk');
-    // Druhé volanie ide z keše — parser sa už nevolá.
-    const second = await precoVysvetlenie(database, testConfig(), scope, parser);
+    // Druhé volanie toho istého poľa ide z keše — parser sa už nevolá.
+    const second = await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
     expect(second?.vysvetlenie).toBe(first?.vysvetlenie);
     expect(second?.zdroje).toHaveLength(1);
     expect(calls).toBe(1);
@@ -183,12 +183,69 @@ describe('Prečo? — AI vysvetlenie', () => {
        VALUES ($1,$2,$3,'organization_default',0.5,'Predvoľba organizácie.')
        ON CONFLICT (document_id) DO UPDATE SET
          source=excluded.source, confidence=excluded.confidence, reason=excluded.reason,
-         vysvetlenie=NULL, updated_at=now()`,
+         vysvetlenia=NULL, updated_at=now()`,
       [documentId, seeded.tenantId, seeded.organizationId],
     );
-    await precoVysvetlenie(database, testConfig(), scope, parser);
+    await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
     expect(calls).toBe(2);
   }, 120_000);
+
+  it('každé pole má vlastné vysvetlenie, vlastnú keš aj povolené domény', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const { documentId } = await seedDocumentWithSuggestion(database, seeded);
+    const scope = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId };
+
+    const videnePolia: string[] = [];
+    const videneDomeny: string[][] = [];
+    const parser = {
+      parse: async (body: any) => {
+        videnePolia.push(JSON.parse(body.input[0].content[0].text).vysvetlujemePole);
+        videneDomeny.push(body.tools[0].filters.allowed_domains);
+        return {
+          output_parsed: {
+            vysvetlenie: 'Vysvetlenie k poľu.',
+            zdroje: [
+              { nazov: 'Finančná správa', url: 'https://www.financnasprava.sk/sk/metodicke-pokyny' },
+              { nazov: 'Účtovná metodika', url: 'https://www.ako-uctovat.sk/ucet.php?i=200' },
+            ],
+          },
+          usage: { input_tokens: 800, output_tokens: 50 },
+        };
+      },
+    };
+
+    const dph = await precoVysvetlenie(database, testConfig(), scope, 'dph', parser);
+    const kv = await precoVysvetlenie(database, testConfig(), scope, 'kv', parser);
+    const predk = await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
+    expect(videnePolia).toEqual(['dph', 'kv', 'predkontacia']);
+
+    // DPH a KV majú zdroje finančnej správy; ako-uctovat.sk sa im zahodí.
+    expect(videneDomeny[0]).toContain('financnasprava.sk');
+    expect(videneDomeny[0]).not.toContain('ako-uctovat.sk');
+    expect(dph?.zdroje.map((z) => z.url)).toEqual([expect.stringContaining('financnasprava.sk')]);
+    expect(kv?.zdroje.map((z) => z.url)).toEqual([expect.stringContaining('financnasprava.sk')]);
+    // Predkontácia naopak berie účtovnú metodiku a zahodí financnasprava.sk.
+    expect(videneDomeny[2]).toContain('ako-uctovat.sk');
+    expect(predk?.zdroje.map((z) => z.url)).toEqual([expect.stringContaining('ako-uctovat.sk')]);
+
+    // Tri samostatné kľúče v keši, každý s vlastnými zdrojmi.
+    const row = await database.query<{ vysvetlenia: Record<string, unknown> }>(
+      'SELECT vysvetlenia FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    );
+    expect(Object.keys(row.rows[0].vysvetlenia).sort()).toEqual(['dph', 'kv', 'predkontacia']);
+  }, 120_000);
+
+  it('inline markdown citácie sa z textu odstránia (odkazy sú pod textom)', () => {
+    const vstup = 'Doklad patrí do KN. ([podpora.financnasprava.sk](https://podpora.financnasprava.sk/226167-co)) '
+      + 'Viac v [metodickom pokyne](https://www.financnasprava.sk/mp) a tu (https://www.danovecentrum.sk/x).';
+    const vysledok = ocistiVysvetlenie(vstup);
+    expect(vysledok).not.toContain('http');
+    expect(vysledok).not.toContain('](');
+    expect(vysledok).toContain('Doklad patrí do KN.');
+    expect(vysledok).toContain('metodickom pokyne');
+  });
 
   it('bez API kľúča a bez injected parsera vráti null (best-effort)', async () => {
     const database = await createTestDatabase();
@@ -197,7 +254,7 @@ describe('Prečo? — AI vysvetlenie', () => {
     const { documentId } = await seedDocumentWithSuggestion(database, seeded);
     const result = await precoVysvetlenie(database, testConfig(), {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
-    });
+    }, 'dph');
     expect(result).toBeNull();
   }, 120_000);
 });

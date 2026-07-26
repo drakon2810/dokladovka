@@ -89,21 +89,24 @@ export function InvoicePanel({
   const [dovodEditing, setDovodEditing] = useState(false);
   const [dovodSaving, setDovodSaving] = useState(false);
   // Druhá rýchlosť panelu: fakty prídu okamžite, AI vysvetlenie sa dotiahne
-  // následne (server ho kešuje na doklad). null po 'done' = nie je k dispozícii.
-  const [vysvetlenie, setVysvetlenie] = useState<PrecoVysvetlenie | null>(null);
-  const [vysState, setVysState] = useState<'idle' | 'loading' | 'done'>('idle');
+  // následne — zvlášť pre každé pole (iné zdroje), server ho kešuje.
+  const [vysMap, setVysMap] = useState<Partial<Record<PrecoField, { stav: 'loading' | 'done'; data: PrecoVysvetlenie | null }>>>({});
 
-  const nacitajVysvetlenie = () => {
-    setVysState('loading');
-    getPrecoVysvetlenie(draft.id)
-      .then((text) => { setVysvetlenie(text); setVysState('done'); })
-      .catch(() => { setVysvetlenie(null); setVysState('done'); });
+  const nacitajVysvetlenie = (field: PrecoField) => {
+    setVysMap((current) => (current[field] ? current : { ...current, [field]: { stav: 'loading', data: null } }));
+    getPrecoVysvetlenie(draft.id, field)
+      .then((data) => setVysMap((current) => ({ ...current, [field]: { stav: 'done', data } })))
+      .catch(() => setVysMap((current) => ({ ...current, [field]: { stav: 'done', data: null } })));
   };
 
   const togglePreco = (field: PrecoField) => {
     if (precoOpen === field) { setPrecoOpen(null); return; }
     setPrecoOpen(field);
     setDovodEditing(false);
+    if (precoState === 'ready') {
+      if (preco && preco.source !== 'none' && !vysMap[field]) nacitajVysvetlenie(field);
+      return;
+    }
     if (precoState === 'idle' || precoState === 'error') {
       setPrecoState('loading');
       getDocumentPreco(draft.id)
@@ -111,7 +114,7 @@ export function InvoicePanel({
           if (data) {
             setPreco(data);
             setPrecoState('ready');
-            if (data.source !== 'none') nacitajVysvetlenie();
+            if (data.source !== 'none') nacitajVysvetlenie(field);
           } else { setPrecoState('error'); }
         })
         .catch(() => setPrecoState('error'));
@@ -160,14 +163,14 @@ export function InvoicePanel({
         </div>
         {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
         {lisiSa && <div className="dv-preco-note">Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</div>}
-        {vysState === 'loading' && <div className="dv-preco-vys dv-preco-muted">Pripravujem vysvetlenie…</div>}
-        {vysState === 'done' && vysvetlenie && (
+        {vysMap[field]?.stav === 'loading' && <div className="dv-preco-vys dv-preco-muted">Pripravujem vysvetlenie…</div>}
+        {vysMap[field]?.stav === 'done' && vysMap[field]?.data && (
           <div className="dv-preco-vys">
             <span className="dv-preco-vys-badge">vysvetlenie AI</span>
-            {vysvetlenie.vysvetlenie}
-            {vysvetlenie.zdroje.length > 0 && (
+            {vysMap[field]!.data!.vysvetlenie}
+            {vysMap[field]!.data!.zdroje.length > 0 && (
               <div className="dv-preco-zdroje">
-                {vysvetlenie.zdroje.map((zdroj) => (
+                {vysMap[field]!.data!.zdroje.map((zdroj) => (
                   <a key={zdroj.url} href={zdroj.url} target="_blank" rel="noopener noreferrer" className="dv-preco-zdroj">
                     {zdroj.nazov} ↗
                   </a>

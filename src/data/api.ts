@@ -2587,10 +2587,13 @@ export interface PrecoVysvetlenie {
   zdroje: Array<{ nazov: string; url: string }>;
 }
 
-export async function getPrecoVysvetlenie(documentId: string): Promise<PrecoVysvetlenie | null> {
+export async function getPrecoVysvetlenie(
+  documentId: string,
+  pole: 'predkontacia' | 'dph' | 'kv',
+): Promise<PrecoVysvetlenie | null> {
   if (!REST_DATA_MODE) return null;
   const response = await restRequest<{ vysvetlenie: string | null; zdroje?: Array<{ nazov: string; url: string }> }>(
-    `/api/documents/${encodeURIComponent(documentId)}/preco/vysvetlenie`,
+    `/api/documents/${encodeURIComponent(documentId)}/preco/vysvetlenie?pole=${pole}`,
   );
   if (!response?.vysvetlenie) return null;
   return { vysvetlenie: response.vysvetlenie, zdroje: response.zdroje ?? [] };
