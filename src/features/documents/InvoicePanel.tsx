@@ -4,7 +4,7 @@
 import { useState, type ReactNode } from 'react';
 import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentPreco, DocumentType, DocumentUcto } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
-import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod } from '../../data/api';
+import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
 import './invoicePanel.css';
@@ -90,7 +90,7 @@ export function InvoicePanel({
   const [dovodSaving, setDovodSaving] = useState(false);
   // Druhá rýchlosť panelu: fakty prídu okamžite, AI vysvetlenie sa dotiahne
   // následne (server ho kešuje na doklad). null po 'done' = nie je k dispozícii.
-  const [vysvetlenie, setVysvetlenie] = useState<string | null>(null);
+  const [vysvetlenie, setVysvetlenie] = useState<PrecoVysvetlenie | null>(null);
   const [vysState, setVysState] = useState<'idle' | 'loading' | 'done'>('idle');
 
   const nacitajVysvetlenie = () => {
@@ -164,7 +164,16 @@ export function InvoicePanel({
         {vysState === 'done' && vysvetlenie && (
           <div className="dv-preco-vys">
             <span className="dv-preco-vys-badge">vysvetlenie AI</span>
-            {vysvetlenie}
+            {vysvetlenie.vysvetlenie}
+            {vysvetlenie.zdroje.length > 0 && (
+              <div className="dv-preco-zdroje">
+                {vysvetlenie.zdroje.map((zdroj) => (
+                  <a key={zdroj.url} href={zdroj.url} target="_blank" rel="noopener noreferrer" className="dv-preco-zdroj">
+                    {zdroj.nazov} ↗
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {pravidlo != null && (dovodEditing ? (

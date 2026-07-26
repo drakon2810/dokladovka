@@ -348,3 +348,9 @@
   display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 600;
   color: var(--dv-muted); text-transform: uppercase; letter-spacing: .04em;
 }
+
+.dv-preco-zdroje { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; }
+.dv-preco-zdroj {
+  font-size: 11.5px; font-weight: 500; color: var(--dv-accent); text-decoration: none;
+}
+.dv-preco-zdroj:hover { text-decoration: underline; text-underline-offset: 2px; }

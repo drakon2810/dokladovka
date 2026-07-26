@@ -147,19 +147,32 @@ describe('Prečo? — AI vysvetlenie', () => {
     const parser = {
       parse: async () => {
         calls += 1;
-        return { output_parsed: { vysvetlenie: 'Návrh vychádza z pravidla pre Hapag-Lloyd.' }, usage: { input_tokens: 900, output_tokens: 60 } };
+        return {
+          output_parsed: {
+            vysvetlenie: 'Ide o prepravnú službu od zahraničného dodávateľa — služby patria do triedy 518.',
+            zdroje: [
+              { nazov: 'Účtovanie služieb — trieda 518', url: 'https://www.ako-uctovat.sk/uctovanie-sluzieb' },
+              { nazov: 'Podvrhnutý zdroj', url: 'https://evil.example.com/x' },
+            ],
+          },
+          usage: { input_tokens: 900, output_tokens: 60 },
+        };
       },
     };
 
     const first = await precoVysvetlenie(database, testConfig(), scope, parser);
-    expect(first).toContain('pravidla');
+    expect(first?.vysvetlenie).toContain('518');
+    // Server-side poistka: odkaz mimo bieleho zoznamu domén sa zahodí.
+    expect(first?.zdroje).toHaveLength(1);
+    expect(first?.zdroje[0].url).toContain('ako-uctovat.sk');
     // Druhé volanie ide z keše — parser sa už nevolá.
     const second = await precoVysvetlenie(database, testConfig(), scope, parser);
-    expect(second).toBe(first);
+    expect(second?.vysvetlenie).toBe(first?.vysvetlenie);
+    expect(second?.zdroje).toHaveLength(1);
     expect(calls).toBe(1);
 
     const run = await database.query<{ prompt_version: string } & Record<string, unknown>>(
-      `SELECT prompt_version FROM extraction_runs WHERE document_id=$1 AND prompt_version='preco-vysvetlenie-v1'`,
+      `SELECT prompt_version FROM extraction_runs WHERE document_id=$1 AND prompt_version LIKE 'preco-vysvetlenie-%'`,
       [documentId],
     );
     expect(run.rowCount).toBe(1);

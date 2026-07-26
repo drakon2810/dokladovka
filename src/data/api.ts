@@ -2582,12 +2582,18 @@ export async function getDocumentPreco(documentId: string): Promise<DocumentPrec
 }
 
 /** AI vysvetlenie k „Prečo?" — kešované na serveri, null = nie je k dispozícii. */
-export async function getPrecoVysvetlenie(documentId: string): Promise<string | null> {
+export interface PrecoVysvetlenie {
+  vysvetlenie: string;
+  zdroje: Array<{ nazov: string; url: string }>;
+}
+
+export async function getPrecoVysvetlenie(documentId: string): Promise<PrecoVysvetlenie | null> {
   if (!REST_DATA_MODE) return null;
-  const response = await restRequest<{ vysvetlenie: string | null }>(
+  const response = await restRequest<{ vysvetlenie: string | null; zdroje?: Array<{ nazov: string; url: string }> }>(
     `/api/documents/${encodeURIComponent(documentId)}/preco/vysvetlenie`,
   );
-  return response?.vysvetlenie ?? null;
+  if (!response?.vysvetlenie) return null;
+  return { vysvetlenie: response.vysvetlenie, zdroje: response.zdroje ?? [] };
 }
 
 /** Zápis/úprava dôvodu pravidla človekom — od tej chvíle je to prax firmy. */

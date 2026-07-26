@@ -387,10 +387,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
-    const vysvetlenie = await precoVysvetlenie(database, config, {
+    const vysledok = await precoVysvetlenie(database, config, {
       tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
     });
-    return { vysvetlenie };
+    return { vysvetlenie: vysledok?.vysvetlenie ?? null, zdroje: vysledok?.zdroje ?? [] };
   });
 
   for (const [route, status, action] of [

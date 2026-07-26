@@ -401,7 +401,7 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
        clenenie_kv_kod=excluded.clenenie_kv_kod,
        source=excluded.source, confidence=excluded.confidence, reason=excluded.reason,
        based_on_document_id=excluded.based_on_document_id, rule_id=excluded.rule_id,
-       vysvetlenie=NULL, updated_at=now()`,
+       vysvetlenie=NULL, vysvetlenie_zdroje=NULL, updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
       candidate.predkontacia_id ?? null, candidate.clenenie_dph_id ?? null,
       candidate.ciselny_rad_id ?? null, candidate.stredisko_id ?? null, kvKod ?? null,
