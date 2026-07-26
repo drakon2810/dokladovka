@@ -339,3 +339,12 @@
   border: 1.5px solid var(--dv-border); border-radius: 9px; padding: 8px 14px; font-size: 12.5px;
   background: #fff; color: var(--dv-soft); cursor: pointer; font-family: inherit;
 }
+
+.dv-preco-vys {
+  border-left: 2.5px solid var(--dv-border-hover); padding: 2px 0 2px 11px;
+  font-size: 12.5px; line-height: 1.7; color: var(--dv-ink);
+}
+.dv-preco-vys-badge {
+  display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 600;
+  color: var(--dv-muted); text-transform: uppercase; letter-spacing: .04em;
+}

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { MemoryObjectStorage } from '../storage.js';
+import { precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -131,5 +132,59 @@ describe('Prečo? — provenience zaúčtovania', () => {
     expect(preco.statusCode).toBe(200);
     expect(preco.json().source).toBe('none');
     expect(preco.json().pravidlo).toBeNull();
+  }, 120_000);
+});
+
+describe('Prečo? — AI vysvetlenie', () => {
+  it('vygeneruje raz, kešuje, účtuje spotrebu; prepočet návrhu kešu nuluje', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const { documentId } = await seedDocumentWithSuggestion(database, seeded, { ruleDovod: 'Zahraniční prepravcovia — samozdanenie.' });
+    const scope = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId };
+
+    let calls = 0;
+    const parser = {
+      parse: async () => {
+        calls += 1;
+        return { output_parsed: { vysvetlenie: 'Návrh vychádza z pravidla pre Hapag-Lloyd.' }, usage: { input_tokens: 900, output_tokens: 60 } };
+      },
+    };
+
+    const first = await precoVysvetlenie(database, testConfig(), scope, parser);
+    expect(first).toContain('pravidla');
+    // Druhé volanie ide z keše — parser sa už nevolá.
+    const second = await precoVysvetlenie(database, testConfig(), scope, parser);
+    expect(second).toBe(first);
+    expect(calls).toBe(1);
+
+    const run = await database.query<{ prompt_version: string } & Record<string, unknown>>(
+      `SELECT prompt_version FROM extraction_runs WHERE document_id=$1 AND prompt_version='preco-vysvetlenie-v1'`,
+      [documentId],
+    );
+    expect(run.rowCount).toBe(1);
+
+    // Prepočet návrhu (upsert) kešované vysvetlenie nuluje.
+    await database.query(
+      `INSERT INTO accounting_suggestions (document_id,tenant_id,organization_id,source,confidence,reason)
+       VALUES ($1,$2,$3,'organization_default',0.5,'Predvoľba organizácie.')
+       ON CONFLICT (document_id) DO UPDATE SET
+         source=excluded.source, confidence=excluded.confidence, reason=excluded.reason,
+         vysvetlenie=NULL, updated_at=now()`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    await precoVysvetlenie(database, testConfig(), scope, parser);
+    expect(calls).toBe(2);
+  }, 120_000);
+
+  it('bez API kľúča a bez injected parsera vráti null (best-effort)', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const { documentId } = await seedDocumentWithSuggestion(database, seeded);
+    const result = await precoVysvetlenie(database, testConfig(), {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+    });
+    expect(result).toBeNull();
   }, 120_000);
 });

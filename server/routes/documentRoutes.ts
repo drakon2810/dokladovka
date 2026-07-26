@@ -16,6 +16,7 @@ import { normalizeExtractionResult, validateExtractionResult, validateNormalized
 import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback } from '../services/accountingSuggestionService.js';
 import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
+import { precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -376,6 +377,20 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       polozky,
       pravidlo,
     };
+  });
+
+  // AI vysvetlenie k „Prečo?" — druhá rýchlosť panelu: fakty prídu okamžite
+  // z /preco, vysvetlenie sa dogeneruje (a kešuje) tu. Best-effort: null je
+  // platná odpoveď (bez API kľúča, bez návrhu, chyba LLM).
+  app.get('/api/documents/:id/preco/vysvetlenie', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const vysvetlenie = await precoVysvetlenie(database, config, {
+      tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
+    });
+    return { vysvetlenie };
   });
 
   for (const [route, status, action] of [

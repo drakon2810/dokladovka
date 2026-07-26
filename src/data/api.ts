@@ -2581,6 +2581,15 @@ export async function getDocumentPreco(documentId: string): Promise<DocumentPrec
   return restRequest<DocumentPreco>(`/api/documents/${encodeURIComponent(documentId)}/preco`);
 }
 
+/** AI vysvetlenie k „Prečo?" — kešované na serveri, null = nie je k dispozícii. */
+export async function getPrecoVysvetlenie(documentId: string): Promise<string | null> {
+  if (!REST_DATA_MODE) return null;
+  const response = await restRequest<{ vysvetlenie: string | null }>(
+    `/api/documents/${encodeURIComponent(documentId)}/preco/vysvetlenie`,
+  );
+  return response?.vysvetlenie ?? null;
+}
+
 /** Zápis/úprava dôvodu pravidla človekom — od tej chvíle je to prax firmy. */
 export async function saveRuleDovod(organizationId: string, ruleId: string, dovod: string): Promise<void> {
   await restRequest(

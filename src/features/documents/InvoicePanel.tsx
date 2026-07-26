@@ -4,7 +4,7 @@
 import { useState, type ReactNode } from 'react';
 import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentPreco, DocumentType, DocumentUcto } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
-import { getDocumentPreco, saveRuleDovod } from '../../data/api';
+import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod } from '../../data/api';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
 import './invoicePanel.css';
@@ -88,6 +88,17 @@ export function InvoicePanel({
   const [dovodDraft, setDovodDraft] = useState('');
   const [dovodEditing, setDovodEditing] = useState(false);
   const [dovodSaving, setDovodSaving] = useState(false);
+  // Druhá rýchlosť panelu: fakty prídu okamžite, AI vysvetlenie sa dotiahne
+  // následne (server ho kešuje na doklad). null po 'done' = nie je k dispozícii.
+  const [vysvetlenie, setVysvetlenie] = useState<string | null>(null);
+  const [vysState, setVysState] = useState<'idle' | 'loading' | 'done'>('idle');
+
+  const nacitajVysvetlenie = () => {
+    setVysState('loading');
+    getPrecoVysvetlenie(draft.id)
+      .then((text) => { setVysvetlenie(text); setVysState('done'); })
+      .catch(() => { setVysvetlenie(null); setVysState('done'); });
+  };
 
   const togglePreco = (field: PrecoField) => {
     if (precoOpen === field) { setPrecoOpen(null); return; }
@@ -96,7 +107,13 @@ export function InvoicePanel({
     if (precoState === 'idle' || precoState === 'error') {
       setPrecoState('loading');
       getDocumentPreco(draft.id)
-        .then((data) => { if (data) { setPreco(data); setPrecoState('ready'); } else { setPrecoState('error'); } })
+        .then((data) => {
+          if (data) {
+            setPreco(data);
+            setPrecoState('ready');
+            if (data.source !== 'none') nacitajVysvetlenie();
+          } else { setPrecoState('error'); }
+        })
         .catch(() => setPrecoState('error'));
     }
   };
@@ -143,6 +160,13 @@ export function InvoicePanel({
         </div>
         {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
         {lisiSa && <div className="dv-preco-note">Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</div>}
+        {vysState === 'loading' && <div className="dv-preco-vys dv-preco-muted">Pripravujem vysvetlenie…</div>}
+        {vysState === 'done' && vysvetlenie && (
+          <div className="dv-preco-vys">
+            <span className="dv-preco-vys-badge">vysvetlenie AI</span>
+            {vysvetlenie}
+          </div>
+        )}
         {pravidlo != null && (dovodEditing ? (
           <div className="dv-preco-edit">
             <textarea
