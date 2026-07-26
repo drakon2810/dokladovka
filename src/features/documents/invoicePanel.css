@@ -137,12 +137,6 @@
 .dv-btn-ai:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 26px -6px rgba(14, 122, 95, .62); }
 .dv-btn-ai:active:not(:disabled) { transform: translateY(0); }
 .dv-btn-ai:disabled { opacity: .5; cursor: not-allowed; }
-.dv-btn-primary {
-  width: 100%; height: 52px; border: none; border-radius: 14px; cursor: pointer; color: #fff;
-  background: var(--dv-accent); font-size: 15px; font-weight: 600; font-family: inherit; transition: background .16s ease;
-}
-.dv-btn-primary:hover:not(:disabled) { background: var(--dv-accent-dark); }
-.dv-btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 .dv-spin { animation: dvSpin .8s linear infinite; }
 
 /* ---- Dropdown ---- */
@@ -159,6 +153,7 @@
 .dv-dd-conf {
   position: absolute; top: -9px; right: 11px; background: #fff; padding: 0 4px;
   display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; color: var(--dv-accent);
+  font-variant-numeric: tabular-nums;
 }
 .dv-dd-badge {
   flex-shrink: 0; min-width: 26px; height: 26px; padding: 0 5px; border-radius: 7px;
