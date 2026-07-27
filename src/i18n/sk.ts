@@ -505,6 +505,9 @@ export const sk = {
     'Typ dokladu nezodpovedá prijímacej fronte. Skontrolujte frontu alebo typ dokladu ručne.',
   'detail.chyba.banner': 'Spracovanie zlyhalo',
   'detail.evidence': 'Zdroj hodnoty',
+  'detail.zvyraznitZdroj': 'Zvýrazniť zdroj údajov',
+  'detail.zdrojUdajov': 'Zdroj údajov',
+  'detail.zdrojUpravene': 'upravené / neisté',
   'detail.confidence': 'Istota',
   'detail.aiWarning': 'AI hodnotu nevedela spoľahlivo potvrdiť. Skontrolujte ju podľa originálu.',
 

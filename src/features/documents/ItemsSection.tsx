@@ -32,6 +32,9 @@ interface ItemsSectionProps {
     strediska: CodeListItem[];
   };
   onChange: (polozky: DocumentLineItem[]) => void;
+  /** Číslo sekcie pri zvýraznení zdroja údajov (5 = Položky), inak nezafarbené. */
+  srcSection?: number;
+  onHoverSrc?: (anchor?: string) => void;
 }
 
 const PlusIcon = () => (
@@ -45,7 +48,7 @@ const WarnIcon = () => (
 );
 
 export function ItemsSection({
-  polozky, rozpisDph, celkovaSuma, mena, readOnly, codeLists, onChange,
+  polozky, rozpisDph, celkovaSuma, mena, readOnly, codeLists, onChange, srcSection, onHoverSrc,
 }: ItemsSectionProps) {
   const [enabled, setEnabled] = useState(polozky.length > 0);
   const [dalsieOpen, setDalsieOpen] = useState(false);
@@ -152,9 +155,14 @@ export function ItemsSection({
 
   return (
     <div className="dv-items">
-      <div className="dv-items-head">
+      <div
+        className={`dv-items-head${srcSection ? ` dv-src-sec dv-src-${srcSection}` : ''}`}
+        onMouseEnter={srcSection ? () => onHoverSrc?.(`sec:${srcSection}`) : undefined}
+        onMouseLeave={srcSection ? () => onHoverSrc?.(undefined) : undefined}
+      >
         <span className="dv-accent-bar" />
         <h3 className="dv-h3">Položky</h3>
+        {srcSection ? <span className="dv-src-chip">{srcSection}</span> : null}
         <button
           type="button"
           role="switch"

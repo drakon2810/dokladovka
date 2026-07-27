@@ -1,7 +1,7 @@
 // Dropdown pre panel úpravy faktúry 1b — dva režimy: 'simple' (badge + label)
 // a 'account' (karty predkontácií so syntetickým účtom). Vyhľadávanie, navigácia
 // klávesnicou (↑↓ Enter Esc), zatvorenie klikom mimo. Verne k Dropdown.dc.html.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 export interface DcOption {
   value: string;
@@ -19,6 +19,8 @@ export interface DcOption {
 
 interface DcDropdownProps {
   label: string;
+  /** Odznak pred labelom — číslo sekcie pri zvýraznení zdroja údajov. */
+  chip?: ReactNode;
   value?: string;
   options: DcOption[];
   mode?: 'simple' | 'account';
@@ -40,7 +42,7 @@ function bezDiakritiky(value: unknown): string {
 }
 
 export function DcDropdown({
-  label, value, options, mode = 'simple', variant = 'karty',
+  label, chip, value, options, mode = 'simple', variant = 'karty',
   searchable = false, confidence, error = false, placeholder = 'Vyberte…', disabled = false, onChange,
 }: DcDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -94,7 +96,7 @@ export function DcDropdown({
   return (
     <div ref={rootRef} className={`dv-dd${open ? ' dv-dd-open' : ''}`}>
       <button type="button" className="dv-dd-btn" onClick={toggle} disabled={disabled}>
-        <span className="dv-label">{label}</span>
+        <span className="dv-label">{chip}{label}</span>
         {confidence != null && (
           <span className="dv-dd-conf"><Check size={11} />{confidence} %</span>
         )}

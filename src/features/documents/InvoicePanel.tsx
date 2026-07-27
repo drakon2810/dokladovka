@@ -7,7 +7,9 @@ import { CLENENIE_KV_KODY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
+import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
 import './invoicePanel.css';
+import './sourceHighlight.css';
 
 // „Prečo?" — pôvod zaúčtovania pre tri polia: predkontácia, členenie DPH, KV.
 type PrecoField = 'predkontacia' | 'dph' | 'kv';
@@ -32,6 +34,13 @@ interface InvoicePanelProps {
   };
   suggestion?: AccountingSuggestion;
   autoFilled: boolean;
+  /** Zvýraznenie zdroja údajov — mapa polí, ktoré vyplnila AI. */
+  src?: SourceMap;
+  srcEdited?: ReadonlySet<string>;
+  srcOn?: boolean;
+  /** Práve zvýraznené pole (`cesta`) alebo celá sekcia (`sec:N`). */
+  activeSrc?: string;
+  onHoverSrc?: (anchor?: string) => void;
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
@@ -141,8 +150,16 @@ function VysvetlenieProgress() {
   );
 }
 
+const IcoPencil = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+);
+
+/** Pod touto istotou pole dostane prerušovaný rám a odznak s percentom. */
+const LOW_CONFIDENCE = 0.5;
+
 export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
+  src, srcEdited, srcOn, activeSrc, onHoverSrc,
   setTyp, updateUcto, updateExtracted, updateSupplier,
 }: InvoicePanelProps) {
   const [rozOpen, setRozOpen] = useState(false);
@@ -356,6 +373,57 @@ export function InvoicePanel({
     </div>
   );
 
+  // ---- Zvýraznenie zdroja údajov -------------------------------------------
+  // Farba = sekcia, v ktorej pole žije; ten istý odtieň má obdĺžnik nad zdrojom
+  // v náhľade dokladu. Keď je prepínač vypnutý, všetky pomocníky vrátia prázdno
+  // a panel vyzerá presne ako predtým.
+  const srcField = (path: string) => (srcOn ? src?.[path] : undefined);
+  const isEdited = (path: string) => srcEdited?.has(path) ?? false;
+  const isLow = (path: string) => {
+    const field = srcField(path);
+    return Boolean(field && !isEdited(path) && field.confidence !== undefined && field.confidence < LOW_CONFIDENCE);
+  };
+  const srcCls = (path: string) => {
+    const field = srcField(path);
+    if (!field) return '';
+    const focused = activeSrc === path || activeSrc === `sec:${field.section}`;
+    const state = focused ? ' dv-src-on' : activeSrc ? ' dv-src-off' : '';
+    return ` dv-src dv-src-${isEdited(path) ? 'edited' : field.section}${isLow(path) ? ' dv-src-low' : ''}${state}`;
+  };
+  const srcHover = (path: string) => (srcField(path)
+    ? { onMouseEnter: () => onHoverSrc?.(path), onMouseLeave: () => onHoverSrc?.(undefined) }
+    : {});
+  const srcChip = (path: string) => {
+    const field = srcField(path);
+    return field && !isEdited(path) ? <span className="dv-src-chip">{field.section}</span> : null;
+  };
+  const srcLabel = (path: string, text: string) => {
+    const field = srcField(path);
+    return (
+      <>
+        {srcChip(path)}
+        {text}
+        {isLow(path) && field?.confidence !== undefined && (
+          <span className="dv-src-warn"><IcoWarn s={10} />{Math.round(field.confidence * 100)} %</span>
+        )}
+      </>
+    );
+  };
+  /** Pod poľom: buď plaketa „Upravené", alebo citát z dokladu pri nízkej istote. */
+  const srcFoot = (path: string) => {
+    const field = srcField(path);
+    if (!field) return null;
+    if (isEdited(path)) return <span className="dv-src-upravene"><IcoPencil />Upravené</span>;
+    if (isLow(path) && field.quote) return <div className="dv-src-note">Zdroj hodnoty: „{field.quote}"</div>;
+    return null;
+  };
+  const secCls = (section: number) => (srcOn && src && Object.values(src).some((field) => field.section === section)
+    ? ` dv-src-sec dv-src-${section}` : '');
+  const secChip = (section: number) => (secCls(section) ? <span className="dv-src-chip">{section}</span> : null);
+  const secHover = (section: number) => (secCls(section)
+    ? { onMouseEnter: () => onHoverSrc?.(`sec:${section}`), onMouseLeave: () => onHoverSrc?.(undefined) }
+    : {});
+
   const ex = draft.extracted;
   const dod = ex.dodavatel;
   const ucto = draft.ucto;
@@ -425,7 +493,7 @@ export function InvoicePanel({
         {/* Základné údaje */}
         <section className="dv-section">
           <div className="dv-h3-row">
-            <div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Základné údaje</h3></div>
+            <div className={`dv-h3-left${secCls(1)}`} {...secHover(1)}><span className="dv-accent-bar" /><h3 className="dv-h3">Základné údaje</h3>{secChip(1)}</div>
             {/* Automatické zaúčtovanie patrí k poliam, ktoré vypĺňa — dole pod
                 položkami sa naň muselo skrolovať. */}
             <button type="button" className="dv-btn-ai dv-btn-ai-inline" disabled={!canAi} onClick={applyAi}>
@@ -439,23 +507,27 @@ export function InvoicePanel({
             <div className="dv-fields">
               <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
               <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
-              <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}`}>
-                <label className="dv-label">Číslo faktúry</label>
+              <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}${srcCls('cisloFaktury')}`} {...srcHover('cisloFaktury')}>
+                <label className="dv-label">{srcLabel('cisloFaktury', 'Číslo faktúry')}</label>
                 <input className="dv-input dv-has-icon" value={ex.cisloFaktury ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('cisloFaktury', e.target.value)} />
                 <svg className="dv-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18" /></svg>
                 {cisloErr && <div className="dv-err-msg">Zadajte číslo faktúry</div>}
+                {srcFoot('cisloFaktury')}
               </div>
-              <div className="dv-field">
-                <label className="dv-label">Dátum vydania</label>
+              <div className={`dv-field${srcCls('datumVystavenia')}`} {...srcHover('datumVystavenia')}>
+                <label className="dv-label">{srcLabel('datumVystavenia', 'Dátum vydania')}</label>
                 <input type="date" className="dv-input" value={ex.datumVystavenia ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumVystavenia', e.target.value)} />
+                {srcFoot('datumVystavenia')}
               </div>
-              <div className="dv-field">
-                <label className="dv-label">Dátum dodania (DUZP)</label>
+              <div className={`dv-field${srcCls('datumDodania')}`} {...srcHover('datumDodania')}>
+                <label className="dv-label">{srcLabel('datumDodania', 'Dátum dodania (DUZP)')}</label>
                 <input type="date" className="dv-input" value={ex.datumDodania ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumDodania', e.target.value || undefined)} />
+                {srcFoot('datumDodania')}
               </div>
-              <div className="dv-field">
-                <label className="dv-label">Dátum splatnosti</label>
+              <div className={`dv-field${srcCls('datumSplatnosti')}`} {...srcHover('datumSplatnosti')}>
+                <label className="dv-label">{srcLabel('datumSplatnosti', 'Dátum splatnosti')}</label>
                 <input type="date" className="dv-input" value={ex.datumSplatnosti ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumSplatnosti', e.target.value || undefined)} />
+                {srcFoot('datumSplatnosti')}
               </div>
             </div>
 
@@ -477,14 +549,16 @@ export function InvoicePanel({
                 <span className="dv-money-sign">€</span>
                 <input className="dv-input dv-money dv-dim" value={sumaBezDph.toFixed(2)} readOnly tabIndex={-1} />
               </div>
-              <div className={`dv-field${dphValid ? '' : ' dv-field-err'}`}>
-                <label className="dv-label">Celková suma s DPH</label>
+              <div className={`dv-field${dphValid ? '' : ' dv-field-err'}${srcCls('sumaSpolu')}`} {...srcHover('sumaSpolu')}>
+                <label className="dv-label">{srcLabel('sumaSpolu', 'Celková suma s DPH')}</label>
                 <span className="dv-money-sign">€</span>
                 <input className="dv-input dv-money" value={ex.sumaSpolu === undefined ? '' : String(ex.sumaSpolu)} disabled={readOnly} inputMode="decimal" onChange={(e) => updateExtracted('sumaSpolu', parseNum(e.target.value))} />
+                {srcFoot('sumaSpolu')}
               </div>
-              <div className="dv-field">
-                <label className="dv-label">Názov spoločnosti</label>
+              <div className={`dv-field${srcCls('dodavatel.nazov')}`} {...srcHover('dodavatel.nazov')}>
+                <label className="dv-label">{srcLabel('dodavatel.nazov', 'Názov spoločnosti')}</label>
                 <input className="dv-input" value={dod.nazov ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('nazov', e.target.value)} />
+                {srcFoot('dodavatel.nazov')}
               </div>
             </div>
           </div>
@@ -513,7 +587,7 @@ export function InvoicePanel({
 
         {/* Dodávateľ */}
         <section className="dv-section">
-          <div className="dv-h3-row"><div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Dodávateľ</h3></div></div>
+          <div className="dv-h3-row"><div className={`dv-h3-left${secCls(2)}`} {...secHover(2)}><span className="dv-accent-bar" /><h3 className="dv-h3">Dodávateľ</h3>{secChip(2)}</div></div>
           <div className="dv-fields">
             <label className="dv-check">
               <input type="checkbox" checked={fyzickaOsoba} disabled={readOnly} onChange={(e) => setFyzickaOsoba(e.target.checked)} />
@@ -521,13 +595,14 @@ export function InvoicePanel({
             </label>
             {/* Názov spoločnosti je hore v Základných údajoch — tu už len IČO
                 a daňové identifikátory, nech sa pole needituje na dvoch miestach. */}
-            <div className={`dv-field${icoErr ? ' dv-field-warn' : ''}`}>
-              <label className="dv-label">IČO</label>
+            <div className={`dv-field${icoErr ? ' dv-field-warn' : ''}${srcCls('dodavatel.ico')}`} {...srcHover('dodavatel.ico')}>
+              <label className="dv-label">{srcLabel('dodavatel.ico', 'IČO')}</label>
               <input className="dv-input" value={dod.ico ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('ico', e.target.value)} />
               {icoErr && <div className="dv-warn-msg">IČO má mať 8 číslic</div>}
+              {srcFoot('dodavatel.ico')}
             </div>
-            <div className="dv-field">
-              <label className="dv-label">IČ DPH (voliteľné)</label>
+            <div className={`dv-field${srcCls('dodavatel.icDph')}`} {...srcHover('dodavatel.icDph')}>
+              <label className="dv-label">{srcLabel('dodavatel.icDph', 'IČ DPH (voliteľné)')}</label>
               <input className="dv-input" style={{ paddingRight: 78 }} value={dod.icDph ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('icDph', e.target.value)} />
               {Boolean(dod.icDph) && (
                 <span className="dv-vies"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>VIES</span>
@@ -535,13 +610,15 @@ export function InvoicePanel({
             </div>
             <div className={`dv-expand${rozDodOpen ? ' dv-open' : ''}`}>
               <div className="dv-expand-inner">
-                <div className="dv-field">
-                  <label className="dv-label">DIČ</label>
+                <div className={`dv-field${srcCls('dodavatel.dic')}`} {...srcHover('dodavatel.dic')}>
+                  <label className="dv-label">{srcLabel('dodavatel.dic', 'DIČ')}</label>
                   <input className="dv-input" value={dod.dic ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('dic', e.target.value)} />
+                  {srcFoot('dodavatel.dic')}
                 </div>
-                <div className="dv-field">
-                  <label className="dv-label">Adresa</label>
+                <div className={`dv-field${srcCls('dodavatel.adresa')}`} {...srcHover('dodavatel.adresa')}>
+                  <label className="dv-label">{srcLabel('dodavatel.adresa', 'Adresa')}</label>
                   <input className="dv-input" value={dod.adresa ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('adresa', e.target.value)} />
+                  {srcFoot('dodavatel.adresa')}
                 </div>
               </div>
             </div>
@@ -556,14 +633,18 @@ export function InvoicePanel({
         {/* Čiastka a DPH */}
         <section className="dv-section">
           <div className="dv-h3-row">
-            <div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Čiastka a DPH</h3></div>
+            <div className={`dv-h3-left${secCls(3)}`} {...secHover(3)}><span className="dv-accent-bar" /><h3 className="dv-h3">Čiastka a DPH</h3>{secChip(3)}</div>
             {dphValid
               ? <span className="dv-dph-ok"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg></span>
               : <span className="dv-dph-warn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg></span>}
           </div>
           {/* Celková suma je hore v Základných údajoch — tu ostáva len rozpis. */}
           <div className="dv-grid-2">
-            <DcDropdown label="Mena" mode="simple" value={ex.mena} options={menaOpts} disabled={readOnly} onChange={(v) => updateExtracted('mena', v as DocumentExtractedData['mena'])} />
+            {/* Rozpis DPH po sadzbách sa nezvýrazňuje — evidencia AI ho vracia po
+                riadkoch bez väzby na konkrétne pole; sekciu nesie Mena. */}
+            <div className={srcCls('mena').trimStart()} {...srcHover('mena')}>
+              <DcDropdown label="Mena" chip={srcChip('mena')} mode="simple" value={ex.mena} options={menaOpts} disabled={readOnly} onChange={(v) => updateExtracted('mena', v as DocumentExtractedData['mena'])} />
+            </div>
             <div />
 
             {numField('Základ dane 23 %', rowFor(23)?.zaklad, (n) => setVat(23, { zaklad: n }))}
@@ -586,19 +667,22 @@ export function InvoicePanel({
 
         {/* Platobné údaje */}
         <section className="dv-section">
-          <div className="dv-h3-row"><div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Platobné údaje</h3></div></div>
+          <div className="dv-h3-row"><div className={`dv-h3-left${secCls(4)}`} {...secHover(4)}><span className="dv-accent-bar" /><h3 className="dv-h3">Platobné údaje</h3>{secChip(4)}</div></div>
           <div className="dv-fields">
-            <div className="dv-field">
-              <label className="dv-label">Variabilný symbol</label>
+            <div className={`dv-field${srcCls('variabilnySymbol')}`} {...srcHover('variabilnySymbol')}>
+              <label className="dv-label">{srcLabel('variabilnySymbol', 'Variabilný symbol')}</label>
               <input className="dv-input" value={ex.variabilnySymbol ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('variabilnySymbol', e.target.value || undefined)} />
+              {srcFoot('variabilnySymbol')}
             </div>
-            <div className="dv-field">
-              <label className="dv-label">IBAN</label>
+            <div className={`dv-field${srcCls('dodavatel.iban')}`} {...srcHover('dodavatel.iban')}>
+              <label className="dv-label">{srcLabel('dodavatel.iban', 'IBAN')}</label>
               <input className="dv-input" style={{ letterSpacing: '.02em' }} value={dod.iban ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('iban', e.target.value)} />
+              {srcFoot('dodavatel.iban')}
             </div>
-            <div className="dv-field">
-              <label className="dv-label">Konštantný symbol</label>
+            <div className={`dv-field${srcCls('konstantnySymbol')}`} {...srcHover('konstantnySymbol')}>
+              <label className="dv-label">{srcLabel('konstantnySymbol', 'Konštantný symbol')}</label>
               <input className="dv-input" value={ex.konstantnySymbol ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('konstantnySymbol', e.target.value || undefined)} />
+              {srcFoot('konstantnySymbol')}
             </div>
           </div>
         </section>
@@ -612,6 +696,8 @@ export function InvoicePanel({
           celkovaSuma={ex.sumaSpolu ?? 0}
           mena={ex.mena}
           readOnly={readOnly}
+          srcSection={srcOn && src?.[ITEMS_PATH] ? 5 : undefined}
+          onHoverSrc={onHoverSrc}
           codeLists={{
             predkontacie: codeLists.predkontacie,
             cleneniaDph: codeLists.cleneniaDph,

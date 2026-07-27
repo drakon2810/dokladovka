@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/TextLayer.css';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   addComment,
@@ -66,6 +67,14 @@ import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { InvoicePanel } from './InvoicePanel';
+import {
+  SOURCE_SECTIONS,
+  buildMarks,
+  buildSourceMap,
+  editedFields,
+  highlightHtml,
+} from './sourceHighlight';
+import './sourceHighlight.css';
 import { AssistantPanel } from '../assistant/AssistantPanel';
 import { useAuth } from '../../auth/AuthContext';
 import {
@@ -122,6 +131,8 @@ const DOCUMENT_TYPES: DocumentType[] = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'];
  * vracia sem, nie na 100 %.
  */
 const DEFAULT_ZOOM = 1.25;
+
+const SRC_STORAGE_KEY = 'dokladovka.zvyraznitZdroj';
 
 const FIELD_ALIASES: Record<string, string[]> = {
   'dodavatel.nazov': ['dodavatel.nazov', 'supplier.nazov'],
@@ -336,8 +347,13 @@ export function DocumentDetailPage() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [mostikStatus, setMostikStatus] = useState<OrganizationMostikStatus>();
   const [autoFilled, setAutoFilled] = useState(false);
+  // Zvýraznenie zdroja údajov: prepínač je vlastnosť používateľa, nie dokladu.
+  const [srcOn, setSrcOn] = useState(() => localStorage.getItem(SRC_STORAGE_KEY) !== '0');
+  const [activeSrc, setActiveSrc] = useState<string>();
+  const [textLayerTick, setTextLayerTick] = useState(0);
   const autoFilledFor = useRef<string>();
   const splitRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!sourceDocument) {
@@ -584,6 +600,67 @@ export function DocumentDetailPage() {
         : undefined,
     [data, draft],
   );
+
+  // ---- Zvýraznenie zdroja údajov -------------------------------------------
+  // Mapa závisí len na behoch extrakcie, preto sa pri písaní do formulára
+  // neprepočítava — textová vrstva PDF sa prekresľuje len keď sa naozaj zmení,
+  // čo pole je „z dokladu" a čo už prepísal účtovník.
+  const srcMap = useMemo(
+    () => buildSourceMap(runs, draft?.appliedExtractionRunId),
+    [runs, draft?.appliedExtractionRunId],
+  );
+  const srcEditedKey = useMemo(
+    () => (draft ? editedFields(srcMap, draft.extracted).join('|') : ''),
+    [srcMap, draft?.extracted],
+  );
+  const srcEdited = useMemo(
+    () => new Set(srcEditedKey ? srcEditedKey.split('|') : []),
+    [srcEditedKey],
+  );
+  const srcMarks = useMemo(
+    () => buildMarks(srcMap, pageNumber, srcEdited),
+    [srcMap, pageNumber, srcEdited],
+  );
+  const srcSections = useMemo(
+    () => SOURCE_SECTIONS.filter((section) => Object.values(srcMap).some((field) => field.section === section.n)),
+    [srcMap],
+  );
+  // Stabilná referencia je nutná: react-pdf má onRenderTextLayerSuccess medzi
+  // závislosťami vykreslenia vrstvy, takže inline funkcia by vrstvu prekresľovala
+  // donekonečna.
+  const handleTextLayerRendered = useCallback(() => setTextLayerTick((value) => value + 1), []);
+
+  // Obdĺžniky sa kreslia priamo do hotovej textovej vrstvy. customTextRenderer
+  // z react-pdf 9 sa tu použiť nedá: páruje položky textu s <span>-mi podľa
+  // indexu a s aktuálnym pdf.js sa rozíde (preskakuje <br>), takže by zvýraznil
+  // nesprávne miesta alebo nič.
+  useEffect(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    for (const span of root.querySelectorAll<HTMLSpanElement>('.react-pdf__Page__textContent > span')) {
+      const text = span.textContent ?? '';
+      const html = srcOn ? highlightHtml(text, srcMarks) : '';
+      if (html.includes('<mark')) span.innerHTML = html;
+      else if (span.querySelector('mark')) span.textContent = text;
+    }
+  }, [srcMarks, srcOn, textLayerTick]);
+
+  // Stav zvýraznenia sa prepína ručne — obdĺžniky nie sú React uzly a po
+  // každom prekreslení vrstvy (strana, zoom) sa efekt spustí znova.
+  useEffect(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    for (const mark of root.querySelectorAll<HTMLElement>('mark[data-src]')) {
+      const focused = Boolean(activeSrc)
+        && (mark.dataset.src === activeSrc || `sec:${mark.dataset.sec}` === activeSrc);
+      mark.classList.toggle('dv-src-on', focused);
+      mark.classList.toggle('dv-src-off', Boolean(activeSrc) && !focused);
+    }
+    if (activeSrc && !activeSrc.startsWith('sec:')) {
+      root.querySelector<HTMLElement>(`mark[data-src="${CSS.escape(activeSrc)}"]`)
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [activeSrc, srcMarks, textLayerTick]);
 
   const beginResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     const container = splitRef.current;
@@ -1083,9 +1160,24 @@ export function DocumentDetailPage() {
                 </button>
               </>
             )}
+            {srcSections.length > 0 && (
+              <label className="dv-src-toggle ml-auto">
+                <input
+                  type="checkbox"
+                  checked={srcOn}
+                  onChange={(event) => {
+                    setSrcOn(event.target.checked);
+                    setActiveSrc(undefined);
+                    localStorage.setItem(SRC_STORAGE_KEY, event.target.checked ? '1' : '0');
+                  }}
+                />
+                <span className="dv-src-switch" />
+                {t('detail.zvyraznitZdroj')}
+              </label>
+            )}
             {fileUrl && (
               <a
-                className="btn ml-auto"
+                className={`btn ${srcSections.length > 0 ? 'ml-2' : 'ml-auto'}`}
                 href={fileUrl}
                 download={draft.zdroj.povodnyNazovSuboru}
               >
@@ -1093,12 +1185,39 @@ export function DocumentDetailPage() {
               </a>
             )}
           </div>
+          {/* Legenda stojí nad dokladom — tam, kde treba farbu rozlúštiť; pravý
+              stĺpec je popísaný nadpismi sekcií. */}
+          {srcOn && srcSections.length > 0 && (
+            <div className="dv-src-legend">
+              <span className="dv-src-legend-label">{t('detail.zdrojUdajov')}</span>
+              {srcSections.map((section) => (
+                <span
+                  key={section.n}
+                  className={`dv-src-lgd dv-src-${section.n}`}
+                  onMouseEnter={() => setActiveSrc(`sec:${section.n}`)}
+                  onMouseLeave={() => setActiveSrc(undefined)}
+                >
+                  <span className="dv-src-chip">{section.n}</span>
+                  {section.title}
+                </span>
+              ))}
+              <span className="dv-src-legend-hint">{t('detail.zdrojUpravene')}</span>
+            </div>
+          )}
           {/* Náhľad má vlastnú výšku a scrolluje sa sám — bez pevnej výšky rástol
               donekonečna a doklad sa dal dočítať len tak, že sa preskrolovala
               celá stránka (teda aj formulár vedľa). `safe center` centruje, kým
               sa doklad zmestí; po priblížení nechá doskrolovať aj k ľavému
               okraju (obyčajné `center` by ho odrezalo). */}
-          <div className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-8rem)]">
+          <div
+            ref={previewRef}
+            className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-8rem)]"
+            onMouseOver={(event) => {
+              const mark = (event.target as HTMLElement).closest?.('mark[data-src]');
+              setActiveSrc(mark instanceof HTMLElement ? mark.dataset.src : undefined);
+            }}
+            onMouseLeave={() => setActiveSrc(undefined)}
+          >
             {xmlPreview ? (
               sepaPreview ? (
                 <BankStatementPreview doklad={draft} zoom={zoom} />
@@ -1143,7 +1262,10 @@ export function DocumentDetailPage() {
                   pageNumber={pageNumber}
                   scale={zoom}
                   width={520}
-                  renderTextLayer={false}
+                  // Textová vrstva sa zapína len kvôli zvýrazneniu zdroja —
+                  // skenované doklady ju nemajú a vtedy sa nič nevykreslí.
+                  renderTextLayer={srcOn && srcMarks.length > 0}
+                  onRenderTextLayerSuccess={handleTextLayerRendered}
                   renderAnnotationLayer={false}
                 />
               </Document>
@@ -1183,6 +1305,11 @@ export function DocumentDetailPage() {
               }}
               suggestion={suggestion}
               autoFilled={autoFilled}
+              src={srcMap}
+              srcEdited={srcEdited}
+              srcOn={srcOn}
+              activeSrc={activeSrc}
+              onHoverSrc={setActiveSrc}
               setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
               updateUcto={updateUcto}
               updateExtracted={updateExtracted}

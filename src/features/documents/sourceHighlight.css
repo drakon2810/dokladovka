@@ -1,0 +1,134 @@
+/* Zvýraznenie zdroja údajov — tokeny a stavy podľa makety z Claude Design.
+   Päť odtieňov je rozvedených po kruhu (214° · 273° · 325° · 43° · 191°) aj po
+   svetlosti a zámerne sa vyhýbajú zelenej (#0E7A5F), jantárovej (#B45309) a
+   červenej (#DC2626) — tie už v aplikácii znamenajú stav, nie zdroj. */
+
+:root {
+  --src-1-tint: #F0F2F9; --src-1-border: #4066C8; --src-1-head: #2A4BA8;
+  --src-1-rect: rgba(42, 75, 168, .20); --src-1-line: rgba(42, 75, 168, .55);
+  --src-2-tint: #F6F1FA; --src-2-border: #9A5FD0; --src-2-head: #7A3DB5;
+  --src-2-rect: rgba(122, 61, 181, .20); --src-2-line: rgba(122, 61, 181, .55);
+  --src-3-tint: #F9EFF4; --src-3-border: #C93A7E; --src-3-head: #A81B60;
+  --src-3-rect: rgba(168, 27, 96, .20); --src-3-line: rgba(168, 27, 96, .55);
+  --src-4-tint: #F6F3EE; --src-4-border: #9C7A22; --src-4-head: #7C5A12;
+  --src-4-rect: rgba(124, 90, 18, .20); --src-4-line: rgba(124, 90, 18, .55);
+  --src-5-tint: #EEF5F6; --src-5-border: #1A8CA2; --src-5-head: #0E6F82;
+  --src-5-rect: rgba(14, 111, 130, .20); --src-5-line: rgba(14, 111, 130, .55);
+}
+
+.dv-src-1 { --src-tint: var(--src-1-tint); --src-border: var(--src-1-border); --src-head: var(--src-1-head); --src-rect: var(--src-1-rect); --src-line: var(--src-1-line); }
+.dv-src-2 { --src-tint: var(--src-2-tint); --src-border: var(--src-2-border); --src-head: var(--src-2-head); --src-rect: var(--src-2-rect); --src-line: var(--src-2-line); }
+.dv-src-3 { --src-tint: var(--src-3-tint); --src-border: var(--src-3-border); --src-head: var(--src-3-head); --src-rect: var(--src-3-rect); --src-line: var(--src-3-line); }
+.dv-src-4 { --src-tint: var(--src-4-tint); --src-border: var(--src-4-border); --src-head: var(--src-4-head); --src-rect: var(--src-4-rect); --src-line: var(--src-4-line); }
+.dv-src-5 { --src-tint: var(--src-5-tint); --src-border: var(--src-5-border); --src-head: var(--src-5-head); --src-rect: var(--src-5-rect); --src-line: var(--src-5-line); }
+/* Prepísaná hodnota už nie je „z dokladu" — ostáva neutrálna. */
+.dv-src-edited { --src-tint: #fff; --src-border: #E3E6E2; --src-head: #8A928C; --src-rect: transparent; --src-line: #B8BFB9; }
+
+/* ---------- panel: nadpis sekcie ---------- */
+.dv-src-sec .dv-accent-bar { background: var(--src-head); }
+.dv-src-sec .dv-h3 { color: var(--src-head); }
+
+/* ---------- panel: pole vyplnené AI ---------- */
+.dv-panel .dv-src .dv-input,
+.dv-panel .dv-src .dv-textarea,
+.dv-panel .dv-src .dv-dd-btn {
+  background: var(--src-tint);
+  border-left: 3px solid var(--src-border);
+}
+.dv-panel .dv-src .dv-input:disabled,
+.dv-panel .dv-src .dv-textarea:disabled { background: var(--src-tint); }
+/* Nízka istota sa nesie pruhom a odznakom, nie iným odtieňom. */
+.dv-panel .dv-src-low .dv-input,
+.dv-panel .dv-src-low .dv-textarea,
+.dv-panel .dv-src-low .dv-dd-btn { border-style: dashed; border-color: var(--src-border); }
+
+.dv-src-on .dv-input,
+.dv-src-on .dv-textarea,
+.dv-src-on .dv-dd-btn {
+  border-color: var(--src-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--src-head) 18%, transparent);
+}
+.dv-src-off { opacity: .45; }
+.dv-src, .dv-src-mark { transition: opacity .15s ease, box-shadow .15s ease, background .15s ease; }
+
+.dv-src-chip {
+  display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 4px;
+  background: var(--src-head); color: #fff; font-size: 9px; font-weight: 700; line-height: 1;
+}
+.dv-src-sec .dv-src-chip { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; }
+.dv-panel .dv-label { display: inline-flex; align-items: center; gap: 5px; }
+
+.dv-src-warn {
+  display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--src-head) 12%, transparent);
+  color: var(--src-head); font-size: 10px; font-weight: 700;
+}
+.dv-src-note { margin-top: 5px; font-size: 11px; line-height: 1.4; color: #5C645F; }
+.dv-src-upravene {
+  position: absolute; top: -9px; right: 10px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 6px; border-radius: 999px;
+  border: 1px solid #E4E8E4; background: #fff; color: #5A635D; font-size: 10.5px; font-weight: 600;
+}
+
+/* ---------- náhľad dokladu: obdĺžnik nad zdrojovým textom ---------- */
+/* mark (nie span) zámerne: .textLayer span má position:absolute a rozbil by riadok. */
+.textLayer mark.dv-src-mark {
+  color: transparent;
+  background: var(--src-rect);
+  box-shadow: inset 0 0 0 1.2px var(--src-line);
+  border-radius: 3px;
+  padding: 0;
+  cursor: default;
+}
+.textLayer mark.dv-src-mark.dv-src-edited {
+  box-shadow: none;
+  outline: 1.3px dashed var(--src-line);
+  outline-offset: 1px;
+}
+.textLayer mark.dv-src-mark.dv-src-on {
+  background: color-mix(in srgb, var(--src-head) 32%, transparent);
+  box-shadow: inset 0 0 0 2px var(--src-head), 0 0 0 4px color-mix(in srgb, var(--src-head) 20%, transparent);
+}
+.textLayer mark.dv-src-mark.dv-src-off { opacity: .22; }
+
+/* ---------- prepínač v lište náhľadu ---------- */
+.dv-src-toggle {
+  display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none;
+  font-size: 13px; font-weight: 600; color: #16201B; white-space: nowrap;
+}
+.dv-src-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.dv-src-switch {
+  display: inline-flex; align-items: center; flex: none; box-sizing: border-box;
+  width: 42px; height: 24px; padding: 2px; border-radius: 999px; background: #CBD3CC;
+  transition: background .2s ease;
+}
+.dv-src-switch::after {
+  content: ''; width: 20px; height: 20px; border-radius: 999px; background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .2s ease;
+}
+.dv-src-toggle input:checked + .dv-src-switch { background: #0E7A5F; }
+.dv-src-toggle input:checked + .dv-src-switch::after { transform: translateX(18px); }
+.dv-src-toggle input:focus-visible + .dv-src-switch { box-shadow: 0 0 0 3px rgba(14, 122, 95, .25); }
+.dv-src-toggle input:disabled + .dv-src-switch { opacity: .5; }
+
+/* ---------- legenda nad dokladom ---------- */
+.dv-src-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid #F0F2EF; background: #FBFCFA;
+}
+.dv-src-legend-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8A928C;
+}
+.dv-src-lgd {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--src-head) 28%, transparent);
+  background: var(--src-tint); color: var(--src-head);
+  font-size: 11.5px; font-weight: 600; cursor: default;
+}
+.dv-src-lgd .dv-src-chip { width: 16px; height: 16px; border-radius: 5px; font-size: 10px; }
+.dv-src-legend-hint {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #9AA39C;
+}
+.dv-src-legend-hint::before {
+  content: ''; width: 11px; height: 11px; border-radius: 3px; border: 1.2px dashed #B8BFB9;
+}
