@@ -3,17 +3,19 @@
    svetlosti a zámerne sa vyhýbajú zelenej (#0E7A5F), jantárovej (#B45309) a
    červenej (#DC2626) — tie už v aplikácii znamenajú stav, nie zdroj. */
 
+/* Zásyp obdĺžnika je zámerne slabší ako v makete (12 % namiesto 20 %) — text
+   faktúry pod ním musí ostať čitateľný aj na drobnom písme; rám drží tvar. */
 :root {
   --src-1-tint: #F0F2F9; --src-1-border: #4066C8; --src-1-head: #2A4BA8;
-  --src-1-rect: rgba(42, 75, 168, .20); --src-1-line: rgba(42, 75, 168, .55);
+  --src-1-rect: rgba(42, 75, 168, .12); --src-1-line: rgba(42, 75, 168, .42);
   --src-2-tint: #F6F1FA; --src-2-border: #9A5FD0; --src-2-head: #7A3DB5;
-  --src-2-rect: rgba(122, 61, 181, .20); --src-2-line: rgba(122, 61, 181, .55);
+  --src-2-rect: rgba(122, 61, 181, .12); --src-2-line: rgba(122, 61, 181, .42);
   --src-3-tint: #F9EFF4; --src-3-border: #C93A7E; --src-3-head: #A81B60;
-  --src-3-rect: rgba(168, 27, 96, .20); --src-3-line: rgba(168, 27, 96, .55);
+  --src-3-rect: rgba(168, 27, 96, .12); --src-3-line: rgba(168, 27, 96, .42);
   --src-4-tint: #F6F3EE; --src-4-border: #9C7A22; --src-4-head: #7C5A12;
-  --src-4-rect: rgba(124, 90, 18, .20); --src-4-line: rgba(124, 90, 18, .55);
+  --src-4-rect: rgba(124, 90, 18, .12); --src-4-line: rgba(124, 90, 18, .42);
   --src-5-tint: #EEF5F6; --src-5-border: #1A8CA2; --src-5-head: #0E6F82;
-  --src-5-rect: rgba(14, 111, 130, .20); --src-5-line: rgba(14, 111, 130, .55);
+  --src-5-rect: rgba(14, 111, 130, .12); --src-5-line: rgba(14, 111, 130, .42);
 }
 
 .dv-src-1 { --src-tint: var(--src-1-tint); --src-border: var(--src-1-border); --src-head: var(--src-1-head); --src-rect: var(--src-1-rect); --src-line: var(--src-1-line); }
@@ -86,8 +88,8 @@
   outline-offset: 1px;
 }
 .textLayer mark.dv-src-mark.dv-src-on {
-  background: color-mix(in srgb, var(--src-head) 32%, transparent);
-  box-shadow: inset 0 0 0 2px var(--src-head), 0 0 0 4px color-mix(in srgb, var(--src-head) 20%, transparent);
+  background: color-mix(in srgb, var(--src-head) 22%, transparent);
+  box-shadow: inset 0 0 0 2px var(--src-head), 0 0 0 4px color-mix(in srgb, var(--src-head) 18%, transparent);
 }
 .textLayer mark.dv-src-mark.dv-src-off { opacity: .22; }
 
