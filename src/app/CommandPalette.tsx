@@ -151,7 +151,6 @@ export function CommandPalette({
       ['/', t('nav.prehlad')],
       ['/doklady', t('nav.doklady')],
       ['/nespracovane', t('nav.nespracovane')],
-      ['/dokumenty', t('nav.dokumenty')],
       ['/partneri', t('nav.partneri')],
       ['/uhrady', t('nav.uhrady')],
       ['/export', t('nav.export')],

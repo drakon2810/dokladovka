@@ -3,6 +3,7 @@ import { PGlite } from '@electric-sql/pglite';
 import type { ServerConfig } from './config.js';
 import { databaseFromPglite, type Database } from './db/database.js';
 import { migrateDatabase } from './db/migrate.js';
+import type { MailMessage, Mailer } from './mailer.js';
 import { hashPassword } from './security.js';
 
 export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -16,6 +17,11 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     webhookSecret: 'test-webhook-secret',
     sessionCookieSecure: false,
     sessionTtlHours: 8,
+    mail: {
+      from: 'Dokladovka <no-reply@doklady.test.sk>',
+      smtp: { host: undefined, port: 465, secure: true, user: undefined, password: undefined },
+    },
+    turnstile: { siteKey: undefined, secretKey: undefined },
     extractionProvider: 'mock',
     imap: {
       host: undefined,
@@ -53,6 +59,11 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     monitorIntervalMs: 100,
     ...overrides,
   };
+}
+
+export function memoryMailer(): Mailer & { sent: MailMessage[] } {
+  const sent: MailMessage[] = [];
+  return { sent, async send(message) { sent.push(message); } };
 }
 
 export async function createTestDatabase(): Promise<Database> {

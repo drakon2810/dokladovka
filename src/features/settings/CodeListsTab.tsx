@@ -7,6 +7,7 @@ import {
   updateCodeListItem,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useOrgSelection } from '../../data/orgSelection';
 import type { CodeListItem, CodeListKind } from '../../data/types';
 import { decodePohodaXml } from '../../data/pohoda/encoding';
 import {
@@ -80,20 +81,10 @@ export function CodeListsTab() {
     cinnosti: [],
     projekty: [],
   };
-  const [orgId, setOrgId] = useState('');
+  const { orgId, selectOrg } = useOrgSelection();
   const [preview, setPreview] = useState<CodeListImportPreview>();
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (organizations.length === 0) {
-      if (orgId) setOrgId('');
-      return;
-    }
-    if (!organizations.some((organization) => organization.id === orgId)) {
-      setOrgId(organizations[0].id);
-    }
-  }, [orgId, organizations]);
 
   useEffect(() => {
     setPreview(undefined);
@@ -174,7 +165,7 @@ export function CodeListsTab() {
         className="input mb-4 max-w-xs"
         value={orgId}
         disabled={busy}
-        onChange={(event) => setOrgId(event.target.value)}
+        onChange={(event) => selectOrg(event.target.value)}
       >
         {organizations.map((item) => (
           <option key={item.id} value={item.id}>

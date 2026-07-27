@@ -65,7 +65,6 @@ import { t, type SkKey } from '../../i18n/sk';
 import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
-import { PaymentCard } from './PaymentCard';
 import { InvoicePanel } from './InvoicePanel';
 import { AssistantPanel } from '../assistant/AssistantPanel';
 import { useAuth } from '../../auth/AuthContext';
@@ -116,6 +115,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const DOCUMENT_TYPES: DocumentType[] = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'];
+
+/**
+ * Doklad sa otvára mierne priblížený — pri 100 % je text faktúry na kontrolu
+ * zbytočne drobný a každý si ho aj tak hneď zväčšoval. Tlačidlo „obnoviť"
+ * vracia sem, nie na 100 %.
+ */
+const DEFAULT_ZOOM = 1.25;
 
 const FIELD_ALIASES: Record<string, string[]> = {
   'dodavatel.nazov': ['dodavatel.nazov', 'supplier.nazov'],
@@ -320,7 +326,7 @@ export function DocumentDetailPage() {
   const [comment, setComment] = useState('');
   const [pageNumber, setPageNumber] = useState(1);
   const [pageCount, setPageCount] = useState(0);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [pdfError, setPdfError] = useState(false);
   const [localFileUrl, setLocalFileUrl] = useState<string>();
   const [localFileLoading, setLocalFileLoading] = useState(false);
@@ -344,7 +350,7 @@ export function DocumentDetailPage() {
     autoFilledFor.current = undefined;
     setPageNumber(1);
     setPageCount(0);
-    setZoom(1);
+    setZoom(DEFAULT_ZOOM);
     setPdfError(false);
   }, [sourceDocument?.id, sourceDocument?.version]);
 
@@ -1042,8 +1048,8 @@ export function DocumentDetailPage() {
             <button
               type="button"
               className="btn px-2.5 text-xs"
-              disabled={!hasAttachedFile || zoom === 1}
-              onClick={() => setZoom(1)}
+              disabled={!hasAttachedFile || zoom === DEFAULT_ZOOM}
+              onClick={() => setZoom(DEFAULT_ZOOM)}
             >
               {t('detail.naSirku')}
             </button>
@@ -1087,7 +1093,12 @@ export function DocumentDetailPage() {
               </a>
             )}
           </div>
-          <div className="flex min-h-[34rem] justify-center overflow-auto bg-[#EDF0EE] p-5">
+          {/* Náhľad má vlastnú výšku a scrolluje sa sám — bez pevnej výšky rástol
+              donekonečna a doklad sa dal dočítať len tak, že sa preskrolovala
+              celá stránka (teda aj formulár vedľa). `safe center` centruje, kým
+              sa doklad zmestí; po priblížení nechá doskrolovať aj k ľavému
+              okraju (obyčajné `center` by ho odrezalo). */}
+          <div className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-8rem)]">
             {xmlPreview ? (
               sepaPreview ? (
                 <BankStatementPreview doklad={draft} zoom={zoom} />
@@ -1107,7 +1118,9 @@ export function DocumentDetailPage() {
                 <img
                   src={fileUrl}
                   alt={draft.zdroj.povodnyNazovSuboru ?? t('detail.titulok')}
-                  className="h-auto max-w-none self-start shadow"
+                  // shrink-0: bez toho flexbox priblížený doklad zmenší späť na
+                  // šírku rámika a zoom nič neurobí — má pretiecť a scrollovať sa.
+                  className="h-auto max-w-none shrink-0 self-start shadow"
                   style={{ width: Math.round(520 * zoom) }}
                   onError={() => setPdfError(true)}
                 />
@@ -1117,6 +1130,7 @@ export function DocumentDetailPage() {
             ) : (
               <Document
                 file={fileUrl}
+                className="shrink-0"
                 loading={<p className="self-center text-sm">{t('stav.nacitavam')}</p>}
                 error={<p className="self-center text-sm text-red-700">{t('detail.pdfChyba')}</p>}
                 onLoadSuccess={({ numPages }) => {
@@ -1154,13 +1168,8 @@ export function DocumentDetailPage() {
         />
 
         <div className="detail-stack min-w-0 space-y-4">
-          {draft.typ !== 'BV' && (
-            <PaymentCard
-              doklad={draft}
-              payments={(data.payments ?? []).filter((payment) => payment.documentId === draft.id)}
-              readOnly={role === 'schvalovatel'}
-            />
-          )}
+          {/* Panel „Úhrada" tu zámerne nie je — miesto patrí formuláru dokladu.
+              Úhrady sa spravujú v sekcii Úhrady a v hromadných akciách zoznamu. */}
           <fieldset disabled={readOnly} className="space-y-4 disabled:opacity-75">
             <InvoicePanel
               key={draft.id}

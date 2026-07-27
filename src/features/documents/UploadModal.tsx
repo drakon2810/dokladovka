@@ -10,9 +10,13 @@ interface UploadItem {
   id: string;
   name: string;
   size: number;
-  progress: number;
   status: UploadStatus;
   error?: string;
+}
+
+function formatBytes(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} kB`;
 }
 
 const ACCEPT =
@@ -82,10 +86,13 @@ function mapError(cause: unknown): string {
 export function UploadModal({
   organizations,
   currentOrgId,
+  initialFiles,
   onClose,
 }: {
   organizations: Organization[];
   currentOrgId: string;
+  /** Súbory pustené na zoznam dokladov — nahrajú sa hneď po otvorení modálu. */
+  initialFiles?: File[];
   onClose: () => void;
 }) {
   const activeOrgs = organizations.filter((organization) => !organization.archived);
@@ -96,73 +103,40 @@ export function UploadModal({
   const [orgId, setOrgId] = useState(defaultOrgId);
   const [items, setItems] = useState<UploadItem[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  const timers = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
 
   useEffect(() => {
     if (!orgId && defaultOrgId) setOrgId(defaultOrgId);
   }, [orgId, defaultOrgId]);
 
-  useEffect(() => {
-    const active = timers.current;
-    return () => active.forEach((timer) => clearInterval(timer));
-  }, []);
-
   const showOrgSelect = currentOrgId === 'all' && activeOrgs.length > 1;
 
-  // Jeden súbor: sieťový upload + animácia počítadla 0 → 100. Vráti Promise,
-  // ktorý sa splní až keď je položka v koncovom stave (hotovo/chyba).
-  function uploadItem(itemId: string, file: File): Promise<void> {
-    return new Promise((resolve) => {
-      let result: 'pending' | 'ok' | 'error' = 'pending';
-      let errorText = '';
-      void uploadDocumentFile(orgId, file)
-        .then((outcome) => {
-          if (outcome.status === 'queued') {
-            result = 'ok';
-          } else {
-            result = 'error';
-            errorText =
-              outcome.status === 'duplicate'
-                ? t('doklady.nahrat.duplicita')
-                : t('doklady.pridat.chybaFormatSuboru');
-          }
-        })
-        .catch((cause) => {
-          result = 'error';
-          errorText = mapError(cause);
-        });
-
-      let progress = 0;
-      const timer = setInterval(() => {
-        if (result === 'error') {
-          clearInterval(timer);
-          timers.current.delete(timer);
-          setItems((prev) =>
-            prev.map((item) =>
-              item.id === itemId ? { ...item, status: 'error', error: errorText } : item,
-            ),
-          );
-          resolve();
-          return;
-        }
-        if (progress < 90) progress = Math.min(90, progress + 6);
-        else if (result === 'ok') progress = 100;
-        const done = progress === 100;
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === itemId
-              ? { ...item, progress, status: done ? 'done' : 'uploading' }
-              : item,
-          ),
-        );
-        if (done) {
-          clearInterval(timer);
-          timers.current.delete(timer);
-          resolve();
-        }
-      }, 50);
-      timers.current.add(timer);
-    });
+  /**
+   * Jeden súbor: čaká sa priamo na odpoveď servera. Žiadny časovač s falošným
+   * percentom — ten sa pri prísnom režime Reactu (dvojité mountnutie v dev)
+   * stihol zrušiť skôr, než tikol, a riadok potom navždy visel na 0 %.
+   * Skutočný stav má len tri hodnoty: nahrávam → nahraté / chyba.
+   */
+  async function uploadItem(itemId: string, file: File): Promise<void> {
+    const finish = (patch: Partial<UploadItem>) =>
+      setItems((prev) => prev.map((item) => (item.id === itemId ? { ...item, ...patch } : item)));
+    try {
+      // Bez otázok navyše — každý súbor ide do AI a tá rozhodne, či je to doklad,
+      // alebo dokument bez účtovania (rozhodnutie úradu, zmluva…), ktorý skončí
+      // medzi „Inými dokladmi". Používateľ nemá triediť za ňu.
+      const outcome = await uploadDocumentFile(orgId, file);
+      if (outcome.status === 'queued') {
+        finish({ status: 'done' });
+        return;
+      }
+      finish({
+        status: 'error',
+        error: outcome.status === 'duplicate'
+          ? t('doklady.nahrat.duplicita')
+          : t('doklady.pridat.chybaFormatSuboru'),
+      });
+    } catch (cause) {
+      finish({ status: 'error', error: mapError(cause) });
+    }
   }
 
   // Súbory nahrávame POSTUPNE, nie naraz: každý mutačný request si vyžiada nový
@@ -171,7 +145,7 @@ export function UploadModal({
   // zobrazia hneď, sieťovo sa spracujú v poradí.
   // ponytail: sekvenčne kvôli rotácii CSRF; dávkový endpoint (files[]) ak by
   // pri mnohých súboroch prekážala rýchlosť.
-  async function handleFiles(files: FileList | null) {
+  async function handleFiles(files: FileList | File[] | null) {
     if (!files || !orgId) return;
     const entries = Array.from(files).map((file) => ({ itemId: nextItemId(), file }));
     setItems((prev) => [
@@ -180,7 +154,6 @@ export function UploadModal({
         id: itemId,
         name: file.name,
         size: file.size,
-        progress: 0,
         status: 'uploading' as UploadStatus,
       })),
     ]);
@@ -188,6 +161,32 @@ export function UploadModal({
       await uploadItem(itemId, file);
     }
   }
+
+  // Súbory pustené priamo na zoznam dokladov sa nahrajú bez ďalšieho kliknutia —
+  // ale LEN keď je jasné, do ktorej firmy patria. Pri „Všetky organizácie" by
+  // sme inak ticho nahrali doklad cudzej firme, preto čakáme na potvrdenie.
+  // Ref, nie stav: efekt sa nesmie zopakovať pri prekreslení (poller ~5 s).
+  const autoStarted = useRef(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>();
+  useEffect(() => {
+    if (autoStarted.current || !initialFiles?.length || !orgId) return;
+    autoStarted.current = true;
+    if (showOrgSelect) setPendingFiles(initialFiles);
+    else void handleFiles(initialFiles);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleFiles sa mení pri každom rendri
+  }, [initialFiles, orgId, showOrgSelect]);
+
+  // Po pustení súborov na zoznam sa okno samo zavrie, keď je všetko nahraté —
+  // AI beží ďalej na pozadí a stav vidno priamo na riadku dokladu. Používateľ
+  // tak nečaká pred modálom na niečo, čo sa aj tak deje inde.
+  const allDone = items.length > 0 && items.every((item) => item.status === 'done');
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!initialFiles?.length || !allDone) return undefined;
+    const timer = window.setTimeout(() => closeRef.current(), 900);
+    return () => window.clearTimeout(timer);
+  }, [allDone, initialFiles]);
 
   const dismiss = (itemId: string) =>
     setItems((prev) => prev.filter((item) => item.id !== itemId));
@@ -219,6 +218,25 @@ export function UploadModal({
                   ))}
                 </select>
               </label>
+            )}
+
+            {pendingFiles && pendingFiles.length > 0 && (
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-[13px] text-amber-900">
+                <span className="min-w-0 flex-1">
+                  <strong className="tnum">{pendingFiles.length}</strong> {t('doklady.nahrat.cakaNaFirmu')}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    const files = pendingFiles;
+                    setPendingFiles(undefined);
+                    void handleFiles(files);
+                  }}
+                >
+                  {t('doklady.nahrat.tlacidlo')}
+                </button>
+              </div>
             )}
 
             {/* Dropzone — 4a aktívny drag-over / 4b pokojný stav */}
@@ -327,23 +345,21 @@ export function UploadModal({
                           {item.status === 'error'
                             ? t('doklady.nahrat.chyba')
                             : item.status === 'done'
-                              ? t('doklady.nahrat.stavHotovo')
-                              : `${item.progress} %`}
+                              // Nahraté ≠ hotové: AI ho ešte číta a zatrieďuje.
+                              ? t('doklady.nahrat.stavSpracuvaAi')
+                              : t('doklady.nahrat.pocetNahrava')}
                         </span>
                       </div>
-                      {item.status === 'error' ? (
-                        <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] font-medium text-red-700">
-                          <IconAlert />
-                          {item.error ?? t('doklady.nahrat.chyba')}
-                        </div>
-                      ) : (
-                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#EEF1EE]">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-accent-bright to-accent transition-[width] duration-100 ease-linear"
-                            style={{ width: `${item.progress}%` }}
-                          />
-                        </div>
-                      )}
+                      <div
+                        className={`mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] font-medium ${
+                          item.status === 'error' ? 'text-red-700' : 'text-ink-faint'
+                        }`}
+                      >
+                        {item.status === 'error' && <IconAlert />}
+                        {item.status === 'error'
+                          ? item.error ?? t('doklady.nahrat.chyba')
+                          : formatBytes(item.size)}
+                      </div>
                     </div>
                     {item.status === 'uploading' ? (
                       <Spinner />

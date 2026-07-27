@@ -55,13 +55,6 @@ function IconNespracovane() {
     </svg>
   );
 }
-function IconDokumenty() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
-      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
-    </svg>
-  );
-}
 function IconPartneri() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
@@ -125,7 +118,6 @@ const NAV_ITEMS = [
   { to: '/', label: 'nav.prehlad', icon: <IconPrehlad />, end: true, badge: false },
   { to: '/doklady', label: 'nav.doklady', icon: <IconDoklady />, end: false, badge: true },
   { to: '/nespracovane', label: 'nav.nespracovane', icon: <IconNespracovane />, end: false, badge: false },
-  { to: '/dokumenty', label: 'nav.dokumenty', icon: <IconDokumenty />, end: false, badge: false },
   { to: '/partneri', label: 'nav.partneri', icon: <IconPartneri />, end: false, badge: false },
   { to: '/uhrady', label: 'nav.uhrady', icon: <IconUhrady />, end: false, badge: false },
   { to: '/export', label: 'nav.export', icon: <IconExport />, end: false, badge: false },
@@ -260,6 +252,14 @@ export function Layout() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Detail dokladu potrebuje šírku (náhľad + formulár vedľa seba), preto sa
+  // panel pri jeho otvorení zbalí na ikony a po odchode zase roztiahne.
+  // Efekt reaguje len na zmenu typu stránky, takže ručné prepnutie ostáva.
+  const onDocumentDetail = /^\/doklady\/[^/]+$/.test(location.pathname);
+  useEffect(() => {
+    setCollapsed(onDocumentDetail);
+  }, [onDocumentDetail]);
 
   const toggleGroup = (orgId: string) =>
     setCollapsedGroups((current) => {

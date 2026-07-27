@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { MemoryObjectStorage } from '../storage.js';
+import { processNextJob } from '../workerService.js';
+import { MockServerDocumentExtractionProvider } from '../extraction/mockProvider.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -84,4 +86,102 @@ describe('POST /api/documents/upload', () => {
     ]);
     expect(response.statusCode).toBe(403);
   }, 30000);
+
+  it('zamietnutý doklad sa dá nahrať znova (kôš neblokuje ten istý súbor navždy)', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const storage = new MemoryObjectStorage();
+    const config = testConfig();
+    const app = await buildApp({ database, storage, config, logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+    const file = { fileName: 'rozhodnutie.pdf', mimeType: 'application/pdf', contentBase64: PDF };
+
+    await upload(app, headers, seeded.organizationId, [file]);
+    await processNextJob(database, config, 'w1', {
+      storage, provider: new MockServerDocumentExtractionProvider({ documentType: 'OZ', invoiceNumber: 'X-1' }),
+    });
+    const documentId = (await database.query<{ id: string } & Record<string, unknown>>('SELECT id FROM documents')).rows[0].id;
+
+    // Kým doklad žije, ten istý súbor je duplicita.
+    expect((await upload(app, headers, seeded.organizationId, [file])).json().results[0])
+      .toMatchObject({ status: 'duplicate', reason: 'technical_duplicate' });
+
+    // Po zamietnutí (kôš) musí prejsť — inak sa zle zaradený doklad nedá opraviť.
+    const document = await database.query<{ version: number } & Record<string, unknown>>('SELECT version FROM documents WHERE id=$1', [documentId]);
+    const rejected = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/reject`,
+      headers, payload: { expectedVersion: document.rows[0].version, reason: 'nie je to doklad' },
+    });
+    expect(rejected.statusCode).toBe(200);
+    expect((await upload(app, headers, seeded.organizationId, [file])).json().results[0])
+      .toMatchObject({ status: 'queued' });
+    await app.close();
+  }, 60000);
+
+  it('job zaseknutý v behu (spadnutý worker) sa po čase vyzdvihne znova', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const storage = new MemoryObjectStorage();
+    const config = testConfig();
+    const app = await buildApp({ database, storage, config, logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    await upload(app, sessionHeaders(login), seeded.organizationId, [
+      { fileName: 'faktura.pdf', mimeType: 'application/pdf', contentBase64: PDF },
+    ]);
+
+    // Simulácia pádu: job ostal 'running' so starým zámkom.
+    await database.query(
+      "UPDATE processing_jobs SET status='running', locked_at=now() - interval '2 hours', locked_by='mrtvy-worker'",
+    );
+    expect(await processNextJob(database, config, 'novy-worker', {
+      storage, provider: new MockServerDocumentExtractionProvider({ invoiceNumber: 'F-1' }),
+    })).toBe(true);
+    const job = await database.query<{ status: string } & Record<string, unknown>>('SELECT status FROM processing_jobs');
+    expect(job.rows[0].status).toBe('succeeded');
+    await app.close();
+  }, 60000);
+
+  it('súbor, ktorý nie je účtovný doklad, skončí medzi Inými dokladmi a nie v zozname na kontrolu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const storage = new MemoryObjectStorage();
+    const config = testConfig();
+    const app = await buildApp({ database, storage, config, logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    await upload(app, headers, seeded.organizationId, [
+      { fileName: 'rozhodnutie-danovy-urad.pdf', mimeType: 'application/pdf', contentBase64: PDF },
+    ]);
+    // AI klasifikuje list z úradu ako INY — nemá sa z neho stať doklad.
+    expect(await processNextJob(database, config, 'test-worker', {
+      storage,
+      provider: new MockServerDocumentExtractionProvider({ documentType: 'INY' }),
+    })).toBe(true);
+
+    expect((await database.query('SELECT id FROM documents')).rowCount).toBe(0);
+    const stored = await database.query<{ file_name: string; storage_key: string } & Record<string, unknown>>(
+      'SELECT file_name, storage_key FROM organization_documents WHERE organization_id=$1',
+      [seeded.organizationId],
+    );
+    expect(stored.rows).toEqual([
+      expect.objectContaining({ file_name: 'rozhodnutie-danovy-urad.pdf' }),
+    ]);
+    // Bajty ostávajú v pôvodnom objekte — dokument sa musí dať stiahnuť.
+    expect(await storage.get(String(stored.rows[0].storage_key))).toBeTruthy();
+
+    const attachment = await database.query<{ status: string; document_id: string | null } & Record<string, unknown>>(
+      'SELECT status, document_id FROM inbound_attachments WHERE organization_id=$1', [seeded.organizationId],
+    );
+    expect(attachment.rows[0]).toMatchObject({ status: 'document_created', document_id: null });
+
+    const snapshot = await app.inject({ method: 'GET', url: '/api/data/snapshot', headers: { cookie: headers.cookie } });
+    expect(snapshot.json().documents).toHaveLength(0);
+    expect(snapshot.json().organizationDocuments).toHaveLength(1);
+    await app.close();
+  }, 60000);
 });

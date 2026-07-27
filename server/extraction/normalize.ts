@@ -105,7 +105,11 @@ export function normalizeExtractionResult(
   ]));
 
   return {
-    documentType: result.documentType === 'UNKNOWN' ? 'FP' : result.documentType,
+    // INY sem dorazí len pri opakovanej extrakcii už existujúceho dokladu —
+    // vtedy sa doklad neruší, len ostane pri predvolenom type ako pri UNKNOWN.
+    documentType: result.documentType === 'UNKNOWN' || result.documentType === 'INY'
+      ? 'FP'
+      : result.documentType,
     extracted: {
       dodavatel: { ...withoutForeignDicCopy(result.supplier), nazov: result.supplier.nazov ?? '' },
       odberatel: withoutForeignDicCopy({ ...result.buyer }),

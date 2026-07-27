@@ -21,6 +21,9 @@
   color: var(--dv-ink);
   animation: dvPop .34s ease both;
   box-sizing: border-box;
+  /* Panel žije vedľa náhľadu dokladu, takže o počte stĺpcov rozhoduje jeho
+     vlastná šírka, nie šírka okna. */
+  container-type: inline-size;
 }
 .dv-panel *, .dv-panel *::before, .dv-panel *::after { box-sizing: border-box; }
 
@@ -40,6 +43,14 @@
 
 .dv-fields { display: flex; flex-direction: column; gap: 18px; }
 .dv-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.dv-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+/* Základné údaje na dva stĺpce: vľavo doklad a dátumy, vpravo zaúčtovanie. */
+.dv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; align-items: start; }
+/* Dva stĺpce sú zmyslom tohto rozloženia, takže sa držia aj v úzkom paneli
+   vedľa náhľadu dokladu; na jeden stĺpec padnú, až keď by sa polia lámali. */
+@container (max-width: 520px) {
+  .dv-cols, .dv-grid-3 { grid-template-columns: 1fr; }
+}
 
 /* Plávajúci label + input */
 .dv-field { position: relative; }
@@ -301,13 +312,20 @@
    Redizajn podľa makety „Prečo - redesign" z Claude Design: pilulka pod poľom,
    panel s hlavičkou, pruh istoty, čipy, AI vysvetlenie so zeleným pásikom
    a tri stavy firemného dôvodu. dvShimmer je globálny (src/index.css). */
-.dv-preco-field { display: flex; flex-direction: column; }
+.dv-preco-field { position: relative; display: flex; flex-direction: column; }
+/* Otáznik „Prečo?" sedí v pravom hornom rohu samotného poľa (na jeho ráme),
+   nie pod ním — inak kradol jeden riadok výšky pri každom z troch polí.
+   Je nad obsahom poľa, ale mimo klikacej plochy rozbaľovača. */
 .dv-preco-btn {
-  align-self: flex-end; margin-top: 6px; display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 9px 3px 8px; border-radius: 999px; border: 1px solid #E4E8E4; background: #fff;
-  color: #5A635D; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+  position: absolute; top: -9px; right: 10px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px 1px 6px; border-radius: 999px; border: 1px solid #E4E8E4; background: #fff;
+  color: #5A635D; font-size: 10.5px; font-weight: 600; cursor: pointer; font-family: inherit;
   transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
+/* Popisok poľa a otáznik sedia na tom istom hornom ráme — popisok sa preto
+   nesmie roztiahnuť až pod tlačidlo, aj keby bol dlhý a pole úzke. */
+.dv-preco-field .dv-label { max-width: calc(100% - 92px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dv-preco-btn:hover { border-color: rgba(14, 122, 95, .32); color: var(--dv-accent-dark); }
 .dv-preco-btn.dv-open {
   background: #E7F2ED; border-color: rgba(14, 122, 95, .3); color: var(--dv-accent-dark);

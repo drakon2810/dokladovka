@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { assignInboundEmailToOrg } from '../../data/api';
+import { assignInboundEmailToOrg, deleteInboundEmail } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useOrgSelection } from '../../data/orgSelection';
 import { useAuth } from '../../auth/AuthContext';
 import { showToast } from '../../components/toast';
+import { ConfirmDialog } from '../../components/ui';
 import { t } from '../../i18n/sk';
 import { formatDateTime } from '../../lib/format';
 
@@ -41,8 +43,12 @@ function formatBytes(value: number): string {
 export function NespracovanePage() {
   const { session } = useAuth();
   const { data, loading, error } = useDataQuery();
+  // Predvolená firma = tá z globálneho prepínača, nie prvá v zozname —
+  // inak sa dá e-mail omylom priradiť cudzej firme.
+  const { orgId: currentOrgId } = useOrgSelection();
   const [assigning, setAssigning] = useState<string>();
   const [orgChoice, setOrgChoice] = useState<Record<string, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; subject: string }>();
 
   if (loading) return <p className="text-sm text-ink-soft">{t('stav.nacitavam')}</p>;
   if (error || !data) return <p className="text-sm text-red-700">{t('chyba.vseobecna')}</p>;
@@ -54,7 +60,7 @@ export function NespracovanePage() {
     .sort((a, b) => (b.receivedAt ?? '').localeCompare(a.receivedAt ?? ''));
 
   async function assign(emailId: string) {
-    const organizationId = orgChoice[emailId] || organizations[0]?.id;
+    const organizationId = orgChoice[emailId] || currentOrgId;
     if (!organizationId) return;
     setAssigning(emailId);
     try {
@@ -64,6 +70,15 @@ export function NespracovanePage() {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'));
     } finally {
       setAssigning(undefined);
+    }
+  }
+
+  async function remove(emailId: string) {
+    try {
+      await deleteInboundEmail(emailId);
+      showToast(t('nespracovane.zmazaneOk'));
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
     }
   }
 
@@ -137,7 +152,7 @@ export function NespracovanePage() {
                 <div className="flex flex-wrap items-center gap-2 border-t border-line/70 pt-3">
                   <select
                     className="input max-w-64"
-                    value={orgChoice[email.id] ?? organizations[0]?.id ?? ''}
+                    value={orgChoice[email.id] ?? currentOrgId}
                     onChange={(event) => setOrgChoice((current) => ({ ...current, [email.id]: event.target.value }))}
                   >
                     {organizations.map((org) => (
@@ -152,6 +167,15 @@ export function NespracovanePage() {
                   >
                     {assigning === email.id ? t('stav.nacitavam') : t('nespracovane.priradit')}
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger ml-auto"
+                    onClick={() =>
+                      setDeleteTarget({ id: email.id, subject: email.subject || t('nespracovane.bezPredmetu') })
+                    }
+                  >
+                    {t('nespracovane.zmazat')}
+                  </button>
                 </div>
               )}
             </motion.section>
@@ -159,6 +183,16 @@ export function NespracovanePage() {
         })
       )}
       </AnimatePresence>
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title={`${t('nespracovane.zmazat')}: ${deleteTarget.subject}`}
+          text={t('nespracovane.zmazatPotvrdenie')}
+          danger
+          onConfirm={() => void remove(deleteTarget.id)}
+          onClose={() => setDeleteTarget(undefined)}
+        />
+      )}
     </div>
   );
 }

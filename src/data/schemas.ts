@@ -59,10 +59,15 @@ export const organizationInputSchema = z.object({
   nazov: z.string().trim().min(1, 'Názov je povinný'),
   // Prázdne IČO/DIČ je dovolené len pre FO nepodnikateľa (kontrola vo formulári/serveri).
   ico: z.string().regex(/^\d{8}$/, 'IČO musí mať presne 8 číslic').or(z.literal('')),
-  dic: z.string().regex(/^\d{10}$/, 'DIČ musí mať 10 číslic').or(z.literal('')),
+  // České firmy sa dajú viesť tiež (našepkávač ich ťahá z ARES), preto popri
+  // slovenskom tvare prechádza aj CZ + 8–10 číslic.
+  dic: z
+    .string()
+    .regex(/^(\d{10}|CZ\d{8,10})$/, 'DIČ musí mať 10 číslic (SK) alebo tvar CZ + 8–10 číslic')
+    .or(z.literal('')),
   icDph: z
     .string()
-    .regex(/^SK\d{10}$/, 'IČ DPH musí mať tvar SK + 10 číslic')
+    .regex(/^(SK\d{10}|CZ\d{8,10})$/, 'IČ DPH musí mať tvar SK + 10 číslic alebo CZ + 8–10 číslic')
     .optional()
     .or(z.literal('').transform(() => undefined)),
   farba: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Farba musí byť hex kód'),

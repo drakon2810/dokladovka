@@ -1,7 +1,7 @@
 // CRUD organizácií — SPEC §6.6 + §11.19.
 // emailAlias generuje systém po uložení; zobrazuje sa read-only s tlačidlom
 // Kopírovať a NIKDY sa neprijíma z formulára ako voľný text.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   archiveOrganization,
@@ -9,6 +9,7 @@ import {
   updateOrganization,
   type CreateOrganizationResult,
 } from '../../data/api';
+import { lookupCompanies, lookupSkTaxIds, type CompanyHit } from '../../data/companyRegistry';
 import { useDataQuery } from '../../data/query';
 import { organizationInputSchema } from '../../data/schemas';
 import type { Organization } from '../../data/types';
@@ -214,9 +215,95 @@ export function OrganizationFormModal({
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // Našepkávač zo štátnych registrov (SK RPO / CZ ARES) — beží nad tým poľom,
+  // v ktorom používateľ práve píše (názov alebo IČO).
+  const [lookupField, setLookupField] = useState<'nazov' | 'ico'>();
+  const [hits, setHits] = useState<CompanyHit[]>([]);
+  const [searching, setSearching] = useState(false);
 
   const set = (key: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const lookupQuery = lookupField ? form[lookupField] : '';
+  useEffect(() => {
+    if (!lookupField) return undefined;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      void lookupCompanies(lookupQuery, controller.signal)
+        .then((next) => {
+          if (!controller.signal.aborted) setHits(next);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!controller.signal.aborted) setSearching(false);
+        });
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [lookupField, lookupQuery]);
+
+  function applyHit(hit: CompanyHit) {
+    // Všetky identifikačné polia sa prepíšu podľa vybranej firmy — čo register
+    // nemá (napr. DIČ/IČ DPH pri slovenských firmách), ostane prázdne. Inak by
+    // po prepnutí na inú firmu ostali visieť údaje tej predošlej.
+    setForm((f) => ({
+      ...f,
+      nazov: hit.nazov,
+      ico: hit.ico,
+      dic: hit.dic ?? '',
+      icDph: hit.icDph ?? '',
+      ulica: hit.ulica ?? '',
+      mesto: hit.mesto ?? '',
+      psc: hit.psc ?? '',
+      krajina: hit.krajina,
+    }));
+    setHits([]);
+    setLookupField(undefined);
+    // Slovenské registre daňové identifikátory nezverejňujú — doťahujú sa
+    // zvlášť z informačných zoznamov Finančnej správy (cez náš backend).
+    if (!hit.dic && !hit.icDph && /^\d{8}$/.test(hit.ico)) {
+      void lookupSkTaxIds(hit.ico)
+        .then(({ dic, icDph }) => {
+          if (!dic && !icDph) return;
+          setForm((f) => ({ ...f, dic: dic ?? f.dic, icDph: icDph ?? f.icDph }));
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  const suggestions = (field: 'nazov' | 'ico') => {
+    if (lookupField !== field || lookupQuery.trim().length === 0) return null;
+    if (!searching && hits.length === 0) return null;
+    return (
+      <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-pop">
+        {hits.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-ink-soft">{t('nast.org.registerHladam')}</p>
+        ) : (
+          hits.map((hit) => (
+            <button
+              key={`${hit.krajina}-${hit.ico}`}
+              type="button"
+              className="block w-full rounded-lg px-2 py-1.5 text-left transition hover:bg-app"
+              // Bez preventDefault by kliknutie najprv zhodilo fokus z políčka,
+              // našepkávač by sa zavrel a výber by sa nikdy nespustil.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => applyHit(hit)}
+            >
+              <span className="block truncate text-sm text-ink">{hit.nazov}</span>
+              <span className="tnum block truncate text-xs text-ink-soft">
+                {[hit.ico, [hit.ulica, hit.psc, hit.mesto].filter(Boolean).join(', '), hit.krajina]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    );
+  };
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -274,11 +361,21 @@ export function OrganizationFormModal({
   return (
     <Modal title={existing ? t('akcia.upravit') : t('nast.org.nova')} onClose={onClose}>
       <form onSubmit={submit} className="flex flex-col gap-3">
-        <div>
+        <div className="relative">
           <label className="label" htmlFor="org-nazov">
             {t('nast.org.nazov')}
           </label>
-          <input id="org-nazov" className="input" value={form.nazov} onChange={set('nazov')} />
+          <input
+            id="org-nazov"
+            className="input"
+            value={form.nazov}
+            onChange={set('nazov')}
+            onFocus={() => setLookupField('nazov')}
+            onBlur={() => setLookupField(undefined)}
+            autoComplete="off"
+          />
+          {suggestions('nazov')}
+          <p className="mt-1 text-xs text-ink-soft">{t('nast.org.registerPopis')}</p>
           {errors.nazov && <p className="mt-1 text-xs text-red-700">{errors.nazov}</p>}
         </div>
         <div>
@@ -296,11 +393,20 @@ export function OrganizationFormModal({
           </select>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div>
+          <div className="relative">
             <label className="label" htmlFor="org-ico">
               {t('nast.org.ico')}
             </label>
-            <input id="org-ico" className="input tnum" value={form.ico} onChange={set('ico')} />
+            <input
+              id="org-ico"
+              className="input tnum"
+              value={form.ico}
+              onChange={set('ico')}
+              onFocus={() => setLookupField('ico')}
+              onBlur={() => setLookupField(undefined)}
+              autoComplete="off"
+            />
+            {suggestions('ico')}
             {errors.ico && <p className="mt-1 text-xs text-red-700">{errors.ico}</p>}
           </div>
           <div>

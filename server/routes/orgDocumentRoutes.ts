@@ -2,6 +2,8 @@
 // Prísna izolácia per-organizácia; obsah sa ukladá do privátneho object storage.
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import OpenAI from 'openai';
+import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import { writeAudit } from '../audit.js';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
@@ -11,6 +13,9 @@ import { HttpError } from '../http.js';
 import { sha256 } from '../security.js';
 import { looksLikeXml } from '../inbound/xmlClassifier.js';
 import type { ObjectStorage } from '../storage.js';
+
+/** Nad túto veľkosť sa dokument do modelu neposiela (cena aj limity vstupu). */
+const MAX_SUMMARY_BYTES = 12 * 1024 * 1024;
 
 const uploadSchema = z.object({
   fileName: z.string().min(1).max(255),
@@ -46,9 +51,16 @@ function rowToDto(row: Record<string, any>) {
     uploadedBy: row.uploaded_by ?? undefined,
     uploadedByName: row.uploaded_by_name ?? undefined,
     note: row.note ?? undefined,
+    aiSummary: row.ai_summary ?? undefined,
     createdAt: row.created_at ? new Date(String(row.created_at)).toISOString() : undefined,
   };
 }
+
+/** Zhrnutie je krátke a v bodoch — na rýchle „o čom to je", nie na prepis. */
+const summarySchema = z.object({
+  nadpis: z.string(),
+  body: z.array(z.string()),
+});
 
 export function registerOrgDocumentRoutes(
   app: FastifyInstance,
@@ -134,6 +146,69 @@ export function registerOrgDocumentRoutes(
     reply.header('Content-Type', row.mime_type);
     reply.header('Content-Disposition', `inline; filename="${downloadName}"`);
     return reply.send(Buffer.from(await storage.get(row.storage_key)));
+  });
+
+  // „Vysvetliť dokument" — AI prečíta súbor a vráti krátke zhrnutie v bodoch.
+  // Výsledok sa uloží, takže druhé otvorenie je zadarmo a okamžité.
+  app.post('/api/organizations/:organizationId/documents/:id/summary', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    const { organizationId, id } = itemParams.parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const row = (await database.query<Record<string, any>>(
+      `SELECT file_name, mime_type, byte_size, storage_key, ai_summary FROM organization_documents
+        WHERE id=$1 AND tenant_id=$2 AND organization_id=$3`,
+      [id, auth.tenantId, organizationId],
+    )).rows[0];
+    if (!row) throw new HttpError(404, 'document_not_found', 'Dokument neexistuje');
+    if (row.ai_summary) return row.ai_summary;
+    if (!config.openai.apiKey) {
+      throw new HttpError(503, 'ai_unavailable', 'AI nie je nakonfigurovaná (chýba API kľúč).');
+    }
+    if (Number(row.byte_size) > MAX_SUMMARY_BYTES) {
+      throw new HttpError(413, 'document_too_large', 'Dokument je príliš veľký na vysvetlenie.');
+    }
+
+    const bytes = await storage.get(row.storage_key);
+    const dataUrl = `data:${row.mime_type};base64,${Buffer.from(bytes).toString('base64')}`;
+    const client = new OpenAI({ apiKey: config.openai.apiKey, timeout: config.openai.timeoutMs, maxRetries: 0 });
+    let summary: z.infer<typeof summarySchema>;
+    try {
+      const response = await client.responses.parse({
+        model: config.openai.model,
+        store: config.openai.storeResponses,
+        instructions:
+          'Si asistent slovenskej účtovnej kancelárie. Prečítaj priložený dokument a vysvetli po slovensky, '
+          + 'o čo ide. Vráť krátky nadpis a 3 až 7 vecných bodov (čo to je, koho sa týka, dôležité sumy, '
+          + 'termíny a povinnosti). Nevymýšľaj si údaje, ktoré v dokumente nie sú.',
+        input: [{
+          role: 'user',
+          content: [
+            row.mime_type?.startsWith('image/')
+              ? { type: 'input_image' as const, image_url: dataUrl, detail: 'high' as const }
+              : { type: 'input_file' as const, filename: row.file_name, file_data: dataUrl },
+            { type: 'input_text' as const, text: `Súbor: ${row.file_name}` },
+          ],
+        }],
+        text: { format: zodTextFormat(summarySchema, 'zhrnutie_dokumentu') },
+      });
+      if (!response.output_parsed) throw new Error('empty_output');
+      summary = summarySchema.parse(response.output_parsed);
+    } catch (error) {
+      request.log.error({ err: error }, 'document_summary_failed');
+      throw new HttpError(502, 'ai_failed', 'Dokument sa nepodarilo vysvetliť. Skúste to znova.');
+    }
+
+    await database.query(
+      'UPDATE organization_documents SET ai_summary=$1::jsonb, ai_summary_at=now() WHERE id=$2 AND tenant_id=$3',
+      [JSON.stringify(summary), id, auth.tenantId],
+    );
+    await writeAudit(database, {
+      tenantId: auth.tenantId, organizationId, actorType: 'user', actorId: auth.userId,
+      action: 'organization_document.summarized', entityType: 'organization_document',
+      entityId: id, correlationId: request.id,
+    });
+    return summary;
   });
 
   app.delete('/api/organizations/:organizationId/documents/:id', async (request, reply) => {

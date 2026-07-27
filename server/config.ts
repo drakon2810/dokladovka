@@ -11,6 +11,27 @@ export interface ServerConfig {
   webhookSecret?: string;
   sessionCookieSecure: boolean;
   sessionTtlHours: number;
+  mail: {
+    from: string;
+    smtp: {
+      host?: string;
+      port: number;
+      secure: boolean;
+      user?: string;
+      password?: string;
+    };
+  };
+  turnstile: {
+    /** Verejný kľúč widgetu — servírovaný cez /api/config/public. */
+    siteKey?: string;
+    secretKey?: string;
+  };
+  /**
+   * Kľúč k OpenData API Finančnej správy SR (informačné zoznamy) — dopĺňa
+   * DIČ a IČ DPH slovenských firiem v našepkávači. Je to secret, preto sa
+   * volá výhradne zo servera; bez kľúča sa polia nechajú prázdne.
+   */
+  fsOpenDataApiKey?: string;
   extractionProvider: 'mock' | 'openai';
   imap: {
     host?: string;
@@ -27,6 +48,12 @@ export interface ServerConfig {
     model: string;
     accountingModel: string;
     ruleAnalysisModel: string;
+    /**
+     * Koľko má model „premýšľať" pred extrakciou. Vyťahovanie polí z dokladu nie
+     * je úvaha, ale čítanie, takže vyššie úsilie väčšinou len predlžuje čakanie.
+     * Prázdna hodnota parameter vôbec neposiela (pre modely, ktoré ho nepoznajú).
+     */
+    reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
     storeResponses: boolean;
     timeoutMs: number;
     maxRetries: number;
@@ -61,6 +88,19 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 function nonNegativeInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+/**
+ * Úsilie rozmýšľania pre extrakciu. Predvolene `low` — doklad sa číta, nerieši
+ * sa. Prázdna hodnota parameter úplne vypne (modely bez podpory ho odmietnu),
+ * neznámu hodnotu radšej stiahneme na predvolenú, než by mal server spadnúť.
+ */
+function reasoningEffort(value: string | undefined): ServerConfig['openai']['reasoningEffort'] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === '') return undefined;
+  if (normalized === undefined) return 'low';
+  return (['none', 'minimal', 'low', 'medium', 'high'] as const)
+    .find((allowed) => allowed === normalized) ?? 'low';
 }
 
 function validDomain(value: string | undefined): string {
@@ -108,6 +148,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     webhookSecret: env.INBOUND_WEBHOOK_SECRET?.trim() || undefined,
     sessionCookieSecure: env.SESSION_COOKIE_SECURE === 'true' || nodeEnv === 'production',
     sessionTtlHours: positiveInteger(env.SESSION_TTL_HOURS, 8),
+    mail: (() => {
+      const port = positiveInteger(env.SMTP_PORT, 465);
+      return {
+        from: env.MAIL_FROM?.trim() || `Dokladovka <no-reply@${validDomain(env.MAIL_RECEIVING_DOMAIN || 'doklady.localhost.test')}>`,
+        smtp: {
+          host: env.SMTP_HOST?.trim() || undefined,
+          port,
+          // Implicitné TLS beží na 465; 587 používa STARTTLS (secure=false).
+          secure: env.SMTP_SECURE ? env.SMTP_SECURE === 'true' : port === 465,
+          user: env.SMTP_USER?.trim() || undefined,
+          // App password sa kopíruje s medzerami (Google) — odstránime ich.
+          password: env.SMTP_PASSWORD?.replace(/\s+/g, '') || undefined,
+        },
+      };
+    })(),
+    turnstile: {
+      siteKey: env.TURNSTILE_SITE_KEY?.trim() || undefined,
+      secretKey: env.TURNSTILE_SECRET_KEY?.trim() || undefined,
+    },
+    fsOpenDataApiKey: env.FS_OPENDATA_API_KEY?.trim() || undefined,
     extractionProvider,
     imap: {
       host: env.IMAP_HOST?.trim() || undefined,
@@ -128,6 +188,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         model: extractionModel,
         accountingModel: env.OPENAI_ACCOUNTING_FALLBACK_MODEL?.trim() || extractionModel,
         ruleAnalysisModel: env.OPENAI_RULE_ANALYSIS_MODEL?.trim() || extractionModel,
+        reasoningEffort: reasoningEffort(env.OPENAI_REASONING_EFFORT),
         storeResponses: env.OPENAI_STORE_RESPONSES === 'true',
         timeoutMs: positiveInteger(env.OPENAI_API_TIMEOUT_MS || env.OPENAI_TIMEOUT_MS, 120_000),
         // Počet pokusov spracovania = maxRetries + 1. Prechodné chyby (429/5xx/

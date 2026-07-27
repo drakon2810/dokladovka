@@ -2407,6 +2407,50 @@ export async function assignInboundEmailToOrg(emailId: string, orgId: string): P
   });
 }
 
+// ===== Voľné firemné dokumenty („Iné doklady" v zozname dokladov) =====
+
+/** AI zhrnutie dokumentu v bodoch; server si výsledok pamätá. */
+export async function summarizeOrgDocument(
+  organizationId: string,
+  documentId: string,
+): Promise<{ nadpis: string; body: string[] }> {
+  const summary = await restRequest<{ nadpis: string; body: string[] }>(
+    `/api/organizations/${encodeURIComponent(organizationId)}/documents/${encodeURIComponent(documentId)}/summary`,
+    { method: 'POST' },
+  );
+  await refreshRestSnapshot();
+  return summary;
+}
+
+export async function deleteOrgDocument(organizationId: string, documentId: string): Promise<void> {
+  await restRequest(
+    `/api/organizations/${encodeURIComponent(organizationId)}/documents/${encodeURIComponent(documentId)}`,
+    { method: 'DELETE' },
+  );
+  await refreshRestSnapshot();
+}
+
+export function orgDocumentFileUrl(organizationId: string, documentId: string): string {
+  return `/api/organizations/${encodeURIComponent(organizationId)}/documents/${encodeURIComponent(documentId)}/file`;
+}
+
+/** Admin: zmazanie nespracovaného e-mailu (spam, omylom doručená správa). */
+export async function deleteInboundEmail(emailId: string): Promise<void> {
+  const s = storeApi.get();
+  assertCapability(s.role, 'inbound.assign', 'Zmazať e-mail môže iba admin');
+  if (REST_DATA_MODE) {
+    await restRequest(`/api/inbound-emails/${encodeURIComponent(emailId)}`, { method: 'DELETE' });
+    await refreshRestSnapshot();
+    return;
+  }
+  storeApi.set({
+    inboundEmails: s.inboundEmails.filter(
+      (e) => !(e.id === emailId && e.tenantId === MOCK_TENANT_ID),
+    ),
+    inboundAttachments: s.inboundAttachments.filter((a) => a.inboundEmailId !== emailId),
+  });
+}
+
 // ===== Reset demo dát (SPEC §10 bod 6) =====
 
 export async function resetDemoData(): Promise<void> {

@@ -24,6 +24,7 @@ import type {
   ExtractionRun,
   InboundAttachment,
   InboundEmail,
+  OrgDocument,
   Organization,
   OrganizationBankAccount,
   OrganizationEmailAlias,
@@ -58,6 +59,8 @@ export interface AppDataState {
   partners: Partner[];
   noteTemplates: NoteTemplate[];
   emailTemplates: EmailTemplate[];
+  /** Voľné firemné dokumenty — v zozname dokladov ako „Iné doklady". */
+  organizationDocuments?: OrgDocument[];
   codeLists: Record<CodeListKind, CodeListItem[]>;
   users: AppUser[];
   exportBatches: ExportBatch[];

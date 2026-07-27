@@ -389,6 +389,9 @@ export function InvoicePanel({
   const expected = round2(base + dan);
   const total = ex.sumaSpolu || 0;
   const dphValid = Math.abs(expected - total) < 0.005 && total > 0;
+  // Bez DPH = celková suma mínus daň z rozpisu. Keď rozpis chýba (nulová daň),
+  // vyjde rovnaká suma ako s DPH — čo je pri neplatiteľovi správne.
+  const sumaBezDph = round2(total - dan);
   const cisloErr = !String(ex.cisloFaktury || '').trim();
   const icoErr = !fyzickaOsoba && Boolean(dod.ico) && !/^\d{8}$/.test(String(dod.ico || '').trim());
 
@@ -430,45 +433,66 @@ export function InvoicePanel({
               Použiť automatické účtovanie
             </button>
           </div>
-          <div className="dv-fields">
-            <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
-            {precoWrap('predkontacia',
-              <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />)}
-            <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
-            <DcDropdown label="Nákladové stredisko" mode="simple" searchable value={ucto.strediskoId} options={toOpts(codeLists.strediska)} disabled={readOnly} onChange={(v) => updateUcto({ strediskoId: v })} />
-            {precoWrap('dph',
-              <DcDropdown label="Členenie DPH" mode="simple" searchable value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
-                onChange={(v) => {
-                  const picked = codeLists.cleneniaDph.find((item) => item.id === v);
-                  updateUcto({ clenenieDphId: v, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
-                }} />)}
-            {precoWrap('kv',
-              <DcDropdown label="Členenie kontrolný výkaz" mode="simple" searchable value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(v) => updateUcto({ clenenieKvKod: v })} />)}
-
-            <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}`}>
-              <label className="dv-label">Číslo faktúry</label>
-              <input className="dv-input dv-has-icon" value={ex.cisloFaktury ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('cisloFaktury', e.target.value)} />
-              <svg className="dv-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18" /></svg>
-              {cisloErr && <div className="dv-err-msg">Zadajte číslo faktúry</div>}
-            </div>
-
-            <div className="dv-grid-2">
+          {/* Dva stĺpce: vľavo identifikácia dokladu a dátumy, vpravo zaúčtovanie
+              a suma. Všetko podstatné je na jednej obrazovke bez skrolovania. */}
+          <div className="dv-cols">
+            <div className="dv-fields">
+              <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
+              <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
+              <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}`}>
+                <label className="dv-label">Číslo faktúry</label>
+                <input className="dv-input dv-has-icon" value={ex.cisloFaktury ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('cisloFaktury', e.target.value)} />
+                <svg className="dv-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18" /></svg>
+                {cisloErr && <div className="dv-err-msg">Zadajte číslo faktúry</div>}
+              </div>
               <div className="dv-field">
                 <label className="dv-label">Dátum vydania</label>
                 <input type="date" className="dv-input" value={ex.datumVystavenia ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumVystavenia', e.target.value)} />
+              </div>
+              <div className="dv-field">
+                <label className="dv-label">Dátum dodania (DUZP)</label>
+                <input type="date" className="dv-input" value={ex.datumDodania ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumDodania', e.target.value || undefined)} />
               </div>
               <div className="dv-field">
                 <label className="dv-label">Dátum splatnosti</label>
                 <input type="date" className="dv-input" value={ex.datumSplatnosti ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumSplatnosti', e.target.value || undefined)} />
               </div>
             </div>
-            <div className="dv-field">
-              <label className="dv-label">Dátum dodania (DUZP)</label>
-              <input type="date" className="dv-input" value={ex.datumDodania ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumDodania', e.target.value || undefined)} />
-            </div>
 
+            <div className="dv-fields">
+              {precoWrap('predkontacia',
+                <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />)}
+              {precoWrap('dph',
+                <DcDropdown label="Členenie DPH" mode="simple" searchable value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
+                  onChange={(v) => {
+                    const picked = codeLists.cleneniaDph.find((item) => item.id === v);
+                    updateUcto({ clenenieDphId: v, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
+                  }} />)}
+              {precoWrap('kv',
+                <DcDropdown label="Členenie kontrolný výkaz" mode="simple" searchable value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(v) => updateUcto({ clenenieKvKod: v })} />)}
+              {/* Základ dane sa nezadáva — dopočíta sa z rozpisu DPH, takže sa
+                  nedá omylom rozísť s celkovou sumou. */}
+              <div className="dv-field">
+                <label className="dv-label">Celková suma bez DPH</label>
+                <span className="dv-money-sign">€</span>
+                <input className="dv-input dv-money dv-dim" value={sumaBezDph.toFixed(2)} readOnly tabIndex={-1} />
+              </div>
+              <div className={`dv-field${dphValid ? '' : ' dv-field-err'}`}>
+                <label className="dv-label">Celková suma s DPH</label>
+                <span className="dv-money-sign">€</span>
+                <input className="dv-input dv-money" value={ex.sumaSpolu === undefined ? '' : String(ex.sumaSpolu)} disabled={readOnly} inputMode="decimal" onChange={(e) => updateExtracted('sumaSpolu', parseNum(e.target.value))} />
+              </div>
+              <div className="dv-field">
+                <label className="dv-label">Názov spoločnosti</label>
+                <input className="dv-input" value={dod.nazov ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('nazov', e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="dv-fields" style={{ marginTop: 18 }}>
             <div className={`dv-expand${rozOpen ? ' dv-open' : ''}`}>
               <div className="dv-expand-inner">
+                <DcDropdown label="Nákladové stredisko" mode="simple" searchable value={ucto.strediskoId} options={toOpts(codeLists.strediska)} disabled={readOnly} onChange={(v) => updateUcto({ strediskoId: v })} />
                 <div className="dv-field">
                   <label className="dv-label">Interné číslo</label>
                   <input className="dv-input" value={ex.interneCislo ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('interneCislo', e.target.value || undefined)} placeholder="napr. INT-2026-014" />
@@ -487,40 +511,6 @@ export function InvoicePanel({
 
         <div className="dv-divider" />
 
-        {/* Čiastka a DPH */}
-        <section className="dv-section">
-          <div className="dv-h3-row">
-            <div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Čiastka a DPH</h3></div>
-            {dphValid
-              ? <span className="dv-dph-ok"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg></span>
-              : <span className="dv-dph-warn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg></span>}
-          </div>
-          <div className="dv-grid-2">
-            <div className={`dv-field${dphValid ? '' : ' dv-field-err'}`}>
-              <label className="dv-label">Celková suma</label>
-              <span className="dv-money-sign">€</span>
-              <input className="dv-input dv-money" value={ex.sumaSpolu === undefined ? '' : String(ex.sumaSpolu)} disabled={readOnly} inputMode="decimal" onChange={(e) => updateExtracted('sumaSpolu', parseNum(e.target.value))} />
-            </div>
-            <DcDropdown label="Mena" mode="simple" value={ex.mena} options={menaOpts} disabled={readOnly} onChange={(v) => updateExtracted('mena', v as DocumentExtractedData['mena'])} />
-
-            {numField('Základ dane 23 %', rowFor(23)?.zaklad, (n) => setVat(23, { zaklad: n }))}
-            {numField('Daň 23 %', rowFor(23)?.dph, (n) => setVat(23, { dph: n }))}
-            {numField('Základ dane 19 %', rowFor(19)?.zaklad, (n) => setVat(19, { zaklad: n }), true)}
-            {numField('Daň 19 %', rowFor(19)?.dph, (n) => setVat(19, { dph: n }), true)}
-            {numField('Základ dane 5 %', rowFor(5)?.zaklad, (n) => setVat(5, { zaklad: n }), true)}
-            {numField('Daň 5 %', rowFor(5)?.dph, (n) => setVat(5, { dph: n }), true)}
-            {numField('Základ dane 0 %', rowFor(0)?.zaklad, (n) => setVat(0, { zaklad: n }), true)}
-          </div>
-          {!dphValid && (
-            <div className="dv-dph-msg">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>
-              Rozpis DPH ({expected.toFixed(2)} €) sa nezhoduje s celkovou sumou ({total.toFixed(2)} €).
-            </div>
-          )}
-        </section>
-
-        <div className="dv-divider" />
-
         {/* Dodávateľ */}
         <section className="dv-section">
           <div className="dv-h3-row"><div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Dodávateľ</h3></div></div>
@@ -529,10 +519,8 @@ export function InvoicePanel({
               <input type="checkbox" checked={fyzickaOsoba} disabled={readOnly} onChange={(e) => setFyzickaOsoba(e.target.checked)} />
               <span>Fyzická osoba nepodnikateľ</span>
             </label>
-            <div className="dv-field">
-              <label className="dv-label">Názov spoločnosti</label>
-              <input className="dv-input" value={dod.nazov ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('nazov', e.target.value)} />
-            </div>
+            {/* Názov spoločnosti je hore v Základných údajoch — tu už len IČO
+                a daňové identifikátory, nech sa pole needituje na dvoch miestach. */}
             <div className={`dv-field${icoErr ? ' dv-field-warn' : ''}`}>
               <label className="dv-label">IČO</label>
               <input className="dv-input" value={dod.ico ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('ico', e.target.value)} />
@@ -561,6 +549,37 @@ export function InvoicePanel({
               Rozšírené položky <span className={`dv-caret${rozDodOpen ? ' dv-up' : ''}`}><CaretIcon /></span>
             </button>
           </div>
+        </section>
+
+        <div className="dv-divider" />
+
+        {/* Čiastka a DPH */}
+        <section className="dv-section">
+          <div className="dv-h3-row">
+            <div className="dv-h3-left"><span className="dv-accent-bar" /><h3 className="dv-h3">Čiastka a DPH</h3></div>
+            {dphValid
+              ? <span className="dv-dph-ok"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg></span>
+              : <span className="dv-dph-warn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg></span>}
+          </div>
+          {/* Celková suma je hore v Základných údajoch — tu ostáva len rozpis. */}
+          <div className="dv-grid-2">
+            <DcDropdown label="Mena" mode="simple" value={ex.mena} options={menaOpts} disabled={readOnly} onChange={(v) => updateExtracted('mena', v as DocumentExtractedData['mena'])} />
+            <div />
+
+            {numField('Základ dane 23 %', rowFor(23)?.zaklad, (n) => setVat(23, { zaklad: n }))}
+            {numField('Daň 23 %', rowFor(23)?.dph, (n) => setVat(23, { dph: n }))}
+            {numField('Základ dane 19 %', rowFor(19)?.zaklad, (n) => setVat(19, { zaklad: n }), true)}
+            {numField('Daň 19 %', rowFor(19)?.dph, (n) => setVat(19, { dph: n }), true)}
+            {numField('Základ dane 5 %', rowFor(5)?.zaklad, (n) => setVat(5, { zaklad: n }), true)}
+            {numField('Daň 5 %', rowFor(5)?.dph, (n) => setVat(5, { dph: n }), true)}
+            {numField('Základ dane 0 %', rowFor(0)?.zaklad, (n) => setVat(0, { zaklad: n }), true)}
+          </div>
+          {!dphValid && (
+            <div className="dv-dph-msg">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>
+              Rozpis DPH ({expected.toFixed(2)} €) sa nezhoduje s celkovou sumou ({total.toFixed(2)} €).
+            </div>
+          )}
         </section>
 
         <div className="dv-divider" />

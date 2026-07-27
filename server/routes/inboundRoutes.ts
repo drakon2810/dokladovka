@@ -9,6 +9,7 @@ import { HttpError } from '../http.js';
 import { constantTimeStringEqual, sha256 } from '../security.js';
 import { classifyXml } from '../inbound/xmlClassifier.js';
 import { detectedMimeType, mimeMatchesDeclared, safeName } from '../inbound/attachmentMime.js';
+import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 import type { ObjectStorage } from '../storage.js';
 
 const attachmentSchema = z.object({
@@ -142,13 +143,10 @@ export function registerInboundRoutes(
         if (classifyXml(bytes) === 'unknown_xml') reason = 'unsupported_xml';
       }
       if (!reason && resolved) {
-        const duplicate = await database.query(
-          `SELECT 1 FROM inbound_attachments
-            WHERE tenant_id=$1 AND organization_id=$2 AND sha256=$3
-              AND status IN ('queued','processing','document_created','duplicate')`,
-          [resolved.tenant_id, resolved.organization_id, hash],
-        );
-        if (duplicate.rowCount > 0) {
+        const duplicate = await isTechnicalDuplicate(database, {
+          tenantId: resolved.tenant_id, organizationId: resolved.organization_id, sha256: hash,
+        });
+        if (duplicate) {
           status = 'duplicate';
           reason = 'technical_duplicate';
           duplicates += 1;
@@ -278,6 +276,52 @@ export function registerInboundRoutes(
     return reply.code(202).send({ queued: attachments.rowCount });
   });
 
+  // Zmazanie nespracovaného e-mailu (karanténa / zlyhanie) — admin upratuje
+  // spam a omylom doručené správy, ktoré nepatria žiadnej firme.
+  app.delete('/api/inbound-emails/:id', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const email = await database.query<{ tenant_id: string | null; organization_id: string | null } & Record<string, unknown>>(
+      'SELECT tenant_id, organization_id FROM inbound_emails WHERE id=$1', [id],
+    );
+    const scope = email.rows[0];
+    if (!scope || (scope.tenant_id !== null && scope.tenant_id !== auth.tenantId)) {
+      throw new HttpError(404, 'inbound_email_not_found', 'E-mail neexistuje');
+    }
+    if (scope.organization_id) await requireOrganizationAccess(database, auth, scope.organization_id);
+    // Doklad, ktorý z prílohy už vznikol, by prišiel o svoj pôvod — mazať sa
+    // musí najprv doklad, inak by v histórii ostala diera.
+    const linked = await database.query(
+      'SELECT 1 FROM inbound_attachments WHERE inbound_email_id=$1 AND document_id IS NOT NULL', [id],
+    );
+    if (linked.rowCount > 0) {
+      throw new HttpError(409, 'inbound_email_has_document', 'Z e-mailu už vznikol doklad — najprv zmažte doklad.');
+    }
+    // processing_jobs.attachment_id nemá ON DELETE CASCADE, takže by kaskádu
+    // z inbound_attachments zablokoval; ide preč ako prvé.
+    await database.query(
+      `DELETE FROM processing_jobs
+        WHERE attachment_id IN (SELECT id FROM inbound_attachments WHERE inbound_email_id=$1)`,
+      [id],
+    );
+    // Prílohy odíde kaskádou; bajty v object storage ostávajú (rovnako ako pri
+    // mazaní dokumentu organizácie) — čistia sa mimo požiadavky.
+    await database.query('DELETE FROM inbound_emails WHERE id=$1', [id]);
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId: scope.organization_id ?? undefined,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'inbound_email.deleted',
+      entityType: 'inbound_email',
+      entityId: id,
+      correlationId: request.id,
+    });
+    return reply.code(204).send();
+  });
+
   app.post('/api/inbound-emails/:id/assign-organization', async (request, reply) => {
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
@@ -303,13 +347,10 @@ export function registerInboundRoutes(
     let duplicates = 0;
     for (const attachment of attachments.rows) {
       if (attachment.storage_key && attachment.status === 'quarantine') {
-        const duplicate = await database.query(
-          `SELECT 1 FROM inbound_attachments
-            WHERE tenant_id=$1 AND organization_id=$2 AND sha256=$3
-              AND status IN ('queued','processing','document_created','duplicate')`,
-          [auth.tenantId, organizationId, attachment.sha256],
-        );
-        if (duplicate.rowCount > 0) {
+        const duplicate = await isTechnicalDuplicate(database, {
+          tenantId: auth.tenantId, organizationId, sha256: attachment.sha256,
+        });
+        if (duplicate) {
           await database.query(
             `UPDATE inbound_attachments SET tenant_id=$1, organization_id=$2, status='duplicate', quarantine_reason='technical_duplicate' WHERE id=$3`,
             [auth.tenantId, organizationId, attachment.id],

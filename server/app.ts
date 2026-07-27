@@ -17,13 +17,16 @@ import { registerPaymentRoutes } from './routes/paymentRoutes.js';
 import { registerPartnerRoutes } from './routes/partnerRoutes.js';
 import { registerAiTrainingRoutes } from './routes/aiTrainingRoutes.js';
 import { registerAssistantRoutes } from './routes/assistantRoutes.js';
+import { registerCompanyRegistryRoutes } from './routes/companyRegistryRoutes.js';
 import type { ObjectStorage } from './storage.js';
+import { createMailer, type Mailer } from './mailer.js';
 
 export async function buildApp(input: {
   database: Database;
   storage: ObjectStorage;
   config: ServerConfig;
   logger?: boolean;
+  mailer?: Mailer;
   aiRulesParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown }> };
   assistantParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown; usage?: { input_tokens?: number; output_tokens?: number } }> };
 }): Promise<FastifyInstance> {
@@ -70,9 +73,12 @@ export async function buildApp(input: {
   app.get('/api/config/public', async () => ({
     mailReceivingDomain: input.config.mailReceivingDomain,
     inboundEmailProvider: process.env.INBOUND_EMAIL_PROVIDER ?? 'mock',
+    // Verejný kľúč Turnstile widgetu. Runtime (nie VITE_*) — frontend build
+    // v Dockeri nevidí .env, takže build-time premenná by ostala prázdna.
+    turnstileSiteKey: input.config.turnstile.siteKey ?? null,
   }));
 
-  registerAuthRoutes(app, input.database, input.config);
+  registerAuthRoutes(app, input.database, input.config, input.mailer ?? createMailer(input.config));
   registerOrganizationRoutes(app, input.database, input.config);
   registerInboundRoutes(app, input.database, input.storage, input.config);
   registerDocumentRoutes(app, input.database, input.storage, input.config);
@@ -84,6 +90,7 @@ export async function buildApp(input: {
   registerPartnerRoutes(app, input.database);
   registerAiTrainingRoutes(app, input.database, input.config, input.aiRulesParser);
   registerAssistantRoutes(app, input.database, input.storage, input.config, input.assistantParser);
+  registerCompanyRegistryRoutes(app, input.database, input.config);
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
@@ -99,6 +106,19 @@ export async function buildApp(input: {
           ? { code: error.code, message: error.message }
           : { code: error.code, message: error.message, details: error.details },
       );
+    }
+    // Fastify pluginy (rate-limit, limit tela požiadavky) hlásia chybu cez
+    // reply.send(error) — bez tejto vetvy by sa 429/413 prepísali na 500 a
+    // klient by nevedel, že len naráža na limit.
+    const plugin = error as { statusCode?: unknown; message?: unknown };
+    const statusCode = typeof plugin.statusCode === 'number' ? plugin.statusCode : 500;
+    if (statusCode >= 400 && statusCode < 500) {
+      const code = statusCode === 429 ? 'rate_limited' : 'bad_request';
+      request.log.warn({ code, statusCode, url: request.url, message: plugin.message }, 'request_rejected');
+      return reply.code(statusCode).send({
+        code,
+        message: statusCode === 429 ? 'Priveľa pokusov, skúste to znova o chvíľu' : 'Požiadavku sa nepodarilo spracovať',
+      });
     }
     request.log.error({ err: error, correlationId: request.id }, 'request_failed');
     return reply.code(500).send({ code: 'internal_error', message: 'Nastala neočakávaná chyba', correlationId: request.id });

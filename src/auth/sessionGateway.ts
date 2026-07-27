@@ -179,7 +179,12 @@ const bffGateway: SessionGateway = {
       body: JSON.stringify(credentials),
     });
     if (response.status === 401) throw new AuthError('invalid_credentials');
-    if (!response.ok) throw new AuthError('session_unavailable');
+    if (!response.ok) {
+      // 400 = captcha / validácia — server posiela slovenskú hlášku, ktorá je
+      // pre používateľa presnejšia než všeobecné „služba nie je dostupná“.
+      const data = (await response.json().catch(() => null)) as { message?: unknown } | null;
+      throw new AuthError('session_unavailable', typeof data?.message === 'string' ? data.message : undefined);
+    }
     const session: unknown = await response.json();
     if (!isAuthSession(session)) throw new AuthError('session_unavailable');
     return session;

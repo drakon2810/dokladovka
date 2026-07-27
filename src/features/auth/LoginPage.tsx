@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AUTH_MODE, DEMO_ACCOUNTS, DEMO_PASSWORD } from '../../auth/config';
 import { useAuth } from '../../auth/AuthContext';
 import { startOidc } from '../../auth/sessionGateway';
 import { AuthError } from '../../auth/types';
 import { t } from '../../i18n/sk';
+import { AuthShell, Field, FormError, Turnstile, inputCls, linkBtnCls, primaryBtnCls } from './authUi';
 
 // Redesign прежнего LoginPage.tsx: та же логика, обновлённая композиция.
 // Палитра из tailwind.config.ts: accent #0E7A5F, accent-hover #0A6650,
@@ -37,18 +38,15 @@ const ssoBtn =
   'hover:border-[#C9D0CB] hover:shadow-md hover:shadow-ink/10 ' +
   'focus:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-60';
 
-const inputCls =
-  'w-full rounded-xl border border-line bg-[#FBFCFB] px-4 py-3 text-[15px] text-ink transition placeholder:text-[#9AA39E] ' +
-  'hover:border-[#C9D0CB] focus:border-accent focus:bg-white focus:outline-none focus:ring-[3px] focus:ring-accent/15';
-
 export function LoginPage() {
   const { session, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [email, setEmail] = useState(AUTH_MODE === 'demo' ? DEMO_ACCOUNTS[0].email : '');
   const [password, setPassword] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaReset, setCaptchaReset] = useState(0);
   const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
 
   if (session) return <Navigate to="/" replace />;
@@ -56,156 +54,123 @@ export function LoginPage() {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError('');
-    setInfo('');
     setBusy(true);
     try {
-      await login({ email, password });
+      await login({ email, password, captchaToken });
       const state = location.state as { from?: { pathname?: string; search?: string } } | null;
       navigate(`${state?.from?.pathname ?? '/'}${state?.from?.search ?? ''}`, { replace: true });
     } catch (cause) {
-      setError(
-        cause instanceof AuthError && cause.code === 'invalid_credentials'
-          ? t('auth.neplatne')
-          : t('auth.nedostupne'),
-      );
+      if (cause instanceof AuthError) {
+        setError(cause.detail ?? (cause.code === 'invalid_credentials' ? t('auth.neplatne') : t('auth.nedostupne')));
+      } else {
+        setError(t('auth.nedostupne'));
+      }
+      // Spotrebovaný token vymeníme, inak by druhý pokus zlyhal na captchu.
+      setCaptchaToken('');
+      setCaptchaReset((value) => value + 1);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <main
-      className="flex min-h-screen items-center justify-center px-4 py-12"
-      style={{
-        background:
-          'radial-gradient(1100px 600px at 50% -180px, rgba(14,122,95,0.10), rgba(14,122,95,0) 60%), ' +
-          'radial-gradient(900px 500px at 85% 110%, rgba(14,122,95,0.06), rgba(14,122,95,0) 55%), #F6F7F5',
-      }}
+    <AuthShell
+      title={t('auth.vitajte')}
+      footer={AUTH_MODE === 'demo' ? t('auth.demo') : t('auth.sessionBff')}
     >
-      <div className="flex w-full max-w-[460px] flex-col gap-7">
-        {/* Логотип */}
-        <div className="flex items-center justify-center gap-3">
-          <span
-            className="grid h-11 w-11 place-items-center rounded-[14px] bg-gradient-to-br from-accent to-accent-hover shadow-lg shadow-accent/40"
-            aria-hidden
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <path d="M6 3.5h8.5L19 8v12a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20V5a1.5 1.5 0 0 1 1-1.5z" stroke="white" strokeWidth="1.8" strokeLinejoin="round" />
-              <path d="M9 12.5h6M9 16h6" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-          </span>
-          <span className="text-2xl font-bold tracking-tight text-ink">{t('app.nazov')}</span>
-        </div>
-
-        <section className="rounded-3xl bg-white p-9 shadow-[0_1px_2px_rgba(27,31,29,0.04),0_12px_32px_-12px_rgba(27,31,29,0.10),0_32px_64px_-32px_rgba(14,122,95,0.12)] sm:p-10">
-          <h1 className="mb-7 text-center text-[26px] font-semibold tracking-tight text-ink">{t('auth.vitajte')}</h1>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              className={ssoBtn}
-              disabled={AUTH_MODE === 'demo'}
-              title={AUTH_MODE === 'demo' ? t('auth.oidcDemo') : undefined}
-              onClick={() => startOidc('google')}
-            >
-              <GoogleIcon />
-              {t('auth.google')}
-            </button>
-            <button
-              type="button"
-              className={ssoBtn}
-              disabled={AUTH_MODE === 'demo'}
-              title={AUTH_MODE === 'demo' ? t('auth.oidcDemo') : undefined}
-              onClick={() => startOidc('microsoft')}
-            >
-              <MicrosoftIcon />
-              {t('auth.microsoft')}
-            </button>
-          </div>
-
-          <div className="my-6 flex items-center gap-3.5 text-xs uppercase tracking-wider text-ink-soft">
-            <span className="h-px flex-1 bg-gradient-to-r from-transparent to-line" />
-            {t('auth.alebo')}
-            <span className="h-px flex-1 bg-gradient-to-r from-line to-transparent" />
-          </div>
-
-          <form onSubmit={submit} className="flex flex-col gap-4.5 space-y-0" style={{ gap: 18 }}>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium text-ink-soft">{t('auth.email')}</span>
-              <input
-                className={inputCls}
-                type="email"
-                autoComplete="username"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium text-ink-soft">{t('auth.heslo')}</span>
-              <input
-                className={inputCls}
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </label>
-
-            {error && <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
-            {info && <p className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm text-sky-800">{info}</p>}
-
-            <button
-              type="submit"
-              className="mt-1 rounded-xl bg-accent px-4 py-3.5 text-[15px] font-semibold text-white shadow-lg shadow-accent/40 transition hover:-translate-y-px hover:bg-accent-hover active:translate-y-0 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-70"
-              disabled={busy}
-            >
-              {busy ? t('stav.nacitavam') : t('auth.prihlasit')}
-            </button>
-            <button
-              type="button"
-              className="text-center text-[13.5px] font-medium text-accent underline-offset-2 hover:text-accent-hover hover:underline"
-              onClick={() => setInfo(t('auth.obnovaBff'))}
-            >
-              {t('auth.zabudnute')}
-            </button>
-          </form>
-
-          {(AUTH_MODE === 'demo' || import.meta.env.DEV) && (
-            <div className="mt-7 rounded-2xl border border-[#F3E3B3] bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-5 py-4.5" style={{ paddingTop: 18, paddingBottom: 18 }}>
-              <div className="flex items-center gap-2">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
-                  <path d="M12 3l9 16H3l9-16z" stroke="#92730A" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M12 10v4M12 16.5v.5" stroke="#92730A" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-                <p className="text-[13.5px] font-semibold text-[#6B5407]">{t('auth.demo')}</p>
-              </div>
-              <p className="mt-1.5 text-xs leading-relaxed text-[#85691A]">{t('auth.demoPopis')}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {DEMO_ACCOUNTS.map((account) => (
-                  <button
-                    key={account.email}
-                    type="button"
-                    className="rounded-full border border-[#EBD79A] bg-white px-3.5 py-1.5 text-xs font-medium text-[#6B5407] transition hover:border-[#DFC97E] hover:bg-[#FDF3CE] hover:shadow-sm focus:outline-none focus-visible:ring-[3px] focus-visible:ring-[#92730A]/20"
-                    onClick={() => {
-                      setEmail(account.email);
-                      setPassword(DEMO_PASSWORD);
-                    }}
-                  >
-                    {t(`rola.${account.role}`)}
-                  </button>
-                ))}
-              </div>
-              <p className="tnum mt-3 text-xs text-[#85691A]">{t('auth.demoHeslo')}: {DEMO_PASSWORD}</p>
-            </div>
-          )}
-        </section>
-
-        <p className="text-center text-xs text-ink-soft">
-          {AUTH_MODE === 'demo' ? t('auth.demo') : t('auth.sessionBff')}
-        </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          className={ssoBtn}
+          disabled={AUTH_MODE === 'demo'}
+          title={AUTH_MODE === 'demo' ? t('auth.oidcDemo') : undefined}
+          onClick={() => startOidc('google')}
+        >
+          <GoogleIcon />
+          {t('auth.google')}
+        </button>
+        <button
+          type="button"
+          className={ssoBtn}
+          disabled={AUTH_MODE === 'demo'}
+          title={AUTH_MODE === 'demo' ? t('auth.oidcDemo') : undefined}
+          onClick={() => startOidc('microsoft')}
+        >
+          <MicrosoftIcon />
+          {t('auth.microsoft')}
+        </button>
       </div>
-    </main>
+
+      <div className="my-6 flex items-center gap-3.5 text-xs uppercase tracking-wider text-ink-soft">
+        <span className="h-px flex-1 bg-gradient-to-r from-transparent to-line" />
+        {t('auth.alebo')}
+        <span className="h-px flex-1 bg-gradient-to-r from-line to-transparent" />
+      </div>
+
+      <form onSubmit={submit} className="flex flex-col" style={{ gap: 18 }}>
+        <Field label={t('auth.email')}>
+          <input
+            className={inputCls}
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </Field>
+        <Field label={t('auth.heslo')}>
+          <input
+            className={inputCls}
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </Field>
+
+        <Turnstile onToken={setCaptchaToken} resetKey={captchaReset} />
+        {error && <FormError>{error}</FormError>}
+
+        <button type="submit" className={primaryBtnCls} disabled={busy}>
+          {busy ? t('stav.nacitavam') : t('auth.prihlasit')}
+        </button>
+        <Link to="/zabudnute-heslo" className={linkBtnCls}>
+          {t('auth.zabudnute')}
+        </Link>
+        <Link to="/registracia" className={linkBtnCls}>
+          {t('auth.nemateUcet')} {t('auth.registrovat')}
+        </Link>
+      </form>
+
+      {(AUTH_MODE === 'demo' || import.meta.env.DEV) && (
+        <div className="mt-7 rounded-2xl border border-[#F3E3B3] bg-gradient-to-b from-amber-50 to-[#FEF7DC] px-5" style={{ paddingTop: 18, paddingBottom: 18 }}>
+          <div className="flex items-center gap-2">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path d="M12 3l9 16H3l9-16z" stroke="#92730A" strokeWidth="1.8" strokeLinejoin="round" />
+              <path d="M12 10v4M12 16.5v.5" stroke="#92730A" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+            <p className="text-[13.5px] font-semibold text-[#6B5407]">{t('auth.demo')}</p>
+          </div>
+          <p className="mt-1.5 text-xs leading-relaxed text-[#85691A]">{t('auth.demoPopis')}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {DEMO_ACCOUNTS.map((account) => (
+              <button
+                key={account.email}
+                type="button"
+                className="rounded-full border border-[#EBD79A] bg-white px-3.5 py-1.5 text-xs font-medium text-[#6B5407] transition hover:border-[#DFC97E] hover:bg-[#FDF3CE] hover:shadow-sm focus:outline-none focus-visible:ring-[3px] focus-visible:ring-[#92730A]/20"
+                onClick={() => {
+                  setEmail(account.email);
+                  setPassword(DEMO_PASSWORD);
+                }}
+              >
+                {t(`rola.${account.role}`)}
+              </button>
+            ))}
+          </div>
+          <p className="tnum mt-3 text-xs text-[#85691A]">{t('auth.demoHeslo')}: {DEMO_PASSWORD}</p>
+        </div>
+      )}
+    </AuthShell>
   );
 }

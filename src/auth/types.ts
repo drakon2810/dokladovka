@@ -39,6 +39,8 @@ export interface AuthSession {
 export interface LoginCredentials {
   email: string;
   password: string;
+  /** Cloudflare Turnstile. Prázdny, keď captcha nie je nakonfigurovaná. */
+  captchaToken?: string;
 }
 
 export interface UpdateProfileInput {
@@ -55,8 +57,12 @@ export interface SessionGateway {
 }
 
 export class AuthError extends Error {
-  constructor(public readonly code: 'invalid_credentials' | 'session_unavailable') {
-    super(code);
+  constructor(
+    public readonly code: 'invalid_credentials' | 'session_unavailable',
+    /** Konkrétna hláška zo servera (napr. zlyhanie captcha), ak ju poslal. */
+    public readonly detail?: string,
+  ) {
+    super(detail ?? code);
     this.name = 'AuthError';
   }
 }

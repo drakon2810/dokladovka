@@ -59,6 +59,19 @@ describe('OpenAIDocumentExtractionProvider', () => {
     expect(outcome.usage).toEqual({ inputTokens: 100, outputTokens: 50 });
   });
 
+  it('posiela nastavené úsilie rozmýšľania a bez neho parameter vynechá', async () => {
+    const parse = vi.fn().mockResolvedValue({ output_parsed: wireResult() });
+    await new OpenAIDocumentExtractionProvider({ ...config, reasoningEffort: 'low' }, { parse })
+      .extract(input());
+    expect((parse.mock.calls[0][0] as any).reasoning).toEqual({ effort: 'low' });
+
+    // Modely bez podpory rozmýšľania parameter odmietnu — musí sa dať vypnúť.
+    const bezRozmyslania = vi.fn().mockResolvedValue({ output_parsed: wireResult() });
+    await new OpenAIDocumentExtractionProvider({ ...config, reasoningEffort: undefined }, { parse: bezRozmyslania })
+      .extract(input());
+    expect((bezRozmyslania.mock.calls[0][0] as any).reasoning).toBeUndefined();
+  });
+
   it('posiela obrázok ako input_image', async () => {
     const parse = vi.fn().mockResolvedValue({ output_parsed: wireResult() });
     const provider = new OpenAIDocumentExtractionProvider(config, { parse });

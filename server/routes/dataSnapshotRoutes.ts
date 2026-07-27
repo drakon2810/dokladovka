@@ -32,7 +32,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     const [
       queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
       extractionRuns, suggestions, payments, approvalRules, dphProfiles,
-      accountingProfiles, partners, noteTemplates, emailTemplates, codeListRows,
+      accountingProfiles, partners, noteTemplates, emailTemplates, orgDocuments, codeListRows,
       users, batches, integration, installations, links, jobs,
     ] = await Promise.all([
       inScope('document_queues', 'name'),
@@ -62,6 +62,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       inScope('partners', 'name'),
       inScope('note_templates', 'created_at'),
       inScope('email_templates', 'name'),
+      inScope('organization_documents'),
       inScope('code_list_items', 'code'),
       database.query<Record<string, any>>(
         'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
@@ -180,6 +181,11 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       emailTemplates: emailTemplates.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id,
         nazov: row.name, predmet: row.subject, telo: row.body, active: row.active,
+      })),
+      organizationDocuments: orgDocuments.rows.map((row) => ({
+        id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id,
+        fileName: row.file_name, mimeType: row.mime_type, byteSize: Number(row.byte_size),
+        note: row.note ?? undefined, aiSummary: row.ai_summary ?? undefined, createdAt: iso(row.created_at),
       })),
       users: users.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, meno: row.name, email: row.email, rola: row.role, jazyk: row.language, notifikacie: row.notifications })),
       exportBatches: batches.rows.map((row) => ({

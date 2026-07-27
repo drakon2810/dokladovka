@@ -17,6 +17,7 @@ import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, up
 import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
+import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -617,13 +618,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       if (!reason && !actualMime) reason = 'unsupported_or_corrupted_file';
       if (!reason && actualMime === 'application/xml' && classifyXml(bytes) === 'unknown_xml') reason = 'unsupported_xml';
       if (!reason) {
-        const duplicate = await database.query(
-          `SELECT 1 FROM inbound_attachments
-            WHERE tenant_id=$1 AND organization_id=$2 AND sha256=$3
-              AND status IN ('queued','processing','document_created','duplicate')`,
-          [auth.tenantId, body.organizationId, hash],
-        );
-        if (duplicate.rowCount > 0) {
+        const duplicate = await isTechnicalDuplicate(database, {
+          tenantId: auth.tenantId, organizationId: body.organizationId, sha256: hash,
+        });
+        if (duplicate) {
           status = 'duplicate';
           reason = 'technical_duplicate';
         } else {

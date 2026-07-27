@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { saveAccountingProfile, saveDphProfile } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useOrgSelection } from '../../data/orgSelection';
 import {
   CLENENIE_KV_KODY,
   type DphProfil,
@@ -89,7 +90,7 @@ function draftFromProfile(profil?: DphProfil): ProfilDraft {
 
 export function ClientProfileTab() {
   const { data, loading, error } = useDataQuery();
-  const [selectedOrgId, setSelectedOrgId] = useState<string>();
+  const { orgId, selectOrg } = useOrgSelection();
   const [drafts, setDrafts] = useState<Record<string, ProfilDraft>>({});
   const [busy, setBusy] = useState(false);
 
@@ -97,7 +98,6 @@ export function ClientProfileTab() {
     () => (data?.organizations ?? []).filter((org) => !org.archived),
     [data?.organizations],
   );
-  const orgId = selectedOrgId ?? organizations[0]?.id;
 
   if (loading) return <p className="text-sm text-ink-soft">{t('stav.nacitavam')}</p>;
   if (error || !data) return <p className="text-sm text-red-700">{t('chyba.vseobecna')}</p>;
@@ -190,7 +190,7 @@ export function ClientProfileTab() {
         <select
           className="input w-full"
           value={orgId}
-          onChange={(event) => setSelectedOrgId(event.target.value)}
+          onChange={(event) => selectOrg(event.target.value)}
         >
           {organizations.map((org) => (
             <option key={org.id} value={org.id}>{org.nazov}</option>

@@ -5,7 +5,7 @@ import { Layout } from './Layout';
 import { LandingPage } from '../features/landing/LandingPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { DocumentsPage } from '../features/documents/DocumentsPage';
-import { DokumentyPage } from '../features/dokumenty/DokumentyPage';
+import { OtherDocumentPage } from '../features/documents/OtherDocumentPage';
 import { NespracovanePage } from '../features/nespracovane/NespracovanePage';
 import { ExportPage } from '../features/export/ExportPage';
 import { PaymentsPage } from '../features/payments/PaymentsPage';
@@ -18,6 +18,9 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { AuthProvider } from '../auth/AuthProvider';
 import { useAuth } from '../auth/AuthContext';
 import { LoginPage } from '../features/auth/LoginPage';
+import { RegisterPage } from '../features/auth/RegisterPage';
+import { ForgotPasswordPage } from '../features/auth/ForgotPasswordPage';
+import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
 
 const DocumentDetailPage = lazy(() =>
@@ -54,9 +57,15 @@ export function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/registracia" element={<RegisterPage />} />
+          <Route path="/zabudnute-heslo" element={<ForgotPasswordPage />} />
+          <Route path="/obnova-hesla" element={<ResetPasswordPage />} />
           <Route element={<AppShell />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/doklady" element={<DocumentsPage />} />
+            {/* Voľné firemné dokumenty žijú v tom istom zozname ako doklady,
+                len majú vlastný detail bez editácie. */}
+            <Route path="/doklady/ine/:id" element={<OtherDocumentPage />} />
             <Route
               path="/doklady/:id"
               element={
@@ -68,7 +77,6 @@ export function App() {
               }
             />
             <Route path="/nespracovane" element={<NespracovanePage />} />
-            <Route path="/dokumenty" element={<DokumentyPage />} />
             <Route path="/export" element={<ExportPage />} />
             <Route path="/uhrady" element={<PaymentsPage />} />
             <Route path="/partneri" element={<PartnersPage />} />

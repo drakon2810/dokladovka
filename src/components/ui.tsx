@@ -153,8 +153,14 @@ export function Modal({
   wide?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Fokus LEN pri otvorení. Volajúci posielajú onClose ako inline arrow, takže
+  // identita sa mení pri každom rendri rodiča (poller snapshotu ~5 s) — keby bol
+  // fokus v tom istom efekte ako Escape, každý tik by prehodil fokus z políčka
+  // späť na dialóg a písanie by sa zaseklo.
   useEffect(() => {
     ref.current?.focus();
+  }, []);
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };

@@ -28,6 +28,21 @@ Heslo sa ukladá ako scrypt hash.
 - Všetky heslá, webhook secrets, DB URL a storage credentials patria iba do
   secret managera hostingu. Hodnoty z `.env.example` nie sú produkčné secrets.
 
+## Registrácia, obnova hesla a captcha
+
+Samoobslužná registrácia (kód do e-mailu) a obnova hesla (jednorazový odkaz)
+potrebujú odosielanie pošty: `SMTP_HOST`, `SMTP_PORT` (465 = implicitné TLS,
+587 = STARTTLS), `SMTP_USER`, `SMTP_PASSWORD` a `MAIL_FROM`. Bez `SMTP_HOST` sa
+správy iba logujú do konzoly — v produkcii by sa nikto nezaregistroval.
+`APP_BASE_URL` musí byť verejná adresa aplikácie, stavia sa z nej odkaz na
+obnovu hesla.
+
+Captcha je Cloudflare Turnstile: `TURNSTILE_SITE_KEY` (verejný, servíruje sa cez
+`/api/config/public`) a `TURNSTILE_SECRET_KEY` (secret). Bez secret kľúča je
+captcha vypnutá — to je v poriadku lokálne, nie v produkcii. Testovacie kľúče
+Cloudflare (`1x00000000000000000000AA` / `1x0000000000000000000000000000000AA`)
+prejdú vždy a hodia sa na overenie nasadenia.
+
 ## AI extrakcia faktúr
 
 Worker podporuje `DOCUMENT_EXTRACTION_PROVIDER=mock|openai`. Pre produkčnú

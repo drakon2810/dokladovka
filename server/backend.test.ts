@@ -236,6 +236,43 @@ describe('backend foundation', () => {
     await app.close();
   }, 90_000);
 
+  it('deletes an unprocessed email with its attachments, but refuses once a document exists', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const storage = new MemoryObjectStorage();
+    const app = await buildApp({ database, storage, config: testConfig(), logger: false });
+    const pdf = Buffer.from('%PDF-1.4\n% spam');
+    const inbound = await app.inject({
+      method: 'POST', url: '/api/webhooks/inbound-email/mock',
+      headers: { 'x-dokladovka-webhook-secret': 'test-webhook-secret' },
+      payload: {
+        providerMessageId: 'provider-delete-1',
+        envelopeRecipients: ['neznamy-alias@doklady.test.sk'],
+        senderEmail: 'spam@example.sk',
+        subject: 'Spam',
+        attachments: [{ fileName: 'spam.pdf', mimeType: 'application/pdf', contentBase64: pdf.toString('base64') }],
+      },
+    });
+    const emailId = inbound.json().id as string;
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    // Doklad z prílohy už vznikol → mazanie musí odmietnuť, inak by prišiel o pôvod.
+    await database.query('UPDATE inbound_attachments SET document_id=$1 WHERE inbound_email_id=$2', ['doc-1', emailId]);
+    const blocked = await app.inject({ method: 'DELETE', url: `/api/inbound-emails/${emailId}`, headers });
+    expect(blocked.statusCode).toBe(409);
+
+    await database.query('UPDATE inbound_attachments SET document_id=NULL WHERE inbound_email_id=$1', [emailId]);
+    const deleted = await app.inject({ method: 'DELETE', url: `/api/inbound-emails/${emailId}`, headers });
+    expect(deleted.statusCode).toBe(204);
+    expect((await database.query('SELECT 1 FROM inbound_emails WHERE id=$1', [emailId])).rowCount).toBe(0);
+    expect((await database.query('SELECT 1 FROM inbound_attachments WHERE inbound_email_id=$1', [emailId])).rowCount).toBe(0);
+    const listed = await app.inject({ method: 'GET', url: '/api/inbound-emails', headers: { cookie: headers.cookie } });
+    expect(listed.json()).toEqual([]);
+    await app.close();
+  }, 90_000);
+
   it('hides unassigned quarantined emails from non-admin roles', async () => {
     const database = await createTestDatabase();
     databases.push(database);

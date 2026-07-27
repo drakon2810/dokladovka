@@ -32,7 +32,7 @@ export class MockServerDocumentExtractionProvider implements ServerDocumentExtra
   async extract(input: ExtractionInput): Promise<ExtractionOutcome> {
     const issueDate = this.hints.issueDate ?? new Date().toISOString().slice(0, 10);
     const total = Number.isFinite(this.hints.totalAmount) ? Number(this.hints.totalAmount) : 0;
-    const documentType = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'].includes(this.hints.documentType ?? '')
+    const documentType = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY'].includes(this.hints.documentType ?? '')
       ? this.hints.documentType as ExtractionResult['documentType']
       : 'FP';
     return {

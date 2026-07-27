@@ -7,6 +7,7 @@ import {
   simulateMostikAgentConnection,
   type MostikOverview,
 } from '../../data/mostik/mostikService';
+import { useOrgSelection } from '../../data/orgSelection';
 import type { AgentPairingCode, Organization } from '../../data/types';
 import { t } from '../../i18n/sk';
 import { formatDateTime } from '../../lib/format';
@@ -49,7 +50,9 @@ export function MostikOnboarding({
   onReload: () => Promise<void>;
 }) {
   const [step, setStep] = useState(1);
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState(organizations[0]?.id ?? '');
+  // Predvyplní sa firma z globálneho prepínača (nie prvá v zozname).
+  const { orgId: currentOrgId } = useOrgSelection();
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState(currentOrgId);
   const [requirements, setRequirements] = useState<Record<Requirement, boolean>>({
     windows: false,
     pohoda: false,

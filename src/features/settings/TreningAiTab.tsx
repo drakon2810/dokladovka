@@ -10,6 +10,7 @@ import {
   type AiRule, type AiRuleProposal, type AiTrainingSupplier,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useOrgSelection } from '../../data/orgSelection';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import type { CodeListKind } from '../../data/types';
@@ -18,7 +19,9 @@ import { extractPohodaDecisions } from './pohodaMdbImport';
 
 export function TreningAiTab() {
   const { data, loading, error } = useDataQuery();
-  const [selectedOrgId, setSelectedOrgId] = useState<string>();
+  // Firma sa berie z globálneho prepínača — inak sa dá omylom nahrať história
+  // pod inú firmu, než je práve otvorená.
+  const { orgId, selectOrg } = useOrgSelection();
   const [stats, setStats] = useState<{ schvalene: number; importovane: number }>();
   const [rows, setRows] = useState<ParsedTrainingRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -29,7 +32,6 @@ export function TreningAiTab() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const organizations = data?.organizations.filter((org) => !org.archived) ?? [];
-  const orgId = selectedOrgId ?? organizations[0]?.id;
 
   async function refreshRules(id: string) {
     try {
@@ -222,7 +224,7 @@ export function TreningAiTab() {
             className="input w-64"
             value={orgId ?? ''}
             onChange={(event) => {
-              setSelectedOrgId(event.target.value);
+              selectOrg(event.target.value);
               setRows([]);
             }}
           >

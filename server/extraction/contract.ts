@@ -60,7 +60,7 @@ const evidenceFieldWireSchema = z.object({
 /** Všetky vlastnosti sú povinné; neznáma hodnota je null. To je stabilné pre Structured Outputs. */
 export const extractionWireSchema = z.object({
   schemaVersion: z.string().max(20),
-  documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'UNKNOWN']),
+  documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY', 'UNKNOWN']),
   supplier: partyWireSchema,
   buyer: buyerWireSchema,
   invoiceNumber: nullableShortText,
@@ -96,7 +96,7 @@ export type ExtractionWireResult = z.infer<typeof extractionWireSchema>;
 
 export interface ExtractionResult {
   schemaVersion: string;
-  documentType: 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD' | 'UNKNOWN';
+  documentType: 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD' | 'INY' | 'UNKNOWN';
   supplier: SupplierPartyResult;
   buyer: BuyerPartyResult;
   invoiceNumber?: string;
@@ -184,7 +184,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
 /** Runtime kontrola uloženého výsledku; akceptuje už skonvertované optional polia. */
 export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   schemaVersion: z.string(),
-  documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'UNKNOWN']),
+  documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY', 'UNKNOWN']),
   supplier: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
     icDph: z.string().optional(), adresa: z.string().optional(), iban: z.string().optional(),

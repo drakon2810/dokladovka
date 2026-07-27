@@ -50,6 +50,14 @@
 }
 
 @layer components {
+  /* Náhľad dokladu: kým sa zmestí, je na stred; po priblížení sa dá doskrolovať
+     aj k ľavému okraju. Obyčajné `center` v scrollovacom kontajneri pretečený
+     obsah zľava odreže a nedá sa k nemu dostať. Tailwind na `safe center`
+     utilitu nemá (arbitrary hodnotu ticho zahodí), preto ručne. */
+  .preview-center {
+    justify-content: safe center;
+  }
+
   .input {
     @apply w-full rounded border border-line bg-surface px-3 py-2 text-sm text-ink transition
       placeholder:text-ink-soft/60 hover:border-[#C9D0CB]

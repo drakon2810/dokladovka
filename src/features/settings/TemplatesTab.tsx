@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { saveEmailTemplates, saveNoteTemplates } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useOrgSelection } from '../../data/orgSelection';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 
@@ -15,7 +16,7 @@ interface SablonaDraft {
 
 export function TemplatesTab() {
   const { data, loading, error } = useDataQuery();
-  const [selectedOrgId, setSelectedOrgId] = useState<string>();
+  const { orgId, selectOrg } = useOrgSelection();
   const [drafts, setDrafts] = useState<Record<string, { poznamky: string[]; sablony: SablonaDraft[] }>>({});
   const [busy, setBusy] = useState<'poznamky' | 'sablony'>();
 
@@ -23,7 +24,6 @@ export function TemplatesTab() {
     () => (data?.organizations ?? []).filter((org) => !org.archived),
     [data?.organizations],
   );
-  const orgId = selectedOrgId ?? organizations[0]?.id;
 
   if (loading) return <p className="text-sm text-ink-soft">{t('stav.nacitavam')}</p>;
   if (error || !data) return <p className="text-sm text-red-700">{t('chyba.vseobecna')}</p>;
@@ -78,7 +78,7 @@ export function TemplatesTab() {
     <div className="space-y-4">
       <label className="block max-w-md">
         <span className="label">{t('nast.dph.organizacia')}</span>
-        <select className="input w-full" value={orgId} onChange={(event) => setSelectedOrgId(event.target.value)}>
+        <select className="input w-full" value={orgId} onChange={(event) => selectOrg(event.target.value)}>
           {organizations.map((org) => (
             <option key={org.id} value={org.id}>{org.nazov}</option>
           ))}

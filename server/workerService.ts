@@ -70,16 +70,25 @@ export interface WorkerDependencies {
   provider?: ServerDocumentExtractionProvider;
 }
 
-async function claimJob(database: Database, workerId: string): Promise<JobRow | undefined> {
+async function claimJob(
+  database: Database,
+  workerId: string,
+  staleRunningSeconds: number,
+): Promise<JobRow | undefined> {
   return database.transaction(async (tx) => {
     const result = await tx.query<JobRow>(
       `SELECT id, tenant_id, organization_id, attachment_id, document_id, correlation_id, kind,
               attempts, max_attempts, payload
          FROM processing_jobs
-        WHERE status='queued' AND available_at <= now()
+        WHERE (status='queued' AND available_at <= now())
+           -- Zaseknutý beh: worker padol alebo ho niekto reštartoval uprostred
+           -- extrakcie. Bez tejto vetvy ostane job navždy 'running' a doklad
+           -- navždy v stave „spracúva sa" — nikto ho už nikdy nevyzdvihne.
+           OR (status='running' AND locked_at < now() - make_interval(secs => $1))
         ORDER BY created_at
         FOR UPDATE SKIP LOCKED
         LIMIT 1`,
+      [staleRunningSeconds],
     );
     const job = result.rows[0];
     if (!job) return undefined;
@@ -216,6 +225,74 @@ function asProviderError(error: unknown): ExtractionProviderError {
   return new ExtractionProviderError('invalid_extraction_result', 'Výsledok AI extrakcie nemá platný formát', false);
 }
 
+/**
+ * Súbor, ktorý nie je účtovný doklad (rozhodnutie z daňového úradu, zmluva,
+ * potvrdenie…). Neúčtuje sa: uloží sa medzi firemné dokumenty („Iné doklady")
+ * a rozpracovaný doklad sa zmaže, aby nikomu nevisel v zozname na kontrolu.
+ * Bajty ostávajú v tom istom objekte v úložisku — nekopírujú sa.
+ */
+async function storeAsOrganizationDocument(
+  database: Database,
+  job: JobRow,
+  context: AttachmentContext,
+  prepared: PreparedRun,
+  result: ExtractionResult,
+  outcome: Awaited<ReturnType<ServerDocumentExtractionProvider['extract']>>,
+  latencyMs: number,
+): Promise<void> {
+  const attachment = await database.query<{ sha256: string } & Record<string, unknown>>(
+    'SELECT sha256 FROM inbound_attachments WHERE id=$1', [context.id],
+  );
+  await database.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE extraction_runs SET status='succeeded', result=$1::jsonb, model=$2, latency_ms=$3,
+              document_id=NULL, completed_at=now()
+        WHERE id=$4 AND tenant_id=$5`,
+      [JSON.stringify(result), outcome.model ?? null, latencyMs, prepared.runId, job.tenant_id],
+    );
+    await tx.query(
+      `INSERT INTO organization_documents
+        (id, tenant_id, organization_id, file_name, mime_type, byte_size, sha256, storage_key, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [randomUUID(), job.tenant_id, job.organization_id, context.original_file_name,
+        context.detected_mime_type, context.byte_size, attachment.rows[0]?.sha256 ?? '',
+        context.storage_key, context.subject ?? null],
+    );
+    await tx.query(
+      `UPDATE inbound_attachments SET status='document_created', document_id=NULL, quarantine_reason=NULL
+        WHERE id=$1 AND tenant_id=$2`,
+      [context.id, job.tenant_id],
+    );
+    await tx.query(
+      `UPDATE processing_jobs SET status='succeeded', document_id=NULL, locked_at=NULL, locked_by=NULL,
+              error_code=NULL, error_message=NULL, updated_at=now()
+        WHERE id=$1 AND tenant_id=$2`,
+      [job.id, job.tenant_id],
+    );
+    // Placeholder dokladu vznikol pred klasifikáciou — teraz už netreba.
+    await tx.query(
+      'DELETE FROM documents WHERE id=$1 AND tenant_id=$2 AND organization_id=$3',
+      [prepared.documentId, job.tenant_id, job.organization_id],
+    );
+    await tx.query(
+      `UPDATE inbound_emails SET status='processed'
+        WHERE id=$1 AND NOT EXISTS (
+          SELECT 1 FROM inbound_attachments WHERE inbound_email_id=$1 AND status IN ('queued','processing','received','stored')
+        )`,
+      [context.inbound_email_id],
+    );
+    await writeAudit(tx, {
+      tenantId: job.tenant_id,
+      organizationId: job.organization_id,
+      actorType: 'system',
+      action: 'organization_document.classified',
+      entityType: 'organization_document',
+      correlationId: job.correlation_id,
+      metadata: { fileName: context.original_file_name, provider: prepared.providerName },
+    });
+  });
+}
+
 async function completeRun(
   database: Database,
   job: JobRow,
@@ -228,6 +305,16 @@ async function completeRun(
     throw new ExtractionProviderError('schema_version_mismatch', 'AI služba vrátila nepodporovanú verziu schémy', false);
   }
   const result = extractionResultSchema.parse(outcome.result);
+  // Nie je to účtovný doklad → skončí medzi „Iné doklady", nie v zozname na
+  // kontrolu. Pri opakovanej extrakcii existujúceho dokladu to neplatí —
+  // tam si o osude dokladu rozhoduje používateľ.
+  if (!prepared.isReprocess && result.documentType === 'INY') {
+    await storeAsOrganizationDocument(
+      database, job, context, prepared, result, outcome,
+      Math.max(0, Math.round(performance.now() - startedAt)),
+    );
+    return undefined;
+  }
   const fallbackDate = new Date(context.received_at).toISOString().slice(0, 10);
   const normalized = normalizeExtractionResult(result, prepared.documentId, fallbackDate);
   const issues = validateExtractionResult(result, normalized, {
@@ -407,7 +494,11 @@ export async function processNextJob(
   workerId = `worker-${process.pid}`,
   dependencies: WorkerDependencies = {},
 ): Promise<boolean> {
-  const job = await claimJob(database, workerId);
+  // Zaseknutý job preberáme až po tom, čo už nemôže bežať: extrakcia je zhora
+  // ohraničená timeoutom volania AI, takže dvojnásobok (minimálne 10 minút) je
+  // bezpečný odstup — nehrozí, že by dvaja workeri robili to isté naraz.
+  const staleRunningSeconds = Math.max(600, Math.ceil(config.openai.timeoutMs / 1000) * 2);
+  const job = await claimJob(database, workerId, staleRunningSeconds);
   if (!job) return false;
   const jobStartedAt = performance.now();
   let prepared: PreparedRun | undefined;

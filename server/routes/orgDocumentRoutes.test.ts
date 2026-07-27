@@ -76,4 +76,53 @@ describe('organization documents (schránka)', () => {
     expect(emptyList.json()).toHaveLength(0);
     await app.close();
   }, 90_000);
+
+  it('vysvetlenie AI: 404 pre neexistujúci dokument, 503 bez API kľúča, inak uložené zhrnutie', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+    const uploaded = await app.inject({
+      method: 'POST',
+      url: `/api/organizations/${seeded.organizationId}/documents`,
+      headers,
+      payload: {
+        fileName: 'usmernenie.pdf',
+        mimeType: 'application/pdf',
+        contentBase64: Buffer.from('%PDF-1.4 usmernenie').toString('base64'),
+      },
+    });
+    const documentId = uploaded.json().id as string;
+
+    const missing = await app.inject({
+      method: 'POST',
+      url: `/api/organizations/${seeded.organizationId}/documents/00000000-0000-4000-8000-000000000000/summary`,
+      headers,
+    });
+    expect(missing.statusCode).toBe(404);
+
+    // Bez OPENAI_API_KEY sa nesmie nič volať — používateľ dostane jasnú hlášku.
+    const unavailable = await app.inject({
+      method: 'POST',
+      url: `/api/organizations/${seeded.organizationId}/documents/${documentId}/summary`,
+      headers,
+    });
+    expect(unavailable.statusCode).toBe(503);
+
+    // Už uložené zhrnutie sa vracia rovno z databázy (bez ďalšieho volania AI).
+    await database.query(
+      `UPDATE organization_documents SET ai_summary='{"nadpis":"Usmernenie","body":["bod 1"]}'::jsonb WHERE id=$1`,
+      [documentId],
+    );
+    const cached = await app.inject({
+      method: 'POST',
+      url: `/api/organizations/${seeded.organizationId}/documents/${documentId}/summary`,
+      headers,
+    });
+    expect(cached.statusCode).toBe(200);
+    expect(cached.json()).toEqual({ nadpis: 'Usmernenie', body: ['bod 1'] });
+    await app.close();
+  }, 90_000);
 });

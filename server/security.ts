@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scrypt = promisify(scryptCallback);
@@ -30,6 +30,11 @@ export function constantTimeStringEqual(actual: string, expected: string): boole
   const actualHash = createHash('sha256').update(actual).digest();
   const expectedHash = createHash('sha256').update(expected).digest();
   return timingSafeEqual(actualHash, expectedHash);
+}
+
+/** Číselný kód do e-mailu (potvrdenie registrácie). */
+export function createNumericCode(length = 6): string {
+  return Array.from({ length }, () => String(randomInt(10))).join('');
 }
 
 export function createPairingCode(): string {

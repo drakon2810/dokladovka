@@ -32,6 +32,7 @@ services:
       # DPH poradca) potrebujú kľúč aj tu, nielen vo `worker` — inak endpoint
       # /ai-training/analyze vráti „AI analýza nie je nakonfigurovaná".
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
       OPENAI_ACCOUNTING_FALLBACK_MODEL: ${OPENAI_ACCOUNTING_FALLBACK_MODEL:-}
       OPENAI_RULE_ANALYSIS_MODEL: ${OPENAI_RULE_ANALYSIS_MODEL:-}
@@ -45,6 +46,20 @@ services:
       OBJECT_STORAGE_MODE: filesystem
       OBJECT_STORAGE_FILESYSTEM_ROOT: /data/objects
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      # Registračný kód a odkaz na obnovu hesla. Bez SMTP_HOST sa e-maily iba
+      # logujú — v produkcii ich treba nastaviť, inak sa nikto nezaregistruje.
+      # Odkaz v e-maile stavia APP_BASE_URL, musí byť verejná doména.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      # Cloudflare Turnstile; bez secret kľúča je captcha vypnutá.
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      # OpenData FS SR — DIČ/IČ DPH v našepkávači organizácií.
+      FS_OPENDATA_API_KEY: ${FS_OPENDATA_API_KEY:-}
       # Len pre jednorazový `docker compose run api node build/server/db/seed.js`.
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
@@ -81,6 +96,7 @@ services:
       MAIL_RECEIVING_DOMAIN: ${MAIL_RECEIVING_DOMAIN:-doklady.localhost.test}
       DOCUMENT_EXTRACTION_PROVIDER: ${DOCUMENT_EXTRACTION_PROVIDER:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
       OPENAI_STORE_RESPONSES: ${OPENAI_STORE_RESPONSES:-false}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-120000}

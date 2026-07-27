@@ -5,6 +5,7 @@ import {
   updateQueue,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useOrgSelection } from '../../data/orgSelection';
 import type {
   DocumentQueue,
   DocumentType,
@@ -298,7 +299,9 @@ function CreateQueueModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [organizationId, setOrganizationId] = useState(organizations[0]?.id ?? '');
+  // Predvyplní sa firma z globálneho prepínača (nie prvá v zozname).
+  const { orgId: currentOrgId } = useOrgSelection();
+  const [organizationId, setOrganizationId] = useState(currentOrgId);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<QueueKind>('received_invoices');
   const [saving, setSaving] = useState(false);

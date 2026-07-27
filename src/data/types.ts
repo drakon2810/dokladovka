@@ -70,6 +70,23 @@ export interface EmailTemplate {
   active?: boolean;
 }
 
+/**
+ * Voľný firemný dokument (zmluva, usmernenie, potvrdenie…) — nejde do účtovného
+ * workflow ani do exportu, v zozname dokladov sa zobrazuje ako „Iný doklad".
+ */
+export interface OrgDocument {
+  id: string;
+  tenantId?: string;
+  organizationId: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  note?: string;
+  /** Zhrnutie od AI — vzniká až po kliknutí na „Vysvetliť". */
+  aiSummary?: { nadpis: string; body: string[] };
+  createdAt?: string;
+}
+
 export interface OrganizationBankAccount {
   id: string;
   tenantId: string;

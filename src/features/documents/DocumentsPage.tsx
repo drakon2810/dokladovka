@@ -42,7 +42,7 @@ const DOCUMENT_STATUSES: DocumentStatus[] = [
 ];
 const PROBLEM_STATUSES = new Set<DocumentStatus>(['chyba', 'karantena', 'duplicita']);
 
-type TabId = 'vsetky' | 'na_kontrole' | 'schvalene' | 'exportovane' | 'na_uhradu' | 'problemy' | 'kos';
+type TabId = 'vsetky' | 'na_kontrole' | 'schvalene' | 'exportovane' | 'na_uhradu' | 'problemy' | 'ine' | 'kos';
 type SourceFilter = '' | DocumentItem['zdroj']['typ'];
 type ProcessingFilter = '' | 'caka' | 'spracuva' | 'hotovo' | 'chyba';
 type SortKey =
@@ -59,7 +59,7 @@ type SortKey =
 type SortDirection = 'asc' | 'desc';
 type Density = 'comfortable' | 'compact';
 
-const TAB_IDS: TabId[] = ['vsetky', 'na_kontrole', 'schvalene', 'exportovane', 'na_uhradu', 'problemy', 'kos'];
+const TAB_IDS: TabId[] = ['vsetky', 'na_kontrole', 'schvalene', 'exportovane', 'na_uhradu', 'problemy', 'ine', 'kos'];
 const COLLATOR = new Intl.Collator('sk', { sensitivity: 'base', numeric: true });
 
 const svg = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
@@ -160,6 +160,9 @@ function normalizeSearch(value: string): string {
 }
 
 function matchesTab(document: DocumentItem, tab: TabId): boolean {
+  // „Iné doklady" sú voľné firemné súbory, nie účtovné doklady — majú vlastný
+  // zoznam, takže sem nepatrí ani jeden doklad.
+  if (tab === 'ine') return false;
   if (tab === 'na_kontrole') {
     return document.status === 'extrahovany' || document.status === 'na_kontrole';
   }
@@ -281,6 +284,8 @@ export function DocumentsPage() {
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const [droppedFiles, setDroppedFiles] = useState<File[]>();
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [qrDocId, setQrDocId] = useState<string | null>(null);
   const [density, setDensity] = useState<Density>('comfortable');
@@ -457,6 +462,7 @@ export function DocumentsPage() {
   }, [visibleIds]);
 
   const showOrganization = currentOrgId === 'all';
+  const canUpload = (data?.role ?? 'uctovnik') !== 'schvalovatel';
 
   if (error || !data) {
     if (loading) return <TableSkeleton showOrganization={showOrganization} />;
@@ -473,10 +479,17 @@ export function DocumentsPage() {
     { id: 'exportovane', label: t('doklady.tab.exportovane') },
     { id: 'na_uhradu', label: t('doklady.tab.naUhradu') },
     { id: 'problemy', label: t('doklady.tab.problemy') },
+    { id: 'ine', label: t('doklady.tab.ine') },
     { id: 'kos', label: t('doklady.tab.kos') },
   ];
+  const otherDocuments = (data.organizationDocuments ?? [])
+    .filter((item) => currentOrgId === 'all' || item.organizationId === currentOrgId)
+    .filter((item) => !query || normalizeSearch(item.fileName).includes(query))
+    .sort((left, right) => (right.createdAt ?? '').localeCompare(left.createdAt ?? ''));
   const tabCount = (tab: TabId) =>
-    queueScopedDocuments.filter((document) => matchesTab(document, tab)).length;
+    tab === 'ine'
+      ? otherDocuments.length
+      : queueScopedDocuments.filter((document) => matchesTab(document, tab)).length;
   const paymentsByDocument = new Map<string, typeof data.payments>();
   for (const payment of data.payments ?? []) {
     const list = paymentsByDocument.get(payment.documentId) ?? [];
@@ -846,8 +859,94 @@ export function DocumentsPage() {
         </FilterPill>
       </div>
 
-      {/* Tabuľka / prázdny stav */}
-      {sortedDocuments.length === 0 ? (
+      {/* Tabuľka / prázdny stav — zároveň dropzóna: súbor pustený kamkoľvek na
+          zoznam sa nahrá rovnako, ako keby sa pridal tlačidlom. */}
+      <div
+        className={`relative rounded-[18px] border border-dashed p-1 transition-colors ${
+          dropActive ? 'border-accent bg-tint/50' : 'border-line'
+        }`}
+        onDragOver={(event) => {
+          if (!canUpload || !event.dataTransfer.types.includes('Files')) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          setDropActive(true);
+        }}
+        onDragLeave={(event) => {
+          const next = event.relatedTarget as Node | null;
+          if (!next || !event.currentTarget.contains(next)) setDropActive(false);
+        }}
+        onDrop={(event) => {
+          if (!canUpload) return;
+          event.preventDefault();
+          setDropActive(false);
+          const files = Array.from(event.dataTransfer.files);
+          if (files.length === 0) return;
+          setDroppedFiles(files);
+          setUploadModalOpen(true);
+        }}
+      >
+        {dropActive && (
+          <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center rounded-[18px] bg-surface/80 backdrop-blur-[1px]">
+            <span className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white shadow-pop">
+              {t('doklady.nahrat.pustite')}
+            </span>
+          </div>
+        )}
+      {activeTab === 'ine' ? (
+        <div className="card overflow-x-auto">
+          {otherDocuments.length === 0 ? (
+            <p className="px-6 py-14 text-center text-sm text-ink-soft">{t('ine.prazdne')}</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line text-left text-xs text-ink-soft">
+                  <th className="px-4 py-2.5 font-medium">{t('ine.stlpec.subor')}</th>
+                  {showOrganization && <th className="px-3 py-2.5 font-medium">{t('doklady.st.organizacia')}</th>}
+                  <th className="px-3 py-2.5 font-medium">{t('ine.stlpec.zhrnutie')}</th>
+                  <th className="px-3 py-2.5 text-right font-medium">{t('ine.stlpec.velkost')}</th>
+                  <th className="px-3 py-2.5 font-medium">{t('ine.stlpec.nahrate')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {otherDocuments.map((item) => (
+                  <tr
+                    key={item.id}
+                    className="cursor-pointer border-b border-line-soft transition last:border-0 hover:bg-[#F7F9F7]"
+                    onClick={() => navigate(`/doklady/ine/${item.id}`)}
+                  >
+                    <td className="px-4 py-3">
+                      <span className="flex items-center gap-2">
+                        {/* Farebná značka, aby sa neúčtovný dokument nedal
+                            zameniť s faktúrou ani letmým pohľadom. */}
+                        <span className="shrink-0 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10.5px] font-bold text-violet-700">
+                          {t('ine.znacka')}
+                        </span>
+                        <span className="truncate font-medium text-ink">{item.fileName}</span>
+                      </span>
+                    </td>
+                    {showOrganization && (
+                      <td className="px-3 py-3 text-ink-soft">
+                        {organizationMap.get(item.organizationId)?.nazov ?? '—'}
+                      </td>
+                    )}
+                    <td className="max-w-[280px] truncate px-3 py-3 text-ink-soft">
+                      {item.aiSummary?.nadpis ?? '—'}
+                    </td>
+                    <td className="tnum px-3 py-3 text-right text-ink-soft">
+                      {item.byteSize >= 1024 * 1024
+                        ? `${(item.byteSize / (1024 * 1024)).toFixed(1)} MB`
+                        : `${Math.round(item.byteSize / 1024)} kB`}
+                    </td>
+                    <td className="tnum px-3 py-3 text-ink-soft">
+                      {item.createdAt ? formatDate(item.createdAt.slice(0, 10)) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : sortedDocuments.length === 0 ? (
         <div className="card flex flex-col items-center gap-1.5 px-6 py-16 text-center">
           <div className="mb-2 grid h-24 w-24 place-items-center rounded-3xl bg-tint text-accent" style={{ boxShadow: '0 10px 28px -14px rgba(14,122,95,.5)' }}>
             <IcInbox />
@@ -1096,6 +1195,7 @@ export function DocumentsPage() {
           </div>
         </div>
       )}
+      </div>
 
       {/* Plávajúca lišta hromadných akcií */}
       <AnimatePresence>
@@ -1175,7 +1275,11 @@ export function DocumentsPage() {
         <UploadModal
           organizations={organizations}
           currentOrgId={currentOrgId}
-          onClose={() => setUploadModalOpen(false)}
+          initialFiles={droppedFiles}
+          onClose={() => {
+            setUploadModalOpen(false);
+            setDroppedFiles(undefined);
+          }}
         />
       )}
 
