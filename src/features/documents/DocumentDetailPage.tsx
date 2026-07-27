@@ -126,11 +126,11 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 const DOCUMENT_TYPES: DocumentType[] = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'];
 
 /**
- * Doklad sa otvára mierne priblížený — pri 100 % je text faktúry na kontrolu
- * zbytočne drobný a každý si ho aj tak hneď zväčšoval. Tlačidlo „obnoviť"
- * vracia sem, nie na 100 %.
+ * Doklad sa otvára priblížený — pri 100 % je text faktúry na kontrolu zbytočne
+ * drobný a každý si ho aj tak hneď zväčšoval. Tlačidlo „obnoviť" vracia sem,
+ * nie na 100 %.
  */
-const DEFAULT_ZOOM = 1.25;
+const DEFAULT_ZOOM = 1.55;
 
 const SRC_STORAGE_KEY = 'dokladovka.zvyraznitZdroj';
 
@@ -1211,7 +1211,7 @@ export function DocumentDetailPage() {
               okraju (obyčajné `center` by ho odrezalo). */}
           <div
             ref={previewRef}
-            className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-8rem)]"
+            className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-6rem)]"
             onMouseOver={(event) => {
               const mark = (event.target as HTMLElement).closest?.('mark[data-src]');
               setActiveSrc(mark instanceof HTMLElement ? mark.dataset.src : undefined);

@@ -58,6 +58,21 @@
     justify-content: safe center;
   }
 
+  /* Detail dokladu: horná lišta sa odsunie nad okno, aby výška patrila náhľadu
+     a formuláru. Vráti sa pri prejdení myšou cez prúžok (alebo cez samotnú
+     lištu, inak by zmizla hneď, ako z prúžku odídeš) a pri fokuse z klávesnice.
+     Ručné pravidlo namiesto tailwind variantov: `-translate-y-full` má rovnakú
+     špecificitu ako `hover:translate-y-0` a vyhráva podľa poradia v súbore. */
+  .topbar-slide {
+    transform: translateY(-100%);
+    transition: transform 0.2s ease;
+  }
+  .topbar-slot:hover > .topbar-slide,
+  .topbar-slide:hover,
+  .topbar-slide:focus-within {
+    transform: none;
+  }
+
   .input {
     @apply w-full rounded border border-line bg-surface px-3 py-2 text-sm text-ink transition
       placeholder:text-ink-soft/60 hover:border-[#C9D0CB]

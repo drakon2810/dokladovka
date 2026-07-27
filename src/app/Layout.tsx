@@ -549,10 +549,19 @@ export function Layout() {
 
       {/* Hlavná časť */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header
-          className="z-30 flex h-16 items-center gap-3.5 border-b border-line px-5"
-          style={{ background: 'rgba(255,255,255,.72)', backdropFilter: 'blur(16px) saturate(1.5)', WebkitBackdropFilter: 'blur(16px) saturate(1.5)' }}
-        >
+        {/* Na detaile dokladu sa horná lišta odsunie nad okno a nechá výšku
+            náhľadu aj formuláru; vráti sa, len keď na ňu prejdeš myšou alebo
+            do nej vojdeš tabulátorom. Prúžok hore je jediná stopa, ktorá ostane. */}
+        <div className={`relative z-30 shrink-0 ${onDocumentDetail ? 'topbar-slot h-2' : ''}`}>
+          {onDocumentDetail && (
+            <span className="pointer-events-none absolute left-1/2 top-0.5 h-1 w-16 -translate-x-1/2 rounded-full bg-line" aria-hidden />
+          )}
+          <header
+            className={`flex h-16 items-center gap-3.5 border-b border-line px-5 ${
+              onDocumentDetail ? 'topbar-slide absolute inset-x-0 top-0 shadow-lg' : ''
+            }`}
+            style={{ background: 'rgba(255,255,255,.72)', backdropFilter: 'blur(16px) saturate(1.5)', WebkitBackdropFilter: 'blur(16px) saturate(1.5)' }}
+          >
           <div className="relative max-w-[420px] flex-1" ref={searchRef}>
             <form
               onSubmit={(e) => {
@@ -856,8 +865,9 @@ export function Layout() {
               </AnimatePresence>
             </div>
           </div>
-        </header>
-        <main className="min-w-0 flex-1 p-6">
+          </header>
+        </div>
+        <main className={`min-w-0 flex-1 ${onDocumentDetail ? 'px-6 pb-6 pt-3' : 'p-6'}`}>
           <Outlet />
         </main>
       </div>
