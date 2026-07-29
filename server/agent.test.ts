@@ -124,6 +124,46 @@ describe('agent backend contour', () => {
     await app.close();
   }, 90_000);
 
+  it('pairs a tenant-wide code without organization and without companyIco', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const cookie = String(login.headers['set-cookie']).split(';')[0];
+    const browserHeaders = { cookie, 'x-csrf-token': login.json().csrfToken as string };
+    await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
+
+    // Kód pre celú kanceláriu: bez organizationId.
+    const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders, payload: {} });
+    expect(pairing.statusCode, pairing.body).toBe(201);
+    expect(pairing.json().organizationId).toBeUndefined();
+
+    // Agent s automatickým vyhľadaním firiem neposiela IČO.
+    const paired = await app.inject({
+      method: 'POST',
+      url: '/api/agent/pair',
+      payload: { pairingCode: pairing.json().code as string, hostname: 'POHODA-SRV', agentVersion: '0.2.0' },
+    });
+    expect(paired.statusCode, paired.body).toBe(201);
+    const agentHeaders = { authorization: `Bearer ${paired.json().agentToken as string}` };
+
+    // Heartbeat spáruje organizáciu podľa IČO aj bez výberu organizácie pri párovaní.
+    const heartbeat = await app.inject({
+      method: 'POST',
+      url: '/api/agent/heartbeat',
+      headers: agentHeaders,
+      payload: { companies: [{ ico: '12345678', dbName: 'StwPh_12345678_2026.mdb', uctovnyRok: '2026' }], agentVersion: '0.2.0' },
+    });
+    expect(heartbeat.statusCode).toBe(200);
+    const links = await database.query<{ db_name: string; matched_at?: string } & Record<string, unknown>>(
+      'SELECT db_name, matched_at FROM pohoda_company_links WHERE organization_id=$1', [seeded.organizationId],
+    );
+    expect(links.rows[0]?.db_name).toBe('StwPh_12345678_2026.mdb');
+    expect(links.rows[0]?.matched_at).toBeTruthy();
+  }, 90_000);
+
   it('distinguishes expired pairing and publishes only complete signed releases', async () => {
     const database = await createTestDatabase();
     databases.push(database);

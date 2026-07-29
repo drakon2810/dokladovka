@@ -5,7 +5,8 @@ public sealed record AgentConfigurationRequest
     public required string CloudBaseUrl { get; init; }
     public required string PairingCode { get; init; }
     public string? MServerUrl { get; init; }
-    public required string CompanyIco { get; init; }
+    /// <summary>Povinné pre mserver a manuálny cli režim; voliteľné pri automatickom vyhľadaní firiem.</summary>
+    public string? CompanyIco { get; init; }
     public required string UserName { get; init; }
     public required string Password { get; init; }
     public string EndpointId { get; init; } = "mserver-1";
@@ -13,11 +14,16 @@ public sealed record AgentConfigurationRequest
     public string? PohodaExePath { get; init; }
     public string Mode { get; init; } = "mserver";
     public string? Database { get; init; }
+    /// <summary>Dátový priečinok POHODA – zapína automatický cli režim pre všetky firmy.</summary>
+    public string? DataDirectory { get; init; }
     public string? AllowedPublisherThumbprint { get; init; }
     public string? InstallationName { get; init; }
 }
 
-public sealed record AgentConfigurationResult(MServerCompany Company, PairResponse Pairing);
+public sealed record AgentConfigurationResult(
+    MServerCompany Company,
+    PairResponse Pairing,
+    IReadOnlyList<DiscoveredCompany> Discovered);
 
 public static class AgentConfiguration
 {
@@ -29,9 +35,93 @@ public static class AgentConfiguration
         if (string.IsNullOrWhiteSpace(request.PairingCode))
             throw new InvalidOperationException("Párovací kód je povinný.");
         if (string.IsNullOrWhiteSpace(request.UserName))
-            throw new InvalidOperationException("Používateľ mServer je povinný.");
+            throw new InvalidOperationException("Používateľ POHODA je povinný.");
         if (string.IsNullOrEmpty(request.Password))
-            throw new InvalidOperationException("Heslo mServer je povinné.");
+            throw new InvalidOperationException("Heslo POHODA je povinné.");
+
+        var isAuto = request.Mode.Equals("cli", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(request.DataDirectory);
+        return isAuto
+            ? await ConfigureAutoAsync(request, log, cancellationToken)
+            : await ConfigureSingleAsync(request, log, cancellationToken);
+    }
+
+    /// <summary>Doklado-štýl: jeden agent pre všetky firmy nájdené v dátovom priečinku POHODA.</summary>
+    private static async Task<AgentConfigurationResult> ConfigureAutoAsync(
+        AgentConfigurationRequest request,
+        IAgentLog log,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.PohodaExePath))
+            throw new InvalidOperationException("Pre priamy import je povinná cesta k pohoda.exe.");
+        var discovered = PohodaDataDiscovery.Scan(request.DataDirectory!);
+        if (discovered.Count == 0)
+            throw new InvalidOperationException(
+                $"V priečinku '{request.DataDirectory}' sa nenašla žiadna databáza firmy (StwPh_ICO_ROK.mdb). Skontrolujte dátový priečinok POHODA.");
+        var probeCompany = string.IsNullOrWhiteSpace(request.CompanyIco)
+            ? discovered.OrderByDescending(company => company.Year, StringComparer.Ordinal).First()
+            : discovered.FirstOrDefault(company => company.Ico == request.CompanyIco.Trim())
+                ?? throw new InvalidOperationException($"Firma s IČO {request.CompanyIco} sa v dátovom priečinku nenašla.");
+
+        var settings = new AgentSettings
+        {
+            CloudBaseUrl = request.CloudBaseUrl,
+            InstallationName = request.InstallationName ?? Environment.MachineName,
+            MServers = [],
+            PohodaAuto = new PohodaAutoSettings
+            {
+                PohodaExePath = request.PohodaExePath!,
+                DataDirectory = request.DataDirectory!,
+            },
+            AllowedPublisherThumbprint = NormalizeThumbprint(request.AllowedPublisherThumbprint),
+        };
+        AgentSettings.Validate(settings);
+        AgentSettingsStore.VerifyWritable();
+        SecretVault.VerifyAvailable();
+
+        var secret = new MServerSecret
+        {
+            EndpointId = PohodaAutoSettings.SecretEndpointId,
+            UserName = request.UserName,
+            Password = request.Password,
+        };
+        var probeEndpoint = new MServerEndpointSettings
+        {
+            Id = PohodaAutoSettings.EndpointIdPrefix + probeCompany.Database,
+            CompanyIco = probeCompany.Ico,
+            Mode = "cli",
+            Database = probeCompany.Database,
+            PohodaExePath = request.PohodaExePath,
+        };
+        IPohodaClient client = new PohodaCliClient(probeEndpoint, secret, log);
+        var company = await client.GetCompanyAsync(cancellationToken);
+        var probeXml = PohodaXml.BuildCodeListRequest(probeCompany.Ico, $"konfiguracia-test-{Guid.NewGuid():N}");
+        PohodaXml.ParseCodeLists(await client.PostXmlAsync(probeXml, "konfiguracia-test", false, cancellationToken));
+
+        var paired = await BackendClient.PairAsync(
+            request.CloudBaseUrl,
+            request.PairingCode,
+            Environment.MachineName,
+            AgentVersion.Current,
+            NullIfBlank(request.CompanyIco),
+            cancellationToken);
+
+        AgentSettingsStore.Save(settings);
+        SecretVault.Save(new AgentSecrets { AgentToken = paired.AgentToken, MServers = [secret] });
+        var backend = new BackendClient(settings.CloudBaseUrl, paired.AgentToken, log);
+        await backend.SendHeartbeatAsync(
+            discovered.Select(item => new HeartbeatCompany(item.Ico, item.Database, item.Year)).ToArray(),
+            cancellationToken);
+        return new AgentConfigurationResult(company, paired, discovered);
+    }
+
+    private static async Task<AgentConfigurationResult> ConfigureSingleAsync(
+        AgentConfigurationRequest request,
+        IAgentLog log,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.CompanyIco))
+            throw new InvalidOperationException("IČO firmy je povinné.");
 
         var endpoint = new MServerEndpointSettings
         {
@@ -83,8 +173,10 @@ public static class AgentConfiguration
         await backend.SendHeartbeatAsync(
             [new HeartbeatCompany(request.CompanyIco, company.DatabaseName, company.Year)],
             cancellationToken);
-        return new AgentConfigurationResult(company, paired);
+        return new AgentConfigurationResult(company, paired, [new DiscoveredCompany(request.CompanyIco, company.DatabaseName, company.Year)]);
     }
+
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? NormalizeThumbprint(string? value)
     {

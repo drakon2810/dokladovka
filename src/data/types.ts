@@ -504,7 +504,8 @@ export interface AgentInstallation {
 export interface AgentPairingCode {
   code: string;
   expiresAt: string;
-  organizationId: string;
+  /** Chýba pri kóde pre celú kanceláriu (všetky firmy tenanta). */
+  organizationId?: string;
 }
 
 export interface PohodaCompanyLink {

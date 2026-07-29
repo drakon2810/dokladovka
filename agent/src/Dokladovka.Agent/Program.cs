@@ -43,18 +43,21 @@ public static class Program
     {
         var cloud = Option(args, "--cloud") ?? Prompt("URL cloudu", Environment.GetEnvironmentVariable("DOKLADOVKA_CLOUD_URL") ?? "https://app.dokladorpro.sk");
         var pairingCode = Option(args, "--pairing-code") ?? Prompt("Párovací kód");
-        var mode = (Option(args, "--mode") ?? Prompt("Režim pripojenia (mserver/cli)", "mserver")).Trim().ToLowerInvariant();
+        var mode = (Option(args, "--mode") ?? Prompt("Režim pripojenia (mserver/cli)", "cli")).Trim().ToLowerInvariant();
         var isCli = mode == "cli";
         var mServerUrl = isCli
             ? Option(args, "--mserver-url")
             : Option(args, "--mserver-url") ?? Prompt("URL POHODA mServer", "http://localhost:444");
-        var database = isCli
-            ? Option(args, "--database") ?? Prompt("Názov databázy POHODA (napr. StwPh_12345678_2026.mdb)")
-            : Option(args, "--database");
+        // --database = starší manuálny režim pre jednu firmu; bez neho cli beží automaticky pre všetky firmy v dátovom priečinku.
+        var database = Option(args, "--database");
         var pohodaExe = isCli
-            ? Option(args, "--pohoda-exe") ?? Prompt("Cesta k pohoda.exe")
+            ? Option(args, "--pohoda-exe") ?? Prompt("Cesta k pohoda.exe", PohodaDiscovery.FindExecutable() ?? string.Empty)
             : Option(args, "--pohoda-exe");
-        var ico = Option(args, "--ico") ?? Prompt("IČO firmy v otvorenej databáze POHODA");
+        var dataDirectory = isCli && database is null
+            ? Option(args, "--data-dir") ?? Prompt("Dátový priečinok POHODA (obsahuje StwPh_*.mdb)", PohodaDataDiscovery.FindDataDirectory(pohodaExe) ?? string.Empty)
+            : Option(args, "--data-dir");
+        var isAuto = isCli && database is null;
+        var ico = Option(args, "--ico") ?? (isAuto ? null : Prompt("IČO firmy v otvorenej databáze POHODA"));
         var user = Option(args, "--mserver-user") ?? Prompt("Používateľ POHODA");
         var password = Environment.GetEnvironmentVariable("DOKLADOVKA_MSERVER_PASSWORD") ?? ReadPassword("Heslo POHODA");
         var log = new RollingFileAgentLog();
@@ -72,12 +75,16 @@ public static class Program
             PohodaExePath = pohodaExe,
             Mode = mode,
             Database = database,
+            DataDirectory = dataDirectory,
             InstallationName = Option(args, "--name"),
             AllowedPublisherThumbprint = Option(args, "--publisher-thumbprint"),
         }, log, cancellationToken);
         Console.WriteLine(isCli
             ? $"POHODA /XML je overená: databáza {configured.Company.DatabaseName}, rok {configured.Company.Year}."
             : $"mServer je dostupný: {configured.Company.Company}, databáza {configured.Company.DatabaseName}, rok {configured.Company.Year}.");
+        if (configured.Discovered.Count > 1)
+            Console.WriteLine($"Nájdené firmy ({configured.Discovered.Count}): "
+                + string.Join(", ", configured.Discovered.Select(item => $"{item.Ico}/{item.Year}")));
         Console.WriteLine($"Agent bol úspešne nakonfigurovaný. Konfigurácia: {AgentPaths.Settings}");
         return 0;
     }
@@ -90,8 +97,8 @@ public static class Program
         var companies = await runner.ReadCompaniesAsync(cancellationToken);
         foreach (var item in companies)
             Console.WriteLine($"{item.Endpoint.Id}: OK, {item.Company.DatabaseName}, rok {item.Company.Year}, obdobie {item.Company.Period}");
-        Console.WriteLine($"Dostupných mServerov: {companies.Count}/{settings.MServers.Count}");
-        return companies.Count == settings.MServers.Count ? 0 : 2;
+        Console.WriteLine($"Dostupných pripojení POHODA: {companies.Count}/{runner.EndpointCount}");
+        return companies.Count == runner.EndpointCount ? 0 : 2;
     }
 
     private static async Task<int> RunOnceAsync(CancellationToken cancellationToken)
@@ -146,7 +153,9 @@ public static class Program
     private static void PrintUsage() => Console.WriteLine("""
         Dokladovka.Agent
           configure [--cloud URL] [--pairing-code CODE] [--mode mserver|cli] [--mserver-url URL]
-                    [--database DB] [--ico ICO] [--mserver-user USER] [--instance NAME] [--pohoda-exe PATH]
+                    [--data-dir PRIECINOK] [--database DB] [--ico ICO] [--mserver-user USER]
+                    [--instance NAME] [--pohoda-exe PATH]
+            cli bez --database = automaticky vsetky firmy (StwPh_*.mdb) z --data-dir
           diagnose
           run-once
           pohoda start|stop|restart [--endpoint ID]

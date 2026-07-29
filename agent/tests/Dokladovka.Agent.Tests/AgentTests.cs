@@ -221,6 +221,84 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void DiscoveryFindsOnlyCompanyDatabases()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"dokladovka-discovery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            foreach (var file in new[]
+            {
+                "StwPh_12345678_2026.mdb", "StwPh_12345678_2025.mdb", "StwPh_87654321_2026.MDB",
+                "StwPh.mdb", "StwPhProfile_12345678.mdb", "StwPh_1234_2026.mdb", "iné.mdb", "StwPh_12345678_2026.bak",
+            })
+            {
+                File.WriteAllText(Path.Combine(directory, file), string.Empty);
+            }
+            var discovered = PohodaDataDiscovery.Scan(directory);
+            Assert.Equal(3, discovered.Count);
+            Assert.Equal(["12345678", "12345678", "87654321"], discovered.Select(company => company.Ico));
+            // Najnovší rok pre rovnaké IČO je prvý.
+            Assert.Equal("2026", discovered[0].Year);
+            Assert.Equal("2025", discovered[1].Year);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DiscoveryReturnsEmptyForMissingDirectory() =>
+        Assert.Empty(PohodaDataDiscovery.Scan(Path.Combine(Path.GetTempPath(), $"neexistuje-{Guid.NewGuid():N}")));
+
+    [Fact]
+    public void AutoSettingsAllowEmptyMServersAndRequireFields()
+    {
+        var auto = Settings("http://localhost:3001") with
+        {
+            MServers = [],
+            PohodaAuto = new PohodaAutoSettings { PohodaExePath = @"C:\Pohoda\Pohoda.exe", DataDirectory = @"C:\Pohoda\Data" },
+        };
+        AgentSettings.Validate(auto);
+
+        var withoutAnything = Settings("http://localhost:3001") with { MServers = [] };
+        Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(withoutAnything));
+
+        var withoutDirectory = auto with { PohodaAuto = auto.PohodaAuto! with { DataDirectory = " " } };
+        Assert.Contains("priečinok", Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(withoutDirectory)).Message);
+    }
+
+    [Fact]
+    public void MatchEndpointPrefersDbNameThenPreferredYearThenLatest()
+    {
+        static (MServerEndpointSettings, MServerCompany) Live(string ico, string database, string year) => (
+            new MServerEndpointSettings { Id = "auto:" + database, CompanyIco = ico, Mode = "cli", Database = database, PohodaExePath = @"C:\Pohoda\Pohoda.exe" },
+            new MServerCompany(ico, database, year, string.Empty));
+        var live = new[]
+        {
+            Live("12345678", "StwPh_12345678_2025.mdb", "2025"),
+            Live("12345678", "StwPh_12345678_2026.mdb", "2026"),
+            Live("87654321", "StwPh_87654321_2026.mdb", "2026"),
+        };
+
+        var byDb = AgentCycleRunner.MatchEndpoint(
+            new AgentOrganization("org-1", "12345678", "Firma", "StwPh_12345678_2025.mdb", "2025", "latest"), live);
+        Assert.Equal("2025", byDb!.Value.Company.Year);
+
+        var byPreferredYear = AgentCycleRunner.MatchEndpoint(
+            new AgentOrganization("org-1", "12345678", "Firma", null, null, "2025"), live);
+        Assert.Equal("2025", byPreferredYear!.Value.Company.Year);
+
+        var latest = AgentCycleRunner.MatchEndpoint(
+            new AgentOrganization("org-1", "12345678", "Firma", null, null, "latest"), live);
+        Assert.Equal("2026", latest!.Value.Company.Year);
+
+        Assert.Null(AgentCycleRunner.MatchEndpoint(
+            new AgentOrganization("org-2", "00000000", "Iná", null, null, "latest"), live));
+    }
+
+    [Fact]
     public void ParsesExistingCodeListResponseFixture()
     {
         var xml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "code-lists-response-synthetic.xml"));

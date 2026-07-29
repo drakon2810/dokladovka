@@ -44,7 +44,13 @@ Export-Certificate -Cert $certificate -FilePath $certificatePath -Force | Out-Nu
 
 foreach ($store in @('Root', 'TrustedPublisher')) {
   if (-not (Test-Path -LiteralPath "Cert:\CurrentUser\$store\$thumbprint")) {
-    Import-Certificate -FilePath $certificatePath -CertStoreLocation "Cert:\CurrentUser\$store" | Out-Null
+    try {
+      Import-Certificate -FilePath $certificatePath -CertStoreLocation "Cert:\CurrentUser\$store" | Out-Null
+    } catch {
+      # Import do CurrentUser\Root vyžaduje interaktívne potvrdenie. V neinteraktívnej relácii sa
+      # preskočí – podpis vznikne aj bez lokálnej dôvery, overenie prebehne podľa thumbprintu.
+      Write-Warning "Certifikát sa nepodarilo pridať do CurrentUser\$store ($($_.Exception.Message)). Pokračujem bez lokálnej dôvery."
+    }
   }
 }
 
@@ -80,8 +86,11 @@ foreach ($file in $files) {
 
 $setupPath = Join-Path $artifacts $setupName
 $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $thumbprint) {
-  throw 'Záverečná kontrola self-signed podpisu zlyhala.'
+# UnknownError = podpis v poriadku, len self-signed root nie je v lokálnom trust store
+# (neinteraktívny build bez importu do CurrentUser\Root). Rozhoduje presný thumbprint.
+$statusOk = $signature.Status -eq 'Valid' -or $signature.Status -eq 'UnknownError'
+if (-not $statusOk -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $thumbprint) {
+  throw "Záverečná kontrola self-signed podpisu zlyhala (status $($signature.Status))."
 }
 
 Write-Host "Dočasný self-signed release je pripravený: $setupPath"

@@ -41,7 +41,7 @@ export interface OrganizationMostikStatus {
   available: boolean;
 }
 
-const pairingCodes = new Map<string, { expiresAt: number; organizationId: string }>();
+const pairingCodes = new Map<string, { expiresAt: number; organizationId?: string }>();
 
 export function validateAgentRelease(value: unknown): AgentRelease | undefined {
   if (!value || typeof value !== 'object') return undefined;
@@ -205,14 +205,16 @@ export async function setMostikEnabled(enabled: boolean, csrfToken?: string): Pr
   storeApi.set({ mostikEnabled: enabled });
 }
 
-export async function generateMostikPairingCode(organizationId: string, csrfToken?: string): Promise<AgentPairingCode> {
+export async function generateMostikPairingCode(organizationId: string | undefined, csrfToken?: string): Promise<AgentPairingCode> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    return restRequest('/api/mostik/pairing-codes', { method: 'POST', body: JSON.stringify({ organizationId }) }, csrfToken);
+    return restRequest('/api/mostik/pairing-codes', { method: 'POST', body: JSON.stringify(organizationId ? { organizationId } : {}) }, csrfToken);
   }
   requireAdmin();
   if (!storeApi.get().mostikEnabled) throw new Error('Mostík nie je povolený');
-  const organization = storeApi.get().organizations.find((item) => item.id === organizationId && item.tenantId === MOCK_TENANT_ID && !item.archived);
-  if (!organization) throw new Error('Organizácia neexistuje');
+  const organization = organizationId
+    ? storeApi.get().organizations.find((item) => item.id === organizationId && item.tenantId === MOCK_TENANT_ID && !item.archived)
+    : undefined;
+  if (organizationId && !organization) throw new Error('Organizácia neexistuje');
   const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   const raw = Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('');
@@ -368,7 +370,8 @@ export async function simulateMostikAgentConnection(code: string): Promise<Agent
   };
   storeApi.set({
     agentInstallations: [installation, ...state.agentInstallations],
-    pohodaCompanyLinks: state.pohodaCompanyLinks.map((link) => link.organizationId === pairing.organizationId ? ({
+    // Kód bez organizácie = celá kancelária: spárujú sa všetky firmy podľa IČO.
+    pohodaCompanyLinks: state.pohodaCompanyLinks.map((link) => (!pairing.organizationId || link.organizationId === pairing.organizationId) ? ({
       ...link,
       dbName: `StwPh_${link.ico}_2026`,
       uctovnyRok: '2026',

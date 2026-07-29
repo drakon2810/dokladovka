@@ -202,7 +202,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       pairingCode: z.string().trim().min(8).max(20),
       hostname: z.string().trim().min(1).max(255),
       agentVersion: z.string().trim().min(1).max(50),
-      companyIco: z.string().regex(/^\d{8}$/),
+      // Voliteľné: agent s automatickým vyhľadaním firiem (viac IČO naraz) neposiela jedno IČO.
+      companyIco: z.string().regex(/^\d{8}$/).optional(),
     }).strict().parse(request.body);
     const codeHash = sha256(body.pairingCode.toUpperCase());
     const token = randomToken();
@@ -232,7 +233,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       if (pairing.organization_id && !selectedOrganization) {
         throw new HttpError(409, 'organization_unavailable', 'Vybraná organizácia už nie je dostupná');
       }
-      if (selectedOrganization && selectedOrganization.ico !== body.companyIco) {
+      if (selectedOrganization && body.companyIco && selectedOrganization.ico !== body.companyIco) {
         throw new HttpError(409, 'organization_mismatch', 'IČO firmy v POHODE sa nezhoduje s vybranou organizáciou');
       }
       await tx.query('UPDATE agent_pairing_codes SET used_at=now() WHERE id=$1', [pairing.id]);
@@ -573,14 +574,16 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     requireCsrf(request, auth);
     requireRole(auth, ['admin']);
     if (!await mostikEnabled(database, auth.tenantId)) throw new HttpError(409, 'mostik_disabled', 'Mostík nie je povolený');
-    const { organizationId } = z.object({ organizationId: z.string().uuid() }).strict().parse(request.body);
-    await requireOrganizationAccess(database, auth, organizationId);
+    // Bez organizationId vznikne kód pre celú kanceláriu: agent sa spáruje s tenantom a firmy sa
+    // priradia automaticky podľa IČO cez heartbeat.
+    const { organizationId } = z.object({ organizationId: z.string().uuid().optional() }).strict().parse(request.body ?? {});
+    if (organizationId) await requireOrganizationAccess(database, auth, organizationId);
     const code = createPairingCode();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
     await database.query(
       `INSERT INTO agent_pairing_codes (id, code_hash, tenant_id, organization_id, created_by, expires_at)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [randomUUID(), sha256(code), auth.tenantId, organizationId, auth.userId, expiresAt.toISOString()],
+      [randomUUID(), sha256(code), auth.tenantId, organizationId ?? null, auth.userId, expiresAt.toISOString()],
     );
     return reply.code(201).send({ code, expiresAt: expiresAt.toISOString(), organizationId });
   });

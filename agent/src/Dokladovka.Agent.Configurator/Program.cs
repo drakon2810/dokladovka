@@ -13,25 +13,33 @@ internal static class Program
             ShowDiagnostics();
             return;
         }
+        // Nakonfigurovaný agent otvorí hlavné okno so zoznamom firiem; sprievodca beží pri prvom
+        // spustení alebo s --configure.
+        var forceWizard = args.Any(value => value.Equals("--configure", StringComparison.OrdinalIgnoreCase));
+        if (!forceWizard && File.Exists(AgentPaths.Settings))
+        {
+            Application.Run(new StatusForm(AgentDefaults.Load()));
+            return;
+        }
         Application.Run(new WizardForm(AgentDefaults.Load()));
     }
 
-    private static void ShowDiagnostics()
+    internal static void ShowDiagnostics()
     {
         try
         {
             var settings = AgentSettingsStore.Load();
             var secrets = SecretVault.Load();
-            var companies = new AgentCycleRunner(settings, secrets, new RollingFileAgentLog())
-                .ReadCompaniesAsync(CancellationToken.None).GetAwaiter().GetResult();
+            var runner = new AgentCycleRunner(settings, secrets, new RollingFileAgentLog());
+            var companies = runner.ReadCompaniesAsync(CancellationToken.None).GetAwaiter().GetResult();
             var schemas = Directory.Exists(settings.SchemaDirectory)
                 ? Directory.EnumerateFiles(settings.SchemaDirectory, "*.xsd").Count()
                 : 0;
             MessageBox.Show(
-                $"Konfigurácia: OK\nPOHODA mServer: {companies.Count}/{settings.MServers.Count}\nXSD schémy: {schemas}\nAgent: {AgentVersion.Current}",
+                $"Konfigurácia: OK\nPripojenia POHODA: {companies.Count}/{runner.EndpointCount}\nXSD schémy: {schemas}\nAgent: {AgentVersion.Current}",
                 "Dokladovka Agent – Diagnostika",
                 MessageBoxButtons.OK,
-                companies.Count == settings.MServers.Count && schemas > 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                companies.Count == runner.EndpointCount && schemas > 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
         catch (Exception error)
         {

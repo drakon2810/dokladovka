@@ -980,6 +980,9 @@ export const sk = {
   'mostik.splnene': 'Splnené',
   'mostik.vyzadujeKontrolu': 'Vyžaduje kontrolu',
   'mostik.vyberOrganizacie': 'Výber organizácie',
+  'mostik.vsetkyFirmy': 'Jeden Mostík pre všetky firmy (odporúčané)',
+  'mostik.vsetkyFirmyPopis':
+    'Agent nájde v POHODE databázy všetkých firiem a spáruje ich podľa IČO automaticky. Nové firmy sa pripoja po kliknutí na Obnoviť v agentovi.',
   'mostik.zistiAgent': 'Zistí agent',
   'mostik.vygenerovatNovyKod': 'Vygenerovať nový kód',
   'mostik.kodZostava': 'Zostávajúci čas',

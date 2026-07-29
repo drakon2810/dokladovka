@@ -62,6 +62,8 @@ export function MostikOnboarding({
     admin: false,
   });
   const [pairing, setPairing] = useState<AgentPairingCode>();
+  // Doklado-štýl: jeden Mostík pre všetky firmy kancelárie je predvolený.
+  const [allFirms, setAllFirms] = useState(true);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
 
@@ -93,14 +95,14 @@ export function MostikOnboarding({
   }, [onReload, pairing, step]);
 
   useEffect(() => {
-    if (pairing && pairing.organizationId !== selectedOrganizationId) setPairing(undefined);
+    if (pairing?.organizationId && pairing.organizationId !== selectedOrganizationId) setPairing(undefined);
   }, [pairing, selectedOrganizationId]);
 
   async function createPairingCode() {
-    if (!selectedOrganizationId) return;
+    if (!allFirms && !selectedOrganizationId) return;
     setBusy(true);
     try {
-      setPairing(await generateMostikPairingCode(selectedOrganizationId, csrfToken));
+      setPairing(await generateMostikPairingCode(allFirms ? undefined : selectedOrganizationId, csrfToken));
       showToast(t('mostik.kodVygenerovany'));
     } catch {
       showToast(t('mostik.parovanieChyba'), { tone: 'error' });
@@ -174,12 +176,21 @@ export function MostikOnboarding({
         {step === 2 && (
           <div className="max-w-xl">
             <h3 className="text-sm font-semibold">{t('mostik.vyberOrganizacie')}</h3>
+            <label className="mt-3 flex items-center gap-2 rounded border border-line p-3 text-sm">
+              <input type="checkbox" checked={allFirms} onChange={(event) => setAllFirms(event.target.checked)} />
+              <span>
+                <span className="font-medium">{t('mostik.vsetkyFirmy')}</span>
+                <span className="mt-0.5 block text-xs text-ink-soft">{t('mostik.vsetkyFirmyPopis')}</span>
+              </span>
+            </label>
+            {!allFirms && (
             <label className="mt-3 block text-sm">
               <span className="mb-1 block text-ink-soft">{t('mostik.organizacia')}</span>
               <select className="input w-full" value={selectedOrganizationId} onChange={(event) => setSelectedOrganizationId(event.target.value)}>
                 {organizations.map((item) => <option key={item.id} value={item.id}>{item.nazov} · {item.ico}</option>)}
               </select>
             </label>
+            )}
             {organization && (
               <dl className="mt-3 grid grid-cols-2 gap-2 rounded bg-app p-3 text-sm">
                 <dt className="text-ink-soft">{t('nast.org.ico')}</dt><dd className="tnum">{organization.ico}</dd>
@@ -195,7 +206,7 @@ export function MostikOnboarding({
             <h3 className="text-sm font-semibold">{t('mostik.parovanie')}</h3>
             <p className="mt-1 text-sm text-ink-soft">{t('mostik.kodJednorazovy')}</p>
             {!pairing || remaining === 0 ? (
-              <button type="button" className="btn btn-primary mt-4" disabled={busy || !selectedOrganizationId} onClick={() => void createPairingCode()}>
+              <button type="button" className="btn btn-primary mt-4" disabled={busy || (!allFirms && !selectedOrganizationId)} onClick={() => void createPairingCode()}>
                 {pairing ? t('mostik.vygenerovatNovyKod') : t('mostik.vygenerovatKod')}
               </button>
             ) : (
@@ -293,7 +304,7 @@ export function MostikOnboarding({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={step === 6 || (step === 1 && !allRequirementsConfirmed) || (step === 2 && !selectedOrganizationId)}
+            disabled={step === 6 || (step === 1 && !allRequirementsConfirmed) || (step === 2 && !allFirms && !selectedOrganizationId)}
             onClick={() => setStep((current) => Math.min(6, current + 1))}
           >
             {t('mostik.pokracovat')}

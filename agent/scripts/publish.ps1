@@ -35,8 +35,12 @@ if (-not $outputFull.StartsWith($agentRootFull, [System.StringComparison]::Ordin
 }
 if (Test-Path -LiteralPath $outputFull) { Remove-Item -LiteralPath $outputFull -Recurse -Force }
 New-Item -ItemType Directory -Path $outputFull | Out-Null
-Copy-Item -Path (Join-Path $agentStaging '*') -Destination $outputFull -Recurse -Force
+# Konfigurátor referencuje Agent exe projekt, takže jeho publish obsahuje aj nefunkčný apphost
+# Dokladovka.Agent.exe (+ runtimeconfig). Kopíruje sa preto PRVÝ a správny single-file agent ho prepíše.
 Copy-Item -Path (Join-Path $configuratorStaging '*') -Destination $outputFull -Recurse -Force
+Copy-Item -Path (Join-Path $agentStaging '*') -Destination $outputFull -Recurse -Force
+$strayRuntimeConfig = Join-Path $outputFull 'Dokladovka.Agent.runtimeconfig.json'
+if (Test-Path -LiteralPath $strayRuntimeConfig) { Remove-Item -LiteralPath $strayRuntimeConfig -Force }
 Copy-Item -LiteralPath $schemas -Destination (Join-Path $output 'Schemas') -Recurse -Force
 $defaults = [ordered]@{
   cloudBaseUrl = $CloudBaseUrl

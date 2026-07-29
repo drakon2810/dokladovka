@@ -15,11 +15,24 @@ public sealed record MServerEndpointSettings
     public bool IsCli => Mode.Equals("cli", StringComparison.OrdinalIgnoreCase);
 }
 
+/// <summary>Automatický cli režim: agent sám nachádza databázy všetkých firiem v dátovom priečinku POHODA.</summary>
+public sealed record PohodaAutoSettings
+{
+    /// <summary>Id zdieľaného secretu (jeden POHODA používateľ pre všetky firmy).</summary>
+    public const string SecretEndpointId = "pohoda-auto";
+    /// <summary>Prefix id dynamicky vytváraných endpointov.</summary>
+    public const string EndpointIdPrefix = "auto:";
+
+    public required string PohodaExePath { get; init; }
+    public required string DataDirectory { get; init; }
+}
+
 public sealed record AgentSettings
 {
     public required string CloudBaseUrl { get; init; }
     public required string InstallationName { get; init; }
     public required List<MServerEndpointSettings> MServers { get; init; }
+    public PohodaAutoSettings? PohodaAuto { get; init; }
     public int PollSeconds { get; init; } = 30;
     public int HeartbeatSeconds { get; init; } = 120;
     public int CodeListSyncMinutes { get; init; } = 60;
@@ -31,7 +44,17 @@ public sealed record AgentSettings
     {
         ValidateNetworkUrl(settings.CloudBaseUrl, allowLocalHttp: true, "URL cloudu");
         if (string.IsNullOrWhiteSpace(settings.InstallationName)) throw new InvalidOperationException("Názov inštalácie je povinný.");
-        if (settings.MServers.Count == 0) throw new InvalidOperationException("Je potrebná aspoň jedna inštancia POHODA mServer.");
+        if (settings.PohodaAuto is not null)
+        {
+            if (string.IsNullOrWhiteSpace(settings.PohodaAuto.PohodaExePath))
+                throw new InvalidOperationException("Pre automatický režim je povinná cesta k pohoda.exe.");
+            if (string.IsNullOrWhiteSpace(settings.PohodaAuto.DataDirectory))
+                throw new InvalidOperationException("Pre automatický režim je povinný dátový priečinok POHODA.");
+        }
+        else if (settings.MServers.Count == 0)
+        {
+            throw new InvalidOperationException("Je potrebná aspoň jedna inštancia POHODA mServer alebo dátový priečinok POHODA.");
+        }
         if (settings.MServers.Select(item => item.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != settings.MServers.Count)
             throw new InvalidOperationException("Identifikátory mServerov musia byť jedinečné.");
         foreach (var endpoint in settings.MServers)

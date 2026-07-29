@@ -14,6 +14,7 @@ public sealed class AgentCycleRunner
     private readonly RuntimeState _state;
     private readonly Dictionary<string, IPohodaClient> _mServers;
     private readonly Dictionary<string, MServerEndpointSettings> _endpoints;
+    private readonly MServerSecret? _autoSecret;
     // ponytail: počítadlo pokusov v pamäti procesu (reset pri reštarte služby). Perzistovať sa nedá – pending .bin sa každý cyklus
     // prepíše z fronty. Pri reštarte sa pokusy vynulujú, čo je prijateľné. Slúži len na cli režim (mserver má vlastnú permanent chybu).
     private const int CliMaxAttempts = 5;
@@ -30,6 +31,12 @@ public sealed class AgentCycleRunner
         _state = _stateStore.Load();
         _endpoints = settings.MServers.ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
         var secretByEndpoint = secrets.MServers.ToDictionary(item => item.EndpointId, StringComparer.OrdinalIgnoreCase);
+        if (settings.PohodaAuto is not null)
+        {
+            _autoSecret = secretByEndpoint.TryGetValue(PohodaAutoSettings.SecretEndpointId, out var autoSecret)
+                ? autoSecret
+                : throw new InvalidOperationException("Chýbajú prihlasovacie údaje POHODA pre automatický režim.");
+        }
         _mServers = settings.MServers.ToDictionary(
             endpoint => endpoint.Id,
             IPohodaClient (endpoint) =>
@@ -101,10 +108,13 @@ public sealed class AgentCycleRunner
         _stateStore.Save(_state);
     }
 
+    public int EndpointCount => _endpoints.Count;
+
     public async Task<IReadOnlyList<(MServerEndpointSettings Endpoint, MServerCompany Company)>> ReadCompaniesAsync(CancellationToken cancellationToken)
     {
+        RefreshAutoEndpoints();
         var result = new List<(MServerEndpointSettings, MServerCompany)>();
-        foreach (var endpoint in _settings.MServers)
+        foreach (var endpoint in _endpoints.Values.ToArray())
         {
             try
             {
@@ -119,7 +129,44 @@ public sealed class AgentCycleRunner
         return result;
     }
 
-    private (MServerEndpointSettings Endpoint, MServerCompany Company)? MatchEndpoint(
+    // Dynamické endpointy z dátového priečinka POHODA: každá StwPh_{ICO}_{rok}.mdb = jedna firma.
+    // Beží pri každom cykle, takže nová firma pridaná do POHODY (alebo Dokladovky) sa objaví bez rekonfigurácie.
+    private void RefreshAutoEndpoints()
+    {
+        if (_settings.PohodaAuto is null || _autoSecret is null) return;
+        var discovered = PohodaDataDiscovery.Scan(_settings.PohodaAuto.DataDirectory);
+        var expected = new HashSet<string>(
+            discovered.Select(company => PohodaAutoSettings.EndpointIdPrefix + company.Database),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var id in _endpoints.Keys
+            .Where(id => id.StartsWith(PohodaAutoSettings.EndpointIdPrefix, StringComparison.OrdinalIgnoreCase) && !expected.Contains(id))
+            .ToArray())
+        {
+            _endpoints.Remove(id);
+            _mServers.Remove(id);
+        }
+        var staticDatabases = new HashSet<string>(
+            _settings.MServers.Where(endpoint => endpoint.Database is not null).Select(endpoint => endpoint.Database!),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var company in discovered)
+        {
+            var id = PohodaAutoSettings.EndpointIdPrefix + company.Database;
+            if (_endpoints.ContainsKey(id) || staticDatabases.Contains(company.Database)) continue;
+            var endpoint = new MServerEndpointSettings
+            {
+                Id = id,
+                CompanyIco = company.Ico,
+                Mode = "cli",
+                Database = company.Database,
+                PohodaExePath = _settings.PohodaAuto.PohodaExePath,
+            };
+            _endpoints[id] = endpoint;
+            _mServers[id] = new PohodaCliClient(endpoint, _autoSecret, _log);
+            _log.Info("auto_endpoint_added", new { id, company.Ico, company.Year });
+        }
+    }
+
+    public static (MServerEndpointSettings Endpoint, MServerCompany Company)? MatchEndpoint(
         AgentOrganization organization,
         IReadOnlyList<(MServerEndpointSettings Endpoint, MServerCompany Company)> live)
     {

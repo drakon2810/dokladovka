@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net;
-using Microsoft.Win32;
 using Dokladovka.Agent;
 
 namespace Dokladovka.Agent.Configurator;
@@ -13,10 +12,10 @@ public sealed class WizardForm : Form
     private readonly Button _next = new() { Text = "Pokračovať", AutoSize = true };
     private readonly TextBox _cloud = new() { Dock = DockStyle.Top };
     private readonly TextBox _pairing = new() { Dock = DockStyle.Top, CharacterCasing = CharacterCasing.Upper };
-    private readonly RadioButton _modeMServer = new() { Text = "POHODA mServer (HTTP, beží trvalo)", AutoSize = true, Checked = true };
-    private readonly RadioButton _modeCli = new() { Text = "Priamy XML import (pohoda.exe /XML, bez mServera)", AutoSize = true };
+    private readonly RadioButton _modeMServer = new() { Text = "POHODA mServer (HTTP, beží trvalo)", AutoSize = true };
+    private readonly RadioButton _modeCli = new() { Text = "Priamy XML import (pohoda.exe /XML, bez mServera) – všetky firmy automaticky", AutoSize = true, Checked = true };
     private readonly TextBox _mServer = new() { Dock = DockStyle.Top };
-    private readonly TextBox _database = new() { Dock = DockStyle.Top };
+    private readonly TextBox _dataDirectory = new() { Dock = DockStyle.Top };
     private readonly TextBox _pohodaExe = new() { Dock = DockStyle.Top };
     private readonly TextBox _user = new() { Dock = DockStyle.Top };
     private readonly TextBox _password = new() { Dock = DockStyle.Top, UseSystemPasswordChar = true };
@@ -95,24 +94,32 @@ public sealed class WizardForm : Form
         panel.Controls.Add(detect);
         panel.Controls.Add(_discovery);
         AddField(page, "Adresa POHODA mServer (iba pre režim mServer)", _mServer);
-        AddField(page, "Databáza firmy (iba pre priamy import, napr. StwPh_12345678_2026.mdb)", _database);
         AddField(page, "Cesta k pohoda.exe (povinná pre priamy import)", _pohodaExe);
+        AddField(page, "Dátový priečinok POHODA s StwPh_*.mdb (iba pre priamy import)", _dataDirectory);
+        var browse = new Button { Text = "Prehľadávať…", AutoSize = true };
+        browse.Click += (_, _) =>
+        {
+            using var dialog = new FolderBrowserDialog { Description = "Vyberte dátový priečinok POHODA (obsahuje StwPh_*.mdb)" };
+            if (Directory.Exists(_dataDirectory.Text)) dialog.SelectedPath = _dataDirectory.Text;
+            if (dialog.ShowDialog(this) == DialogResult.OK) _dataDirectory.Text = dialog.SelectedPath;
+        };
+        panel.Controls.Add(browse);
         return page;
     }
 
     private TabPage BuildCredentialsPage()
     {
-        var page = Page("Prihlásenie do mServer", "Údaje zostanú iba na tomto počítači a heslo sa uloží cez Windows DPAPI LocalMachine.");
-        AddField(page, "Používateľ mServer", _user);
-        AddField(page, "Heslo mServer", _password);
-        AddField(page, "IČO firmy", _ico);
+        var page = Page("Prihlásenie do POHODY", "Údaje zostanú iba na tomto počítači a heslo sa uloží cez Windows DPAPI LocalMachine. Pri priamom importe zadajte používateľa POHODA s právom Dátová komunikácia pre všetky firmy.");
+        AddField(page, "Používateľ POHODA", _user);
+        AddField(page, "Heslo POHODA", _password);
+        AddField(page, "IČO firmy (pri priamom importe voliteľné – firmy sa nájdu automaticky)", _ico);
         AddField(page, "Názov inštancie (voliteľné)", _instance);
         return page;
     }
 
     private TabPage BuildCompanyPage()
     {
-        var page = Page("Výber firmy", "IČO sa musí zhodovať s organizáciou vybranou pri vytvorení párovacieho kódu. Pri nezhode backend spojenie bezpečne odmietne.");
+        var page = Page("Výber firmy", "Pri priamom importe sa všetky firmy z dátového priečinka spárujú s Dokladovkou automaticky podľa IČO. Pri režime mServer sa IČO musí zhodovať s vybranou organizáciou.");
         page.Controls.Add(_companySummary);
         return page;
     }
@@ -168,19 +175,33 @@ public sealed class WizardForm : Form
             1 when !Uri.TryCreate(_cloud.Text.Trim(), UriKind.Absolute, out _) => "Zadajte platnú URL Dokladovka.",
             1 when string.IsNullOrWhiteSpace(_pairing.Text) => "Zadajte párovací kód.",
             2 when !_modeCli.Checked && !Uri.TryCreate(_mServer.Text.Trim(), UriKind.Absolute, out _) => "Zadajte platnú adresu mServera.",
-            2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_database.Text) => "Zadajte názov databázy POHODA (napr. StwPh_12345678_2026.mdb).",
             2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_pohodaExe.Text) => "Zadajte cestu k pohoda.exe.",
+            2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_dataDirectory.Text) => "Zadajte dátový priečinok POHODA (obsahuje StwPh_*.mdb).",
+            2 when _modeCli.Checked && PohodaDataDiscovery.Scan(_dataDirectory.Text.Trim()).Count == 0 =>
+                "V zadanom priečinku sa nenašla žiadna databáza firmy StwPh_ICO_ROK.mdb.",
             3 when string.IsNullOrWhiteSpace(_user.Text) => "Zadajte používateľa POHODA.",
             3 when string.IsNullOrEmpty(_password.Text) => "Zadajte heslo POHODA.",
-            3 when !System.Text.RegularExpressions.Regex.IsMatch(_ico.Text.Trim(), "^[0-9]{8}$") => "IČO musí mať presne 8 číslic.",
+            3 when !IcoValid() => "IČO musí mať presne 8 číslic.",
             5 when !_configured => "Najprv úspešne vykonajte kontrolu spojenia.",
             _ => null,
         };
         if (error is null)
         {
-            if (_pages.SelectedIndex == 3) _companySummary.Text = _modeCli.Checked
-                ? $"Firma s IČO: {_ico.Text.Trim()}\nDatabáza POHODA: {_database.Text.Trim()}"
-                : $"Firma s IČO: {_ico.Text.Trim()}\nAdresa mServera: {_mServer.Text.Trim()}";
+            if (_pages.SelectedIndex == 3)
+            {
+                if (_modeCli.Checked)
+                {
+                    var companies = PohodaDataDiscovery.Scan(_dataDirectory.Text.Trim());
+                    _companySummary.Text = $"Nájdené firmy ({companies.Count}):\n" + string.Join(
+                        "\n",
+                        companies.Take(20).Select(company => $"• IČO {company.Ico}, rok {company.Year} ({company.Database})"))
+                        + (companies.Count > 20 ? $"\n… a ďalších {companies.Count - 20}" : string.Empty);
+                }
+                else
+                {
+                    _companySummary.Text = $"Firma s IČO: {_ico.Text.Trim()}\nAdresa mServera: {_mServer.Text.Trim()}";
+                }
+            }
             return true;
         }
         MessageBox.Show(error, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -200,20 +221,20 @@ public sealed class WizardForm : Form
                 CloudBaseUrl = _cloud.Text.Trim(),
                 PairingCode = _pairing.Text.Trim(),
                 MServerUrl = NullIfBlank(_mServer.Text),
-                CompanyIco = _ico.Text.Trim(),
+                CompanyIco = NullIfBlank(_ico.Text),
                 UserName = _user.Text.Trim(),
                 Password = _password.Text,
                 InstanceName = NullIfBlank(_instance.Text),
                 PohodaExePath = NullIfBlank(_pohodaExe.Text),
                 Mode = _modeCli.Checked ? "cli" : "mserver",
-                Database = NullIfBlank(_database.Text),
+                DataDirectory = _modeCli.Checked ? NullIfBlank(_dataDirectory.Text) : null,
                 EndpointId = _modeCli.Checked ? "pohoda-1" : "mserver-1",
                 AllowedPublisherThumbprint = _defaults.PublisherThumbprint,
             }, new RollingFileAgentLog(), CancellationToken.None);
             _configured = true;
             _testResult.ForeColor = Color.DarkGreen;
-            _testResult.Text = $"Spojenie je v poriadku.\nPOHODA: {result.Company.Company}\nDatabáza: {result.Company.DatabaseName}\nÚčtovný rok: {result.Company.Year}\nHeartbeat: odoslaný";
-            _diagnostics = $"Kód: OK\r\nAgent: {AgentVersion.Current}\r\nmServer: dostupný\r\nRok: {result.Company.Year}";
+            _testResult.Text = $"Spojenie je v poriadku.\nPOHODA: {result.Company.Company}\nDatabáza: {result.Company.DatabaseName}\nÚčtovný rok: {result.Company.Year}\nNájdené firmy: {result.Discovered.Count}\nHeartbeat: odoslaný";
+            _diagnostics = $"Kód: OK\r\nAgent: {AgentVersion.Current}\r\nPOHODA: dostupná\r\nRok: {result.Company.Year}\r\nFirmy: {result.Discovered.Count}";
             _copyDiagnostics.Enabled = true;
             _next.Enabled = true;
         }
@@ -243,8 +264,21 @@ public sealed class WizardForm : Form
             return;
         }
         _pohodaExe.Text = path;
-        _discovery.Text = $"POHODA bola nájdená: {path}";
+        var dataDirectory = PohodaDataDiscovery.FindDataDirectory(path);
+        if (dataDirectory is not null) _dataDirectory.Text = dataDirectory;
+        IReadOnlyList<DiscoveredCompany> companies = dataDirectory is null ? [] : PohodaDataDiscovery.Scan(dataDirectory);
+        _discovery.Text = $"POHODA bola nájdená: {path}"
+            + (dataDirectory is null
+                ? "\nDátový priečinok sa nepodarilo určiť – vyberte ho ručne."
+                : $"\nDátový priečinok: {dataDirectory} (firiem: {companies.Count})");
         _discovery.ForeColor = Color.DarkGreen;
+    }
+
+    private bool IcoValid()
+    {
+        var ico = _ico.Text.Trim();
+        if (_modeCli.Checked && ico.Length == 0) return true;
+        return System.Text.RegularExpressions.Regex.IsMatch(ico, "^[0-9]{8}$");
     }
 
     private void UpdateNavigation()
@@ -295,39 +329,5 @@ public sealed class WizardForm : Form
         foreach (var secret in new[] { _password.Text, _pairing.Text, _user.Text })
             if (!string.IsNullOrEmpty(secret)) value = value.Replace(secret, "***", StringComparison.OrdinalIgnoreCase);
         return value;
-    }
-}
-
-internal static class PohodaDiscovery
-{
-    public static string? FindExecutable()
-    {
-        var candidates = new[]
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "STORMWARE", "POHODA", "Pohoda.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "STORMWARE", "POHODA", "Pohoda.exe"),
-        };
-        var known = candidates.FirstOrDefault(File.Exists);
-        if (known is not null) return known;
-        foreach (var registryPath in new[]
-        {
-            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-        })
-        {
-            using var root = Registry.LocalMachine.OpenSubKey(registryPath);
-            if (root is null) continue;
-            foreach (var name in root.GetSubKeyNames())
-            {
-                using var item = root.OpenSubKey(name);
-                var displayName = item?.GetValue("DisplayName") as string;
-                if (displayName?.Contains("POHODA", StringComparison.OrdinalIgnoreCase) != true) continue;
-                var location = item?.GetValue("InstallLocation") as string;
-                if (string.IsNullOrWhiteSpace(location)) continue;
-                var path = Path.Combine(location, "Pohoda.exe");
-                if (File.Exists(path)) return path;
-            }
-        }
-        return null;
     }
 }

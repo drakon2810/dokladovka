@@ -4,8 +4,24 @@ Agent je odchádzajúci most medzi cloud backendom a lokálnou POHODOU. Cloud ne
 
 Agent podporuje dva režimy prepojenia s POHODOU (pole `mode` endpointu v `agent.json`):
 
-- **`mserver`** (predvolený) – HTTP komunikácia s trvalo bežiacim POHODA mServer.
-- **`cli`** – priamy XML import bez mServera: agent zapíše dataPack a INI súbor do `%ProgramData%\Dokladovka\xml` a spustí `pohoda.exe /XML "user" "heslo" job.ini`. POHODA sa spustí bez okna, spracuje import, zapíše responsePack a skončí. Licencia je obsadená iba počas behu. Režim vyžaduje `database` (názov databázy firmy, napr. `StwPh_12345678_2026.mdb`; pri SQL/E1 názov SQL databázy) a `pohodaExePath`. Účtovný rok sa odvodzuje z názvu databázy – **pri prechode na nový rok treba `database` v konfigurácii aktualizovať**. Beh má timeout 10 minút a na stroji beží vždy iba jeden import naraz (medziprocesový zámok, takže sa serializuje aj beh služby vs. `configure`/`run-once`). **Bezpečnostné upozornenie:** POHODA vyžaduje prihlasovacie údaje ako argumenty príkazového riadku (oficiálny mechanizmus STORMWARE), takže počas behu je heslo viditeľné v zozname procesov (`Win32_Process.CommandLine`) – a to nielen lokálnemu správcovi, ale na predvolenom Windowse aj bežným (neadministrátorským) používateľom prihláseným na tom istom stroji, plus sa zaznamená do auditu vytvárania procesov (Event ID 4688 / Sysmon 1). Preto: službu spúšťajte pod vyhradeným účtom s minimom práv, na zdieľanom (RDP) serveri, kde sa prihlasuje viac ľudí, uprednostnite režim `mserver`, a prístup interaktívneho/RDP prihlásenia obmedzte len na nevyhnutné účty.
+- **`mserver`** – HTTP komunikácia s trvalo bežiacim POHODA mServer.
+- **`cli`** (predvolený v sprievodcovi) – priamy XML import bez mServera: agent zapíše dataPack a INI súbor do `%ProgramData%\Dokladovka\xml` a spustí `pohoda.exe /XML "user" "heslo" job.ini`.
+
+## Automatický režim pre všetky firmy (`pohodaAuto`)
+
+Sprievodca v režime priameho importu už nekonfiguruje jednu firmu, ale dátový
+priečinok POHODA. `agent.json` obsahuje sekciu `pohodaAuto` s poľami
+`pohodaExePath` a `dataDirectory`; zoznam `mServers` môže byť prázdny. Agent pri
+každom cykle prehľadá priečinok, každý súbor `StwPh_{IČO}_{rok}.mdb` sa stane
+dynamickým cli endpointom (`auto:StwPh_...`) so zdieľaným prihlásením
+(`pohoda-auto` secret). Heartbeat hlási všetky nájdené firmy a backend ich
+spáruje s organizáciami podľa IČO (preferovaný rok, inak najnovší). Nová firma
+v Dokladovke aj nová databáza v POHODE sa teda pripoja bez rekonfigurácie –
+stačí kliknúť **Obnoviť** v hlavnom okne agenta (alebo počkať na ďalší cyklus).
+Prechod na nový účtovný rok je automatický: nový `StwPh_*_{rok+1}.mdb` sa
+nájde a použije sám. Hlavné okno konfigurátora (spustenie bez parametrov po
+nakonfigurovaní) zobrazuje tabuľku firiem a ich stav párovania; sprievodcu
+vynútite parametrom `--configure`. POHODA sa spustí bez okna, spracuje import, zapíše responsePack a skončí. Licencia je obsadená iba počas behu. Režim vyžaduje `database` (názov databázy firmy, napr. `StwPh_12345678_2026.mdb`; pri SQL/E1 názov SQL databázy) a `pohodaExePath`. Účtovný rok sa odvodzuje z názvu databázy – **pri prechode na nový rok treba `database` v konfigurácii aktualizovať**. Beh má timeout 10 minút a na stroji beží vždy iba jeden import naraz (medziprocesový zámok, takže sa serializuje aj beh služby vs. `configure`/`run-once`). **Bezpečnostné upozornenie:** POHODA vyžaduje prihlasovacie údaje ako argumenty príkazového riadku (oficiálny mechanizmus STORMWARE), takže počas behu je heslo viditeľné v zozname procesov (`Win32_Process.CommandLine`) – a to nielen lokálnemu správcovi, ale na predvolenom Windowse aj bežným (neadministrátorským) používateľom prihláseným na tom istom stroji, plus sa zaznamená do auditu vytvárania procesov (Event ID 4688 / Sysmon 1). Preto: službu spúšťajte pod vyhradeným účtom s minimom práv, na zdieľanom (RDP) serveri, kde sa prihlasuje viac ľudí, uprednostnite režim `mserver`, a prístup interaktívneho/RDP prihlásenia obmedzte len na nevyhnutné účty.
 
 ## Inštalácia používateľom
 

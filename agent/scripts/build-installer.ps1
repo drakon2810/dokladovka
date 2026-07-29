@@ -47,7 +47,13 @@ if ($TemporarySelfSigned) {
     Select-Object -First 1
   if (-not $certificate) { throw 'Self-signed certifikát s privátnym kľúčom nebol nájdený v Cert:\CurrentUser\My.' }
   $signed = Set-AuthenticodeSignature -LiteralPath $artifact.FullName -Certificate $certificate -HashAlgorithm SHA256 -TimestampServer 'http://timestamp.digicert.com'
-  if ($signed.Status -ne 'Valid') { throw "Dočasný Authenticode podpis nie je platný: $($signed.Status)." }
+  # UnknownError = podpis je kryptograficky v poriadku, len self-signed root nie je v lokálnom
+  # trust store (neinteraktívny build). Overuje sa presný thumbprint podpisujúceho certifikátu.
+  $signerMatchesExpected = $signed.SignerCertificate -and
+    $signed.SignerCertificate.Thumbprint.Replace(' ', '').ToUpperInvariant() -eq $normalizedThumbprint
+  if ($signed.Status -ne 'Valid' -and -not ($signed.Status -eq 'UnknownError' -and $signerMatchesExpected)) {
+    throw "Dočasný Authenticode podpis nie je platný: $($signed.Status)."
+  }
   $actualThumbprint = $certificate.Thumbprint.Replace(' ', '').ToUpperInvariant()
 } elseif (-not $Development) {
   & cmd.exe /d /s /c ($env:AGENT_SIGNTOOL_COMMAND.Replace('{file}', '"' + $artifact.FullName + '"'))

@@ -68,9 +68,10 @@ public sealed class BackendClient
         string pairingCode,
         string hostname,
         string agentVersion,
-        string companyIco,
+        string? companyIco,
         CancellationToken cancellationToken)
     {
+        // companyIco == null (automatické vyhľadanie firiem) sa vďaka WhenWritingNull do JSON vôbec neodošle.
         using var http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(30) };
         using var response = await http.PostAsJsonAsync("api/agent/pair", new { pairingCode, hostname, agentVersion, companyIco }, JsonOptions, cancellationToken);
         if (!response.IsSuccessStatusCode) throw await ToException(response, cancellationToken);

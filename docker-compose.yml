@@ -65,6 +65,9 @@ services:
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
     volumes:
       - objects-data:/data/objects
+      # Inštalátor Mostík agenta (gitignored) — na server sa kopíruje scp do
+      # /root/dokladovka/agent/artifacts a API ho servíruje na /downloads/*.
+      - ./agent/artifacts:/app/agent/artifacts:ro
     # Port nie je publikovaný von — chodí sa naň iba cez Caddy (web).
 
   web:
