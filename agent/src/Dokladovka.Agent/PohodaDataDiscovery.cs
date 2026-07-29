@@ -1,9 +1,10 @@
 using System.Text.RegularExpressions;
+using Microsoft.Data.SqlClient;
 using Microsoft.Win32;
 
 namespace Dokladovka.Agent;
 
-/// <summary>Firma nájdená v dátovom priečinku POHODA podľa názvu súboru StwPh_{IČO}_{rok}.mdb.</summary>
+/// <summary>Firma nájdená podľa databázy POHODA: StwPh_{IČO}_{rok}.mdb (Access) alebo StwPh_{IČO}_{rok} (SQL/E1).</summary>
 public sealed record DiscoveredCompany(string Ico, string Database, string Year);
 
 public static partial class PohodaDataDiscovery
@@ -11,6 +12,10 @@ public static partial class PohodaDataDiscovery
     // Systémové databázy (StwPh.mdb, StwPhProfile.mdb, zálohy…) vzor zámerne nematchne.
     [GeneratedRegex(@"^StwPh_(\d{8})_(\d{4})\.mdb$", RegexOptions.IgnoreCase)]
     private static partial Regex CompanyDatabasePattern();
+
+    // SQL/E1 variant: databáza sa volá ako súbor, len bez prípony.
+    [GeneratedRegex(@"^StwPh_(\d{8})_(\d{4})$", RegexOptions.IgnoreCase)]
+    private static partial Regex SqlDatabasePattern();
 
     /// <summary>Nájde všetky firemné databázy v dátovom priečinku POHODA. Chýbajúci priečinok vráti prázdny zoznam.</summary>
     public static IReadOnlyList<DiscoveredCompany> Scan(string dataDirectory)
@@ -27,6 +32,46 @@ public static partial class PohodaDataDiscovery
             .OrderBy(company => company.Ico, StringComparer.Ordinal)
             .ThenByDescending(company => company.Year, StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// Nájde všetky firemné databázy na SQL Serveri POHODY (varianty SQL/E1) — rovnako ako Doklado
+    /// číta sys.databases namiesto súborov. INI parameter database= berie pri SQL variante názov databázy.
+    /// </summary>
+    public static async Task<IReadOnlyList<DiscoveredCompany>> ScanSqlAsync(
+        string host, int port, string userName, string password, CancellationToken cancellationToken)
+    {
+        var builder = new SqlConnectionStringBuilder
+        {
+            DataSource = $"{host},{port}",
+            UserID = userName,
+            Password = password,
+            InitialCatalog = "master",
+            // POHODA SQL beží v LAN spravidla bez dôveryhodného certifikátu.
+            TrustServerCertificate = true,
+            ConnectTimeout = 15,
+        };
+        var result = new List<DiscoveredCompany>();
+        await using var connection = new SqlConnection(builder.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new SqlCommand("SELECT name FROM sys.databases WHERE name LIKE 'StwPh[_]%'", connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var company = ParseSqlDatabaseName(reader.GetString(0));
+            if (company is not null) result.Add(company);
+        }
+        return result
+            .OrderBy(company => company.Ico, StringComparer.Ordinal)
+            .ThenByDescending(company => company.Year, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>StwPh_{IČO}_{rok} → firma; systémové databázy (StwPh, StwPhProfile…) vráti null.</summary>
+    public static DiscoveredCompany? ParseSqlDatabaseName(string name)
+    {
+        var match = SqlDatabasePattern().Match(name.Trim());
+        return match.Success ? new DiscoveredCompany(match.Groups[1].Value, name.Trim(), match.Groups[2].Value) : null;
     }
 
     /// <summary>Skúsi nájsť dátový priečinok POHODA – preferuje kandidáta, ktorý už obsahuje firemné databázy.</summary>

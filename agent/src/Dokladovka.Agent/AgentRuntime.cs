@@ -15,6 +15,7 @@ public sealed class AgentCycleRunner
     private readonly Dictionary<string, IPohodaClient> _mServers;
     private readonly Dictionary<string, MServerEndpointSettings> _endpoints;
     private readonly MServerSecret? _autoSecret;
+    private readonly MServerSecret? _sqlSecret;
     // ponytail: počítadlo pokusov v pamäti procesu (reset pri reštarte služby). Perzistovať sa nedá – pending .bin sa každý cyklus
     // prepíše z fronty. Pri reštarte sa pokusy vynulujú, čo je prijateľné. Slúži len na cli režim (mserver má vlastnú permanent chybu).
     private const int CliMaxAttempts = 5;
@@ -36,6 +37,12 @@ public sealed class AgentCycleRunner
             _autoSecret = secretByEndpoint.TryGetValue(PohodaAutoSettings.SecretEndpointId, out var autoSecret)
                 ? autoSecret
                 : throw new InvalidOperationException("Chýbajú prihlasovacie údaje POHODA pre automatický režim.");
+            if (settings.PohodaAuto.UsesSql)
+            {
+                _sqlSecret = secretByEndpoint.TryGetValue(PohodaAutoSettings.SqlSecretEndpointId, out var sqlSecret)
+                    ? sqlSecret
+                    : throw new InvalidOperationException("Chýbajú prihlasovacie údaje SQL Servera POHODY.");
+            }
         }
         _mServers = settings.MServers.ToDictionary(
             endpoint => endpoint.Id,
@@ -112,7 +119,7 @@ public sealed class AgentCycleRunner
 
     public async Task<IReadOnlyList<(MServerEndpointSettings Endpoint, MServerCompany Company)>> ReadCompaniesAsync(CancellationToken cancellationToken)
     {
-        RefreshAutoEndpoints();
+        await RefreshAutoEndpointsAsync(cancellationToken);
         var result = new List<(MServerEndpointSettings, MServerCompany)>();
         foreach (var endpoint in _endpoints.Values.ToArray())
         {
@@ -129,12 +136,31 @@ public sealed class AgentCycleRunner
         return result;
     }
 
-    // Dynamické endpointy z dátového priečinka POHODA: každá StwPh_{ICO}_{rok}.mdb = jedna firma.
+    // Dynamické endpointy: každá firemná databáza POHODY (StwPh_{ICO}_{rok}) = jeden endpoint.
     // Beží pri každom cykle, takže nová firma pridaná do POHODY (alebo Dokladovky) sa objaví bez rekonfigurácie.
-    private void RefreshAutoEndpoints()
+    private async Task RefreshAutoEndpointsAsync(CancellationToken cancellationToken)
     {
         if (_settings.PohodaAuto is null || _autoSecret is null) return;
-        var discovered = PohodaDataDiscovery.Scan(_settings.PohodaAuto.DataDirectory);
+        IReadOnlyList<DiscoveredCompany> discovered;
+        if (_settings.PohodaAuto.UsesSql)
+        {
+            try
+            {
+                discovered = await PohodaDataDiscovery.ScanSqlAsync(
+                    _settings.PohodaAuto.SqlHost!, _settings.PohodaAuto.SqlPort,
+                    _sqlSecret!.UserName, _sqlSecret.Password, cancellationToken);
+            }
+            catch (Exception error)
+            {
+                // Výpadok SQL Servera nesmie zhodiť už známe endpointy — heartbeat pobeží so starým zoznamom.
+                _log.Error("sql_discovery_failed", error, new { _settings.PohodaAuto.SqlHost, _settings.PohodaAuto.SqlPort });
+                return;
+            }
+        }
+        else
+        {
+            discovered = PohodaDataDiscovery.Scan(_settings.PohodaAuto.DataDirectory!);
+        }
         var expected = new HashSet<string>(
             discovered.Select(company => PohodaAutoSettings.EndpointIdPrefix + company.Database),
             StringComparer.OrdinalIgnoreCase);

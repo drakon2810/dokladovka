@@ -48,14 +48,21 @@ public static class Program
         var mServerUrl = isCli
             ? Option(args, "--mserver-url")
             : Option(args, "--mserver-url") ?? Prompt("URL POHODA mServer", "http://localhost:444");
-        // --database = starší manuálny režim pre jednu firmu; bez neho cli beží automaticky pre všetky firmy v dátovom priečinku.
+        // --database = starší manuálny režim pre jednu firmu; bez neho cli beží automaticky pre všetky firmy
+        // (--data-dir = MDB variant, --sql-host = SQL/E1 variant).
         var database = Option(args, "--database");
         var pohodaExe = isCli
             ? Option(args, "--pohoda-exe") ?? Prompt("Cesta k pohoda.exe", PohodaDiscovery.FindExecutable() ?? string.Empty)
             : Option(args, "--pohoda-exe");
-        var dataDirectory = isCli && database is null
+        var sqlHost = Option(args, "--sql-host");
+        var dataDirectory = isCli && database is null && sqlHost is null
             ? Option(args, "--data-dir") ?? Prompt("Dátový priečinok POHODA (obsahuje StwPh_*.mdb)", PohodaDataDiscovery.FindDataDirectory(pohodaExe) ?? string.Empty)
             : Option(args, "--data-dir");
+        var sqlPort = int.TryParse(Option(args, "--sql-port"), out var parsedPort) ? parsedPort : 1433;
+        var sqlUser = sqlHost is null ? null : Option(args, "--sql-user") ?? Prompt("SQL používateľ (sysadmin)", "sa");
+        var sqlPassword = sqlHost is null
+            ? null
+            : Environment.GetEnvironmentVariable("DOKLADOVKA_SQL_PASSWORD") ?? ReadPassword("SQL heslo");
         var isAuto = isCli && database is null;
         var ico = Option(args, "--ico") ?? (isAuto ? null : Prompt("IČO firmy v otvorenej databáze POHODA"));
         var user = Option(args, "--mserver-user") ?? Prompt("Používateľ POHODA");
@@ -76,6 +83,10 @@ public static class Program
             Mode = mode,
             Database = database,
             DataDirectory = dataDirectory,
+            SqlHost = sqlHost,
+            SqlPort = sqlHost is null ? null : sqlPort,
+            SqlUserName = sqlUser,
+            SqlPassword = sqlPassword,
             InstallationName = Option(args, "--name"),
             AllowedPublisherThumbprint = Option(args, "--publisher-thumbprint"),
         }, log, cancellationToken);
@@ -153,9 +164,11 @@ public static class Program
     private static void PrintUsage() => Console.WriteLine("""
         Dokladovka.Agent
           configure [--cloud URL] [--pairing-code CODE] [--mode mserver|cli] [--mserver-url URL]
-                    [--data-dir PRIECINOK] [--database DB] [--ico ICO] [--mserver-user USER]
-                    [--instance NAME] [--pohoda-exe PATH]
-            cli bez --database = automaticky vsetky firmy (StwPh_*.mdb) z --data-dir
+                    [--data-dir PRIECINOK] [--sql-host HOST] [--sql-port 1433] [--sql-user USER]
+                    [--database DB] [--ico ICO] [--mserver-user USER] [--instance NAME] [--pohoda-exe PATH]
+            cli bez --database = automaticky vsetky firmy:
+              --data-dir  = POHODA MDB (subory StwPh_*.mdb)
+              --sql-host  = POHODA SQL/E1 (databazy StwPh_* na SQL Serveri; heslo DOKLADOVKA_SQL_PASSWORD)
           diagnose
           run-once
           pohoda start|stop|restart [--endpoint ID]

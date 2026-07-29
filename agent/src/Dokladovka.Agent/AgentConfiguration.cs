@@ -14,8 +14,13 @@ public sealed record AgentConfigurationRequest
     public string? PohodaExePath { get; init; }
     public string Mode { get; init; } = "mserver";
     public string? Database { get; init; }
-    /// <summary>Dátový priečinok POHODA – zapína automatický cli režim pre všetky firmy.</summary>
+    /// <summary>Dátový priečinok POHODA – zapína automatický cli režim pre všetky firmy (MDB variant).</summary>
     public string? DataDirectory { get; init; }
+    /// <summary>Adresa SQL Servera POHODY – zapína automatický cli režim pre všetky firmy (SQL/E1 variant).</summary>
+    public string? SqlHost { get; init; }
+    public int? SqlPort { get; init; }
+    public string? SqlUserName { get; init; }
+    public string? SqlPassword { get; init; }
     public string? AllowedPublisherThumbprint { get; init; }
     public string? InstallationName { get; init; }
 }
@@ -40,7 +45,7 @@ public static class AgentConfiguration
             throw new InvalidOperationException("Heslo POHODA je povinné.");
 
         var isAuto = request.Mode.Equals("cli", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(request.DataDirectory);
+            && (!string.IsNullOrWhiteSpace(request.DataDirectory) || !string.IsNullOrWhiteSpace(request.SqlHost));
         return isAuto
             ? await ConfigureAutoAsync(request, log, cancellationToken)
             : await ConfigureSingleAsync(request, log, cancellationToken);
@@ -54,10 +59,17 @@ public static class AgentConfiguration
     {
         if (string.IsNullOrWhiteSpace(request.PohodaExePath))
             throw new InvalidOperationException("Pre priamy import je povinná cesta k pohoda.exe.");
-        var discovered = PohodaDataDiscovery.Scan(request.DataDirectory!);
+        var usesSql = !string.IsNullOrWhiteSpace(request.SqlHost);
+        if (usesSql && (string.IsNullOrWhiteSpace(request.SqlUserName) || string.IsNullOrEmpty(request.SqlPassword)))
+            throw new InvalidOperationException("Pre MS SQL POHODU je povinné prihlásenie na SQL Server (napr. sa).");
+        var discovered = usesSql
+            ? await PohodaDataDiscovery.ScanSqlAsync(
+                request.SqlHost!.Trim(), request.SqlPort ?? 1433, request.SqlUserName!.Trim(), request.SqlPassword!, cancellationToken)
+            : PohodaDataDiscovery.Scan(request.DataDirectory!);
         if (discovered.Count == 0)
-            throw new InvalidOperationException(
-                $"V priečinku '{request.DataDirectory}' sa nenašla žiadna databáza firmy (StwPh_ICO_ROK.mdb). Skontrolujte dátový priečinok POHODA.");
+            throw new InvalidOperationException(usesSql
+                ? $"Na SQL Serveri '{request.SqlHost}' sa nenašla žiadna databáza firmy (StwPh_ICO_ROK). Skontrolujte adresu a prihlásenie."
+                : $"V priečinku '{request.DataDirectory}' sa nenašla žiadna databáza firmy (StwPh_ICO_ROK.mdb). Skontrolujte dátový priečinok POHODA.");
         var probeCompany = string.IsNullOrWhiteSpace(request.CompanyIco)
             ? discovered.OrderByDescending(company => company.Year, StringComparer.Ordinal).First()
             : discovered.FirstOrDefault(company => company.Ico == request.CompanyIco.Trim())
@@ -71,7 +83,9 @@ public static class AgentConfiguration
             PohodaAuto = new PohodaAutoSettings
             {
                 PohodaExePath = request.PohodaExePath!,
-                DataDirectory = request.DataDirectory!,
+                DataDirectory = NullIfBlank(request.DataDirectory),
+                SqlHost = NullIfBlank(request.SqlHost),
+                SqlPort = request.SqlPort ?? 1433,
             },
             AllowedPublisherThumbprint = NormalizeThumbprint(request.AllowedPublisherThumbprint),
         };
@@ -107,7 +121,15 @@ public static class AgentConfiguration
             cancellationToken);
 
         AgentSettingsStore.Save(settings);
-        SecretVault.Save(new AgentSecrets { AgentToken = paired.AgentToken, MServers = [secret] });
+        var storedSecrets = new List<MServerSecret> { secret };
+        if (usesSql)
+            storedSecrets.Add(new MServerSecret
+            {
+                EndpointId = PohodaAutoSettings.SqlSecretEndpointId,
+                UserName = request.SqlUserName!.Trim(),
+                Password = request.SqlPassword!,
+            });
+        SecretVault.Save(new AgentSecrets { AgentToken = paired.AgentToken, MServers = storedSecrets });
         var backend = new BackendClient(settings.CloudBaseUrl, paired.AgentToken, log);
         await backend.SendHeartbeatAsync(
             discovered.Select(item => new HeartbeatCompany(item.Ico, item.Database, item.Year)).ToArray(),

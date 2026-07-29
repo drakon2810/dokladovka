@@ -267,6 +267,28 @@ public sealed class AgentTests
 
         var withoutDirectory = auto with { PohodaAuto = auto.PohodaAuto! with { DataDirectory = " " } };
         Assert.Contains("priečinok", Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(withoutDirectory)).Message);
+
+        // SQL/E1 variant: stačí SqlHost bez dátového priečinka.
+        var sqlOnly = auto with { PohodaAuto = auto.PohodaAuto! with { DataDirectory = null, SqlHost = "192.168.16.3" } };
+        AgentSettings.Validate(sqlOnly);
+        var badPort = sqlOnly with { PohodaAuto = sqlOnly.PohodaAuto! with { SqlPort = 0 } };
+        Assert.Contains("Port", Assert.Throws<InvalidOperationException>(() => AgentSettings.Validate(badPort)).Message);
+    }
+
+    [Fact]
+    public void SqlDatabaseNameParsing()
+    {
+        var company = PohodaDataDiscovery.ParseSqlDatabaseName("StwPh_51743124_2026");
+        Assert.NotNull(company);
+        Assert.Equal(("51743124", "StwPh_51743124_2026", "2026"), (company!.Ico, company.Database, company.Year));
+        // Systémové a cudzie databázy sa ignorujú.
+        Assert.Null(PohodaDataDiscovery.ParseSqlDatabaseName("StwPh"));
+        Assert.Null(PohodaDataDiscovery.ParseSqlDatabaseName("StwPhProfile"));
+        Assert.Null(PohodaDataDiscovery.ParseSqlDatabaseName("StwPh_1234_2026"));
+        Assert.Null(PohodaDataDiscovery.ParseSqlDatabaseName("StwPh_51743124_2026.mdb"));
+        Assert.Null(PohodaDataDiscovery.ParseSqlDatabaseName("master"));
+        // Rok z názvu SQL databázy vie odvodiť aj cli klient (heartbeat, validácia).
+        Assert.Equal("2026", PohodaCliClient.YearFromDatabase("StwPh_51743124_2026"));
     }
 
     [Fact]

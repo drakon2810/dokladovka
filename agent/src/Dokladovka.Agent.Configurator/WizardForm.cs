@@ -15,7 +15,13 @@ public sealed class WizardForm : Form
     private readonly RadioButton _modeMServer = new() { Text = "POHODA mServer (HTTP, beží trvalo)", AutoSize = true };
     private readonly RadioButton _modeCli = new() { Text = "Priamy XML import (pohoda.exe /XML, bez mServera) – všetky firmy automaticky", AutoSize = true, Checked = true };
     private readonly TextBox _mServer = new() { Dock = DockStyle.Top };
+    private readonly RadioButton _typeMdb = new() { Text = "POHODA MDB (databázy sú súbory StwPh_*.mdb v dátovom priečinku)", AutoSize = true, Checked = true };
+    private readonly RadioButton _typeSql = new() { Text = "POHODA SQL / E1 (databázy sú na Microsoft SQL Serveri)", AutoSize = true };
     private readonly TextBox _dataDirectory = new() { Dock = DockStyle.Top };
+    private readonly TextBox _sqlHost = new() { Dock = DockStyle.Top };
+    private readonly TextBox _sqlPort = new() { Dock = DockStyle.Top, Text = "1433" };
+    private readonly TextBox _sqlUser = new() { Dock = DockStyle.Top, Text = "sa" };
+    private readonly TextBox _sqlPassword = new() { Dock = DockStyle.Top, UseSystemPasswordChar = true };
     private readonly TextBox _pohodaExe = new() { Dock = DockStyle.Top };
     private readonly TextBox _user = new() { Dock = DockStyle.Top };
     private readonly TextBox _password = new() { Dock = DockStyle.Top, UseSystemPasswordChar = true };
@@ -95,7 +101,10 @@ public sealed class WizardForm : Form
         panel.Controls.Add(_discovery);
         AddField(page, "Adresa POHODA mServer (iba pre režim mServer)", _mServer);
         AddField(page, "Cesta k pohoda.exe (povinná pre priamy import)", _pohodaExe);
-        AddField(page, "Dátový priečinok POHODA s StwPh_*.mdb (iba pre priamy import)", _dataDirectory);
+        panel.Controls.Add(new Label { Text = "Typ POHODY (pre priamy import)", AutoSize = true, Margin = new Padding(3, 14, 3, 3), Font = new Font(Font, FontStyle.Bold) });
+        panel.Controls.Add(_typeMdb);
+        panel.Controls.Add(_typeSql);
+        AddField(page, "Dátový priečinok POHODA s StwPh_*.mdb (typ MDB)", _dataDirectory);
         var browse = new Button { Text = "Prehľadávať…", AutoSize = true };
         browse.Click += (_, _) =>
         {
@@ -104,6 +113,10 @@ public sealed class WizardForm : Form
             if (dialog.ShowDialog(this) == DialogResult.OK) _dataDirectory.Text = dialog.SelectedPath;
         };
         panel.Controls.Add(browse);
+        AddField(page, "SQL Server – adresa alebo IP (typ SQL/E1)", _sqlHost);
+        AddField(page, "SQL Server – port", _sqlPort);
+        AddField(page, "SQL Server – používateľ (sysadmin, napr. sa)", _sqlUser);
+        AddField(page, "SQL Server – heslo", _sqlPassword);
         return page;
     }
 
@@ -176,9 +189,13 @@ public sealed class WizardForm : Form
             1 when string.IsNullOrWhiteSpace(_pairing.Text) => "Zadajte párovací kód.",
             2 when !_modeCli.Checked && !Uri.TryCreate(_mServer.Text.Trim(), UriKind.Absolute, out _) => "Zadajte platnú adresu mServera.",
             2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_pohodaExe.Text) => "Zadajte cestu k pohoda.exe.",
-            2 when _modeCli.Checked && string.IsNullOrWhiteSpace(_dataDirectory.Text) => "Zadajte dátový priečinok POHODA (obsahuje StwPh_*.mdb).",
-            2 when _modeCli.Checked && PohodaDataDiscovery.Scan(_dataDirectory.Text.Trim()).Count == 0 =>
+            2 when _modeCli.Checked && _typeMdb.Checked && string.IsNullOrWhiteSpace(_dataDirectory.Text) => "Zadajte dátový priečinok POHODA (obsahuje StwPh_*.mdb).",
+            2 when _modeCli.Checked && _typeMdb.Checked && PohodaDataDiscovery.Scan(_dataDirectory.Text.Trim()).Count == 0 =>
                 "V zadanom priečinku sa nenašla žiadna databáza firmy StwPh_ICO_ROK.mdb.",
+            2 when _modeCli.Checked && _typeSql.Checked && string.IsNullOrWhiteSpace(_sqlHost.Text) => "Zadajte adresu SQL Servera POHODY.",
+            2 when _modeCli.Checked && _typeSql.Checked && !SqlPortValid() => "Port SQL Servera musí byť číslo 1–65535.",
+            2 when _modeCli.Checked && _typeSql.Checked && string.IsNullOrWhiteSpace(_sqlUser.Text) => "Zadajte SQL používateľa (napr. sa).",
+            2 when _modeCli.Checked && _typeSql.Checked && string.IsNullOrEmpty(_sqlPassword.Text) => "Zadajte heslo SQL používateľa.",
             3 when string.IsNullOrWhiteSpace(_user.Text) => "Zadajte používateľa POHODA.",
             3 when string.IsNullOrEmpty(_password.Text) => "Zadajte heslo POHODA.",
             3 when !IcoValid() => "IČO musí mať presne 8 číslic.",
@@ -189,7 +206,12 @@ public sealed class WizardForm : Form
         {
             if (_pages.SelectedIndex == 3)
             {
-                if (_modeCli.Checked)
+                if (_modeCli.Checked && _typeSql.Checked)
+                {
+                    _companySummary.Text = $"SQL Server: {_sqlHost.Text.Trim()}:{_sqlPort.Text.Trim()}\n"
+                        + "Firmy sa načítajú zo sys.databases pri teste spojenia a spárujú sa s Dokladovkou automaticky podľa IČO.";
+                }
+                else if (_modeCli.Checked)
                 {
                     var companies = PohodaDataDiscovery.Scan(_dataDirectory.Text.Trim());
                     _companySummary.Text = $"Nájdené firmy ({companies.Count}):\n" + string.Join(
@@ -227,7 +249,11 @@ public sealed class WizardForm : Form
                 InstanceName = NullIfBlank(_instance.Text),
                 PohodaExePath = NullIfBlank(_pohodaExe.Text),
                 Mode = _modeCli.Checked ? "cli" : "mserver",
-                DataDirectory = _modeCli.Checked ? NullIfBlank(_dataDirectory.Text) : null,
+                DataDirectory = _modeCli.Checked && _typeMdb.Checked ? NullIfBlank(_dataDirectory.Text) : null,
+                SqlHost = _modeCli.Checked && _typeSql.Checked ? NullIfBlank(_sqlHost.Text) : null,
+                SqlPort = _modeCli.Checked && _typeSql.Checked && int.TryParse(_sqlPort.Text.Trim(), out var sqlPort) ? sqlPort : null,
+                SqlUserName = _modeCli.Checked && _typeSql.Checked ? NullIfBlank(_sqlUser.Text) : null,
+                SqlPassword = _modeCli.Checked && _typeSql.Checked ? _sqlPassword.Text : null,
                 EndpointId = _modeCli.Checked ? "pohoda-1" : "mserver-1",
                 AllowedPublisherThumbprint = _defaults.PublisherThumbprint,
             }, new RollingFileAgentLog(), CancellationToken.None);
@@ -281,6 +307,8 @@ public sealed class WizardForm : Form
         return System.Text.RegularExpressions.Regex.IsMatch(ico, "^[0-9]{8}$");
     }
 
+    private bool SqlPortValid() => int.TryParse(_sqlPort.Text.Trim(), out var port) && port is >= 1 and <= 65535;
+
     private void UpdateNavigation()
     {
         _back.Enabled = _pages.SelectedIndex > 0;
@@ -326,7 +354,7 @@ public sealed class WizardForm : Form
 
     private string Redact(string value)
     {
-        foreach (var secret in new[] { _password.Text, _pairing.Text, _user.Text })
+        foreach (var secret in new[] { _password.Text, _pairing.Text, _user.Text, _sqlPassword.Text })
             if (!string.IsNullOrEmpty(secret)) value = value.Replace(secret, "***", StringComparison.OrdinalIgnoreCase);
         return value;
     }

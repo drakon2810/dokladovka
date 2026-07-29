@@ -15,16 +15,27 @@ public sealed record MServerEndpointSettings
     public bool IsCli => Mode.Equals("cli", StringComparison.OrdinalIgnoreCase);
 }
 
-/// <summary>Automatický cli režim: agent sám nachádza databázy všetkých firiem v dátovom priečinku POHODA.</summary>
+/// <summary>
+/// Automatický cli režim: agent sám nachádza databázy všetkých firiem — buď v dátovom
+/// priečinku (MDB variant), alebo na SQL Serveri POHODY (SQL/E1 variant, sys.databases).
+/// </summary>
 public sealed record PohodaAutoSettings
 {
     /// <summary>Id zdieľaného secretu (jeden POHODA používateľ pre všetky firmy).</summary>
     public const string SecretEndpointId = "pohoda-auto";
+    /// <summary>Id secretu SQL prihlásenia (sysadmin, napr. sa) pre SQL/E1 variant.</summary>
+    public const string SqlSecretEndpointId = "pohoda-sql";
     /// <summary>Prefix id dynamicky vytváraných endpointov.</summary>
     public const string EndpointIdPrefix = "auto:";
 
     public required string PohodaExePath { get; init; }
-    public required string DataDirectory { get; init; }
+    /// <summary>MDB variant: priečinok so StwPh_*.mdb.</summary>
+    public string? DataDirectory { get; init; }
+    /// <summary>SQL/E1 variant: adresa SQL Servera POHODY.</summary>
+    public string? SqlHost { get; init; }
+    public int SqlPort { get; init; } = 1433;
+
+    public bool UsesSql => !string.IsNullOrWhiteSpace(SqlHost);
 }
 
 public sealed record AgentSettings
@@ -48,8 +59,10 @@ public sealed record AgentSettings
         {
             if (string.IsNullOrWhiteSpace(settings.PohodaAuto.PohodaExePath))
                 throw new InvalidOperationException("Pre automatický režim je povinná cesta k pohoda.exe.");
-            if (string.IsNullOrWhiteSpace(settings.PohodaAuto.DataDirectory))
-                throw new InvalidOperationException("Pre automatický režim je povinný dátový priečinok POHODA.");
+            if (string.IsNullOrWhiteSpace(settings.PohodaAuto.DataDirectory) && !settings.PohodaAuto.UsesSql)
+                throw new InvalidOperationException("Pre automatický režim je povinný dátový priečinok POHODA alebo adresa SQL Servera.");
+            if (settings.PohodaAuto.UsesSql && settings.PohodaAuto.SqlPort is < 1 or > 65535)
+                throw new InvalidOperationException("Port SQL Servera musí byť 1–65535.");
         }
         else if (settings.MServers.Count == 0)
         {
