@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -8,6 +8,7 @@ namespace Dokladovka.Agent;
 
 public sealed record ParsedCodeLists(IReadOnlyDictionary<string, IReadOnlyList<CodeListValue>> Items, IReadOnlyList<string> Warnings);
 public sealed record ParsedExportResponse(IReadOnlyList<ExportDocumentResult> Results, string PackState, string? Note);
+public sealed record ParsedTrainingDecisions(IReadOnlyList<TrainingDecision> Items, IReadOnlyList<string> Warnings);
 
 public static class PohodaXml
 {
@@ -26,6 +27,95 @@ public static class PohodaXml
   <dat:dataPackItem id="c04" version="2.0"><lCen:listCentreRequest version="2.0" centreVersion="2.0"><lCen:requestCentre/></lCen:listCentreRequest></dat:dataPackItem>
 </dat:dataPack>
 """;
+
+    // Prijaté typy agendy FA — parita s ručným importom .mdb (RelTpFak 11/12/15).
+    private static readonly string[] ReceivedInvoiceTypes = ["receivedInvoice", "receivedCreditNotice", "receivedAdvanceInvoice"];
+    // Zákonné sekcie kontrolného výkazu DPH (parita s CLENENIE_KV_KODY na webe).
+    private static readonly HashSet<string> KvSekcie = new(["A1", "A2", "B1", "B2", "B3", "C1", "C2", "D1", "D2", "KN"], StringComparer.Ordinal);
+
+    /// <summary>Tréning AI: export prijatých faktúr — číta históriu, v POHODE nič nemení.</summary>
+    public static string BuildInvoiceListRequest(string ico, string requestId)
+    {
+        var items = string.Join("\n", ReceivedInvoiceTypes.Select((type, index) =>
+            $"""  <dat:dataPackItem id="t{index + 1:D2}" version="2.0"><lst:listInvoiceRequest version="2.0" invoiceType="{type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest></dat:dataPackItem>"""));
+        return $"""
+<?xml version="1.0" encoding="Windows-1250"?>
+<dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export historie zauctovani"
+  xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd">
+{items}
+</dat:dataPack>
+""";
+    }
+
+    public static ParsedTrainingDecisions ParseTrainingDecisions(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {FindText(root, "note") ?? "bez popisu"}");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var rows = new List<TrainingDecision>();
+        foreach (var invoice in document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "invoice"))
+        {
+            var header = invoice.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "invoiceHeader");
+            if (header is null) continue;
+            var type = FindText(header, "invoiceType");
+            if (type is null || !ReceivedInvoiceTypes.Contains(type, StringComparer.Ordinal)) continue;
+            var partner = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "partnerIdentity");
+            var supplierIco = Trimmed(partner is null ? null : FindText(partner, "ico"));
+            var supplierName = Trimmed(partner is null ? null : FindText(partner, "company"));
+            var predkontacia = HeaderRefIds(header, "accounting");
+            var clenenieDph = HeaderRefIds(header, "classificationVAT");
+            if ((supplierIco is null && supplierName is null) || (predkontacia is null && clenenieDph is null)) continue;
+            var row = new TrainingDecision(
+                supplierIco,
+                supplierName,
+                Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value),
+                predkontacia,
+                clenenieDph,
+                ZakladnaKvSekcia(HeaderRefIds(header, "classificationKVDPH")));
+            // Opakované identické doklady sa zlúčia — server aj tak deduplikuje.
+            var key = string.Join("\u0001", row.SupplierIco, row.SupplierName, row.LineText, row.PredkontaciaKod, row.ClenenieDphKod, row.ClenenieKvKod);
+            if (seen.Add(key)) rows.Add(row);
+        }
+        var warnings = document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value != "ok")
+            .Select(item => FindText(item, "note") ?? item.Attribute("note")?.Value ?? "POHODA nevrátila časť faktúr.").ToArray();
+        return new ParsedTrainingDecisions(rows, warnings);
+    }
+
+    /// <summary>Ochrana POHODY: agent smie doklady len vytvárať. Vráti zoznam
+    /// zakázaných prvkov (actionType update/delete a transformation — XSLT by
+    /// mohla dataPack prepísať až v POHODE); prázdny zoznam = v poriadku.</summary>
+    public static IReadOnlyList<string> FindDestructiveActions(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var destructive = document.Descendants()
+            .Where(item => IsStormware(item) && item.Name.LocalName == "actionType")
+            .SelectMany(item => item.Descendants())
+            .Where(item => item.Name.LocalName is "update" or "delete")
+            .Select(item => item.Name.LocalName);
+        var transformations = document.Descendants()
+            .Where(item => IsStormware(item) && item.Name.LocalName == "transformation")
+            .Select(item => item.Name.LocalName);
+        return destructive.Concat(transformations).Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    // Kód referencie (typ:ids) priamo pod elementom hlavičky — nezachádza do položiek.
+    private static string? HeaderRefIds(XElement header, string localName)
+    {
+        var element = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == localName);
+        return element is null ? null : Trimmed(FindText(element, "ids"));
+    }
+
+    // POHODA má rozšírené KV kódy (C2B1, B1-0…) — základná zákonná sekcia sú prvé dva znaky.
+    private static string? ZakladnaKvSekcia(string? kod)
+    {
+        var text = kod?.Trim().ToUpperInvariant();
+        if (string.IsNullOrEmpty(text)) return null;
+        if (KvSekcie.Contains(text)) return text;
+        var zaklad = text.Length >= 2 ? text[..2] : text;
+        return KvSekcie.Contains(zaklad) ? zaklad : null;
+    }
 
     public static ParsedCodeLists ParseCodeLists(string xml)
     {

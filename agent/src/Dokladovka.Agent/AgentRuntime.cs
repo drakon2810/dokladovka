@@ -20,6 +20,10 @@ public sealed class AgentCycleRunner
     // prepíše z fronty. Pri reštarte sa pokusy vynulujú, čo je prijateľné. Slúži len na cli režim (mserver má vlastnú permanent chybu).
     private const int CliMaxAttempts = 5;
     private readonly Dictionary<string, int> _cliExportAttempts = new(StringComparer.Ordinal);
+    // ponytail: rovnaký vzor pre tréningovú synchronizáciu — trvalá chyba POHODY by inak
+    // spúšťala celý export agendy (a POHODU v cli režime) donekonečna každý cyklus.
+    private const int TrainingMaxAttempts = 3;
+    private readonly Dictionary<string, int> _trainingSyncAttempts = new(StringComparer.Ordinal);
 
     public AgentCycleRunner(AgentSettings settings, AgentSecrets secrets, IAgentLog log)
     {
@@ -82,9 +86,14 @@ public sealed class AgentCycleRunner
             if (endpoint is null)
             {
                 _log.Info("organization_unmatched", new { organization.OrganizationId, organization.Ico, organization.PreferredYear });
+                // Žiadosť o tréning pre nespárovanú firmu by inak visela naveky bez stopy
+                // v telemetrii — po opakovaných cykloch sa vzdá a žiadosť sa zmaže.
+                if (organization.TrainingSyncRequested)
+                    await HandleTrainingSyncFailureAsync(organization.OrganizationId, "organization_unmatched", 0, cancellationToken);
                 continue;
             }
             await TrySyncCodeListsAsync(organization, endpoint.Value, cancellationToken);
+            if (organization.TrainingSyncRequested) await TrySyncTrainingAsync(organization, endpoint.Value, cancellationToken);
             IReadOnlyList<AgentExportJob> jobs;
             try
             {
@@ -267,6 +276,90 @@ public sealed class AgentCycleRunner
         }
     }
 
+    // Tréning AI cez mostík: beží len na žiadosť z webu (žiadny interval).
+    // Agent stiahne prijaté faktúry oficiálnym XML exportom (iba čítanie)
+    // a nahrá rozhodnutia do cloudu; server žiadosť zmaže pri nahratí —
+    // aj prázdny výsledok sa nahráva, inak by sa sync opakoval každý cyklus.
+    private async Task TrySyncTrainingAsync(
+        AgentOrganization organization,
+        (MServerEndpointSettings Endpoint, MServerCompany Company) target,
+        CancellationToken cancellationToken)
+    {
+        // Strop pokusov už dosiahnutý — export POHODY sa nespúšťa, skúša sa len
+        // lacné zmazanie žiadosti (HandleTrainingSyncFailureAsync pri strope).
+        if (_trainingSyncAttempts.GetValueOrDefault(organization.OrganizationId) >= TrainingMaxAttempts)
+        {
+            await HandleTrainingSyncFailureAsync(organization.OrganizationId, "max_attempts", 0, cancellationToken);
+            return;
+        }
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var requestXml = PohodaXml.BuildInvoiceListRequest(organization.Ico, $"trening-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+            var errors = _validator.ValidateDataPack(requestXml);
+            if (errors.Count > 0) throw new InvalidOperationException("XSD validácia požiadavky tréningu zlyhala: " + string.Join("; ", errors.Take(5)));
+            var response = await _mServers[target.Endpoint.Id].PostXmlAsync(requestXml, $"trening-{organization.OrganizationId}", false, cancellationToken);
+            var parsed = PohodaXml.ParseTrainingDecisions(response);
+            var imported = 0;
+            var duplicates = 0;
+            var rejected = 0;
+            // Dávky po 2 000 riadkov: bezpečne pod limitom API (10 000) aj bodyLimit.
+            // done=true iba pri poslednej — server až vtedy zmaže žiadosť, takže
+            // výpadok uprostred nechá žiadosť aktívnu a ďalší cyklus sync zopakuje.
+            var batches = parsed.Items.Count == 0
+                ? new List<TrainingDecision[]> { Array.Empty<TrainingDecision>() }
+                : parsed.Items.Chunk(2000).ToList();
+            for (var index = 0; index < batches.Count; index++)
+            {
+                var result = await _backend.UploadTrainingDecisionsAsync(organization.OrganizationId, batches[index], index == batches.Count - 1, cancellationToken);
+                imported += result.Imported;
+                duplicates += result.Duplicates;
+                rejected += result.Rejected;
+            }
+            _trainingSyncAttempts.Remove(organization.OrganizationId);
+            // Nič neprešlo a všetko odmietnuté = pravdepodobne chýbajú číselníky —
+            // do telemetrie ide error, nech to nevyzerá ako úspešná synchronizácia.
+            var allRejected = rejected > 0 && imported == 0 && duplicates == 0;
+            await TrySendSyncResultAsync(new AgentSyncResult(
+                organization.OrganizationId, "treningAi", allRejected ? "error" : "ok",
+                Math.Min(parsed.Items.Count, 20_000), (int)stopwatch.ElapsedMilliseconds,
+                allRejected ? "rows_rejected" : null), cancellationToken);
+            _log.Info("training_synced", new { organization.OrganizationId, rows = parsed.Items.Count, imported, duplicates, rejected, durationMs = stopwatch.ElapsedMilliseconds, warnings = parsed.Warnings.Count });
+        }
+        catch (Exception error)
+        {
+            _log.Error("training_sync_failed", error, new { organization.OrganizationId, target.Endpoint.Id, durationMs = stopwatch.ElapsedMilliseconds });
+            await HandleTrainingSyncFailureAsync(organization.OrganizationId, error.GetType().Name, (int)stopwatch.ElapsedMilliseconds, cancellationToken);
+        }
+    }
+
+    // Zlyhanie tréningovej synchronizácie: telemetria + počítadlo pokusov. Po
+    // TrainingMaxAttempts sa žiadosť vzdá (prázdny upload s done=true ju zmaže),
+    // aby trvalá chyba nespúšťala celý export agendy donekonečna.
+    private async Task HandleTrainingSyncFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken)
+    {
+        await TrySendSyncResultAsync(new AgentSyncResult(organizationId, "treningAi", "error", 0, durationMs, errorCode), cancellationToken);
+        var attempts = _trainingSyncAttempts.GetValueOrDefault(organizationId) + 1;
+        if (attempts < TrainingMaxAttempts)
+        {
+            _trainingSyncAttempts[organizationId] = attempts;
+            return;
+        }
+        try
+        {
+            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, cancellationToken);
+            _trainingSyncAttempts.Remove(organizationId);
+            _log.Info("training_sync_abandoned", new { organizationId, attempts, errorCode });
+        }
+        catch (Exception error)
+        {
+            // Zmazanie žiadosti sa nepodarilo — počítadlo ostáva na strope, ďalší
+            // cyklus skúsi iba lacné zmazanie, export POHODY sa už nespúšťa.
+            _trainingSyncAttempts[organizationId] = attempts;
+            _log.Error("training_sync_abandon_failed", error, new { organizationId });
+        }
+    }
+
     private async Task TryProcessPendingAsync(PendingExport pending, CancellationToken cancellationToken)
     {
         if (!_endpoints.TryGetValue(pending.EndpointId, out var endpoint) || !_mServers.TryGetValue(pending.EndpointId, out var mServer))
@@ -287,6 +380,14 @@ public sealed class AgentCycleRunner
             if (errors.Count > 0)
             {
                 await SendPermanentFailureAsync(pending, documentIds, "XSD validácia zlyhala: " + string.Join("; ", errors.Take(5)), stopwatch, cancellationToken);
+                return;
+            }
+            // Ochrana dát POHODY: agent doklady výhradne vytvára. DataPack s akciou
+            // update/delete sa odmietne ešte pred odoslaním — nech príde odkiaľkoľvek.
+            var destructive = PohodaXml.FindDestructiveActions(pending.Job.DataPackXml);
+            if (destructive.Count > 0)
+            {
+                await SendPermanentFailureAsync(pending, documentIds, $"Agent povoľuje iba vytváranie dokladov — dataPack obsahuje akciu {string.Join(", ", destructive)}.", stopwatch, cancellationToken);
                 return;
             }
             var response = await mServer.PostXmlAsync(pending.Job.DataPackXml, pending.Job.IdempotencyKey, true, cancellationToken);

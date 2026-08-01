@@ -12,6 +12,7 @@ import { HttpError } from '../http.js';
 import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from '../security.js';
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
+import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
 
 interface AgentAuth extends Record<string, unknown> {
   id: string;
@@ -37,6 +38,8 @@ interface ExportJobRow extends Record<string, unknown> {
 }
 
 const codeListKind = z.enum(['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska']);
+// Telemetria (agent_sync_runs) pozná okrem číselníkov aj tréningovú synchronizáciu.
+const syncRunKind = z.enum([...codeListKind.options, 'treningAi']);
 const codeListItem = z.object({
   kod: z.string().trim().min(1).max(100),
   nazov: z.string().trim().min(1).max(300),
@@ -267,7 +270,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       `SELECT o.id AS "organizationId", o.ico, o.name AS nazov,
               l.db_name AS "dbName", l.accounting_year AS "uctovnyRok",
               COALESCE(l.preferred_year, 'latest') AS "preferredYear",
-              (l.code_list_sync_requested_at IS NOT NULL) AS "syncRequested"
+              (l.code_list_sync_requested_at IS NOT NULL) AS "syncRequested",
+              (l.training_sync_requested_at IS NOT NULL) AS "trainingSyncRequested"
          FROM organizations o
          LEFT JOIN pohoda_company_links l ON l.organization_id=o.id AND l.tenant_id=o.tenant_id
         WHERE o.tenant_id=$1 AND o.archived=false ORDER BY o.name`, [agent.tenant_id],
@@ -280,7 +284,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const agent = await requireAgent(request, database);
     const body = z.object({
       organizationId: z.string().uuid(),
-      kind: codeListKind,
+      kind: syncRunKind,
       state: z.enum(['ok', 'error']),
       itemCount: z.number().int().min(0).max(20_000),
       durationMs: z.number().int().min(0).max(86_400_000),
@@ -344,6 +348,38 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now(), agent_version=$1 WHERE id=$2', [agent.agent_version, agent.id]);
     return counts;
+  });
+
+  // Tréning AI cez mostík: agent nahrá historické zaúčtovania prijatých faktúr
+  // z POHODY (kódy číselníkov). Preklad kódov, dedup aj audit rieši spoločné
+  // importTrainingRows — rovnaká cesta ako ručný import v Nastaveniach.
+  // Prázdne rows sú platné: aj „žiadne faktúry" musí zmazať žiadosť o sync.
+  // Agent nahráva po dávkach — žiadosť sa zmaže až pri done=true (posledná
+  // dávka), inak by výpadok uprostred potichu stratil zvyšok riadkov.
+  app.put('/api/agent/organizations/:id/training-decisions', async (request) => {
+    const agent = await requireAgent(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ rows: z.array(trainingRowSchema).max(10_000), done: z.boolean().default(true) }).strict().parse(request.body);
+    const organization = await database.query('SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
+    if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const result = body.rows.length > 0
+      ? await importTrainingRows(database, {
+          tenantId: agent.tenant_id,
+          organizationId: id,
+          rows: body.rows,
+          actor: { type: 'agent', id: agent.id },
+          correlationId: request.id,
+        })
+      : { imported: 0, duplicates: 0, rejected: [] };
+    if (body.done) {
+      await database.query(
+        `UPDATE pohoda_company_links SET training_sync_requested_at=NULL, updated_at=now()
+          WHERE organization_id=$1 AND tenant_id=$2 AND training_sync_requested_at IS NOT NULL`,
+        [id, agent.tenant_id],
+      );
+    }
+    await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
+    return { imported: result.imported, duplicates: result.duplicates, rejected: result.rejected.length };
   });
 
   app.get('/api/agent/export-queue', async (request) => {
@@ -712,6 +748,35 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       actorType: 'user',
       actorId: auth.userId,
       action: 'mostik.code_list_sync_requested',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+    });
+    return reply.code(202).send({ requested: true });
+  });
+
+  // „Synchronizovať mostíkom" pre Tréning AI: agent stiahne prijaté faktúry
+  // z POHODY (XML export, iba čítanie) a naplní pamäť rozhodnutí.
+  app.post('/api/mostik/organization-links/:organizationId/sync-training', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const updated = await database.query(
+      `UPDATE pohoda_company_links SET training_sync_requested_at=now(), updated_at=now()
+        WHERE organization_id=$1 AND tenant_id=$2`,
+      [organizationId, auth.tenantId],
+    );
+    if (updated.rowCount === 0) {
+      throw new HttpError(404, 'mostik_link_missing', 'Organizácia nemá prepojenie na POHODU. Skontrolujte Nastavenia → Mostík.');
+    }
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'mostik.training_sync_requested',
       entityType: 'organization',
       entityId: organizationId,
       correlationId: request.id,

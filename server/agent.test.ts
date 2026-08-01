@@ -84,6 +84,54 @@ describe('agent backend contour', () => {
     const afterSync = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
     expect(afterSync.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, syncRequested: false }));
 
+    // Tréning AI cez mostík: žiadosť z webu → agent ju vidí v organizáciách →
+    // nahratie rozhodnutí ju zmaže a naplní pamäť; opakovaný upload deduplikuje.
+    const trainingRequest = await app.inject({
+      method: 'POST',
+      url: `/api/mostik/organization-links/${seeded.organizationId}/sync-training`,
+      headers: browserHeaders,
+      payload: {},
+    });
+    expect(trainingRequest.statusCode, trainingRequest.body).toBe(202);
+    const withTrainingFlag = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
+    expect(withTrainingFlag.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, trainingSyncRequested: true }));
+
+    // Medziľahlá dávka (done=false) žiadosť nemaže — inak by výpadok uprostred
+    // viacdávkového uploadu potichu stratil zvyšok riadkov.
+    const trainingRow = { supplierIco: '87654321', supplierName: 'Dodávateľ s.r.o.', lineText: 'Prenájom', predkontaciaKod: '518/321', clenenieDphKod: 'PD', clenenieKvKod: 'B2' };
+    const uploaded = await app.inject({
+      method: 'PUT',
+      url: `/api/agent/organizations/${seeded.organizationId}/training-decisions`,
+      headers: agentHeaders,
+      payload: { rows: [trainingRow, { supplierName: 'Neznámy kód', predkontaciaKod: 'NEEXISTUJE' }], done: false },
+    });
+    expect(uploaded.statusCode, uploaded.body).toBe(200);
+    expect(uploaded.json()).toEqual({ imported: 1, duplicates: 0, rejected: 1 });
+    const decisions = await database.query<{ supplier_ico: string; predkontacia_id: string } & Record<string, unknown>>(
+      "SELECT supplier_ico, predkontacia_id FROM ucto_decisions WHERE tenant_id=$1 AND organization_id=$2 AND source='import'",
+      [seeded.tenantId, seeded.organizationId],
+    );
+    expect(decisions.rows).toEqual([{ supplier_ico: '87654321', predkontacia_id: syncedIds.predkontacie }]);
+    const midBatch = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
+    expect(midBatch.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, trainingSyncRequested: true }));
+    // Posledná dávka (done neuvedené = true) žiadosť zmaže; opakovaný riadok deduplikuje.
+    const repeatedUpload = await app.inject({
+      method: 'PUT',
+      url: `/api/agent/organizations/${seeded.organizationId}/training-decisions`,
+      headers: agentHeaders,
+      payload: { rows: [trainingRow] },
+    });
+    expect(repeatedUpload.json()).toEqual({ imported: 0, duplicates: 1, rejected: 0 });
+    const afterTraining = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
+    expect(afterTraining.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, trainingSyncRequested: false }));
+    const trainingMetric = await app.inject({
+      method: 'POST',
+      url: '/api/agent/sync-results',
+      headers: agentHeaders,
+      payload: { organizationId: seeded.organizationId, kind: 'treningAi', state: 'ok', itemCount: 1, durationMs: 42 },
+    });
+    expect(trainingMetric.statusCode, trainingMetric.body).toBe(202);
+
     const documentId = randomUUID();
     const snapshot = {
       version: 1,

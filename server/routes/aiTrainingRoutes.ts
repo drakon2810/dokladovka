@@ -14,7 +14,8 @@ import { normalizeName, platnyKvKod } from '../services/accountingSuggestionServ
 // rozhodnutí. Riadky nesú KÓDY číselníkov — server ich preloží na aktívne
 // položky organizácie; riadok s neznámym kódom sa odmietne s dôvodom.
 
-const rowSchema = z.object({
+// Zdieľané s agentom (PUT /api/agent/organizations/:id/training-decisions).
+export const trainingRowSchema = z.object({
   supplierIco: z.string().trim().max(20).optional(),
   supplierName: z.string().trim().max(300).optional(),
   lineText: z.string().trim().max(2000).optional(),
@@ -24,6 +25,7 @@ const rowSchema = z.object({
   strediskoKod: z.string().trim().max(100).optional(),
   clenenieKvKod: z.string().trim().max(20).optional(),
 }).strict();
+const rowSchema = trainingRowSchema;
 // Priamy import celej agendy POHODY (.mdb) môže mať tisíce riadkov; malé JSON
 // riadky sa pod bodyLimit (30 MB) pohodlne zmestia aj po tisícoch.
 const importSchema = z.object({ rows: z.array(rowSchema).min(1).max(10000) }).strict();
@@ -140,6 +142,127 @@ function cistePravidlo(
   return maPodmienku && maCiel ? cleaned : undefined;
 }
 
+/**
+ * Preloží kódy číselníkov na aktívne položky a uloží rozhodnutia do pamäte
+ * (ucto_decisions, source='import'). Spoločná cesta pre ručný import z webu
+ * aj synchronizáciu mostíkom (agent).
+ */
+export async function importTrainingRows(
+  database: Database,
+  input: {
+    tenantId: string;
+    organizationId: string;
+    rows: Array<z.infer<typeof trainingRowSchema>>;
+    actor: { type: 'user' | 'agent'; id: string };
+    correlationId: string;
+  },
+): Promise<{ imported: number; duplicates: number; rejected: Array<{ index: number; dovod: string }> }> {
+  const { tenantId, organizationId } = input;
+  const codeLists = await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
+    `SELECT id, kind, code FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true
+        AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')`,
+    [tenantId, organizationId],
+  );
+  const idPreKod = new Map(codeLists.rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
+
+  const rejected: Array<{ index: number; dovod: string }> = [];
+  const resolved: Array<{
+    supplierIco: string | null; supplierName: string | null; lineText: string | null;
+    predkontaciaId: string | null; clenenieDphId: string | null; ciselnyRadId: string | null;
+    strediskoId: string | null; clenenieKvKod: string | null;
+  }> = [];
+
+  input.rows.forEach((row, index) => {
+    const supplierIco = row.supplierIco?.replace(/\D/g, '') || null;
+    const supplierName = normalizeName(row.supplierName) || null;
+    if (!supplierIco && !supplierName) {
+      rejected.push({ index, dovod: 'Chýba dodávateľ (IČO alebo názov)' });
+      return;
+    }
+    const ids: Record<string, string | null> = {};
+    for (const [field, kind] of Object.entries(KIND_PRE_KOD)) {
+      const kod = (row as Record<string, string | undefined>)[field]?.trim();
+      if (!kod) {
+        ids[field] = null;
+        continue;
+      }
+      const found = idPreKod.get(`${kind}:${kod}`);
+      if (!found) {
+        rejected.push({ index, dovod: `Kód „${kod}" nie je v aktívnom číselníku (${kind})` });
+        return;
+      }
+      ids[field] = found;
+    }
+    if (!ids.predkontaciaKod && !ids.clenenieDphKod) {
+      rejected.push({ index, dovod: 'Chýba predkontácia aj členenie DPH' });
+      return;
+    }
+    const kv = row.clenenieKvKod?.trim();
+    if (kv && !platnyKvKod(kv)) {
+      rejected.push({ index, dovod: `Neplatné členenie KV „${kv}"` });
+      return;
+    }
+    resolved.push({
+      supplierIco,
+      supplierName,
+      lineText: normalizeName(row.lineText).slice(0, 1000) || null,
+      predkontaciaId: ids.predkontaciaKod,
+      clenenieDphId: ids.clenenieDphKod,
+      ciselnyRadId: ids.ciselnyRadKod,
+      strediskoId: ids.strediskoKod,
+      clenenieKvKod: platnyKvKod(kv) ?? null,
+    });
+  });
+
+  let imported = 0;
+  let duplicates = 0;
+  if (resolved.length > 0) {
+    await database.transaction(async (tx) => {
+      // Súbežný import (agent + ručný import v prehliadači) sa serializuje per
+      // organizácia — dedup cez NOT EXISTS by inak pod READ COMMITTED prepustil
+      // duplicitné riadky (ucto_decisions nemá unikátny index pre importy).
+      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ai_training:${tenantId}:${organizationId}`]);
+      for (const row of resolved) {
+        // Opakovaný import toho istého súboru nezakladá duplicity.
+        const result = await tx.query(
+          `INSERT INTO ucto_decisions
+            (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
+             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source)
+           SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import'
+            WHERE NOT EXISTS (
+              SELECT 1 FROM ucto_decisions
+               WHERE tenant_id=$2 AND organization_id=$3 AND source='import'
+                 AND supplier_ico IS NOT DISTINCT FROM $4
+                 AND supplier_name_normalized IS NOT DISTINCT FROM $5
+                 AND line_text_normalized IS NOT DISTINCT FROM $6
+                 AND predkontacia_id IS NOT DISTINCT FROM $7
+                 AND clenenie_dph_id IS NOT DISTINCT FROM $8
+                 AND ciselny_rad_id IS NOT DISTINCT FROM $9
+                 AND stredisko_id IS NOT DISTINCT FROM $10
+                 AND clenenie_kv_kod IS NOT DISTINCT FROM $11)`,
+          [randomUUID(), tenantId, organizationId, row.supplierIco, row.supplierName, row.lineText,
+            row.predkontaciaId, row.clenenieDphId, row.ciselnyRadId, row.strediskoId, row.clenenieKvKod],
+        );
+        if (result.rowCount > 0) imported += 1;
+        else duplicates += 1;
+      }
+      await writeAudit(tx, {
+        tenantId,
+        organizationId,
+        actorType: input.actor.type,
+        actorId: input.actor.id,
+        action: 'ai_training.imported',
+        entityType: 'organization',
+        entityId: organizationId,
+        correlationId: input.correlationId,
+        metadata: { imported, duplicates, rejected: rejected.length },
+      });
+    });
+  }
+  return { imported, duplicates, rejected };
+}
+
 export function registerAiTrainingRoutes(
   app: FastifyInstance,
   database: Database,
@@ -153,106 +276,13 @@ export function registerAiTrainingRoutes(
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await requireOrganizationAccess(database, auth, id);
     const body = importSchema.parse(request.body);
-
-    const codeLists = await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
-      `SELECT id, kind, code FROM code_list_items
-        WHERE tenant_id=$1 AND organization_id=$2 AND active=true
-          AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')`,
-      [auth.tenantId, id],
-    );
-    const idPreKod = new Map(codeLists.rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
-
-    const rejected: Array<{ index: number; dovod: string }> = [];
-    const resolved: Array<{
-      supplierIco: string | null; supplierName: string | null; lineText: string | null;
-      predkontaciaId: string | null; clenenieDphId: string | null; ciselnyRadId: string | null;
-      strediskoId: string | null; clenenieKvKod: string | null;
-    }> = [];
-
-    body.rows.forEach((row, index) => {
-      const supplierIco = row.supplierIco?.replace(/\D/g, '') || null;
-      const supplierName = normalizeName(row.supplierName) || null;
-      if (!supplierIco && !supplierName) {
-        rejected.push({ index, dovod: 'Chýba dodávateľ (IČO alebo názov)' });
-        return;
-      }
-      const ids: Record<string, string | null> = {};
-      for (const [field, kind] of Object.entries(KIND_PRE_KOD)) {
-        const kod = (row as Record<string, string | undefined>)[field]?.trim();
-        if (!kod) {
-          ids[field] = null;
-          continue;
-        }
-        const found = idPreKod.get(`${kind}:${kod}`);
-        if (!found) {
-          rejected.push({ index, dovod: `Kód „${kod}" nie je v aktívnom číselníku (${kind})` });
-          return;
-        }
-        ids[field] = found;
-      }
-      if (!ids.predkontaciaKod && !ids.clenenieDphKod) {
-        rejected.push({ index, dovod: 'Chýba predkontácia aj členenie DPH' });
-        return;
-      }
-      const kv = row.clenenieKvKod?.trim();
-      if (kv && !platnyKvKod(kv)) {
-        rejected.push({ index, dovod: `Neplatné členenie KV „${kv}"` });
-        return;
-      }
-      resolved.push({
-        supplierIco,
-        supplierName,
-        lineText: normalizeName(row.lineText).slice(0, 1000) || null,
-        predkontaciaId: ids.predkontaciaKod,
-        clenenieDphId: ids.clenenieDphKod,
-        ciselnyRadId: ids.ciselnyRadKod,
-        strediskoId: ids.strediskoKod,
-        clenenieKvKod: platnyKvKod(kv) ?? null,
-      });
+    return importTrainingRows(database, {
+      tenantId: auth.tenantId,
+      organizationId: id,
+      rows: body.rows,
+      actor: { type: 'user', id: auth.userId },
+      correlationId: request.id,
     });
-
-    let imported = 0;
-    let duplicates = 0;
-    if (resolved.length > 0) {
-      await database.transaction(async (tx) => {
-        for (const row of resolved) {
-          // Opakovaný import toho istého súboru nezakladá duplicity.
-          const result = await tx.query(
-            `INSERT INTO ucto_decisions
-              (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
-               predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source)
-             SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import'
-              WHERE NOT EXISTS (
-                SELECT 1 FROM ucto_decisions
-                 WHERE tenant_id=$2 AND organization_id=$3 AND source='import'
-                   AND supplier_ico IS NOT DISTINCT FROM $4
-                   AND supplier_name_normalized IS NOT DISTINCT FROM $5
-                   AND line_text_normalized IS NOT DISTINCT FROM $6
-                   AND predkontacia_id IS NOT DISTINCT FROM $7
-                   AND clenenie_dph_id IS NOT DISTINCT FROM $8
-                   AND ciselny_rad_id IS NOT DISTINCT FROM $9
-                   AND stredisko_id IS NOT DISTINCT FROM $10
-                   AND clenenie_kv_kod IS NOT DISTINCT FROM $11)`,
-            [randomUUID(), auth.tenantId, id, row.supplierIco, row.supplierName, row.lineText,
-              row.predkontaciaId, row.clenenieDphId, row.ciselnyRadId, row.strediskoId, row.clenenieKvKod],
-          );
-          if (result.rowCount > 0) imported += 1;
-          else duplicates += 1;
-        }
-        await writeAudit(tx, {
-          tenantId: auth.tenantId,
-          organizationId: id,
-          actorType: 'user',
-          actorId: auth.userId,
-          action: 'ai_training.imported',
-          entityType: 'organization',
-          entityId: id,
-          correlationId: request.id,
-          metadata: { imported, duplicates, rejected: rejected.length },
-        });
-      });
-    }
-    return { imported, duplicates, rejected };
   });
 
   app.get('/api/organizations/:id/ai-training/stats', async (request) => {

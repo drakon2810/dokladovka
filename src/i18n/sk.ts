@@ -664,6 +664,9 @@ export const sk = {
   'trening.schvalene': 'zo schválených dokladov',
   'trening.importovane': 'z importu histórie',
   'trening.nahrat': 'Nahrať Excel / POHODA .mdb',
+  'trening.syncMostikom': 'Synchronizovať mostíkom',
+  'trening.mostikSyncOdoslane':
+    'Synchronizácia histórie je vyžiadaná — Mostík stiahne prijaté faktúry z POHODY do minúty. Potom spustite Analyzovať pamäť.',
   'trening.mdbNacitane': 'Z databázy POHODA načítané',
   'trening.prijatych': 'prijatých',
   'trening.vydanychPreskocene': 'vydaných preskočených',

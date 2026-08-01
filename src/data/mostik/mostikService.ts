@@ -248,6 +248,21 @@ export async function requestMostikCodeListSync(organizationId: string): Promise
   applyMockCodeListSync(organizationId);
 }
 
+/**
+ * „Synchronizovať mostíkom" pre Tréning AI — agent stiahne prijaté faktúry
+ * z POHODY (iba čítanie) a naplní pamäť rozhodnutí. REST: nastaví žiadosť,
+ * agent ju vybaví pri najbližšom cykle (do ~1 minúty). Mock: iba kontrola
+ * pripojenia (simulátor nemá históriu faktúr).
+ */
+export async function requestMostikTrainingSync(organizationId: string): Promise<void> {
+  if (MOSTIK_DATA_MODE === 'rest') {
+    await restRequest(`/api/mostik/organization-links/${encodeURIComponent(organizationId)}/sync-training`, { method: 'POST', body: JSON.stringify({}) });
+    return;
+  }
+  requireExporter();
+  if (!storeApi.get().agentInstallations.some((installation) => isConnected(installation))) throw new Error('Agent nie je pripojený');
+}
+
 export async function disconnectMostikInstallation(id: string): Promise<void> {
   if (MOSTIK_DATA_MODE === 'rest') {
     await restRequest(`/api/mostik/installations/${encodeURIComponent(id)}`, { method: 'DELETE' });

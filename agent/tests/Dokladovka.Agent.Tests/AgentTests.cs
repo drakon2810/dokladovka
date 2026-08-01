@@ -52,6 +52,102 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void InvoiceListRequestConformsToBundledOfficialSchema()
+    {
+        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
+        Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
+        var xml = PohodaXml.BuildInvoiceListRequest("12345678", "trening-request");
+        Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
+    }
+
+    [Fact]
+    public void ParsesTrainingDecisionsFromInvoiceListResponse()
+    {
+        const string response = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+              <rsp:responsePackItem id="t01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:text>Prenájom kancelárie</inv:text>
+                      <inv:partnerIdentity><typ:address><typ:company>Reality s.r.o.</typ:company><typ:ico>87654321</typ:ico></typ:address></inv:partnerIdentity>
+                      <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>
+                      <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                      <inv:classificationKVDPH><typ:ids>C2B1</typ:ids></inv:classificationKVDPH>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:text>Prenájom kancelárie</inv:text>
+                      <inv:partnerIdentity><typ:address><typ:company>Reality s.r.o.</typ:company><typ:ico>87654321</typ:ico></typ:address></inv:partnerIdentity>
+                      <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>
+                      <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                      <inv:classificationKVDPH><typ:ids>C2B1</typ:ids></inv:classificationKVDPH>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>issuedInvoice</inv:invoiceType>
+                      <inv:partnerIdentity><typ:address><typ:company>Odberateľ a.s.</typ:company></typ:address></inv:partnerIdentity>
+                      <inv:accounting><typ:ids>311/604</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:partnerIdentity><typ:address><typ:company>Bez zaúčtovania s.r.o.</typ:company></typ:address></inv:partnerIdentity>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var parsed = PohodaXml.ParseTrainingDecisions(response);
+        // Duplicitná faktúra sa zlúči, vydaná a nezaúčtovaná sa preskočia.
+        var row = Assert.Single(parsed.Items);
+        Assert.Equal(new TrainingDecision("87654321", "Reality s.r.o.", "Prenájom kancelárie", "518/321", "PD", "C2"), row);
+        Assert.Empty(parsed.Warnings);
+    }
+
+    [Fact]
+    public void FindsDestructiveActionsOnlyInUpdateOrDeleteDataPacks()
+    {
+        const string updatePack = """
+            <dat:dataPack xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd">
+              <dat:dataPackItem id="1" version="2.0">
+                <inv:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                  <inv:actionType><typ:update><typ:filter><typ:id>1</typ:id></typ:filter></typ:update></inv:actionType>
+                </inv:invoice>
+              </dat:dataPackItem>
+            </dat:dataPack>
+            """;
+        Assert.Equal(["update"], PohodaXml.FindDestructiveActions(updatePack));
+
+        // XSLT transformácia by mohla dataPack prepísať až v POHODE — zakázaná.
+        const string transformationPack = """
+            <dat:dataPack xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd">
+              <dat:transformation><dat:xsltName>rewrite.xsl</dat:xsltName></dat:transformation>
+              <dat:dataPackItem id="1" version="2.0" />
+            </dat:dataPack>
+            """;
+        Assert.Equal(["transformation"], PohodaXml.FindDestructiveActions(transformationPack));
+
+        const string createPack = """
+            <dat:dataPack xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd">
+              <dat:dataPackItem id="1" version="2.0">
+                <inv:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                  <inv:actionType><typ:add/></inv:actionType>
+                  <inv:invoiceHeader><inv:invoiceType>receivedInvoice</inv:invoiceType></inv:invoiceHeader>
+                </inv:invoice>
+              </dat:dataPackItem>
+            </dat:dataPack>
+            """;
+        Assert.Empty(PohodaXml.FindDestructiveActions(createPack));
+    }
+
+    [Fact]
     public void ConfirmedInvoiceAndVoucherMappingsConformToOfficialSchema()
     {
         const string xml = """

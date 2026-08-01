@@ -21,7 +21,9 @@ public sealed record AgentOrganization(
     string? UctovnyRok,
     string PreferredYear,
     // Web požiadal o okamžitú synchronizáciu číselníkov („Synchronizovať mostíkom").
-    bool SyncRequested = false);
+    bool SyncRequested = false,
+    // Web požiadal o synchronizáciu histórie zaúčtovaní pre Tréning AI.
+    bool TrainingSyncRequested = false);
 public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyRok);
 // UcetMd/UcetDal: účty predkontácie z atribútov debit/credit (len kind=predkontacie).
 public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null);
@@ -40,6 +42,15 @@ public sealed record AgentRelease(
     bool Signed = false,
     string? Reason = null);
 public sealed record AgentSyncResult(string OrganizationId, string Kind, string State, int ItemCount, int DurationMs, string? ErrorCode = null);
+// Riadok histórie zaúčtovania pre Tréning AI — kódy číselníkov prekladá server.
+public sealed record TrainingDecision(
+    string? SupplierIco,
+    string? SupplierName,
+    string? LineText,
+    string? PredkontaciaKod,
+    string? ClenenieDphKod,
+    string? ClenenieKvKod);
+public sealed record TrainingImportResult(int Imported, int Duplicates, int Rejected);
 
 public sealed class BackendApiException(HttpStatusCode statusCode, string message, bool transient = false) : Exception(message)
 {
@@ -93,6 +104,10 @@ public sealed class BackendClient
 
     public Task SendSyncResultAsync(AgentSyncResult result, CancellationToken cancellationToken) =>
         SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Post, "api/agent/sync-results", result), cancellationToken);
+
+    // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
+    public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, CancellationToken cancellationToken) =>
+        SendJsonAsync<TrainingImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/training-decisions", new { rows, done }), cancellationToken);
 
     public Task<IReadOnlyList<AgentExportJob>> GetExportQueueAsync(string organizationId, CancellationToken cancellationToken) =>
         SendJsonAsync<IReadOnlyList<AgentExportJob>>(

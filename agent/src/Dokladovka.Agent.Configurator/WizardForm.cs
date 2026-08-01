@@ -115,7 +115,9 @@ public sealed class WizardForm : Form
         panel.Controls.Add(browse);
         AddField(page, "SQL Server – adresa alebo IP (typ SQL/E1)", _sqlHost);
         AddField(page, "SQL Server – port", _sqlPort);
-        AddField(page, "SQL Server – používateľ (sysadmin, napr. sa)", _sqlUser);
+        // Agent číta iba zoznam databáz (SELECT na master.sys.databases) — stačí
+        // login s právom VIEW ANY DATABASE, sysadmin nie je potrebný.
+        AddField(page, "SQL Server – používateľ (stačí právo čítania, napr. sa)", _sqlUser);
         AddField(page, "SQL Server – heslo", _sqlPassword);
         return page;
     }

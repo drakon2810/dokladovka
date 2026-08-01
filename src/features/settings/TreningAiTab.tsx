@@ -16,6 +16,7 @@ import { t } from '../../i18n/sk';
 import type { CodeListKind } from '../../data/types';
 import { parseTrainingRows, validateTrainingRows, type ParsedTrainingRow, type TrainingKody } from './treningImport';
 import { extractPohodaDecisions } from './pohodaMdbImport';
+import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
 
 export function TreningAiTab() {
   const { data, loading, error } = useDataQuery();
@@ -158,6 +159,21 @@ export function TreningAiTab() {
     }
   }
 
+  // Namiesto ručného nahrávania súboru si históriu stiahne agent priamo
+  // z POHODY; pamäť sa doplní na pozadí (import robí server, nie prehliadač).
+  async function syncViaMostik() {
+    if (!orgId) return;
+    setBusy(true);
+    try {
+      await requestMostikTrainingSync(orgId);
+      showToast(t('trening.mostikSyncOdoslane'));
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function analyze() {
     if (!orgId) return;
     setBusy(true);
@@ -240,6 +256,14 @@ export function TreningAiTab() {
           onClick={() => fileInputRef.current?.click()}
         >
           {t('trening.nahrat')}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !orgId}
+          onClick={() => void syncViaMostik()}
+        >
+          {t('trening.syncMostikom')}
         </button>
         <button
           type="button"
