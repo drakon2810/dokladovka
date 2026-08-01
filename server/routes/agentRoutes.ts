@@ -139,7 +139,11 @@ async function requireAgent(request: FastifyRequest, database: Database): Promis
 async function createExportJob(
   database: Database,
   auth: AuthContext,
-  input: { organizationId: string; documentIds: string[]; idempotencyKey?: string },
+  input: {
+    organizationId: string; documentIds: string[]; idempotencyKey?: string;
+    /** Zopakovanie: nadväzuje na pôvodný prenos a berie aj doklady v stave „chyba". */
+    retryOfJobId?: string; attempt?: number;
+  },
   correlationId: string,
 ): Promise<ExportJobRow> {
   await requireOrganizationAccess(database, auth, input.organizationId);
@@ -161,15 +165,17 @@ async function createExportJob(
     ico: link.rows[0].ico,
     documentIds: input.documentIds,
     packId: id,
+    allowFailedDocuments: input.retryOfJobId !== undefined,
   });
   const hash = sha256(xml);
   const result = await database.query<ExportJobRow>(
     `INSERT INTO export_jobs
       (id, tenant_id, organization_id, document_ids, status, idempotency_key, request_xml,
-       request_xml_hash, created_by)
-     VALUES ($1,$2,$3,$4::jsonb,'pending',$5,$6,$7,$8)
+       request_xml_hash, created_by, attempt, retry_of_job_id)
+     VALUES ($1,$2,$3,$4::jsonb,'pending',$5,$6,$7,$8,$9,$10)
      RETURNING *`,
-    [id, auth.tenantId, input.organizationId, JSON.stringify([...new Set(input.documentIds)]), idempotencyKey, xml, hash, auth.userId],
+    [id, auth.tenantId, input.organizationId, JSON.stringify([...new Set(input.documentIds)]), idempotencyKey, xml, hash, auth.userId,
+      input.attempt ?? 1, input.retryOfJobId ?? null],
   );
   await writeAudit(database, {
     tenantId: auth.tenantId,
@@ -812,14 +818,27 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const job = current.rows[0];
     if (!job || job.status !== 'failed') throw new HttpError(409, 'job_not_retryable', 'Prenos nie je možné zopakovať');
     await requireOrganizationAccess(database, auth, job.organization_id);
-    const next = await database.query<ExportJobRow>(
-      `INSERT INTO export_jobs
-        (id,tenant_id,organization_id,document_ids,status,idempotency_key,request_xml,request_xml_hash,
-         response_meta,attempt,created_by,retry_of_job_id)
-       VALUES ($1,$2,$3,$4::jsonb,'pending',$5,$6,$7,NULL,$8,$9,$10) RETURNING *`,
-      [randomUUID(), auth.tenantId, job.organization_id, JSON.stringify(job.document_ids), randomUUID(), job.request_xml, job.request_xml_hash, job.attempt + 1, auth.userId, job.id],
+    // DataPack sa stavia nanovo z aktuálnych schválených verzií — pôvodné XML mohlo
+    // zlyhať práve pre dáta v ňom (napr. pridlhé IČO) a jeho prehratie by padlo znova.
+    // Doklady, ktoré v POHODE už sú, sa neposielajú druhý raz.
+    const pending = await database.query<{ id: string } & Record<string, unknown>>(
+      `SELECT id FROM documents
+        WHERE tenant_id=$1 AND id = ANY($2::text[]) AND status <> 'exportovany'`,
+      [auth.tenantId, job.document_ids],
     );
-    return reply.code(201).send(publicJob(next.rows[0]));
+    if (pending.rowCount === 0) throw new HttpError(409, 'nothing_to_retry', 'Všetky doklady prenosu už sú v POHODE');
+    const next = await createExportJob(
+      database,
+      auth,
+      {
+        organizationId: job.organization_id,
+        documentIds: pending.rows.map((row) => row.id),
+        retryOfJobId: job.id,
+        attempt: job.attempt + 1,
+      },
+      request.id,
+    );
+    return reply.code(201).send(publicJob(next));
   });
 
   app.post('/api/mostik/releases', async (request, reply) => {

@@ -19,7 +19,11 @@ interface DocumentRow extends Record<string, unknown> {
 
 export async function buildApprovedDocumentsXml(
   database: Database,
-  input: { tenantId: string; organizationId: string; ico: string; documentIds: string[]; packId: string },
+  input: {
+    tenantId: string; organizationId: string; ico: string; documentIds: string[]; packId: string;
+    /** Zopakovanie prenosu: doklad zo zlyhaného exportu je v stave „chyba", nie „schválený". */
+    allowFailedDocuments?: boolean;
+  },
 ): Promise<string> {
   const uniqueIds = [...new Set(input.documentIds)];
   if (uniqueIds.length === 0) throw new HttpError(400, 'no_documents', 'Nie sú vybrané žiadne doklady');
@@ -32,7 +36,8 @@ export async function buildApprovedDocumentsXml(
   if (documents.rows.some((row) => row.organization_id !== input.organizationId)) {
     throw new HttpError(409, 'mixed_organizations', 'Export nesmie miešať organizácie');
   }
-  if (documents.rows.some((row) => row.status !== 'schvaleny' || !row.approved_snapshot || row.approved_snapshot.version !== row.approved_version)) {
+  const exportable = input.allowFailedDocuments ? ['schvaleny', 'chyba'] : ['schvaleny'];
+  if (documents.rows.some((row) => !exportable.includes(row.status) || !row.approved_snapshot || row.approved_snapshot.version !== row.approved_version)) {
     throw new HttpError(409, 'document_not_approved', 'Exportovať možno iba aktuálnu schválenú verziu dokladu');
   }
   const rows = await database.query<CodeListRow>(

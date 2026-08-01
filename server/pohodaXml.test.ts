@@ -55,6 +55,70 @@ describe('buildServerDataPack — variabilný symbol', () => {
   });
 });
 
+describe('buildServerDataPack — dodržanie limitov XSD schémy', () => {
+  // Reálny prípad: francúzsky dodávateľ mal v poli IČO SIRET „340 256 791 00054"
+  // (17 znakov) — typ:icoType má maxLength 15, takže XSD validácia u agenta
+  // zhodila CELÝ dataPack vrátane bezchybných dokladov v tej istej dávke.
+  it('zahraničné identifikátory sa zbavia medzier a orežú na limit schémy', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-limits',
+      ico: '35761571',
+      documents: [invoiceDocument({
+        dodavatel: { nazov: 'A'.repeat(300), ico: '340 256 791 00054', dic: 'FR 12 345 678 901 234 567 890', adresa: `${'Ulica '.repeat(20)} – 851 01 ${'Mesto'.repeat(20)}` },
+        cisloFaktury: 'F'.repeat(60),
+        cisloObjednavky: 'O'.repeat(60),
+        variabilnySymbol: '1'.repeat(40),
+      })],
+      codeLists,
+    });
+    expect(xml).toContain('<typ:ico>34025679100054</typ:ico>');
+    expect(xml).not.toContain('340 256 791');
+    for (const [element, maxLength] of [
+      ['typ:ico', 15], ['typ:dic', 18], ['typ:company', 255], ['typ:city', 45], ['typ:street', 64], ['typ:zip', 15],
+      ['inv:symVar', 20], ['inv:originalDocument', 32], ['inv:numberOrder', 32], ['inv:text', 240],
+    ] as const) {
+      const value = new RegExp(`<${element}>([^<]*)</${element}>`).exec(xml)?.[1];
+      expect(value, `${element} chýba v dataPacku`).toBeDefined();
+      expect(value!.length, `${element} presahuje limit ${maxLength}`).toBeLessThanOrEqual(maxLength);
+    }
+  });
+
+  // Dátumy sú xsd:date — chýbajúca splatnosť je pri schvaľovaní len upozornenie,
+  // takže sa doklad dá schváliť a doteraz zhodil celý prenos až u agenta.
+  it('neplatný alebo chýbajúci dátum sa nahradí dátumom vystavenia', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-dates',
+      ico: '35761571',
+      documents: [invoiceDocument({ datumSplatnosti: '', datumDodania: '30.06.2026' })],
+      codeLists,
+    });
+    expect(xml).toContain('<inv:date>2026-06-30</inv:date>');
+    expect(xml).toContain('<inv:dateDue>2026-06-30</inv:dateDue>');
+    expect(xml).toContain('<inv:dateTax>2026-06-30</inv:dateTax>');
+    expect(xml).not.toContain('30.06.2026');
+    expect(xml).not.toContain('<inv:dateDelivery>');
+  });
+
+  it('doklad bez dátumu vystavenia sa odmietne s menom dokladu', () => {
+    expect(() => buildServerDataPack({
+      id: 'pack-nodate',
+      ico: '35761571',
+      documents: [invoiceDocument({ datumVystavenia: '' })],
+      codeLists,
+    })).toThrow(/doc-1.*dátum vystavenia/);
+  });
+
+  it('nečíselné množstvo položky nezhodí dataPack', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-qty',
+      ico: '35761571',
+      documents: [invoiceDocument({ polozky: [{ popis: 'Preprava', mnozstvo: '2 ks', sadzbaDph: 23, cenaBezDph: 70, dph: 16.1 }] })],
+      codeLists,
+    });
+    expect(xml).toContain('<inv:quantity>1</inv:quantity>');
+  });
+});
+
 describe('buildServerDataPack — krajina a text hlavičky', () => {
   // Extrakcia zahraničný daňový identifikátor často uloží do DIČ (icDph zostane
   // prázdne) — POHODA potom importovala dodávateľa bez krajiny.

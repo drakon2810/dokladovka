@@ -8,6 +8,32 @@ export function escapeXml(value: unknown): string {
     .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, (character) => `&#${character.codePointAt(0)};`);
 }
 
+/**
+ * Skráti hodnotu na limit oficiálnej XSD schémy POHODY. Hodnoty pochádzajú z AI
+ * extrakcie, takže pridlhý názov firmy či zahraničné daňové číslo v poli IČO
+ * (napr. francúzske SIRET „340 256 791 00054") inak zhodí XSD validáciu — a s ňou
+ * CELÝ dataPack vrátane bezchybných dokladov v tej istej dávke.
+ */
+function clamp(value: unknown, maxLength: number): string {
+  return String(value ?? '').trim().slice(0, maxLength);
+}
+
+/** Identifikátory (IČO, DIČ, IČ DPH) POHODA očakáva bez medzier. */
+function identifier(value: unknown, maxLength: number): string {
+  return String(value ?? '').replace(/\s+/g, '').slice(0, maxLength);
+}
+
+/**
+ * Dátumy sú v schéme xsd:date (RRRR-MM-DD). Prázdna hodnota (chýbajúca splatnosť
+ * je pri schvaľovaní len upozornenie) alebo formát „30.06.2026" zhodí XSD validáciu
+ * celého dataPacku — preto sa nevalidný dátum radšej nahradí alebo vynechá.
+ */
+function isoDate(value: unknown): string | undefined {
+  const text = String(value ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(text))) return undefined;
+  return text;
+}
+
 interface Snapshot {
   version: number;
   typ: string;
@@ -104,9 +130,11 @@ function documentDetailXml(
     const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
     const centre = codeLists.strediska.get(item.ucto?.strediskoId ?? '');
     const lines = [
-      `        <${ns}:text>${escapeXml(item.popis ?? '')}</${ns}:text>`,
-      `        <${ns}:quantity>${escapeXml(item.mnozstvo ?? 1)}</${ns}:quantity>`,
-      ...(item.jednotka ? [`        <${ns}:unit>${escapeXml(item.jednotka)}</${ns}:unit>`] : []),
+      // Text položky má v schéme 90 znakov, merná jednotka 10.
+      `        <${ns}:text>${escapeXml(clamp(item.popis, 90))}</${ns}:text>`,
+      // quantity je xsd:float — „2 ks" alebo prázdna hodnota by zhodila celý dataPack.
+      `        <${ns}:quantity>${Number.isFinite(Number(item.mnozstvo)) ? Number(item.mnozstvo) : 1}</${ns}:quantity>`,
+      ...(item.jednotka ? [`        <${ns}:unit>${escapeXml(clamp(item.jednotka, 10))}</${ns}:unit>`] : []),
       `        <${ns}:coefficient>1.0</${ns}:coefficient>`,
       `        <${ns}:payVAT>false</${ns}:payVAT>`,
       `        <${ns}:rateVAT>${vatRateName(item.sadzbaDph)}</${ns}:rateVAT>`,
@@ -171,13 +199,15 @@ function partnerAddressXml(supplier: Record<string, any>): string {
   // daňový identifikátor (DE813960018, ATU61252600) často uloží do poľa DIČ.
   // Bez tohto fallbacku POHODA importovala dodávateľa bez krajiny.
   const country = vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic);
-  const lines = [`<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
-  if (address.city) lines.push(`<typ:city>${escapeXml(address.city)}</typ:city>`);
-  if (address.street) lines.push(`<typ:street>${escapeXml(address.street)}</typ:street>`);
-  if (address.zip) lines.push(`<typ:zip>${escapeXml(address.zip)}</typ:zip>`);
-  if (supplier.ico) lines.push(`<typ:ico>${escapeXml(supplier.ico)}</typ:ico>`);
-  if (supplier.dic) lines.push(`<typ:dic>${escapeXml(supplier.dic)}</typ:dic>`);
-  if (supplier.icDph) lines.push(`<typ:icDph>${escapeXml(String(supplier.icDph).replace(/\s+/g, ''))}</typ:icDph>`);
+  // Limity podľa oficiálnej type.xsd: company 255, city 45, street 64, zip 15,
+  // ico 15, dic 18, icDph 18.
+  const lines = [`<typ:company>${escapeXml(clamp(supplier.nazov, 255))}</typ:company>`];
+  if (address.city) lines.push(`<typ:city>${escapeXml(clamp(address.city, 45))}</typ:city>`);
+  if (address.street) lines.push(`<typ:street>${escapeXml(clamp(address.street, 64))}</typ:street>`);
+  if (address.zip) lines.push(`<typ:zip>${escapeXml(clamp(address.zip, 15))}</typ:zip>`);
+  if (supplier.ico) lines.push(`<typ:ico>${escapeXml(identifier(supplier.ico, 15))}</typ:ico>`);
+  if (supplier.dic) lines.push(`<typ:dic>${escapeXml(identifier(supplier.dic, 18))}</typ:dic>`);
+  if (supplier.icDph) lines.push(`<typ:icDph>${escapeXml(identifier(supplier.icDph, 18))}</typ:icDph>`);
   // Krajina sa vypĺňa vždy (aj tuzemsko SK) — POHODA ju pri importe páruje na číselník krajín.
   if (country) lines.push(`<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
   return `<typ:address>
@@ -217,6 +247,13 @@ export function buildServerDataPack(input: {
         <typ:price3VAT>${amount(vat5)}</typ:price3VAT>
         <typ:priceNone>${amount(base0)}</typ:priceNone>`;
     const partner = partnerAddressXml(supplier);
+    // Dátum vystavenia je povinný — bez neho sa doklad odmietne hneď pri vytvorení
+    // prenosu s jasnou hláškou, nie až XSD chybou agenta o hodinu neskôr.
+    const issueDate = isoDate(extracted.datumVystavenia);
+    if (!issueDate) throw new Error(`Doklad ${id} nemá platný dátum vystavenia (očakáva sa RRRR-MM-DD)`);
+    const deliveryDate = isoDate(extracted.datumDodania);
+    const taxDate = deliveryDate ?? issueDate;
+    const dueDate = isoDate(extracted.datumSplatnosti) ?? issueDate;
     if (snapshot.typ === 'PD') {
       const cashAccount = snapshot.ucto.pokladnaKod;
       const voucherType = snapshot.ucto.pokladnaTyp;
@@ -227,13 +264,13 @@ export function buildServerDataPack(input: {
         <vch:voucherType>${escapeXml(voucherType)}</vch:voucherType>
         <vch:cashAccount><typ:ids>${escapeXml(cashAccount)}</typ:ids></vch:cashAccount>
         <vch:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></vch:number>
-        <vch:originalDocument>${escapeXml(extracted.cisloFaktury ?? '')}</vch:originalDocument>
-        <vch:date>${escapeXml(extracted.datumVystavenia)}</vch:date>
-        <vch:dateTax>${escapeXml(extracted.datumDodania ?? extracted.datumVystavenia)}</vch:dateTax>
+        <vch:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</vch:originalDocument>
+        <vch:date>${issueDate}</vch:date>
+        <vch:dateTax>${taxDate}</vch:dateTax>
         <vch:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></vch:accounting>
         <vch:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></vch:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<vch:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></vch:classificationKVDPH>` : ''}
-        <vch:text>${escapeXml(extracted.textPolozky ?? extracted.cisloFaktury ?? 'Pokladničný doklad')}</vch:text>
+        <vch:text>${escapeXml(clamp(extracted.textPolozky ?? extracted.cisloFaktury ?? 'Pokladničný doklad', 240))}</vch:text>
         <vch:partnerIdentity>${partner}</vch:partnerIdentity>
       </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.voucher)}
       <vch:voucherSummary><vch:homeCurrency>
@@ -257,10 +294,10 @@ export function buildServerDataPack(input: {
     <int:intDoc version="2.0">
       <int:intDocHeader>
         <int:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></int:number>
-        <int:date>${escapeXml(extracted.datumVystavenia)}</int:date>
+        <int:date>${issueDate}</int:date>
         <int:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></int:accounting>
         <int:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></int:classificationVAT>
-        <int:text>${escapeXml(extracted.textPolozky ?? `Mzdová páska ${extracted.cisloFaktury || extracted.datumVystavenia}`)}</int:text>
+        <int:text>${escapeXml(clamp(extracted.textPolozky ?? `Mzdová páska ${extracted.cisloFaktury || extracted.datumVystavenia}`, 240))}</int:text>
         <int:partnerIdentity>${partner}</int:partnerIdentity>
       </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.intDoc)}
       <int:intDocSummary><int:homeCurrency>
@@ -280,17 +317,17 @@ export function buildServerDataPack(input: {
       <inv:invoiceHeader>
         <inv:invoiceType>${invoiceType(snapshot.typ)}</inv:invoiceType>
         <inv:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></inv:number>
-        <inv:symVar>${escapeXml((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''))}</inv:symVar>
-        ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(extracted.cisloFaktury)}</inv:originalDocument>` : ''}
-        <inv:date>${escapeXml(extracted.datumVystavenia)}</inv:date>
-        <inv:dateTax>${escapeXml(extracted.datumDodania ?? extracted.datumVystavenia)}</inv:dateTax>
-        <inv:dateDue>${escapeXml(extracted.datumSplatnosti ?? extracted.datumVystavenia)}</inv:dateDue>
-        ${extracted.datumDodania ? `<inv:dateDelivery>${escapeXml(extracted.datumDodania)}</inv:dateDelivery>` : ''}
+        <inv:symVar>${escapeXml(clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20))}</inv:symVar>
+        ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</inv:originalDocument>` : ''}
+        <inv:date>${issueDate}</inv:date>
+        <inv:dateTax>${taxDate}</inv:dateTax>
+        <inv:dateDue>${dueDate}</inv:dateDue>
+        ${deliveryDate ? `<inv:dateDelivery>${deliveryDate}</inv:dateDelivery>` : ''}
         <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>
         <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
-        ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(extracted.cisloObjednavky)}</inv:numberOrder>` : ''}
-        ${headerText ? `<inv:text>${escapeXml(headerText)}</inv:text>` : ''}
+        ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(clamp(extracted.cisloObjednavky, 32))}</inv:numberOrder>` : ''}
+        ${headerText ? `<inv:text>${escapeXml(clamp(headerText, 240))}</inv:text>` : ''}
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}
