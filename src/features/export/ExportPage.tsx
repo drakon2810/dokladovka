@@ -10,7 +10,6 @@ import { EmptyState, OrgChip, TypBadge } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import { formatDate, formatDateTime, formatMoney } from '../../lib/format';
-import { useAuth } from '../../auth/AuthContext';
 import {
   createMostikExportJob,
   getOrganizationMostikStatus,
@@ -73,7 +72,6 @@ function exportUnavailableReason(
 }
 
 export function ExportPage() {
-  const { session } = useAuth();
   const { data, loading, error } = useDataQuery();
   const [tab, setTab] = useState<ExportTab>('novy');
   const [organizationId, setOrganizationId] = useState('');
@@ -180,7 +178,7 @@ export function ExportPage() {
     if (!organizationId || selectedIds.length === 0 || !mostikStatus?.available) return;
     setBusy(true);
     try {
-      await createMostikExportJob(organizationId, selectedIds, session?.csrfToken);
+      await createMostikExportJob(organizationId, selectedIds);
       setSelected(new Set());
       showToast(t('mostik.prenosVytvoreny'));
     } catch (error) {

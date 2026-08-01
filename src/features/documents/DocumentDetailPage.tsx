@@ -76,7 +76,6 @@ import {
 } from './sourceHighlight';
 import './sourceHighlight.css';
 import { AssistantPanel } from '../assistant/AssistantPanel';
-import { useAuth } from '../../auth/AuthContext';
 import {
   createMostikExportJob,
   getOrganizationMostikStatus,
@@ -316,7 +315,6 @@ function processingMatches(status: DocumentItem['processingStatus'], filter: str
 }
 
 export function DocumentDetailPage() {
-  const { session } = useAuth();
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -948,7 +946,7 @@ export function DocumentDetailPage() {
     if (!mostikStatus?.available || draft.status !== 'schvaleny' || dirty) return;
     setBusy(true);
     try {
-      await createMostikExportJob(draft.orgId, [draft.id], session?.csrfToken);
+      await createMostikExportJob(draft.orgId, [draft.id]);
       showToast(t('mostik.prenosVytvoreny'));
     } catch {
       showToast(t('chyba.vseobecna'), { tone: 'error' });

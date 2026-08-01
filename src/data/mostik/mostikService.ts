@@ -100,7 +100,17 @@ function requireExporter(): void {
   }
 }
 
-async function restRequest<T>(path: string, init?: RequestInit, csrfToken?: string): Promise<T> {
+async function restRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  // GET /api/auth/session rotuje CSRF token pri každom volaní, takže token
+  // držaný dopredu (napr. v AuthContexte) rýchlo zastará. Pred mutáciou si
+  // preto vyžiadame čerstvý — rovnako ako restRequest v api.ts.
+  let csrfToken: string | undefined;
+  const method = init?.method?.toUpperCase() ?? 'GET';
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const sessionResponse = await fetch('/api/auth/session', { credentials: 'include' });
+    if (!sessionResponse.ok) throw new Error('Prihlásenie vypršalo');
+    csrfToken = ((await sessionResponse.json()) as { csrfToken?: string }).csrfToken;
+  }
   const response = await fetch(path, {
     credentials: 'include',
     ...init,
@@ -196,18 +206,18 @@ export async function getOrganizationMostikStatus(organizationId: string): Promi
   return { enabled: overview.enabled, connected, matched, available: overview.enabled && connected && matched };
 }
 
-export async function setMostikEnabled(enabled: boolean, csrfToken?: string): Promise<void> {
+export async function setMostikEnabled(enabled: boolean): Promise<void> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    await restRequest('/api/mostik/settings', { method: 'PUT', body: JSON.stringify({ enabled }) }, csrfToken);
+    await restRequest('/api/mostik/settings', { method: 'PUT', body: JSON.stringify({ enabled }) });
     return;
   }
   requireAdmin();
   storeApi.set({ mostikEnabled: enabled });
 }
 
-export async function generateMostikPairingCode(organizationId: string | undefined, csrfToken?: string): Promise<AgentPairingCode> {
+export async function generateMostikPairingCode(organizationId: string | undefined): Promise<AgentPairingCode> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    return restRequest('/api/mostik/pairing-codes', { method: 'POST', body: JSON.stringify(organizationId ? { organizationId } : {}) }, csrfToken);
+    return restRequest('/api/mostik/pairing-codes', { method: 'POST', body: JSON.stringify(organizationId ? { organizationId } : {}) });
   }
   requireAdmin();
   if (!storeApi.get().mostikEnabled) throw new Error('Mostík nie je povolený');
@@ -229,26 +239,18 @@ export async function generateMostikPairingCode(organizationId: string | undefin
  * REST: nastaví žiadosť, agent ju vybaví pri najbližšom cykle (do ~1 minúty).
  * Mock: číselníky sa naplnia hneď (simulátor agenta).
  */
-export async function requestMostikCodeListSync(organizationId: string, csrfToken?: string): Promise<void> {
+export async function requestMostikCodeListSync(organizationId: string): Promise<void> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    // Volá sa aj z miest bez session v propoch (editor faktúry) — CSRF token si
-    // vtedy vyžiadame sami, rovnako ako restRequest v api.ts.
-    let token = csrfToken;
-    if (!token) {
-      const sessionResponse = await fetch('/api/auth/session', { credentials: 'include' });
-      if (!sessionResponse.ok) throw new Error('Prihlásenie vypršalo');
-      token = ((await sessionResponse.json()) as { csrfToken?: string }).csrfToken;
-    }
-    await restRequest(`/api/mostik/organization-links/${encodeURIComponent(organizationId)}/sync-code-lists`, { method: 'POST', body: JSON.stringify({}) }, token);
+    await restRequest(`/api/mostik/organization-links/${encodeURIComponent(organizationId)}/sync-code-lists`, { method: 'POST', body: JSON.stringify({}) });
     return;
   }
   requireExporter();
   applyMockCodeListSync(organizationId);
 }
 
-export async function disconnectMostikInstallation(id: string, csrfToken?: string): Promise<void> {
+export async function disconnectMostikInstallation(id: string): Promise<void> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    await restRequest(`/api/mostik/installations/${encodeURIComponent(id)}`, { method: 'DELETE' }, csrfToken);
+    await restRequest(`/api/mostik/installations/${encodeURIComponent(id)}`, { method: 'DELETE' });
     return;
   }
   requireAdmin();
@@ -263,13 +265,12 @@ export async function disconnectMostikInstallation(id: string, csrfToken?: strin
 export async function updateMostikOrganizationLink(
   organizationId: string,
   input: { dbName: string; uctovnyRok: string; preferredYear: string },
-  csrfToken?: string,
 ): Promise<void> {
   if (MOSTIK_DATA_MODE === 'rest') {
     await restRequest(`/api/mostik/organization-links/${encodeURIComponent(organizationId)}`, {
       method: 'PATCH',
       body: JSON.stringify(input),
-    }, csrfToken);
+    });
     return;
   }
   requireAdmin();
@@ -309,13 +310,12 @@ function approvedDocument(document: DocumentItem): DocumentItem {
 export async function createMostikExportJob(
   organizationId: string,
   documentIds: string[],
-  csrfToken?: string,
 ): Promise<ExportJob> {
   if (MOSTIK_DATA_MODE === 'rest') {
     return restRequest('/api/mostik/export-jobs', {
       method: 'POST',
       body: JSON.stringify({ organizationId, documentIds, idempotencyKey: crypto.randomUUID() }),
-    }, csrfToken);
+    });
   }
   requireExporter();
   const state = storeApi.get();
@@ -347,9 +347,9 @@ export async function createMostikExportJob(
   return structuredClone(job);
 }
 
-export async function retryMostikExportJob(id: string, csrfToken?: string): Promise<ExportJob> {
+export async function retryMostikExportJob(id: string): Promise<ExportJob> {
   if (MOSTIK_DATA_MODE === 'rest') {
-    return restRequest(`/api/mostik/export-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' }, csrfToken);
+    return restRequest(`/api/mostik/export-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
   }
   requireExporter();
   const state = storeApi.get();

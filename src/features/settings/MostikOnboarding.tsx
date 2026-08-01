@@ -41,12 +41,10 @@ function formatCountdown(seconds: number): string {
 export function MostikOnboarding({
   overview,
   organizations,
-  csrfToken,
   onReload,
 }: {
   overview: MostikOverview;
   organizations: Organization[];
-  csrfToken?: string;
   onReload: () => Promise<void>;
 }) {
   const [step, setStep] = useState(1);
@@ -102,7 +100,7 @@ export function MostikOnboarding({
     if (!allFirms && !selectedOrganizationId) return;
     setBusy(true);
     try {
-      setPairing(await generateMostikPairingCode(allFirms ? undefined : selectedOrganizationId, csrfToken));
+      setPairing(await generateMostikPairingCode(allFirms ? undefined : selectedOrganizationId));
       showToast(t('mostik.kodVygenerovany'));
     } catch {
       showToast(t('mostik.parovanieChyba'), { tone: 'error' });

@@ -22,7 +22,6 @@ import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
-import { useAuth } from '../../auth/AuthContext';
 import { t } from '../../i18n/sk';
 
 // Prehľadné slovenské názvy agend číselných radov z POHODY (element „agenda").
@@ -84,7 +83,6 @@ export function CodeListsTab() {
     projekty: [],
   };
   const { orgId, selectOrg } = useOrgSelection();
-  const { session } = useAuth();
   const [preview, setPreview] = useState<CodeListImportPreview>();
   const [busy, setBusy] = useState(false);
   const [mostikBusy, setMostikBusy] = useState(false);
@@ -135,7 +133,7 @@ export function CodeListsTab() {
     if (!organization) return;
     setMostikBusy(true);
     try {
-      await requestMostikCodeListSync(organization.id, session?.csrfToken);
+      await requestMostikCodeListSync(organization.id);
       showToast(t('nast.cis.mostikSyncOdoslane'));
     } catch (cause) {
       showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });

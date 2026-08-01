@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAuth } from '../../auth/AuthContext';
 import { showToast } from '../../components/toast';
 import { EmptyState } from '../../components/ui';
 import {
@@ -33,12 +32,10 @@ function transferLabel(job: ExportJob): string {
 function LinkYearEditor({
   link,
   disabled,
-  csrfToken,
   onSaved,
 }: {
   link: PohodaCompanyLink;
   disabled: boolean;
-  csrfToken?: string;
   onSaved: () => Promise<void>;
 }) {
   const [year, setYear] = useState(link.uctovnyRok ?? '');
@@ -65,7 +62,6 @@ function LinkYearEditor({
           void updateMostikOrganizationLink(
             link.organizationId,
             { dbName: link.dbName!, uctovnyRok: year, preferredYear: preferred === 'latest' ? 'latest' : year },
-            csrfToken,
           ).then(onSaved);
         }}
       >
@@ -77,12 +73,10 @@ function LinkYearEditor({
 
 export function MostikTab() {
   const { data } = useDataQuery();
-  const { session } = useAuth();
   const [overview, setOverview] = useState<MostikOverview>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [expandedJobId, setExpandedJobId] = useState<string>();
-  const csrfToken = session?.csrfToken;
 
   const load = useCallback(async () => {
     try {
@@ -127,7 +121,7 @@ export function MostikTab() {
             disabled={busy}
             onChange={(event) => {
               const enabled = event.target.checked;
-              void run(() => setMostikEnabled(enabled, csrfToken), t('mostik.nastavenieUlozene'));
+              void run(() => setMostikEnabled(enabled), t('mostik.nastavenieUlozene'));
             }}
           />
           <span>
@@ -154,7 +148,6 @@ export function MostikTab() {
         <MostikOnboarding
           overview={overview}
           organizations={data.organizations.filter((item) => !item.archived)}
-          csrfToken={csrfToken}
           onReload={load}
         />
 
@@ -178,7 +171,7 @@ export function MostikTab() {
                     <td className="tnum px-2 py-2">{installation.agentVersion}</td>
                     <td className="tnum px-2 py-2">{installation.lastSeenAt ? formatDateTime(installation.lastSeenAt) : '—'}</td>
                     <td className="px-2 py-2"><span className={online ? 'text-green-700' : 'text-red-700'}>{online ? t('mostik.pripojene') : t('mostik.nepripojene')}</span></td>
-                    <td className="px-2 py-2 text-right"><button type="button" className="btn" disabled={installation.status === 'revoked'} onClick={() => void run(() => disconnectMostikInstallation(installation.id, csrfToken))}>{t('mostik.odpojit')}</button></td>
+                    <td className="px-2 py-2 text-right"><button type="button" className="btn" disabled={installation.status === 'revoked'} onClick={() => void run(() => disconnectMostikInstallation(installation.id))}>{t('mostik.odpojit')}</button></td>
                   </tr>;
                 })}</tbody>
               </table>
@@ -202,7 +195,7 @@ export function MostikTab() {
                 <td className="px-3 py-2 font-medium">{organization?.nazov ?? '—'}</td><td className="tnum px-3 py-2">{link.ico}</td>
                 <td className="px-3 py-2">{link.dbName ?? '—'}</td><td className="tnum px-3 py-2">{link.uctovnyRok ?? '—'}</td>
                 <td className="px-3 py-2">{link.matchedAt ? t('mostik.sparovane') : t('mostik.caka')}</td>
-                <td className="px-3 py-2"><LinkYearEditor link={link} disabled={busy} csrfToken={csrfToken} onSaved={load} /></td>
+                <td className="px-3 py-2"><LinkYearEditor link={link} disabled={busy} onSaved={load} /></td>
               </tr>;
             })}</tbody>
           </table>
@@ -216,7 +209,7 @@ export function MostikTab() {
                 <th className="px-3 py-2">{t('export.hist.datum')}</th><th className="px-3 py-2">{t('mostik.pouzivatel')}</th>
                 <th className="px-3 py-2">{t('mostik.organizacia')}</th><th className="px-3 py-2 text-right">{t('mostik.pocetDokladov')}</th><th className="px-3 py-2">{t('mostik.stav')}</th><th />
               </tr></thead>
-              <tbody>{overview.exportJobs.map((job) => <FragmentJob key={job.id} job={job} organizationName={organizationMap.get(job.organizationId)?.nazov} expanded={expandedJobId === job.id} busy={busy} csrfToken={csrfToken} onToggle={() => setExpandedJobId((current) => current === job.id ? undefined : job.id)} onRun={run} />)}</tbody>
+              <tbody>{overview.exportJobs.map((job) => <FragmentJob key={job.id} job={job} organizationName={organizationMap.get(job.organizationId)?.nazov} expanded={expandedJobId === job.id} busy={busy} onToggle={() => setExpandedJobId((current) => current === job.id ? undefined : job.id)} onRun={run} />)}</tbody>
             </table>
           )}
         </section>
@@ -225,8 +218,8 @@ export function MostikTab() {
   );
 }
 
-function FragmentJob({ job, organizationName, expanded, busy, csrfToken, onToggle, onRun }: {
-  job: ExportJob; organizationName?: string; expanded: boolean; busy: boolean; csrfToken?: string;
+function FragmentJob({ job, organizationName, expanded, busy, onToggle, onRun }: {
+  job: ExportJob; organizationName?: string; expanded: boolean; busy: boolean;
   onToggle: () => void; onRun: (action: () => Promise<void>, toast?: string) => Promise<void>;
 }) {
   return <>
@@ -236,7 +229,7 @@ function FragmentJob({ job, organizationName, expanded, busy, csrfToken, onToggl
       <td className="px-3 py-2">{transferLabel(job)}</td>
       <td className="space-x-1 px-3 py-2 text-right">
         <button type="button" className="btn" onClick={onToggle}>{t('mostik.detailPrenosu')}</button>
-        {job.status === 'failed' && <button type="button" className="btn" disabled={busy} onClick={() => void onRun(async () => { await retryMostikExportJob(job.id, csrfToken); })}>{t('mostik.zopakovat')}</button>}
+        {job.status === 'failed' && <button type="button" className="btn" disabled={busy} onClick={() => void onRun(async () => { await retryMostikExportJob(job.id); })}>{t('mostik.zopakovat')}</button>}
         {MOSTIK_DATA_MODE === 'mock' && ['pending', 'sent'].includes(job.status) && <>
           <button type="button" className="btn" disabled={busy} onClick={() => void onRun(async () => { await simulateMostikAgentResult(job.id, 'ok'); }, t('mostik.prenosPotvrdeny'))}>{t('mostik.simulovatUspech')}</button>
           <button type="button" className="btn" disabled={busy} onClick={() => void onRun(async () => { await simulateMostikAgentResult(job.id, 'error'); })}>{t('mostik.simulovatChybu')}</button>
