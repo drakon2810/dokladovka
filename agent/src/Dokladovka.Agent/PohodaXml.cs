@@ -52,7 +52,7 @@ public static class PohodaXml
     {
         var document = XDocument.Parse(xml, LoadOptions.None);
         var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
-        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {FindText(root, "note") ?? "bez popisu"}");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var rows = new List<TrainingDecision>();
         foreach (var invoice in document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "invoice"))
@@ -121,7 +121,7 @@ public static class PohodaXml
     {
         var document = XDocument.Parse(xml, LoadOptions.None);
         var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
-        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {FindText(root, "note") ?? "bez popisu"}");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
         var result = new Dictionary<string, IReadOnlyList<CodeListValue>>
         {
             ["predkontacie"] = ParseContainer(document, "listAccountingDoubleEntry", "itemAccounting", attributes: true),
@@ -192,6 +192,27 @@ public static class PohodaXml
                 attributes ? Trimmed(item.Attribute("credit")?.Value) : null));
         }
         return values.Values.OrderBy(item => item.Kod, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>Popis chyby z odpovede POHODY. Text chodí ako ATRIBÚT note na
+    /// responsePack/responsePackItem — element „note" v response.xsd neexistuje,
+    /// takže hľadanie elementu vrátilo vždy „bez popisu" (a v odpovedi s dokladmi
+    /// dokonca cudzí obchodný note faktúry). Pri viacerých chybách sa spoja.</summary>
+    private static string ErrorNote(XElement root)
+    {
+        var notes = new List<string>();
+        void Add(string? note)
+        {
+            var text = Trimmed(note);
+            if (text is not null && !notes.Contains(text, StringComparer.Ordinal)) notes.Add(text);
+        }
+        Add(root.Attribute("note")?.Value);
+        foreach (var item in root.Descendants().Where(item => IsStormware(item)
+            && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value != "ok"))
+        {
+            Add(item.Attribute("note")?.Value);
+        }
+        return notes.Count == 0 ? "bez popisu" : string.Join(" · ", notes);
     }
 
     private static string? FindText(XElement parent, string localName) => parent.Descendants()

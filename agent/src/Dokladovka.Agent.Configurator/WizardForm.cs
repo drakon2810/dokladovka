@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text;
 using Dokladovka.Agent;
 
 namespace Dokladovka.Agent.Configurator;
@@ -10,28 +11,30 @@ public sealed class WizardForm : Form
     private readonly TabControl _pages = new() { Dock = DockStyle.Fill, Appearance = TabAppearance.FlatButtons, ItemSize = new Size(0, 1), SizeMode = TabSizeMode.Fixed };
     private readonly Button _back = new() { Text = "Späť", AutoSize = true };
     private readonly Button _next = new() { Text = "Pokračovať", AutoSize = true };
-    private readonly TextBox _cloud = new() { Dock = DockStyle.Top };
-    private readonly TextBox _pairing = new() { Dock = DockStyle.Top, CharacterCasing = CharacterCasing.Upper };
+    // Polia sú bez Dock: šírku im dáva AddField. Dokované pole by v AutoSize
+    // skupine zmerali na preferovanú šírku a zmrštilo by sa na šírku popisu.
+    private readonly TextBox _cloud = new();
+    private readonly TextBox _pairing = new() { CharacterCasing = CharacterCasing.Upper };
     private readonly RadioButton _modeMServer = new() { Text = "POHODA mServer (HTTP, beží trvalo)", AutoSize = true };
     private readonly RadioButton _modeCli = new() { Text = "Priamy XML import (pohoda.exe /XML, bez mServera) – všetky firmy automaticky", AutoSize = true, Checked = true };
-    private readonly TextBox _mServer = new() { Dock = DockStyle.Top };
+    private readonly TextBox _mServer = new();
     private readonly RadioButton _typeMdb = new() { Text = "POHODA MDB (databázy sú súbory StwPh_*.mdb v dátovom priečinku)", AutoSize = true, Checked = true };
     private readonly RadioButton _typeSql = new() { Text = "POHODA SQL / E1 (databázy sú na Microsoft SQL Serveri)", AutoSize = true };
-    private readonly TextBox _dataDirectory = new() { Dock = DockStyle.Top };
-    private readonly TextBox _sqlHost = new() { Dock = DockStyle.Top };
-    private readonly TextBox _sqlPort = new() { Dock = DockStyle.Top, Text = "1433" };
-    private readonly TextBox _sqlUser = new() { Dock = DockStyle.Top, Text = "sa" };
-    private readonly TextBox _sqlPassword = new() { Dock = DockStyle.Top, UseSystemPasswordChar = true };
-    private readonly TextBox _pohodaExe = new() { Dock = DockStyle.Top };
-    private readonly TextBox _user = new() { Dock = DockStyle.Top };
-    private readonly TextBox _password = new() { Dock = DockStyle.Top, UseSystemPasswordChar = true };
-    private readonly TextBox _ico = new() { Dock = DockStyle.Top, MaxLength = 8 };
-    private readonly TextBox _instance = new() { Dock = DockStyle.Top };
+    private readonly TextBox _dataDirectory = new();
+    private readonly TextBox _sqlHost = new();
+    private readonly TextBox _sqlPort = new() { Text = "1433" };
+    private readonly TextBox _sqlUser = new() { Text = "sa" };
+    private readonly TextBox _sqlPassword = new() { UseSystemPasswordChar = true };
+    private readonly TextBox _pohodaExe = new();
+    private readonly TextBox _user = new();
+    private readonly TextBox _password = new() { UseSystemPasswordChar = true };
+    private readonly TextBox _ico = new() { MaxLength = 8 };
+    private readonly TextBox _instance = new();
     private readonly Label _discovery = new() { AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = Color.DimGray };
     private readonly Label _companySummary = new() { AutoSize = true, MaximumSize = new Size(660, 0) };
     private readonly Label _testResult = new() { AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = Color.DimGray };
     private readonly Button _test = new() { Text = "Skontrolovať a pripojiť", AutoSize = true };
-    private readonly Button _copyDiagnostics = new() { Text = "Kopírovať diagnostiku", AutoSize = true, Enabled = false };
+    private readonly Button _diagnosticsButton = new() { Text = "Diagnostika", AutoSize = true, Enabled = false, Margin = new Padding(12, 3, 3, 3) };
     private bool _configured;
     private string _diagnostics = string.Empty;
 
@@ -40,11 +43,11 @@ public sealed class WizardForm : Form
         _defaults = defaults;
         Text = "Dokladovka Agent – Nastavenie";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(760, 600);
-        ClientSize = new Size(760, 600);
+        MinimumSize = new Size(780, 620);
+        ClientSize = new Size(820, 660);
         Font = new Font("Segoe UI", 9F);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
+        // Sizable: dlhé chybové hlásenia a zoznam firiem sa inak nezmestia.
+        FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;
 
         _cloud.Text = defaults.CloudBaseUrl;
@@ -73,7 +76,7 @@ public sealed class WizardForm : Form
         _next.Click += (_, _) => MoveStep(1);
         _pages.SelectedIndexChanged += (_, _) => UpdateNavigation();
         _test.Click += async (_, _) => await ConfigureAsync();
-        _copyDiagnostics.Click += (_, _) => Clipboard.SetText(_diagnostics);
+        _diagnosticsButton.Click += (_, _) => ShowDiagnostics();
         UpdateNavigation();
     }
 
@@ -92,34 +95,55 @@ public sealed class WizardForm : Form
     private TabPage BuildDiscoveryPage()
     {
         var page = Page("Vyhľadanie POHODA", "Sprievodca skúsi nájsť nainštalovanú POHODU. Vyberte spôsob prepojenia: mServer beží trvalo ako služba, priamy XML import spúšťa POHODU iba počas prenosu.");
-        var panel = (FlowLayoutPanel)page.Controls[0];
         // Režim a typ POHODY sú dve nezávislé voľby — každá dvojica RadioButtonov
         // musí mať vlastný kontajner, inak ich WinForms spojí do jednej skupiny
         // a výber typu SQL/E1 by zrušil výber priameho importu.
-        panel.Controls.Add(RadioGroup(_modeMServer, _modeCli));
+        AddToPage(page, RadioGroup(_modeMServer, _modeCli));
         var detect = new Button { Text = "Vyhľadať POHODU", AutoSize = true, Margin = new Padding(3, 12, 3, 3) };
         detect.Click += (_, _) => DiscoverPohoda();
-        panel.Controls.Add(detect);
-        panel.Controls.Add(_discovery);
-        AddField(page, "Adresa POHODA mServer (iba pre režim mServer)", _mServer);
-        AddField(page, "Cesta k pohoda.exe (povinná pre priamy import)", _pohodaExe);
-        panel.Controls.Add(new Label { Text = "Typ POHODY (pre priamy import)", AutoSize = true, Margin = new Padding(3, 14, 3, 3), Font = new Font(Font, FontStyle.Bold) });
-        panel.Controls.Add(RadioGroup(_typeMdb, _typeSql));
-        AddField(page, "Dátový priečinok POHODA s StwPh_*.mdb (typ MDB)", _dataDirectory);
-        var browse = new Button { Text = "Prehľadávať…", AutoSize = true };
+        AddToPage(page, detect);
+        AddToPage(page, _discovery);
+        var mServerField = AddField(page, "Adresa POHODA mServer", _mServer);
+        var exeField = AddField(page, "Cesta k pohoda.exe", _pohodaExe);
+        var typeLabel = new Label { Text = "Typ POHODY", AutoSize = true, Margin = new Padding(3, 16, 3, 6), Font = new Font(Font, FontStyle.Bold) };
+        AddToPage(page, typeLabel);
+        var typeGroup = RadioGroup(_typeMdb, _typeSql);
+        AddToPage(page, typeGroup);
+        var dataField = AddField(page, "Dátový priečinok POHODA s StwPh_*.mdb", _dataDirectory);
+        var browse = new Button { Text = "Prehľadávať…", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
         browse.Click += (_, _) =>
         {
             using var dialog = new FolderBrowserDialog { Description = "Vyberte dátový priečinok POHODA (obsahuje StwPh_*.mdb)" };
             if (Directory.Exists(_dataDirectory.Text)) dialog.SelectedPath = _dataDirectory.Text;
             if (dialog.ShowDialog(this) == DialogResult.OK) _dataDirectory.Text = dialog.SelectedPath;
         };
-        panel.Controls.Add(browse);
-        AddField(page, "SQL Server – adresa alebo IP (typ SQL/E1)", _sqlHost);
-        AddField(page, "SQL Server – port", _sqlPort);
+        AddToPage(page, browse);
         // Agent číta iba zoznam databáz (SELECT na master.sys.databases) — stačí
         // login s právom VIEW ANY DATABASE, sysadmin nie je potrebný.
-        AddField(page, "SQL Server – používateľ (stačí právo čítania, napr. sa)", _sqlUser);
-        AddField(page, "SQL Server – heslo", _sqlPassword);
+        Control[] sqlFields =
+        [
+            AddField(page, "SQL Server – adresa alebo IP", _sqlHost),
+            AddField(page, "SQL Server – port", _sqlPort),
+            AddField(page, "SQL Server – používateľ (stačí právo čítania, napr. sa)", _sqlUser),
+            AddField(page, "SQL Server – heslo", _sqlPassword),
+        ];
+
+        // Zobrazia sa iba polia zvoleného režimu — inak sprievodca pýta údaje,
+        // ktoré sa v danom režime vôbec nepoužijú (napr. MDB priečinok pri SQL/E1).
+        void UpdateFieldVisibility()
+        {
+            var cli = _modeCli.Checked;
+            mServerField.Visible = !cli;
+            exeField.Visible = cli;
+            typeLabel.Visible = cli;
+            typeGroup.Visible = cli;
+            dataField.Visible = cli && _typeMdb.Checked;
+            browse.Visible = cli && _typeMdb.Checked;
+            foreach (var field in sqlFields) field.Visible = cli && _typeSql.Checked;
+        }
+        _modeCli.CheckedChanged += (_, _) => UpdateFieldVisibility();
+        _typeSql.CheckedChanged += (_, _) => UpdateFieldVisibility();
+        UpdateFieldVisibility();
         return page;
     }
 
@@ -135,17 +159,19 @@ public sealed class WizardForm : Form
 
     private TabPage BuildCompanyPage()
     {
-        var page = Page("Výber firmy", "Pri priamom importe sa všetky firmy z dátového priečinka spárujú s Dokladovkou automaticky podľa IČO. Pri režime mServer sa IČO musí zhodovať s vybranou organizáciou.");
-        page.Controls.Add(_companySummary);
+        var page = Page("Výber firmy", "Pri priamom importe sa všetky nájdené firmy spárujú s Dokladovkou automaticky podľa IČO. Pri režime mServer sa IČO musí zhodovať s vybranou organizáciou.");
+        AddToPage(page, _companySummary);
         return page;
     }
 
     private TabPage BuildTestPage()
     {
         var page = Page("Test spojenia", "Overí sa POHODA, prihlásenie, firma, účtovný rok, cloud, párovanie a dostupnosť XSD schém. Pri priamom XML importe sa POHODA spustí na pozadí a test môže trvať aj minútu.");
-        page.Controls.Add(_test);
-        page.Controls.Add(_testResult);
-        page.Controls.Add(_copyDiagnostics);
+        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
+        buttons.Controls.Add(_test);
+        buttons.Controls.Add(_diagnosticsButton);
+        AddToPage(page, buttons);
+        AddToPage(page, _testResult);
         return page;
     }
 
@@ -170,12 +196,20 @@ public sealed class WizardForm : Form
         return page;
     }
 
-    private static void AddField(TabPage page, string label, TextBox input)
+    // Obsah stránky patrí do vnútorného panela s nadpisom — priamo na TabPage by
+    // sa kreslil cez nadpis (prekrývajúci sa text v sprievodcovi).
+    private static void AddToPage(TabPage page, Control control) => ((FlowLayoutPanel)page.Controls[0]).Controls.Add(control);
+
+    /// <summary>Popis + pole ako jeden celok, aby sa dali skryť naraz.</summary>
+    private static Control AddField(TabPage page, string label, TextBox input)
     {
-        var panel = (FlowLayoutPanel)page.Controls[0];
-        panel.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(3, 8, 3, 3) });
+        var group = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
+        group.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(3, 0, 3, 3) });
+        input.Dock = DockStyle.None;
         input.Width = 640;
-        panel.Controls.Add(input);
+        group.Controls.Add(input);
+        AddToPage(page, group);
+        return group;
     }
 
     private void MoveStep(int direction)
@@ -245,7 +279,7 @@ public sealed class WizardForm : Form
         _test.Enabled = false;
         _testResult.ForeColor = Color.DimGray;
         _testResult.Text = "Prebieha kontrola spojenia…";
-        _copyDiagnostics.Enabled = false;
+        _diagnosticsButton.Enabled = false;
         try
         {
             var result = await AgentConfiguration.ConfigureAsync(new AgentConfigurationRequest
@@ -270,24 +304,127 @@ public sealed class WizardForm : Form
             _configured = true;
             _testResult.ForeColor = Color.DarkGreen;
             _testResult.Text = $"Spojenie je v poriadku.\nPOHODA: {result.Company.Company}\nDatabáza: {result.Company.DatabaseName}\nÚčtovný rok: {result.Company.Year}\nNájdené firmy: {result.Discovered.Count}\nHeartbeat: odoslaný";
-            _diagnostics = $"Kód: OK\r\nAgent: {AgentVersion.Current}\r\nPOHODA: dostupná\r\nRok: {result.Company.Year}\r\nFirmy: {result.Discovered.Count}";
-            _copyDiagnostics.Enabled = true;
+            _diagnostics = BuildDiagnostics("OK", null,
+                $"POHODA: {result.Company.Company}\r\nDatabáza: {result.Company.DatabaseName}\r\nÚčtovný rok: {result.Company.Year}\r\nNájdené firmy: {result.Discovered.Count}");
+            _diagnosticsButton.Enabled = true;
             _next.Enabled = true;
         }
         catch (Exception error)
         {
             _configured = false;
             var code = ErrorCode(error);
-            var safeMessage = Redact(error.Message);
             _testResult.ForeColor = Color.DarkRed;
-            _testResult.Text = $"Spojenie sa nepodarilo. {FriendlyMessage(error)}\nTechnický kód: {code}";
-            _diagnostics = $"Kód: {code}\r\nTyp: {error.GetType().Name}\r\nSpráva: {safeMessage}\r\nAgent: {AgentVersion.Current}";
-            _copyDiagnostics.Enabled = true;
+            _testResult.Text = $"Spojenie sa nepodarilo. {FriendlyMessage(error)}\nTechnický kód: {code}\nPodrobnosti a log nájdete cez tlačidlo Diagnostika.";
+            _diagnostics = BuildDiagnostics(code, error, null);
+            _diagnosticsButton.Enabled = true;
         }
         finally
         {
             _test.Enabled = true;
         }
+    }
+
+    // Diagnostika pre používateľa aj podporu: čo sa testovalo, ktorá chyba padla
+    // (celá reťaz vnútorných výnimiek) a koniec logu agenta. Heslá sú prekryté.
+    private string BuildDiagnostics(string code, Exception? error, string? summary)
+    {
+        var text = new StringBuilder();
+        text.AppendLine($"Kód: {code}");
+        text.AppendLine($"Čas: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}");
+        text.AppendLine($"Agent: {AgentVersion.Current}");
+        text.AppendLine($"Počítač: {Environment.MachineName} · Windows {Environment.OSVersion.Version}");
+        text.AppendLine();
+        text.AppendLine("== Nastavenie ==");
+        text.AppendLine($"Cloud: {_cloud.Text.Trim()}");
+        text.AppendLine($"Režim: {(_modeCli.Checked ? "priamy XML import (pohoda.exe /XML)" : "mServer")}");
+        if (_modeCli.Checked)
+        {
+            text.AppendLine($"Typ POHODY: {(_typeSql.Checked ? "SQL / E1" : "MDB")}");
+            text.AppendLine($"pohoda.exe: {_pohodaExe.Text.Trim()}");
+            text.AppendLine(_typeSql.Checked
+                ? $"SQL Server: {_sqlHost.Text.Trim()}:{_sqlPort.Text.Trim()} (používateľ {_sqlUser.Text.Trim()})"
+                : $"Dátový priečinok: {_dataDirectory.Text.Trim()}");
+        }
+        else
+        {
+            text.AppendLine($"mServer: {_mServer.Text.Trim()}");
+        }
+        text.AppendLine($"Používateľ POHODA: {_user.Text.Trim()}");
+        text.AppendLine();
+        if (summary is not null)
+        {
+            text.AppendLine("== Výsledok ==");
+            text.AppendLine(summary);
+            text.AppendLine();
+        }
+        if (error is not null)
+        {
+            text.AppendLine("== Chyba ==");
+            for (var current = error; current is not null; current = current.InnerException)
+                text.AppendLine($"{current.GetType().Name}: {Redact(current.Message)}");
+            text.AppendLine();
+        }
+        text.AppendLine($"== Log agenta ({AgentPaths.Logs}) ==");
+        text.AppendLine(Redact(ReadLogTail(80)));
+        return text.ToString();
+    }
+
+    private static string ReadLogTail(int lines)
+    {
+        try
+        {
+            var path = Path.Combine(AgentPaths.Logs, "agent.log");
+            if (!File.Exists(path)) return "(log zatiaľ neexistuje)";
+            // Do logu súbežne píše aj služba agenta, preto FileShare.ReadWrite.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            var tail = new Queue<string>(lines);
+            while (reader.ReadLine() is { } line)
+            {
+                if (tail.Count == lines) tail.Dequeue();
+                tail.Enqueue(line);
+            }
+            return tail.Count == 0 ? "(log je prázdny)" : string.Join(Environment.NewLine, tail);
+        }
+        catch (Exception error)
+        {
+            return $"(log sa nepodarilo prečítať: {error.Message})";
+        }
+    }
+
+    private void ShowDiagnostics()
+    {
+        using var dialog = new Form
+        {
+            Text = "Diagnostika spojenia",
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(840, 560),
+            MinimumSize = new Size(520, 320),
+            MinimizeBox = false,
+            Font = Font,
+        };
+        dialog.Controls.Add(new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = new Font("Consolas", 9F),
+            Text = _diagnostics,
+        });
+        var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new Padding(8) };
+        var close = new Button { Text = "Zavrieť", AutoSize = true, DialogResult = DialogResult.OK };
+        var copy = new Button { Text = "Kopírovať", AutoSize = true };
+        copy.Click += (_, _) => Clipboard.SetText(_diagnostics);
+        var openLogs = new Button { Text = "Otvoriť priečinok s logmi", AutoSize = true, Enabled = Directory.Exists(AgentPaths.Logs) };
+        openLogs.Click += (_, _) => Process.Start(new ProcessStartInfo(AgentPaths.Logs) { UseShellExecute = true });
+        footer.Controls.Add(close);
+        footer.Controls.Add(copy);
+        footer.Controls.Add(openLogs);
+        dialog.Controls.Add(footer);
+        dialog.AcceptButton = close;
+        dialog.ShowDialog(this);
     }
 
     private void DiscoverPohoda()
@@ -350,6 +487,12 @@ public sealed class WizardForm : Form
 
     private static string? NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // POHODA odmietla XML komunikáciu vlastnou chybou (často bez popisu) — má
+    // vlastný kód, inak by sa stratila medzi generickými CONFIG-FAILED.
+    private static bool IsPohodaXmlRejection(Exception error) =>
+        error.Message.Contains("POHODA vrátila chybu", StringComparison.Ordinal)
+        || error.Message.Contains("bez súboru odpovede", StringComparison.Ordinal);
+
     private static string ErrorCode(Exception error) => error switch
     {
         BackendApiException { StatusCode: HttpStatusCode.Gone } => "PAIR-EXPIRED",
@@ -360,6 +503,7 @@ public sealed class WizardForm : Form
         HttpRequestException => "NETWORK-UNREACHABLE",
         PlatformNotSupportedException => "WINDOWS-UNSUPPORTED",
         UnauthorizedAccessException => "WINDOWS-ADMIN",
+        _ when IsPohodaXmlRejection(error) => "POHODA-XML",
         _ => "CONFIG-FAILED",
     };
 
@@ -371,6 +515,8 @@ public sealed class WizardForm : Form
         MServerException => "POHODA mServer vrátil chybu. Skontrolujte, či je spustený.",
         HttpRequestException => "Cloud alebo mServer nie je dostupný. Skontrolujte internet, adresu a firewall.",
         UnauthorizedAccessException => "Chýbajú administrátorské práva na uloženie konfigurácie.",
+        _ when IsPohodaXmlRejection(error) =>
+            "POHODA odmietla XML komunikáciu. Najčastejšie príčiny: používateľ nemá právo Dátová komunikácia, POHODA nie je na tomto počítači aktivovaná (licencia), databáza je zamknutá alebo POHODA čaká na dialóg (napr. prevod databáz po aktualizácii).",
         _ => error.Message,
     };
 

@@ -112,6 +112,28 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void PohodaErrorMessageComesFromNoteAttributesNotForeignElements()
+    {
+        // POHODA posiela popis chyby ako ATRIBÚT note (element „note" v response.xsd
+        // neexistuje) — hľadanie elementu vracalo vždy „bez popisu", prípadne cudziu
+        // obchodnú poznámku faktúry z tela odpovede.
+        const string response = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="error" note="Účtovná jednotka s IČO 12345678 sa nenašla.">
+              <rsp:responsePackItem id="c01" state="error" note="Používateľ nemá právo Dátová komunikácia.">
+                <inv:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd"><inv:note>Obchodná poznámka faktúry</inv:note></inv:invoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        foreach (var parse in new Action[] { () => PohodaXml.ParseCodeLists(response), () => PohodaXml.ParseTrainingDecisions(response) })
+        {
+            var error = Assert.Throws<InvalidOperationException>(parse);
+            Assert.Contains("Účtovná jednotka s IČO 12345678 sa nenašla.", error.Message, StringComparison.Ordinal);
+            Assert.Contains("Používateľ nemá právo Dátová komunikácia.", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Obchodná poznámka", error.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void FindsDestructiveActionsOnlyInUpdateOrDeleteDataPacks()
     {
         const string updatePack = """
