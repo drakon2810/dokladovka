@@ -153,7 +153,17 @@ public static class PohodaXml
             var state = item.Attribute("state")?.Value;
             state = state is "ok" or "warning" or "error" ? state : "error";
             var message = FindText(item, "note") ?? item.Attribute("note")?.Value;
-            var number = item.Descendants().FirstOrDefault(value => value.Name.LocalName is "number" or "numberRequested" or "ids")?.Value.Trim();
+            var produced = item.Descendants().FirstOrDefault(value => IsStormware(value) && value.Name.LocalName == "producedDetails");
+            var number = (produced ?? item).Descendants()
+                .FirstOrDefault(value => value.Name.LocalName is "number" or "numberRequested" or "ids")?.Value.Trim();
+            // POHODA vie odpovedať state="ok" a doklad pritom nezaložiť (napr. „Doklad
+            // so zadaným číslom už existuje"). Bez producedDetails sa doklad v cloude
+            // nesmie označiť za prenesený — inak účtovník verí, že je v POHODE.
+            if (state == "ok" && produced is null)
+            {
+                state = "warning";
+                message ??= "POHODA doklad nezaložila (bez potvrdenia o vytvorení).";
+            }
             results.Add(new ExportDocumentResult(documentId, state, number, message));
         }
         return new ParsedExportResponse(results, packState, rootNote);

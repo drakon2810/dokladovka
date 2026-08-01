@@ -40,6 +40,25 @@ public sealed class AgentTests
         var parsed = PohodaXml.ParseExportResponse(response, ids);
         Assert.Equal("ok", parsed.PackState);
         Assert.Equal("FP26001", Assert.Single(parsed.Results).PohodaNumber);
+        Assert.Equal("ok", Assert.Single(parsed.Results).State);
+    }
+
+    [Fact]
+    public void ResponseWithoutProducedDetailsIsNotReportedAsExported()
+    {
+        // Reálny prípad: POHODA vrátila state="ok" s poznámkou „Doklad so zadaným
+        // číslom už existuje" a doklad nezaložila — cloud ho napriek tomu označil
+        // za prenesený.
+        const string response = """
+            <dat:responsePack xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd" state="ok">
+              <dat:responsePackItem id="11111111-1111-4111-8111-111111111111" state="ok" note="Doklad so zadaným číslom už existuje." />
+            </dat:responsePack>
+            """;
+        var parsed = PohodaXml.ParseExportResponse(response, ["11111111-1111-4111-8111-111111111111"]);
+        var result = Assert.Single(parsed.Results);
+        Assert.Equal("warning", result.State);
+        Assert.Contains("už existuje", result.Message, StringComparison.Ordinal);
+        Assert.Null(result.PohodaNumber);
     }
 
     [Fact]
@@ -182,7 +201,7 @@ public sealed class AgentTests
               <dat:dataPackItem id="11111111-1111-4111-8111-111111111111" version="2.0">
                 <inv:invoice version="2.0"><inv:invoiceHeader>
                   <inv:invoiceType>commitment</inv:invoiceType>
-                  <inv:number><typ:numberRequested>OZ</typ:numberRequested></inv:number>
+                  <inv:number><typ:ids>OZ</typ:ids></inv:number>
                   <inv:symVar>2026001</inv:symVar><inv:date>2026-07-14</inv:date><inv:dateTax>2026-07-14</inv:dateTax><inv:dateDue>2026-07-28</inv:dateDue>
                   <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting><inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
                   <inv:partnerIdentity><typ:address><typ:company>Test s.r.o.</typ:company><typ:ico>87654321</typ:ico></typ:address></inv:partnerIdentity>
@@ -192,7 +211,7 @@ public sealed class AgentTests
               <dat:dataPackItem id="22222222-2222-4222-8222-222222222222" version="2.0">
                 <vch:voucher version="2.0"><vch:voucherHeader>
                   <vch:voucherType>expense</vch:voucherType><vch:cashAccount><typ:ids>EUR</typ:ids></vch:cashAccount>
-                  <vch:number><typ:numberRequested>VPD</typ:numberRequested></vch:number><vch:originalDocument>BLOK-1</vch:originalDocument>
+                  <vch:number><typ:ids>VPD</typ:ids></vch:number><vch:originalDocument>BLOK-1</vch:originalDocument>
                   <vch:date>2026-07-14</vch:date><vch:dateTax>2026-07-14</vch:dateTax>
                   <vch:accounting><typ:ids>501/211</typ:ids></vch:accounting><vch:classificationVAT><typ:ids>PD</typ:ids></vch:classificationVAT>
                   <vch:text>Pokladničný doklad</vch:text><vch:partnerIdentity><typ:address><typ:company>Test s.r.o.</typ:company></typ:address></vch:partnerIdentity>

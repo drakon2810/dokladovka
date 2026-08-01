@@ -108,6 +108,20 @@ describe('buildServerDataPack — dodržanie limitov XSD schémy', () => {
     })).toThrow(/doc-1.*dátum vystavenia/);
   });
 
+  // typ:ids = prefix rady (POHODA pridelí ďalšie voľné číslo). Keď tam išiel
+  // typ:numberRequested, každý doklad žiadal to isté číslo a druhý export
+  // skončil hláškou „Doklad so zadaným číslom už existuje".
+  it('číselný rad ide do typ:ids, nie ako konkrétne číslo dokladu', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-series',
+      ico: '35761571',
+      documents: [invoiceDocument({})],
+      codeLists,
+    });
+    expect(xml).toContain('<inv:number><typ:ids>26FP</typ:ids></inv:number>');
+    expect(xml).not.toContain('numberRequested');
+  });
+
   it('nečíselné množstvo položky nezhodí dataPack', () => {
     const xml = buildServerDataPack({
       id: 'pack-qty',

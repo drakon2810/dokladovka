@@ -227,6 +227,11 @@ export function buildServerDataPack(input: {
     const supplier = extracted.dodavatel ?? {};
     const accounting = input.codeLists.predkontacie.get(snapshot.ucto.predkontaciaId ?? '');
     const classificationVat = input.codeLists.cleneniaDph.get(snapshot.ucto.clenenieDphId ?? '');
+    // typ:ids = prefix číselnej rady, z ktorej POHODA pridelí ďalšie voľné číslo.
+    // typ:numberRequested je naopak konkrétne ČÍSLO dokladu „bez väzby na číselnú
+    // radu" — posielať doň prefix znamenalo žiadať pre každý doklad to isté číslo,
+    // takže druhý a každý ďalší export skončil hláškou „Doklad so zadaným číslom
+    // už existuje" a doklad sa v POHODE vôbec nezaložil.
     const numberSeries = input.codeLists.ciselneRady.get(snapshot.ucto.ciselnyRadId ?? '');
     if (!accounting || !classificationVat || !numberSeries) {
       throw new Error(`Doklad ${id} nemá platné aktívne číselníky organizácie`);
@@ -263,7 +268,7 @@ export function buildServerDataPack(input: {
       <vch:voucherHeader>
         <vch:voucherType>${escapeXml(voucherType)}</vch:voucherType>
         <vch:cashAccount><typ:ids>${escapeXml(cashAccount)}</typ:ids></vch:cashAccount>
-        <vch:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></vch:number>
+        <vch:number><typ:ids>${escapeXml(numberSeries)}</typ:ids></vch:number>
         <vch:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</vch:originalDocument>
         <vch:date>${issueDate}</vch:date>
         <vch:dateTax>${taxDate}</vch:dateTax>
@@ -293,7 +298,7 @@ export function buildServerDataPack(input: {
       return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <int:intDoc version="2.0">
       <int:intDocHeader>
-        <int:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></int:number>
+        <int:number><typ:ids>${escapeXml(numberSeries)}</typ:ids></int:number>
         <int:date>${issueDate}</int:date>
         <int:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></int:accounting>
         <int:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></int:classificationVAT>
@@ -316,7 +321,7 @@ export function buildServerDataPack(input: {
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
         <inv:invoiceType>${invoiceType(snapshot.typ)}</inv:invoiceType>
-        <inv:number><typ:numberRequested>${escapeXml(numberSeries)}</typ:numberRequested></inv:number>
+        <inv:number><typ:ids>${escapeXml(numberSeries)}</typ:ids></inv:number>
         <inv:symVar>${escapeXml(clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20))}</inv:symVar>
         ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</inv:originalDocument>` : ''}
         <inv:date>${issueDate}</inv:date>
