@@ -58,7 +58,11 @@ public sealed class AgentCycleRunner
 
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
-        var live = await ReadCompaniesAsync(cancellationToken);
+        // Organizácie sa čítajú PRED heartbeatom: do cloudu sa hlásia len firmy,
+        // ktoré v projekte existujú. Účtovník tak nikdy nesynchronizuje databázy
+        // firiem, s ktorými v Dokladovke nepracuje.
+        var organizations = await _backend.GetOrganizationsAsync(cancellationToken);
+        var live = FilterToKnownOrganizations(await ReadCompaniesAsync(cancellationToken), organizations);
         // Heartbeat oddelený od zvyšku cyklu: jeho zlyhanie (napr. odmietnutá dávka) nesmie zablokovať spracovanie exportov.
         try
         {
@@ -68,7 +72,6 @@ public sealed class AgentCycleRunner
         {
             _log.Error("heartbeat_failed", error);
         }
-        var organizations = await _backend.GetOrganizationsAsync(cancellationToken);
 
         foreach (var pending in _pendingJobs.LoadAll())
             await TryProcessPendingAsync(pending, cancellationToken);
@@ -192,6 +195,15 @@ public sealed class AgentCycleRunner
         }
     }
 
+    /// <summary>Len firmy existujúce v projekte — cudzie databázy POHODY sa do cloudu nehlásia.</summary>
+    public static IReadOnlyList<(MServerEndpointSettings Endpoint, MServerCompany Company)> FilterToKnownOrganizations(
+        IReadOnlyList<(MServerEndpointSettings Endpoint, MServerCompany Company)> live,
+        IReadOnlyList<AgentOrganization> organizations)
+    {
+        var knownIcos = new HashSet<string>(organizations.Select(organization => organization.Ico), StringComparer.Ordinal);
+        return live.Where(item => knownIcos.Contains(item.Endpoint.CompanyIco)).ToList();
+    }
+
     public static (MServerEndpointSettings Endpoint, MServerCompany Company)? MatchEndpoint(
         AgentOrganization organization,
         IReadOnlyList<(MServerEndpointSettings Endpoint, MServerCompany Company)> live)
@@ -218,7 +230,10 @@ public sealed class AgentCycleRunner
         CancellationToken cancellationToken)
     {
         var stateKey = $"{organization.OrganizationId}:{target.Company.DatabaseName}:{target.Company.Year}";
-        if (_state.LastCodeListSync.TryGetValue(stateKey, out var last)
+        // „Synchronizovať mostíkom" z webu obchádza hodinový interval — žiadosť
+        // zmaže server pri nahratí číselníkov, takže sa nevykoná dvakrát.
+        if (!organization.SyncRequested
+            && _state.LastCodeListSync.TryGetValue(stateKey, out var last)
             && DateTimeOffset.UtcNow - last < TimeSpan.FromMinutes(_settings.CodeListSyncMinutes)) return;
         var stopwatch = Stopwatch.StartNew();
         try

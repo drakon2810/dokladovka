@@ -21,6 +21,8 @@ interface DcDropdownProps {
   label: string;
   /** Odznak pred labelom — číslo sekcie pri zvýraznení zdroja údajov. */
   chip?: ReactNode;
+  /** „Synchronizovať mostíkom" v pätičke zoznamu — stiahne číselník z POHODY. */
+  onMostikSync?: () => void;
   value?: string;
   options: DcOption[];
   mode?: 'simple' | 'account';
@@ -42,7 +44,7 @@ function bezDiakritiky(value: unknown): string {
 }
 
 export function DcDropdown({
-  label, chip, value, options, mode = 'simple', variant = 'karty',
+  label, chip, onMostikSync, value, options, mode = 'simple', variant = 'karty',
   searchable = false, confidence, error = false, placeholder = 'Vyberte…', disabled = false, onChange,
 }: DcDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -151,6 +153,16 @@ export function DcDropdown({
             <div className="dv-dd-empty">Žiadne výsledky pre „{search}“</div>
           )}
         </div>
+        {onMostikSync && (
+          <button
+            type="button"
+            className="dv-dd-sync"
+            onClick={() => { setOpen(false); onMostikSync(); }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>
+            Synchronizovať mostíkom
+          </button>
+        )}
       </div>
     </div>
   );

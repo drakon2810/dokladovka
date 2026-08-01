@@ -131,9 +131,15 @@ public static class AgentConfiguration
             });
         SecretVault.Save(new AgentSecrets { AgentToken = paired.AgentToken, MServers = storedSecrets });
         var backend = new BackendClient(settings.CloudBaseUrl, paired.AgentToken, log);
+        // Do cloudu sa hlásia len firmy vedené v projekte — cudzie databázy POHODY
+        // (iní klienti kancelárie, archívy) sa nikam neposielajú.
+        var organizations = await backend.GetOrganizationsAsync(cancellationToken);
+        var knownIcos = new HashSet<string>(organizations.Select(organization => organization.Ico), StringComparer.Ordinal);
+        var reported = discovered.Where(item => knownIcos.Contains(item.Ico)).ToList();
         await backend.SendHeartbeatAsync(
-            discovered.Select(item => new HeartbeatCompany(item.Ico, item.Database, item.Year)).ToArray(),
+            reported.Select(item => new HeartbeatCompany(item.Ico, item.Database, item.Year)).ToArray(),
             cancellationToken);
+        // Discovered = lokálny nález pre sprievodcu; do cloudu odišiel len filtrovaný zoznam.
         return new AgentConfigurationResult(company, paired, discovered);
     }
 

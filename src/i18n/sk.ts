@@ -874,6 +874,8 @@ export const sk = {
   'nast.cis.dalsieCislo': 'Ďalšie číslo',
   'nast.cis.banner':
     'Číselníky môžete spravovať ručne alebo ich importovať z POHODY pomocou XML súboru.',
+  'nast.cis.syncMostikom': 'Synchronizovať mostíkom',
+  'nast.cis.mostikSyncOdoslane': 'Synchronizácia je vyžiadaná — Mostík stiahne číselníky z POHODY do minúty a zoznam sa obnoví sám.',
   'nast.cis.stiahnutRequest': 'Stiahnuť request pre POHODU',
   'nast.cis.importXml': 'Import z POHODY (XML)',
   'nast.cis.pohodaNavod':

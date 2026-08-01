@@ -321,6 +321,22 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void HeartbeatReportsOnlyProjectOrganizations()
+    {
+        static (MServerEndpointSettings, MServerCompany) Live(string ico, string database, string year) => (
+            new MServerEndpointSettings { Id = "auto:" + database, CompanyIco = ico, Mode = "cli", Database = database, PohodaExePath = @"C:\Pohoda\Pohoda.exe" },
+            new MServerCompany(ico, database, year, string.Empty));
+        var live = new[]
+        {
+            Live("12345678", "StwPh_12345678_2026", "2026"),
+            Live("99999999", "StwPh_99999999_2026", "2026"), // cudzia firma na tom istom SQL serveri
+        };
+        var organizations = new[] { new AgentOrganization("org-1", "12345678", "Firma", null, null, "latest") };
+        var filtered = AgentCycleRunner.FilterToKnownOrganizations(live, organizations);
+        Assert.Equal("12345678", Assert.Single(filtered).Endpoint.CompanyIco);
+    }
+
+    [Fact]
     public void ParsesExistingCodeListResponseFixture()
     {
         var xml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "code-lists-response-synthetic.xml"));

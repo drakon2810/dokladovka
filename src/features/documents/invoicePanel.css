@@ -193,6 +193,14 @@
 .dv-dd-search input:focus { border-color: var(--dv-accent); box-shadow: 0 0 0 3px rgba(14, 122, 95, .15); }
 .dv-dd-list { max-height: 300px; overflow: auto; padding: 6px; }
 .dv-dd-empty { padding: 18px 12px; text-align: center; font-size: 13px; color: var(--dv-muted); }
+/* „Synchronizovať mostíkom" — pätička zoznamu (parita s Doklado). */
+.dv-dd-sync {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; padding: 10px 12px; border: 0; border-top: 1px solid #EEF1EE;
+  background: #fff; font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--dv-accent); cursor: pointer; transition: background .15s ease;
+}
+.dv-dd-sync:hover { background: rgba(14, 122, 95, .06); }
 
 /* Simple option */
 .dv-opt {

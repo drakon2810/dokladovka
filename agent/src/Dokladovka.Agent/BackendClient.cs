@@ -19,7 +19,9 @@ public sealed record AgentOrganization(
     string Nazov,
     string? DbName,
     string? UctovnyRok,
-    string PreferredYear);
+    string PreferredYear,
+    // Web požiadal o okamžitú synchronizáciu číselníkov („Synchronizovať mostíkom").
+    bool SyncRequested = false);
 public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyRok);
 // UcetMd/UcetDal: účty predkontácie z atribútov debit/credit (len kind=predkontacie).
 public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null);

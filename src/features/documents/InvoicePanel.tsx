@@ -5,6 +5,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentPreco, DocumentType, DocumentUcto } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
+import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
+import { showToast } from '../../components/toast';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
@@ -429,6 +431,14 @@ export function InvoicePanel({
   const ucto = draft.ucto;
   const typDokladu = TYP_META[draft.typ]?.label ?? 'Faktúra';
 
+  // „Synchronizovať mostíkom" v pätičke číselníkových dropdownov — agent stiahne
+  // číselníky z POHODY do ~1 minúty, zoznam sa obnoví sám (snapshot poller).
+  const syncMostik = readOnly ? undefined : () => {
+    requestMostikCodeListSync(draft.orgId)
+      .then(() => showToast('Synchronizácia číselníkov cez Mostík je vyžiadaná — zoznam sa obnoví do minúty.'))
+      .catch((cause: unknown) => showToast(cause instanceof Error && cause.message ? cause.message : 'Synchronizáciu sa nepodarilo vyžiadať.', { tone: 'error' }));
+  };
+
   const toOpts = (items: CodeListItem[]): DcOption[] =>
     items.map((item) => ({ value: item.id, label: `${item.kod} · ${item.nazov}`, title: `${item.kod} · ${item.nazov}` }));
 
@@ -506,7 +516,7 @@ export function InvoicePanel({
           <div className="dv-cols">
             <div className="dv-fields">
               <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
-              <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
+              <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable onMostikSync={syncMostik} value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
               <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}${srcCls('cisloFaktury')}`} {...srcHover('cisloFaktury')}>
                 <label className="dv-label">{srcLabel('cisloFaktury', 'Číslo faktúry')}</label>
                 <input className="dv-input dv-has-icon" value={ex.cisloFaktury ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('cisloFaktury', e.target.value)} />
@@ -533,9 +543,9 @@ export function InvoicePanel({
 
             <div className="dv-fields">
               {precoWrap('predkontacia',
-                <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />)}
+                <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} onMostikSync={syncMostik} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />)}
               {precoWrap('dph',
-                <DcDropdown label="Členenie DPH" mode="simple" searchable value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
+                <DcDropdown label="Členenie DPH" mode="simple" searchable onMostikSync={syncMostik} value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
                   onChange={(v) => {
                     const picked = codeLists.cleneniaDph.find((item) => item.id === v);
                     updateUcto({ clenenieDphId: v, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
@@ -566,7 +576,7 @@ export function InvoicePanel({
           <div className="dv-fields" style={{ marginTop: 18 }}>
             <div className={`dv-expand${rozOpen ? ' dv-open' : ''}`}>
               <div className="dv-expand-inner">
-                <DcDropdown label="Nákladové stredisko" mode="simple" searchable value={ucto.strediskoId} options={toOpts(codeLists.strediska)} disabled={readOnly} onChange={(v) => updateUcto({ strediskoId: v })} />
+                <DcDropdown label="Nákladové stredisko" mode="simple" searchable onMostikSync={syncMostik} value={ucto.strediskoId} options={toOpts(codeLists.strediska)} disabled={readOnly} onChange={(v) => updateUcto({ strediskoId: v })} />
                 <div className="dv-field">
                   <label className="dv-label">Interné číslo</label>
                   <input className="dv-input" value={ex.interneCislo ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('interneCislo', e.target.value || undefined)} placeholder="napr. INT-2026-014" />

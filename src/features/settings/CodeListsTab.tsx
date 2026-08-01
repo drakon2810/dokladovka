@@ -21,6 +21,8 @@ import {
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
+import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
+import { useAuth } from '../../auth/AuthContext';
 import { t } from '../../i18n/sk';
 
 // Prehľadné slovenské názvy agend číselných radov z POHODY (element „agenda").
@@ -82,8 +84,10 @@ export function CodeListsTab() {
     projekty: [],
   };
   const { orgId, selectOrg } = useOrgSelection();
+  const { session } = useAuth();
   const [preview, setPreview] = useState<CodeListImportPreview>();
   const [busy, setBusy] = useState(false);
+  const [mostikBusy, setMostikBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -124,6 +128,19 @@ export function CodeListsTab() {
     } finally {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function syncViaMostik(): Promise<void> {
+    if (!organization) return;
+    setMostikBusy(true);
+    try {
+      await requestMostikCodeListSync(organization.id, session?.csrfToken);
+      showToast(t('nast.cis.mostikSyncOdoslane'));
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setMostikBusy(false);
     }
   }
 
@@ -176,6 +193,15 @@ export function CodeListsTab() {
 
       <section className="card mb-4 p-4">
         <div className="flex flex-wrap gap-2">
+          {/* Doklado-parity: číselníky natiahne agent priamo z POHODY — bez ručného XML. */}
+          <button
+            type="button"
+            className="btn border-accent/40 bg-accent/10 font-semibold text-accent-hover"
+            disabled={!organization || mostikBusy}
+            onClick={() => void syncViaMostik()}
+          >
+            {mostikBusy ? t('stav.nacitavam') : t('nast.cis.syncMostikom')}
+          </button>
           <button
             type="button"
             className="btn"

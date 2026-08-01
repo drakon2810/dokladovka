@@ -72,21 +72,22 @@ public sealed class StatusForm : Form
             var secrets = SecretVault.Load();
             var log = new RollingFileAgentLog();
             var runner = new AgentCycleRunner(settings, secrets, log);
-            var live = await runner.ReadCompaniesAsync(CancellationToken.None);
             var backend = new BackendClient(settings.CloudBaseUrl, secrets.AgentToken, log);
-            // Heartbeat pred čítaním organizácií: backend hneď spáruje nové firmy podľa IČO.
+            // Organizácie ako prvé: okno aj heartbeat pracujú len s firmami,
+            // ktoré účtovník vedie v Dokladovke — cudzie databázy POHODY sa nehlásia.
+            var organizations = await backend.GetOrganizationsAsync(CancellationToken.None);
+            var live = AgentCycleRunner.FilterToKnownOrganizations(
+                await runner.ReadCompaniesAsync(CancellationToken.None), organizations);
+            // Heartbeat pred vykreslením: backend hneď spáruje nové firmy podľa IČO.
             await backend.SendHeartbeatAsync(
                 live.Select(item => new HeartbeatCompany(item.Endpoint.CompanyIco, item.Company.DatabaseName, item.Company.Year)).ToArray(),
                 CancellationToken.None);
-            var organizations = await backend.GetOrganizationsAsync(CancellationToken.None);
 
             _firms.BeginUpdate();
             _firms.Items.Clear();
-            var usedDatabases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var organization in organizations)
             {
                 var match = AgentCycleRunner.MatchEndpoint(organization, live);
-                if (match is not null) usedDatabases.Add(match.Value.Company.DatabaseName);
                 var item = new ListViewItem([
                     organization.Nazov,
                     organization.Ico,
@@ -97,20 +98,8 @@ public sealed class StatusForm : Form
                 item.ForeColor = match is not null ? Color.DarkGreen : Color.DarkOrange;
                 _firms.Items.Add(item);
             }
-            foreach (var (endpoint, company) in live)
-            {
-                if (usedDatabases.Contains(company.DatabaseName)) continue;
-                if (organizations.Any(organization => organization.Ico == endpoint.CompanyIco)) continue;
-                var item = new ListViewItem([
-                    "(nie je v Dokladovke)",
-                    endpoint.CompanyIco,
-                    company.DatabaseName,
-                    company.Year,
-                    "Čaká na firmu vo webe",
-                ]);
-                item.ForeColor = Color.Gray;
-                _firms.Items.Add(item);
-            }
+            // Databázy bez firmy v Dokladovke sa zámerne nezobrazujú — okno ukazuje
+            // len firmy, ktoré účtovník v projekte vedie.
             _firms.EndUpdate();
             var paired = organizations.Count(organization => AgentCycleRunner.MatchEndpoint(organization, live) is not null);
             _summary.Text = $"Firmy v Dokladovke: {organizations.Count} · spárované: {paired} · databázy POHODA: {live.Count}"

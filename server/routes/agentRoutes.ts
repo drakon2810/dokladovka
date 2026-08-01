@@ -266,7 +266,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const result = await database.query(
       `SELECT o.id AS "organizationId", o.ico, o.name AS nazov,
               l.db_name AS "dbName", l.accounting_year AS "uctovnyRok",
-              COALESCE(l.preferred_year, 'latest') AS "preferredYear"
+              COALESCE(l.preferred_year, 'latest') AS "preferredYear",
+              (l.code_list_sync_requested_at IS NOT NULL) AS "syncRequested"
          FROM organizations o
          LEFT JOIN pohoda_company_links l ON l.organization_id=o.id AND l.tenant_id=o.tenant_id
         WHERE o.tenant_id=$1 AND o.archived=false ORDER BY o.name`, [agent.tenant_id],
@@ -332,6 +333,13 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
         [agent.tenant_id, id, body.kind, [...normalized.keys()]],
       );
       await writeAudit(tx, { tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id, action: 'agent.code_lists_synced', entityType: 'organization', entityId: id, correlationId: request.id, metadata: { kind: body.kind, itemCount: normalized.size, deactivated: deactivated.rowCount } });
+      // Žiadosť „Synchronizovať mostíkom" je vybavená prvým nahratým číselníkom —
+      // agent v jednom cykle nahráva všetky druhy, netreba čakať na posledný.
+      await tx.query(
+        `UPDATE pohoda_company_links SET code_list_sync_requested_at=NULL, updated_at=now()
+          WHERE organization_id=$1 AND tenant_id=$2 AND code_list_sync_requested_at IS NOT NULL`,
+        [id, agent.tenant_id],
+      );
       return { upserted: insertedOrUpdated, deactivated: deactivated.rowCount };
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now(), agent_version=$1 WHERE id=$2', [agent.agent_version, agent.id]);
@@ -680,6 +688,35 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       [body.dbName, body.uctovnyRok, body.preferredYear, organizationId, auth.tenantId],
     );
     return { organizationId, ...body, matchedAt: new Date().toISOString(), matchRule: 'manual' };
+  });
+
+  // „Synchronizovať mostíkom": web požiada o okamžitú synchronizáciu číselníkov,
+  // agent žiadosť vybaví pri najbližšom cykle (~30 s) mimo hodinového intervalu.
+  app.post('/api/mostik/organization-links/:organizationId/sync-code-lists', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const updated = await database.query(
+      `UPDATE pohoda_company_links SET code_list_sync_requested_at=now(), updated_at=now()
+        WHERE organization_id=$1 AND tenant_id=$2`,
+      [organizationId, auth.tenantId],
+    );
+    if (updated.rowCount === 0) {
+      throw new HttpError(404, 'mostik_link_missing', 'Organizácia nemá prepojenie na POHODU. Skontrolujte Nastavenia → Mostík.');
+    }
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'mostik.code_list_sync_requested',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+    });
+    return reply.code(202).send({ requested: true });
   });
 
   app.post('/api/mostik/export-jobs', async (request, reply) => {

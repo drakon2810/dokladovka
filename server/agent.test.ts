@@ -54,6 +54,18 @@ describe('agent backend contour', () => {
     expect(organizations.statusCode, organizations.body).toBe(200);
     expect(organizations.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId }));
 
+    // „Synchronizovať mostíkom": web nastaví žiadosť, agent ju vidí v organizáciách
+    // a prvé nahratie číselníkov ju zmaže.
+    const syncRequest = await app.inject({
+      method: 'POST',
+      url: `/api/mostik/organization-links/${seeded.organizationId}/sync-code-lists`,
+      headers: browserHeaders,
+      payload: {},
+    });
+    expect(syncRequest.statusCode, syncRequest.body).toBe(202);
+    const withFlag = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
+    expect(withFlag.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, syncRequested: true }));
+
     const syncedIds: Record<string, string> = {};
     for (const [kind, kod] of [['predkontacie', '518/321'], ['cleneniaDph', 'PD'], ['ciselneRady', '26FP']] as const) {
       const synced = await app.inject({
@@ -69,6 +81,8 @@ describe('agent backend contour', () => {
       );
       syncedIds[kind] = row.rows[0].id;
     }
+    const afterSync = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
+    expect(afterSync.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, syncRequested: false }));
 
     const documentId = randomUUID();
     const snapshot = {

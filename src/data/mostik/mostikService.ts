@@ -224,6 +224,28 @@ export async function generateMostikPairingCode(organizationId: string | undefin
   return { code, expiresAt: new Date(expiresAt).toISOString(), organizationId };
 }
 
+/**
+ * „Synchronizovať mostíkom" — okamžitá synchronizácia číselníkov z POHODY.
+ * REST: nastaví žiadosť, agent ju vybaví pri najbližšom cykle (do ~1 minúty).
+ * Mock: číselníky sa naplnia hneď (simulátor agenta).
+ */
+export async function requestMostikCodeListSync(organizationId: string, csrfToken?: string): Promise<void> {
+  if (MOSTIK_DATA_MODE === 'rest') {
+    // Volá sa aj z miest bez session v propoch (editor faktúry) — CSRF token si
+    // vtedy vyžiadame sami, rovnako ako restRequest v api.ts.
+    let token = csrfToken;
+    if (!token) {
+      const sessionResponse = await fetch('/api/auth/session', { credentials: 'include' });
+      if (!sessionResponse.ok) throw new Error('Prihlásenie vypršalo');
+      token = ((await sessionResponse.json()) as { csrfToken?: string }).csrfToken;
+    }
+    await restRequest(`/api/mostik/organization-links/${encodeURIComponent(organizationId)}/sync-code-lists`, { method: 'POST', body: JSON.stringify({}) }, token);
+    return;
+  }
+  requireExporter();
+  applyMockCodeListSync(organizationId);
+}
+
 export async function disconnectMostikInstallation(id: string, csrfToken?: string): Promise<void> {
   if (MOSTIK_DATA_MODE === 'rest') {
     await restRequest(`/api/mostik/installations/${encodeURIComponent(id)}`, { method: 'DELETE' }, csrfToken);
@@ -401,6 +423,10 @@ const SYNC_ITEMS: Record<CodeListKind, Array<Pick<CodeListItem, 'kod' | 'nazov'>
 export async function simulateMostikCodeListSync(organizationId?: string): Promise<void> {
   if (MOSTIK_DATA_MODE !== 'mock') throw new Error('Simulátor je dostupný iba v demo režime');
   requireAdmin();
+  applyMockCodeListSync(organizationId);
+}
+
+function applyMockCodeListSync(organizationId?: string): void {
   const state = storeApi.get();
   if (!state.agentInstallations.some((installation) => isConnected(installation))) throw new Error('Agent nie je pripojený');
   const organizationIds = organizationId ? [organizationId] : state.organizations.filter((item) => !item.archived).map((item) => item.id);
