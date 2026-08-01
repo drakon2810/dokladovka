@@ -148,7 +148,7 @@ public sealed class WizardForm : Form
 
     private TabPage BuildFinishPage() => Page(
         "Dokončenie",
-        "Mostík bol úspešne nakonfigurovaný. Inštalátor teraz zaregistruje a spustí službu DokladovkaService. Stav sa do niekoľkých sekúnd zobrazí vo webovej aplikácii.");
+        "Mostík bol úspešne nakonfigurovaný. Po dokončení sa zaregistruje a spustí služba DokladovkaService. Stav sa do niekoľkých sekúnd zobrazí vo webovej aplikácii.");
 
     private static TabPage Page(string title, string description)
     {
@@ -173,7 +173,7 @@ public sealed class WizardForm : Form
         if (direction > 0 && !ValidateCurrentPage()) return;
         if (_pages.SelectedIndex == _pages.TabCount - 1 && direction > 0)
         {
-            TryStartExistingService();
+            EnsureServiceRegisteredAndStarted();
             DialogResult = DialogResult.OK;
             Close();
             return;
@@ -316,14 +316,26 @@ public sealed class WizardForm : Form
         _next.Enabled = _pages.SelectedIndex != 5 || _configured;
     }
 
-    private static void TryStartExistingService()
+    // Konfigurátor beží ako administrátor, takže službu vie sám zaregistrovať —
+    // inštalátor ju vytvoriť nemôže, jeho [Run] kroky bežia ešte pred sprievodcom.
+    private static void EnsureServiceRegisteredAndStarted()
     {
         var sc = Path.Combine(Environment.SystemDirectory, "sc.exe");
-        using var query = Process.Start(new ProcessStartInfo(sc, "query DokladovkaService") { UseShellExecute = false, CreateNoWindow = true });
-        query?.WaitForExit(5_000);
-        if (query?.ExitCode != 0) return;
-        using var start = Process.Start(new ProcessStartInfo(sc, "start DokladovkaService") { UseShellExecute = false, CreateNoWindow = true });
-        start?.WaitForExit(10_000);
+        if (RunSc(sc, "query DokladovkaService") != 0)
+        {
+            var agentExe = Path.Combine(AppContext.BaseDirectory, "Dokladovka.Agent.exe");
+            RunSc(sc, $"create DokladovkaService binPath= \"{agentExe}\" start= auto DisplayName= \"Dokladovka Agent\"");
+            RunSc(sc, "description DokladovkaService \"Bezpečný odchádzajúci most medzi Dokladovkou a POHODA mServer\"");
+            RunSc(sc, "failure DokladovkaService reset= 86400 actions= restart/5000/restart/15000/restart/60000");
+        }
+        RunSc(sc, "start DokladovkaService");
+    }
+
+    private static int RunSc(string sc, string arguments)
+    {
+        using var process = Process.Start(new ProcessStartInfo(sc, arguments) { UseShellExecute = false, CreateNoWindow = true });
+        if (process is null || !process.WaitForExit(15_000)) return -1;
+        return process.ExitCode;
     }
 
     private static string? NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

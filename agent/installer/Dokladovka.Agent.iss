@@ -60,11 +60,10 @@ Name: "desktopicon"; Description: "Vytvoriť odkaz na nastavenie na pracovnej pl
 Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f Root ""{tmp}\Dokladovka-Agent-Temporary-Code-Signing.cer"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f TrustedPublisher ""{tmp}\Dokladovka-Agent-Temporary-Code-Signing.cer"""; Flags: runhidden waituntilterminated
 #endif
-Filename: "{app}\Dokladovka.Agent.Configurator.exe"; Description: "Nakonfigurovať a spárovať agenta"; Flags: postinstall waituntilterminated skipifsilent; Check: not AgentIsConfigured
-Filename: "{sys}\sc.exe"; Parameters: "create DokladovkaService binPath= ""{app}\Dokladovka.Agent.exe"" start= auto DisplayName= ""Dokladovka Agent"""; Flags: runhidden waituntilterminated; Check: AgentIsConfigured and not ServiceExists
-Filename: "{sys}\sc.exe"; Parameters: "description DokladovkaService ""Bezpečný odchádzajúci most medzi Dokladovkou a POHODA mServer"""; Flags: runhidden waituntilterminated; Check: ServiceExists
-Filename: "{sys}\sc.exe"; Parameters: "failure DokladovkaService reset= 86400 actions= restart/5000/restart/15000/restart/60000"; Flags: runhidden waituntilterminated; Check: ServiceExists
-Filename: "{sys}\sc.exe"; Parameters: "start DokladovkaService"; Flags: runhidden waituntilterminated; Check: AgentIsConfigured and ServiceExists
+; Konfigurátor má v manifeste requireAdministrator — bez runascurrentuser by ho
+; postinstall spúšťal ako pôvodný neelevovaný účet a CreateProcess padne s kódom 740.
+; Registráciu a štart služby robí konfigurátor sám po úspešnom dokončení sprievodcu.
+Filename: "{app}\Dokladovka.Agent.Configurator.exe"; Description: "Nakonfigurovať a spárovať agenta"; Flags: postinstall waituntilterminated skipifsilent runascurrentuser; Check: not AgentIsConfigured
 
 [UninstallRun]
 Filename: "{sys}\sc.exe"; Parameters: "stop DokladovkaService"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
