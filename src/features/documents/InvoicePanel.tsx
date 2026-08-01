@@ -6,6 +6,7 @@ import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, Documen
 import { CLENENIE_KV_KODY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
+import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { showToast } from '../../components/toast';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
@@ -442,6 +443,12 @@ export function InvoicePanel({
   const toOpts = (items: CodeListItem[]): DcOption[] =>
     items.map((item) => ({ value: item.id, label: `${item.kod} · ${item.nazov}`, title: `${item.kod} · ${item.nazov}` }));
 
+  // Predikcia interného čísla: posledné číslo radu z POHODY (topNumber zo sync
+  // mostíkom) + 1. Skutočné číslo pridelí POHODA až pri prenose — toto je
+  // orientácia pre účtovníka, aby videl, pod akým číslom doklad zaeviduje.
+  const vybranyRad = codeLists.ciselneRady.find((item) => item.id === ucto.ciselnyRadId);
+  const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo);
+
   const predkOpts: DcOption[] = codeLists.predkontacie.map((item) => {
     const synt = syntOf(item.kod);
     return { value: item.id, title: item.nazov || item.kod, label: item.nazov || item.kod, synt, predk: item.kod, agenda: 'Faktúry', typDokladu, color: syntColor(synt) };
@@ -517,6 +524,9 @@ export function InvoicePanel({
             <div className="dv-fields">
               <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
               <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable onMostikSync={syncMostik} value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
+              {dalsieCislo && (
+                <p className="dv-next-number">Ďalšie číslo v POHODE: <strong className="tnum">{dalsieCislo}</strong></p>
+              )}
               <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}${srcCls('cisloFaktury')}`} {...srcHover('cisloFaktury')}>
                 <label className="dv-label">{srcLabel('cisloFaktury', 'Číslo faktúry')}</label>
                 <input className="dv-input dv-has-icon" value={ex.cisloFaktury ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('cisloFaktury', e.target.value)} />

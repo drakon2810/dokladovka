@@ -26,7 +26,9 @@ public sealed record AgentOrganization(
     bool TrainingSyncRequested = false);
 public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyRok);
 // UcetMd/UcetDal: účty predkontácie z atribútov debit/credit (len kind=predkontacie).
-public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null);
+// PosledneCislo: najvyššie použité číslo číselného radu (topNumber z exportu POHODY) —
+// web z neho predikuje interné číslo ďalšieho dokladu.
+public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null, string? PosledneCislo = null);
 public sealed record AgentExportJob(string ExportJobId, string DataPackXml, string IdempotencyKey);
 public sealed record ExportDocumentResult(string DocumentId, string State, string? PohodaNumber = null, string? Message = null);
 public sealed record AgentRelease(

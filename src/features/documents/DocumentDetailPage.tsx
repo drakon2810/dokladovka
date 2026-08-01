@@ -42,7 +42,6 @@ import type {
   VatBreakdownRow,
 } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
-import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import {
   ConfidenceIndicator,
   Modal,

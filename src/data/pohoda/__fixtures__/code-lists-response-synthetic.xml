@@ -29,6 +29,8 @@
         <nms:numericalSeriesHeader>
           <nms:id>303</nms:id>
           <nms:prefix>2025</nms:prefix>
+          <nms:number>0001</nms:number>
+          <nms:topNumber>20250042</nms:topNumber>
           <nms:name>Prijaté faktúry</nms:name>
           <nms:agenda>prijate_faktury</nms:agenda>
           <nms:year>2025</nms:year>

@@ -72,14 +72,16 @@ describe('agent backend contour', () => {
         method: 'PUT',
         url: `/api/agent/organizations/${seeded.organizationId}/code-lists`,
         headers: agentHeaders,
-        payload: { kind, items: [{ kod, nazov: kod }] },
+        // Číselný rad nesie topNumber z POHODY — z neho web predikuje interné číslo.
+        payload: { kind, items: [{ kod, nazov: kod, ...(kind === 'ciselneRady' ? { posledneCislo: '2026300' } : {}) }] },
       });
       expect(synced.statusCode, synced.body).toBe(200);
-      const row = await database.query<{ id: string } & Record<string, unknown>>(
-        'SELECT id FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND code=$4',
+      const row = await database.query<{ id: string; last_number: string | null } & Record<string, unknown>>(
+        'SELECT id, last_number FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND code=$4',
         [seeded.tenantId, seeded.organizationId, kind, kod],
       );
       syncedIds[kind] = row.rows[0].id;
+      expect(row.rows[0].last_number).toBe(kind === 'ciselneRady' ? '2026300' : null);
     }
     const afterSync = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers: agentHeaders });
     expect(afterSync.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, syncRequested: false }));

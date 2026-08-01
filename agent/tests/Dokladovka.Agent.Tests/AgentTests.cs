@@ -480,7 +480,10 @@ public sealed class AgentTests
         var parsed = PohodaXml.ParseCodeLists(xml);
         Assert.Equal("022200", Assert.Single(parsed.Items["predkontacie"]).Kod);
         Assert.Equal("DD2odb", Assert.Single(parsed.Items["cleneniaDph"]).Kod);
-        Assert.Equal("2025", Assert.Single(parsed.Items["ciselneRady"]).Kod);
+        var rad = Assert.Single(parsed.Items["ciselneRady"]);
+        Assert.Equal("2025", rad.Kod);
+        // topNumber z POHODY = posledné použité číslo radu (predikcia interného čísla).
+        Assert.Equal("20250042", rad.PosledneCislo);
         Assert.Equal("1", Assert.Single(parsed.Items["strediska"]).Kod);
     }
 

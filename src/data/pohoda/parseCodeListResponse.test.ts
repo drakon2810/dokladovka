@@ -40,6 +40,7 @@ describe('parseCodeListResponse', () => {
       externalId: '303',
       agenda: 'prijate_faktury',
       uctovnyRok: '2025',
+      posledneCislo: '20250042',
     });
     expect(preview.perKind.strediska.nove[0]).toMatchObject({
       kod: '1',

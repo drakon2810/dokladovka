@@ -194,12 +194,14 @@ public static class PohodaXml
             var name = attributes ? (item.Attribute("accounting")?.Value ?? item.Attribute("name")?.Value)?.Trim() : FindText(item, "name");
             if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name) || values.ContainsKey(code)) continue;
             // debit/credit = účty MD/DAL predkontácie (len itemAccounting ich má; inde vráti null).
+            // topNumber = najvyššie číslo číselného radu (len numericalSeries; fallback number).
             values.Add(code, new CodeListValue(code, name,
                 attributes ? item.Attribute("id")?.Value : FindText(item, "id"),
                 attributes ? item.Attribute("agenda")?.Value : FindText(item, "agenda"),
                 attributes ? item.Attribute("year")?.Value : FindText(item, "year"),
                 attributes ? Trimmed(item.Attribute("debit")?.Value) : null,
-                attributes ? Trimmed(item.Attribute("credit")?.Value) : null));
+                attributes ? Trimmed(item.Attribute("credit")?.Value) : null,
+                prefixCode ? Trimmed(FindText(item, "topNumber") ?? FindText(item, "number")) : null));
         }
         return values.Values.OrderBy(item => item.Kod, StringComparer.OrdinalIgnoreCase).ToArray();
     }
