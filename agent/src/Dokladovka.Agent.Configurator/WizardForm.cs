@@ -93,8 +93,10 @@ public sealed class WizardForm : Form
     {
         var page = Page("Vyhľadanie POHODA", "Sprievodca skúsi nájsť nainštalovanú POHODU. Vyberte spôsob prepojenia: mServer beží trvalo ako služba, priamy XML import spúšťa POHODU iba počas prenosu.");
         var panel = (FlowLayoutPanel)page.Controls[0];
-        panel.Controls.Add(_modeMServer);
-        panel.Controls.Add(_modeCli);
+        // Režim a typ POHODY sú dve nezávislé voľby — každá dvojica RadioButtonov
+        // musí mať vlastný kontajner, inak ich WinForms spojí do jednej skupiny
+        // a výber typu SQL/E1 by zrušil výber priameho importu.
+        panel.Controls.Add(RadioGroup(_modeMServer, _modeCli));
         var detect = new Button { Text = "Vyhľadať POHODU", AutoSize = true, Margin = new Padding(3, 12, 3, 3) };
         detect.Click += (_, _) => DiscoverPohoda();
         panel.Controls.Add(detect);
@@ -102,8 +104,7 @@ public sealed class WizardForm : Form
         AddField(page, "Adresa POHODA mServer (iba pre režim mServer)", _mServer);
         AddField(page, "Cesta k pohoda.exe (povinná pre priamy import)", _pohodaExe);
         panel.Controls.Add(new Label { Text = "Typ POHODY (pre priamy import)", AutoSize = true, Margin = new Padding(3, 14, 3, 3), Font = new Font(Font, FontStyle.Bold) });
-        panel.Controls.Add(_typeMdb);
-        panel.Controls.Add(_typeSql);
+        panel.Controls.Add(RadioGroup(_typeMdb, _typeSql));
         AddField(page, "Dátový priečinok POHODA s StwPh_*.mdb (typ MDB)", _dataDirectory);
         var browse = new Button { Text = "Prehľadávať…", AutoSize = true };
         browse.Click += (_, _) =>
@@ -151,6 +152,13 @@ public sealed class WizardForm : Form
     private TabPage BuildFinishPage() => Page(
         "Dokončenie",
         "Mostík bol úspešne nakonfigurovaný. Po dokončení sa zaregistruje a spustí služba DokladovkaService. Stav sa do niekoľkých sekúnd zobrazí vo webovej aplikácii.");
+
+    private static FlowLayoutPanel RadioGroup(params RadioButton[] buttons)
+    {
+        var group = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(0) };
+        foreach (var button in buttons) group.Controls.Add(button);
+        return group;
+    }
 
     private static TabPage Page(string title, string description)
     {
