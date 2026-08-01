@@ -12,6 +12,10 @@ export interface ParsedItem {
   posledneCislo?: string;
   /** Členenie DPH: sekcia KV DPH (sectionInVATLedgerStatement), ak je vyplnená. */
   kvSekcia?: string;
+  /** Predkontácie: účet MD (atribút debit) — základ typu položky. */
+  ucetMd?: string;
+  /** Predkontácie: účet DAL (atribút credit). */
+  ucetDal?: string;
 }
 
 export interface CodeListImportPreview {
@@ -115,7 +119,9 @@ function sameImportedData(current: CodeListItem, parsed: ParsedItem): boolean {
     sameOptional(current.agenda, parsed.agenda) &&
     sameOptional(current.uctovnyRok, parsed.uctovnyRok) &&
     sameOptional(current.posledneCislo, parsed.posledneCislo) &&
-    sameOptional(current.kvSekcia, parsed.kvSekcia)
+    sameOptional(current.kvSekcia, parsed.kvSekcia) &&
+    sameOptional(current.ucetMd, parsed.ucetMd) &&
+    sameOptional(current.ucetDal, parsed.ucetDal)
   );
 }
 
@@ -197,7 +203,18 @@ export function parseCodeListResponse(
       foundKinds.add('predkontacie');
       parsedByKind.predkontacie.push(
         ...descendants(container, 'itemAccounting')
-          .map(itemFromAttributes)
+          .map((item) => {
+            const base = itemFromAttributes(item);
+            if (!base) return undefined;
+            // Účty MD/DAL predkontácie — POHODA ich posiela v atribútoch debit/credit.
+            const ucetMd = clean(item.getAttribute('debit'));
+            const ucetDal = clean(item.getAttribute('credit'));
+            return {
+              ...base,
+              ...(ucetMd ? { ucetMd } : {}),
+              ...(ucetDal ? { ucetDal } : {}),
+            };
+          })
           .filter((item): item is ParsedItem => Boolean(item)),
       );
     } else if (container.localName === 'listClassificationVAT') {

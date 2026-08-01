@@ -10,6 +10,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from '../security.js';
+import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 
 interface AgentAuth extends Record<string, unknown> {
@@ -42,6 +43,9 @@ const codeListItem = z.object({
   externalId: z.string().max(100).optional(),
   agenda: z.string().max(50).optional(),
   uctovnyRok: z.string().max(20).optional(),
+  // Predkontácie: účty MD/DAL z atribútov debit/credit exportu POHODY.
+  ucetMd: z.string().max(20).optional(),
+  ucetDal: z.string().max(20).optional(),
 }).strict();
 
 const releaseSchema = z.object({
@@ -308,15 +312,19 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       for (const item of normalized.values()) {
         await tx.query(
           `INSERT INTO code_list_items
-            (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, synced_at)
-           VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,now())
+            (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,now())
            ON CONFLICT (tenant_id, organization_id, kind, code)
            DO UPDATE SET name=excluded.name, source='pohoda', active=true, external_id=excluded.external_id,
-                         agenda=excluded.agenda, accounting_year=excluded.accounting_year, synced_at=now(), updated_at=now()`,
-          [randomUUID(), agent.tenant_id, id, body.kind, item.kod, item.nazov, item.externalId ?? null, item.agenda ?? null, item.uctovnyRok ?? null],
+                         agenda=excluded.agenda, accounting_year=excluded.accounting_year,
+                         ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal, synced_at=now(), updated_at=now()`,
+          [randomUUID(), agent.tenant_id, id, body.kind, item.kod, item.nazov, item.externalId ?? null, item.agenda ?? null, item.uctovnyRok ?? null,
+            item.ucetMd ?? null, item.ucetDal ?? null],
         );
         insertedOrUpdated += 1;
       }
+      // Nové predkontácie dostanú účet z prefixu kódu a daňový pomer z názvu.
+      if (body.kind === 'predkontacie') await seedTaxRatioDefaults(tx, agent.tenant_id, id);
       const deactivated = await tx.query(
         `UPDATE code_list_items SET active=false, updated_at=now()
           WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND source='pohoda' AND active=true

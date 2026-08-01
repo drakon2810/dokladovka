@@ -92,6 +92,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         source: row.source, active: row.active, externalId: row.external_id ?? undefined,
         agenda: row.agenda ?? undefined, uctovnyRok: row.accounting_year ?? undefined,
         posledneCislo: row.last_number ?? undefined, kvSekcia: row.kv_section ?? undefined,
+        ucetMd: row.ucet_md ?? undefined, ucetDal: row.ucet_dal ?? undefined,
         syncedAt: iso(row.synced_at),
       });
     }

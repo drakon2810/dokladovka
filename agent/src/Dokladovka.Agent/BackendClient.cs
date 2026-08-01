@@ -21,7 +21,8 @@ public sealed record AgentOrganization(
     string? UctovnyRok,
     string PreferredYear);
 public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyRok);
-public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null);
+// UcetMd/UcetDal: účty predkontácie z atribútov debit/credit (len kind=predkontacie).
+public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null);
 public sealed record AgentExportJob(string ExportJobId, string DataPackXml, string IdempotencyKey);
 public sealed record ExportDocumentResult(string DocumentId, string State, string? PohodaNumber = null, string? Message = null);
 public sealed record AgentRelease(

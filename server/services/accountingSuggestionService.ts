@@ -127,6 +127,32 @@ export function matchKeywords(keywords: unknown, lineText: string): string | und
     .find((slovo) => text.includes(bezDiakritiky(slovo.trim())));
 }
 
+const MAX_PREDKONTACII_V_PONUKE = 25;
+
+/** Modelu sa neposiela celý účtovný rozvrh (stovky predkontácií) — ponuka sa
+ *  zúži na riadky podobné textu položiek, zjednotené s predkontáciami vybraných
+ *  príkladov (príklad s ID mimo ponuky by model nemohol nasledovať). Predtým tu
+ *  bol spoločný LIMIT 300 cez všetky číselníky: kinds sa radia abecedne, takže
+ *  predkontácie dostali len zvyšok kvóty a správna často v ponuke vôbec nebola. */
+export function zuzPonukuPredkontacii<T extends { id: string; kod: string; nazov: string }>(
+  vsetky: T[],
+  lineText: string,
+  priklady: PodobnyPriklad[],
+): T[] {
+  if (vsetky.length <= MAX_PREDKONTACII_V_PONUKE) return vsetky;
+  const zPrikladov = new Set(priklady.map((priklad) => priklad.predkontaciaId).filter(Boolean));
+  return vsetky
+    .map((item) => ({
+      item,
+      // Predkontácie z príkladov majú prednosť pred akoukoľvek textovou zhodou.
+      skore: zPrikladov.has(item.id) ? 1.1 : textSimilarity(lineText, `${item.kod} ${item.nazov}`),
+    }))
+    .sort((a, b) => b.skore - a.skore)
+    // Bez tokenovej zhody radšej prvých N než prázdna ponuka — model vráti null.
+    .slice(0, MAX_PREDKONTACII_V_PONUKE)
+    .map((row) => row.item);
+}
+
 interface MemoryRow extends SuggestionCandidate {
   line_text_normalized?: string;
   clenenie_kv_kod?: string;
@@ -466,6 +492,22 @@ async function kvPreClenenie(
   return result.rows[0]?.kv_section ?? undefined;
 }
 
+/** Riadky s vlastným zaúčtovaním (ItemsSection) — ukladajú sa do pamäte ako
+ *  zásoba pre budúci seed typov položiek. sadzbaDph je jediný zdroj dph_perc. */
+function polozkyUctoJson(extracted: unknown): string | null {
+  const polozky = Array.isArray((extracted as any)?.polozky) ? (extracted as any).polozky : [];
+  const zapisy = polozky
+    .filter((polozka: any) => polozka?.ucto?.predkontaciaId || polozka?.ucto?.clenenieDphId)
+    .map((polozka: any) => ({
+      popis: normalizeName(polozka?.popis).slice(0, 200),
+      sadzbaDph: polozka?.sadzbaDph,
+      predkontaciaId: polozka?.ucto?.predkontaciaId,
+      clenenieDphId: polozka?.ucto?.clenenieDphId,
+      strediskoId: polozka?.ucto?.strediskoId,
+    }));
+  return zapisy.length > 0 ? JSON.stringify(zapisy) : null;
+}
+
 /** Zápis do pamäte rozhodnutí pri schválení dokladu (spätná väzba = učenie). */
 export async function recordUctoDecision(tx: Queryable, input: {
   tenantId: string;
@@ -481,18 +523,19 @@ export async function recordUctoDecision(tx: Queryable, input: {
   await tx.query(
     `INSERT INTO ucto_decisions
       (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
-       predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'approved')
+       predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,polozky_ucto,source)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'approved')
      ON CONFLICT (document_id) WHERE document_id IS NOT NULL DO UPDATE SET
        supplier_ico=excluded.supplier_ico, supplier_name_normalized=excluded.supplier_name_normalized,
        line_text_normalized=excluded.line_text_normalized, predkontacia_id=excluded.predkontacia_id,
        clenenie_dph_id=excluded.clenenie_dph_id, ciselny_rad_id=excluded.ciselny_rad_id,
-       stredisko_id=excluded.stredisko_id, clenenie_kv_kod=excluded.clenenie_kv_kod, created_at=now()`,
+       stredisko_id=excluded.stredisko_id, clenenie_kv_kod=excluded.clenenie_kv_kod,
+       polozky_ucto=excluded.polozky_ucto, created_at=now()`,
     [randomUUID(), input.tenantId, input.organizationId, input.documentId, ico, nazov,
       normalizeLineText(input.extracted) || null,
       input.accounting.predkontaciaId ?? null, input.accounting.clenenieDphId ?? null,
       input.accounting.ciselnyRadId ?? null, input.accounting.strediskoId ?? null,
-      input.accounting.clenenieKvKod ?? null],
+      input.accounting.clenenieKvKod ?? null, polozkyUctoJson(input.extracted)],
   );
 }
 
@@ -551,18 +594,28 @@ export async function maybeAiAccountingSuggestion(
   );
   if (existing.rows[0] && existing.rows[0].source !== 'none') return false;
 
+  // Bez LIMITu naprieč kinds — predkontácie sa zúžia textovou podobnosťou nižšie,
+  // členenia a rady sú krátke číselníky. 5000 je len poistka proti degenerovaným dátam.
   const codeLists = await database.query<{ id: string; kind: string; code: string; name: string } & Record<string, unknown>>(
     `SELECT id, kind, code, name FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
         AND kind IN ('predkontacie','cleneniaDph','ciselneRady')
-      ORDER BY kind, code LIMIT 300`,
+      ORDER BY kind, code LIMIT 5000`,
     [input.tenantId, input.organizationId],
   );
   const byKind = (kind: string) => codeLists.rows
     .filter((row) => row.kind === kind)
     .map((row) => ({ id: row.id, kod: row.code, nazov: row.name }));
-  const predkontacie = byKind('predkontacie');
-  if (predkontacie.length === 0) return false;
+  const vsetkyPredkontacie = byKind('predkontacie');
+  if (vsetkyPredkontacie.length === 0) return false;
+
+  // Retrieval beží nad PLNÝM zoznamom predkontácií (nie nad zúženou ponukou),
+  // aby sa príklady účtovníka nestratili; ponuka sa potom zjednotí s príkladmi.
+  const lineText = normalizeName(documentContext.lineDescriptions.join(' | ')).slice(0, 1000);
+  const priklady = await najdiPodobnePriklady(
+    database, input, lineText, new Set(vsetkyPredkontacie.map((item) => item.id)),
+  );
+  const predkontacie = zuzPonukuPredkontacii(vsetkyPredkontacie, lineText, priklady);
 
   // DPH profil klienta: pokyny idú do promptu ako dáta a pre organizáciu bez
   // nároku na odpočet sa ponuka členení zúži na členenie bez odpočtu — model
@@ -580,12 +633,6 @@ export async function maybeAiAccountingSuggestion(
         pokyny: dphPokynyPreAi(dphProfil),
       }
     : undefined;
-
-  // Retrieval: podobné potvrdené doklady firmy ako príklady (few-shot).
-  const lineText = normalizeName(documentContext.lineDescriptions.join(' | ')).slice(0, 1000);
-  const priklady = await najdiPodobnePriklady(
-    database, input, lineText, new Set(predkontacie.map((item) => item.id)),
-  );
 
   const parser = injectedParser ?? (new OpenAI({
     apiKey: config.openai.apiKey,

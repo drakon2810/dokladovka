@@ -54,6 +54,8 @@ function normalizedItem(item: ParsedItem): ParsedItem {
     uctovnyRok: optional(item.uctovnyRok),
     posledneCislo: optional(item.posledneCislo),
     kvSekcia: optional(item.kvSekcia),
+    ucetMd: optional(item.ucetMd),
+    ucetDal: optional(item.ucetDal),
   };
 }
 
@@ -66,7 +68,9 @@ function equalsImportedValues(current: CodeListItem, imported: ParsedItem): bool
     current.agenda === imported.agenda &&
     current.uctovnyRok === imported.uctovnyRok &&
     current.posledneCislo === imported.posledneCislo &&
-    current.kvSekcia === imported.kvSekcia
+    current.kvSekcia === imported.kvSekcia &&
+    current.ucetMd === imported.ucetMd &&
+    current.ucetDal === imported.ucetDal
   );
 }
 
@@ -81,6 +85,8 @@ function importedItem(
     uctovnyRok: _uctovnyRok,
     posledneCislo: _posledneCislo,
     kvSekcia: _kvSekcia,
+    ucetMd: _ucetMd,
+    ucetDal: _ucetDal,
     syncedAt: _syncedAt,
     ...preserved
   } = current ?? {
@@ -105,6 +111,8 @@ function importedItem(
     ...(parsed.uctovnyRok ? { uctovnyRok: parsed.uctovnyRok } : {}),
     ...(parsed.posledneCislo ? { posledneCislo: parsed.posledneCislo } : {}),
     ...(parsed.kvSekcia ? { kvSekcia: parsed.kvSekcia } : {}),
+    ...(parsed.ucetMd ? { ucetMd: parsed.ucetMd } : {}),
+    ...(parsed.ucetDal ? { ucetDal: parsed.ucetDal } : {}),
     syncedAt: options.syncedAt,
   };
 }

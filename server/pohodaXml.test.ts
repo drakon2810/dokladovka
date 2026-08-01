@@ -204,6 +204,55 @@ describe('buildServerDataPack — rozpis na položky (invoiceDetail)', () => {
   });
 });
 
+describe('buildServerDataPack — položkový rozpis PD a MZDY', () => {
+  const detailCodeLists: PohodaCodeLookup = {
+    predkontacie: new Map([['p1', '501/211'], ['p2', '513/211']]),
+    cleneniaDph: new Map([['c1', 'PD'], ['c2', 'PN']]),
+    ciselneRady: new Map([['r1', '26PD']]),
+    strediska: new Map([['s1', 'CENTRALA']]),
+  };
+  const polozky = [
+    {
+      id: 'li-1', popis: 'Nafta', mnozstvo: 1, sadzbaDph: 23,
+      sumaBezDph: 42.28, sumaDph: 9.72, sumaSpolu: 52,
+      ucto: { predkontaciaId: 'p2', clenenieDphId: 'c2', strediskoId: 's1' },
+    },
+  ];
+
+  it('PD (vch:voucher) exportuje voucherDetail s pozičným zaúčtovaním', () => {
+    const doc = invoiceDocument({ polozky });
+    doc.snapshot.typ = 'PD';
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, pokladnaKod: 'PKR', pokladnaTyp: 'expense', clenenieKvKod: 'B3' };
+    const xml = buildServerDataPack({ id: 'pack-pd', ico: '35761571', documents: [doc], codeLists: detailCodeLists });
+    expect(xml).toContain('<vch:voucherDetail>');
+    expect(xml).toContain('<vch:text>Nafta</vch:text>');
+    expect(xml).toContain('<vch:rateVAT>high</vch:rateVAT>');
+    // Per-riadkové zaúčtovanie sa pri PD predtým mlčky zahadzovalo.
+    expect(xml).toContain('<vch:accounting><typ:ids>513/211</typ:ids></vch:accounting>');
+    expect(xml).toContain('<vch:classificationVAT><typ:ids>PN</typ:ids></vch:classificationVAT>');
+    expect(xml).toContain('<vch:classificationKVDPH><typ:ids>B3</typ:ids></vch:classificationKVDPH>');
+    expect(xml).toContain('<vch:centre><typ:ids>CENTRALA</typ:ids></vch:centre>');
+  });
+
+  it('PD bez položiek zostáva len súhrn (žiadny voucherDetail)', () => {
+    const doc = invoiceDocument({});
+    doc.snapshot.typ = 'PD';
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, pokladnaKod: 'PKR', pokladnaTyp: 'expense' };
+    const xml = buildServerDataPack({ id: 'pack-pd-2', ico: '35761571', documents: [doc], codeLists: detailCodeLists });
+    expect(xml).not.toContain('<vch:voucherDetail>');
+    expect(xml).toContain('<vch:voucherSummary>');
+  });
+
+  it('MZDY (int:intDoc) exportuje intDocDetail', () => {
+    const doc = invoiceDocument({ polozky });
+    doc.snapshot.typ = 'MZDY';
+    const xml = buildServerDataPack({ id: 'pack-mzdy', ico: '35761571', documents: [doc], codeLists: detailCodeLists });
+    expect(xml).toContain('<int:intDocDetail>');
+    expect(xml).toContain('<int:text>Nafta</int:text>');
+    expect(xml).toContain('<int:accounting><typ:ids>513/211</typ:ids></int:accounting>');
+  });
+});
+
 describe('splitPostalAddress a vatCountryIds', () => {
   it('rozloží jednoriadkovú adresu s pomlčkou aj viacriadkovú adresu', () => {
     expect(splitPostalAddress('1020 Wien – Seitenhafenstrasse 15/202'))

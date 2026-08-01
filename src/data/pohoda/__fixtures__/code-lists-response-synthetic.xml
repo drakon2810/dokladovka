@@ -8,8 +8,8 @@
   xmlns:vat="http://www.stormware.cz/schema/version_2/classificationVAT.xsd">
   <rsp:responsePackItem id="c01" state="ok">
     <lst:listAccountingDoubleEntry version="1.1" state="ok">
-      <lst:itemAccounting id="101" code="022200" accounting="Zaradenie HIM do užívania" agenda="internalDocument"/>
-      <lst:itemAccounting id="duplicate" code="022200" accounting="Duplicitná položka" agenda="cashPaid"/>
+      <lst:itemAccounting id="101" code="022200" accounting="Zaradenie HIM do užívania" agenda="internalDocument" debit="022200" credit="042200"/>
+      <lst:itemAccounting id="duplicate" code="022200" accounting="Duplicitná položka" agenda="cashPaid" debit="022200" credit="042200"/>
     </lst:listAccountingDoubleEntry>
   </rsp:responsePackItem>
   <rsp:responsePackItem id="c02" state="ok">

@@ -24,6 +24,9 @@ describe('parseCodeListResponse', () => {
         nazov: 'Zaradenie HIM do užívania',
         externalId: '101',
         agenda: 'internalDocument',
+        // Účty MD/DAL z atribútov debit/credit (POHODA XSD ich má ako povinné).
+        ucetMd: '022200',
+        ucetDal: '042200',
       },
     ]);
     expect(preview.perKind.cleneniaDph.nove[0]).toMatchObject({
@@ -60,6 +63,8 @@ describe('parseCodeListResponse', () => {
         active: true,
         externalId: '101',
         agenda: 'internalDocument',
+        ucetMd: '022200',
+        ucetDal: '042200',
       },
       {
         id: 'missing',

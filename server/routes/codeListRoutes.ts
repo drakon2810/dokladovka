@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
 import { writeAudit } from '../audit.js';
+import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import type { Database } from '../db/database.js';
 
 const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'zakazky', 'cinnosti', 'projekty'] as const;
@@ -14,6 +15,8 @@ const itemSchema = z.object({
   uctovnyRok: z.string().trim().max(20).optional(),
   posledneCislo: z.string().trim().max(50).optional(),
   kvSekcia: z.string().trim().max(20).optional(),
+  ucetMd: z.string().trim().max(20).optional(),
+  ucetDal: z.string().trim().max(20).optional(),
 }).strict();
 const removedSchema = z.object({ id: z.string().min(1), kod: z.string().min(1) }).passthrough();
 const kindSchema = z.object({
@@ -60,8 +63,9 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           const existing = await tx.query<{
             id: string; name: string; source: string; active: boolean; external_id?: string;
             agenda?: string; accounting_year?: string; last_number?: string; kv_section?: string;
+            ucet_md?: string; ucet_dal?: string;
           } & Record<string, unknown>>(
-            `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section FROM code_list_items
+            `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal FROM code_list_items
               WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND code=$4`,
             [auth.tenantId, id, kind, item.kod],
           );
@@ -71,21 +75,25 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
             && (row.agenda ?? undefined) === item.agenda
             && (row.accounting_year ?? undefined) === item.uctovnyRok
             && (row.last_number ?? undefined) === item.posledneCislo
-            && (row.kv_section ?? undefined) === item.kvSekcia;
+            && (row.kv_section ?? undefined) === item.kvSekcia
+            && (row.ucet_md ?? undefined) === item.ucetMd
+            && (row.ucet_dal ?? undefined) === item.ucetDal;
           if (unchanged) {
             perKind[kind].bezZmeny += 1;
             continue;
           }
           await tx.query(
             `INSERT INTO code_list_items
-              (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,synced_at)
-             VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12)
+              (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,synced_at)
+             VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14)
              ON CONFLICT (tenant_id,organization_id,kind,code) DO UPDATE SET
                name=EXCLUDED.name,source='pohoda',active=true,external_id=EXCLUDED.external_id,
                agenda=EXCLUDED.agenda,accounting_year=EXCLUDED.accounting_year,last_number=EXCLUDED.last_number,
-               kv_section=EXCLUDED.kv_section,synced_at=EXCLUDED.synced_at,updated_at=now()`,
+               kv_section=EXCLUDED.kv_section,ucet_md=EXCLUDED.ucet_md,ucet_dal=EXCLUDED.ucet_dal,
+               synced_at=EXCLUDED.synced_at,updated_at=now()`,
             [randomUUID(), auth.tenantId, id, kind, item.kod, item.nazov, item.externalId ?? null,
-              item.agenda ?? null, item.uctovnyRok ?? null, item.posledneCislo ?? null, item.kvSekcia ?? null, syncedAt],
+              item.agenda ?? null, item.uctovnyRok ?? null, item.posledneCislo ?? null, item.kvSekcia ?? null,
+              item.ucetMd ?? null, item.ucetDal ?? null, syncedAt],
           );
           if (row) perKind[kind].aktualizovane += 1;
           else perKind[kind].nove += 1;
@@ -99,6 +107,9 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           perKind[kind].vyradene += result.rowCount;
         }
       }
+      // Doplnenie účtov a daňových pomerov novým predkontáciám (idempotentné,
+      // ručné úpravy neprepisuje — guard tax_ratio_kod IS NULL).
+      await seedTaxRatioDefaults(tx, auth.tenantId, id);
       await writeAudit(tx, {
         tenantId: auth.tenantId,
         organizationId: id,

@@ -77,44 +77,54 @@ function lineItemAmounts(item: any): { bezDph: number; dph: number; spolu: numbe
   return { bezDph, dph, spolu, unitPrice };
 }
 
+/** Elementy položkového rozpisu podľa agendy — obsah položky je vo všetkých
+ *  troch schémach zhodný (líši sa len namespace a názov obálky). */
+const DETAIL_TAGS = {
+  invoice: { ns: 'inv', detail: 'invoiceDetail', item: 'invoiceItem' },
+  voucher: { ns: 'vch', detail: 'voucherDetail', item: 'voucherItem' },
+  intDoc: { ns: 'int', detail: 'intDocDetail', item: 'intDocItem' },
+} as const;
+
 /**
- * <inv:invoiceDetail> z položiek dokladu (SPEC — rozpis na položky).
+ * Položkový rozpis dokladu (SPEC — rozpis na položky) pre invoice/voucher/intDoc.
  * Zaúčtovanie/členenie položky s návratom na hlavičku; členenie KV DPH z hlavičky.
  * Vráti prázdny reťazec, ak doklad nemá položky (vtedy sa importuje len súhrn).
  */
-function invoiceDetailXml(
+function documentDetailXml(
   polozky: unknown,
   header: { accounting: string; classificationVat: string; kv?: string },
   codeLists: PohodaCodeLookup,
+  tag: (typeof DETAIL_TAGS)[keyof typeof DETAIL_TAGS],
 ): string {
   if (!Array.isArray(polozky) || polozky.length === 0) return '';
+  const { ns } = tag;
   const items = polozky.map((item: any) => {
     const { bezDph, dph, spolu, unitPrice } = lineItemAmounts(item);
     const accounting = codeLists.predkontacie.get(item.ucto?.predkontaciaId ?? '') ?? header.accounting;
     const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
     const centre = codeLists.strediska.get(item.ucto?.strediskoId ?? '');
     const lines = [
-      `        <inv:text>${escapeXml(item.popis ?? '')}</inv:text>`,
-      `        <inv:quantity>${escapeXml(item.mnozstvo ?? 1)}</inv:quantity>`,
-      ...(item.jednotka ? [`        <inv:unit>${escapeXml(item.jednotka)}</inv:unit>`] : []),
-      `        <inv:coefficient>1.0</inv:coefficient>`,
-      `        <inv:payVAT>false</inv:payVAT>`,
-      `        <inv:rateVAT>${vatRateName(item.sadzbaDph)}</inv:rateVAT>`,
-      `        <inv:discountPercentage>0.0</inv:discountPercentage>`,
-      `        <inv:homeCurrency>`,
+      `        <${ns}:text>${escapeXml(item.popis ?? '')}</${ns}:text>`,
+      `        <${ns}:quantity>${escapeXml(item.mnozstvo ?? 1)}</${ns}:quantity>`,
+      ...(item.jednotka ? [`        <${ns}:unit>${escapeXml(item.jednotka)}</${ns}:unit>`] : []),
+      `        <${ns}:coefficient>1.0</${ns}:coefficient>`,
+      `        <${ns}:payVAT>false</${ns}:payVAT>`,
+      `        <${ns}:rateVAT>${vatRateName(item.sadzbaDph)}</${ns}:rateVAT>`,
+      `        <${ns}:discountPercentage>0.0</${ns}:discountPercentage>`,
+      `        <${ns}:homeCurrency>`,
       `          <typ:unitPrice>${amount(unitPrice)}</typ:unitPrice>`,
       `          <typ:price>${amount(bezDph)}</typ:price>`,
       `          <typ:priceVAT>${amount(dph)}</typ:priceVAT>`,
       `          <typ:priceSum>${amount(spolu)}</typ:priceSum>`,
-      `        </inv:homeCurrency>`,
-      ...(accounting ? [`        <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>`] : []),
-      ...(classificationVat ? [`        <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>`] : []),
-      ...(header.kv ? [`        <inv:classificationKVDPH><typ:ids>${escapeXml(header.kv)}</typ:ids></inv:classificationKVDPH>`] : []),
-      ...(centre ? [`        <inv:centre><typ:ids>${escapeXml(centre)}</typ:ids></inv:centre>`] : []),
+      `        </${ns}:homeCurrency>`,
+      ...(accounting ? [`        <${ns}:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></${ns}:accounting>`] : []),
+      ...(classificationVat ? [`        <${ns}:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></${ns}:classificationVAT>`] : []),
+      ...(header.kv ? [`        <${ns}:classificationKVDPH><typ:ids>${escapeXml(header.kv)}</typ:ids></${ns}:classificationKVDPH>`] : []),
+      ...(centre ? [`        <${ns}:centre><typ:ids>${escapeXml(centre)}</typ:ids></${ns}:centre>`] : []),
     ];
-    return `      <inv:invoiceItem>\n${lines.join('\n')}\n      </inv:invoiceItem>`;
+    return `      <${ns}:${tag.item}>\n${lines.join('\n')}\n      </${ns}:${tag.item}>`;
   });
-  return `\n      <inv:invoiceDetail>\n${items.join('\n')}\n      </inv:invoiceDetail>`;
+  return `\n      <${ns}:${tag.detail}>\n${items.join('\n')}\n      </${ns}:${tag.detail}>`;
 }
 
 /** Krajina z prefixu IČ DPH — POHODA číselník krajín používa ISO kódy (EL→GR, XI→GB). */
@@ -225,7 +235,7 @@ export function buildServerDataPack(input: {
         ${snapshot.ucto.clenenieKvKod ? `<vch:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></vch:classificationKVDPH>` : ''}
         <vch:text>${escapeXml(extracted.textPolozky ?? extracted.cisloFaktury ?? 'Pokladničný doklad')}</vch:text>
         <vch:partnerIdentity>${partner}</vch:partnerIdentity>
-      </vch:voucherHeader>
+      </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.voucher)}
       <vch:voucherSummary><vch:homeCurrency>
         ${currency}
       </vch:homeCurrency></vch:voucherSummary>
@@ -252,7 +262,7 @@ export function buildServerDataPack(input: {
         <int:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></int:classificationVAT>
         <int:text>${escapeXml(extracted.textPolozky ?? `Mzdová páska ${extracted.cisloFaktury || extracted.datumVystavenia}`)}</int:text>
         <int:partnerIdentity>${partner}</int:partnerIdentity>
-      </int:intDocHeader>
+      </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.intDoc)}
       <int:intDocSummary><int:homeCurrency>
         ${mzdyCurrency}
       </int:homeCurrency></int:intDocSummary>
@@ -284,7 +294,7 @@ export function buildServerDataPack(input: {
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}
-      </inv:invoiceHeader>${invoiceDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists)}
+      </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.invoice)}
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}
       </inv:homeCurrency></inv:invoiceSummary>

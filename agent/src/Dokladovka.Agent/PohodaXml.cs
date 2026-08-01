@@ -93,16 +93,20 @@ public static class PohodaXml
             var code = attributes ? item.Attribute("code")?.Value.Trim() : FindText(item, prefixCode ? "prefix" : "code");
             var name = attributes ? (item.Attribute("accounting")?.Value ?? item.Attribute("name")?.Value)?.Trim() : FindText(item, "name");
             if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name) || values.ContainsKey(code)) continue;
+            // debit/credit = účty MD/DAL predkontácie (len itemAccounting ich má; inde vráti null).
             values.Add(code, new CodeListValue(code, name,
                 attributes ? item.Attribute("id")?.Value : FindText(item, "id"),
                 attributes ? item.Attribute("agenda")?.Value : FindText(item, "agenda"),
-                attributes ? item.Attribute("year")?.Value : FindText(item, "year")));
+                attributes ? item.Attribute("year")?.Value : FindText(item, "year"),
+                attributes ? Trimmed(item.Attribute("debit")?.Value) : null,
+                attributes ? Trimmed(item.Attribute("credit")?.Value) : null));
         }
         return values.Values.OrderBy(item => item.Kod, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static string? FindText(XElement parent, string localName) => parent.Descendants()
         .FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == localName)?.Value.Trim();
+    private static string? Trimmed(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static bool IsStormware(XElement element) => element.Name.NamespaceName.Contains(StormwareNamespace, StringComparison.OrdinalIgnoreCase);
     private static string Escape(string value) => System.Security.SecurityElement.Escape(value) ?? string.Empty;
 }

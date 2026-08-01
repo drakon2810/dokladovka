@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
-import { forgetUctoDecision, maybeAiAccountingSuggestion, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback } from './accountingSuggestionService.js';
+import { forgetUctoDecision, maybeAiAccountingSuggestion, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -113,9 +113,35 @@ describe('accounting suggestions', () => {
     };
     await recordUctoDecision(database, { ...decision, accounting: { ...decision.accounting, clenenieKvKod: 'A1' } });
     await recordUctoDecision(database, decision);
-    const rows = await database.query('SELECT clenenie_kv_kod FROM ucto_decisions WHERE document_id=$1', [historyId]);
+    const rows = await database.query('SELECT clenenie_kv_kod, polozky_ucto FROM ucto_decisions WHERE document_id=$1', [historyId]);
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0].clenenie_kv_kod).toBe('B3');
+    // Položky bez vlastného zaúčtovania nevyrábajú prázdny jsonb zápis.
+    expect(rows.rows[0].polozky_ucto).toBeNull();
+
+    // Per-riadkové zaúčtovanie z ItemsSection sa ukladá ako zásoba pre seed typov položiek.
+    await recordUctoDecision(database, {
+      ...decision,
+      extracted: {
+        ...extracted,
+        polozky: [
+          { popis: 'Nafta PHM 50L', sadzbaDph: 23, ucto: { predkontaciaId: pred, clenenieDphId: dph } },
+          { popis: 'Žuvačky', sadzbaDph: 23 },
+        ],
+      },
+    });
+    const perLine = await database.query<{ polozky_ucto: any }>(
+      'SELECT polozky_ucto FROM ucto_decisions WHERE document_id=$1', [historyId],
+    );
+    const zapisy = typeof perLine.rows[0].polozky_ucto === 'string'
+      ? JSON.parse(perLine.rows[0].polozky_ucto)
+      : perLine.rows[0].polozky_ucto;
+    // Iba riadky s vlastným zaúčtovaním; popis je normalizovaný.
+    expect(zapisy).toEqual([
+      { popis: 'nafta phm 50l', sadzbaDph: 23, predkontaciaId: pred, clenenieDphId: dph },
+    ]);
+    // Obnova pôvodného zápisu — zvyšok testu počíta s pôvodným textom položiek.
+    await recordUctoDecision(database, decision);
 
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: currentId, supplierIco: '31322832', supplierName: 'Slovnaft' };
     const suggestionRow = async () => (await database.query<Record<string, any>>(
@@ -447,5 +473,31 @@ describe('textSimilarity', () => {
     expect(textSimilarity('', 'čokoľvek')).toBe(0);
     // čiastočné prekrytie: {prenajom, kancelarie} ∩ {prenajom, auta} = 1 z min(2,2)
     expect(textSimilarity('prenajom kancelarie', 'prenajom auta')).toBeCloseTo(0.5);
+  });
+});
+
+describe('zuzPonukuPredkontacii', () => {
+  const rozvrh = (pocet: number, specialny: { index: number; nazov: string }) =>
+    Array.from({ length: pocet }, (_, i) => ({
+      id: `p${i}`,
+      kod: String(100000 + i),
+      nazov: i === specialny.index ? specialny.nazov : 'Ostatné služby',
+    }));
+
+  it('nájde predkontáciu hlboko za hranicou bývalého LIMIT 300', () => {
+    const vybrane = zuzPonukuPredkontacii(rozvrh(800, { index: 700, nazov: 'PHM nafta' }), 'nafta diesel tankovanie', []);
+    expect(vybrane.map((item) => item.id)).toContain('p700');
+    expect(vybrane.length).toBeLessThanOrEqual(25);
+  });
+
+  it('predkontácie z príkladov účtovníka sú v ponuke aj bez textovej zhody', () => {
+    const priklad = { text: 'nesuvisiaci text', predkontaciaId: 'p512', podobnost: 0.4 };
+    const vybrane = zuzPonukuPredkontacii(rozvrh(800, { index: 700, nazov: 'PHM nafta' }), 'nafta', [priklad]);
+    expect(vybrane.map((item) => item.id)).toContain('p512');
+  });
+
+  it('krátky rozvrh sa nezužuje', () => {
+    const vsetky = rozvrh(10, { index: 3, nazov: 'PHM nafta' });
+    expect(zuzPonukuPredkontacii(vsetky, 'nafta', [])).toEqual(vsetky);
   });
 });

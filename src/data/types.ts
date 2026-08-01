@@ -473,6 +473,9 @@ export interface CodeListItem {
    * v POHODE, ak ju export vyplní. POHODA nemá samostatný číselník KV DPH.
    */
   kvSekcia?: string;
+  /** Predkontácie: účet MD (debit) a DAL (credit) z exportu POHODY — základ typu položky. */
+  ucetMd?: string;
+  ucetDal?: string;
   syncedAt?: string;
 }
 
