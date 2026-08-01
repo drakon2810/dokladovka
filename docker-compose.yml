@@ -60,6 +60,10 @@ services:
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       # OpenData FS SR — DIČ/IČ DPH v našepkávači organizácií.
       FS_OPENDATA_API_KEY: ${FS_OPENDATA_API_KEY:-}
+      # Registrácia vydania Mostík agenta cez POST /api/internal/agent-releases
+      # (Bearer token) a povolenie dočasného self-signed kanála.
+      AGENT_RELEASE_PUBLISH_TOKEN: ${AGENT_RELEASE_PUBLISH_TOKEN:-}
+      AGENT_ALLOW_SELF_SIGNED_RELEASES: ${AGENT_ALLOW_SELF_SIGNED_RELEASES:-false}
       # Len pre jednorazový `docker compose run api node build/server/db/seed.js`.
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
