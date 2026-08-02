@@ -60,3 +60,43 @@ ssh root@162.254.38.225 "cd /root/dokladovka && docker compose logs -f web"   # 
   готова почта Namecheap Private Email (catch-all ящик): вписать `IMAP_USER` и
   `IMAP_PASSWORD` в `/root/dokladovka/.env` (там же `IMAP_HOST=mail.privateemail.com`),
   затем `docker compose up -d imap`.
+
+## Zálohy
+
+Nočná záloha beží **každý deň o 03:00** (cron, `deploy/backup.sh`), ukladá do
+`/root/dokladovka-backups` a drží **30 dní** dozadu. Jedna záloha = tri súbory:
+
+| Súbor | Čo obsahuje |
+|---|---|
+| `db-<značka>.dump` | celá databáza (`pg_dump -Fc`) |
+| `objects-<značka>.tar.gz` | všetky dokumenty (PDF prijatých faktúr) |
+| `env-<značka>.txt` | `.env` — heslá a tokeny, bez nich sa server nerozbehne |
+
+Každá záloha sa po vytvorení overí (`pg_restore --list`, `tar tzf`) a staré sa
+mažú až po úspešnom overení novej — zlyhaná záloha nikdy nezmaže tú funkčnú.
+
+```bash
+cat /root/dokladovka-backups/last-status.txt   # výsledok poslednej zálohy
+tail -20 /root/dokladovka-backups/backup.log   # história
+ls -1 /root/dokladovka-backups/db-*.dump       # dostupné zálohy
+```
+
+### Obnova
+
+```bash
+ssh root@162.254.38.225
+/root/dokladovka/deploy/restore.sh              # vypíše dostupné značky
+/root/dokladovka/deploy/restore.sh 2026-08-02_030000
+```
+
+Skript si pýta potvrdenie slovom `OBNOVIT`, najprv odloží súčasný stav (a overí,
+že sa to naozaj podarilo), zastaví aplikáciu, obnoví databázu do prázdnej schémy,
+obnoví dokumenty, spustí aplikáciu a skontroluje `/api/health`. Ak obnova
+databázy zlyhá, dokumenty ostanú nedotknuté a skript povie, ako sa vrátiť späť.
+
+Obnova staršej zálohy je v poriadku: schéma sa najprv vyprázdni a migrácie sa pri
+štarte dotiahnu na aktuálnu verziu kódu.
+
+⚠️ Zálohy ležia **na tom istom serveri** — chránia pred zlým nasadením, chybou v
+aplikácii a omylom, nie pred stratou VPS. Odvoz mimo servera sa zapne premennou
+`BACKUP_REMOTE` v `deploy/backup.sh` (cieľ pre `rsync`, napr. `user@nas:/zalohy`).
