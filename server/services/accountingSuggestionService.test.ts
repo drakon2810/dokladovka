@@ -549,24 +549,74 @@ describe('predvolený číselný rad', () => {
     return row.rows[0]?.ciselny_rad_id ?? null;
   };
 
-  it('automaticky vyberie rad, ktorý firma v POHODE reálne používa', async () => {
-    const { database, seeded, documentId, pouzivany } = await pripravFirmu();
-    expect(await navrh(database, seeded, documentId)).toBe(pouzivany);
-  }, 60_000);
+  // Tri scenáre v jednom teste zámerne: každý vlastný beh znamená ďalšiu
+  // databázu a tento súbor je najpomalší v sade.
+  it('automat vyberie reálne používaný rad, nastavenie účtovníka ho prebije', async () => {
+    const { database, seeded, documentId, pouzivany, nepouzivany, pokladnicny } = await pripravFirmu();
 
-  it('rešpektuje nastavenie účtovníka pred automatikou', async () => {
-    const { database, seeded, documentId, nepouzivany } = await pripravFirmu();
+    // 1) Automat: vyhrá rad s najvyšším číslom z POHODY, nie nepoužitý.
+    expect(await navrh(database, seeded, documentId)).toBe(pouzivany);
+
+    // 2) Nastavenie účtovníka má prednosť pred automatikou.
     await database.query(
       `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id)
        VALUES ($1,$2,'FP',$3)`,
       [seeded.organizationId, seeded.tenantId, nepouzivany],
     );
     expect(await navrh(database, seeded, documentId)).toBe(nepouzivany);
-  }, 60_000);
 
-  it('neponúkne rad inej agendy (pokladňa pre prijatú faktúru)', async () => {
-    const { database, seeded, documentId, pokladnicny } = await pripravFirmu();
+    // 3) Rad inej agendy sa neponúkne ani keď rady prijatých faktúr vypadnú.
+    await database.query('DELETE FROM organization_series_defaults');
     await database.query(`UPDATE code_list_items SET active=false WHERE agenda='prijate_faktury'`);
     expect(await navrh(database, seeded, documentId)).not.toBe(pokladnicny);
-  }, 60_000);
+  }, 90_000);
+});
+
+describe('AI nevyberá číselný rad', () => {
+  // Reálny prípad: pokladničnému dokladu model vybral rad prijatých faktúr
+  // (dostával celý zoznam radov) a prepísal tým nastavenie firmy.
+  it('rad pokladničného dokladu určí nastavenie firmy, nie model', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const radPokladna = randomUUID();
+    const radFaktury = randomUUID();
+
+    await database.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+         VALUES ($1,$2,$3,'PD','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,216.1,'EUR')`,
+        [documentId, seeded.tenantId, seeded.organizationId],
+      );
+      await tx.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'predkontacie','501/211','Nákup','pohoda')`,
+        [pred, seeded.tenantId, seeded.organizationId],
+      );
+      for (const [id, code, agenda] of [
+        [radPokladna, '26HP', 'pokladna'],
+        [radFaktury, '2026', 'prijate_faktury'],
+      ] as const) {
+        await tx.query(
+          `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda)
+           VALUES ($1,$2,$3,'ciselneRady',$4,$4,'pohoda',$5)`,
+          [id, seeded.tenantId, seeded.organizationId, code, agenda],
+        );
+      }
+    });
+
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'HUKE s. r. o.' };
+    // Model si vypýta rad prijatých faktúr — pre pokladničný doklad nesprávne.
+    const parser = {
+      parse: vi.fn().mockResolvedValue({
+        output_parsed: { predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: radFaktury, confidence: 0.7, reason: 'Nákup' },
+      }),
+    };
+    const context = { documentType: 'PD', supplierName: 'HUKE s. r. o.', totalAmount: 216.1, currency: 'EUR', lineDescriptions: ['Espresso'] };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+    const suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
+    expect(suggestion.ciselny_rad_id).toBe(radPokladna);
+  }, 90_000);
 });

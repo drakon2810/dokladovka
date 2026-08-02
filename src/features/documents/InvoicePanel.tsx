@@ -7,6 +7,7 @@ import { CLENENIE_KV_KODY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
+import { radyPreTyp } from '../../data/pohoda/agendas';
 import { showToast } from '../../components/toast';
 import { DcDropdown, type DcOption } from './DcDropdown';
 import { ItemsSection } from './ItemsSection';
@@ -446,6 +447,12 @@ export function InvoicePanel({
   // Predikcia interného čísla: posledné číslo radu z POHODY (topNumber zo sync
   // mostíkom) + 1. Skutočné číslo pridelí POHODA až pri prenose — toto je
   // orientácia pre účtovníka, aby videl, pod akým číslom doklad zaeviduje.
+  // Rad musí sedieť s agendou dokladu — pokladničný doklad nesmie dostať rad
+  // prijatých faktúr. Už zvolený rad ostáva v ponuke, nech sa hodnota nestratí.
+  const ponukaRadov = radyPreTyp(codeLists.ciselneRady, draft.typ);
+  const radOpts = ponukaRadov.some((item) => item.id === ucto.ciselnyRadId) || !ucto.ciselnyRadId
+    ? ponukaRadov
+    : [...ponukaRadov, ...codeLists.ciselneRady.filter((item) => item.id === ucto.ciselnyRadId)];
   const vybranyRad = codeLists.ciselneRady.find((item) => item.id === ucto.ciselnyRadId);
   const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo);
 
@@ -523,7 +530,7 @@ export function InvoicePanel({
           <div className="dv-cols">
             <div className="dv-fields">
               <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
-              <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable onMostikSync={syncMostik} value={ucto.ciselnyRadId} options={toOpts(codeLists.ciselneRady)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
+              <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable onMostikSync={syncMostik} value={ucto.ciselnyRadId} options={toOpts(radOpts)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
               {dalsieCislo && (
                 <p className="dv-next-number">Ďalšie číslo v POHODE: <strong className="tnum">{dalsieCislo}</strong></p>
               )}

@@ -665,6 +665,10 @@ export async function maybeAiAccountingSuggestion(
   const byKind = (kind: string) => codeLists.rows
     .filter((row) => row.kind === kind)
     .map((row) => ({ id: row.id, kod: row.code, nazov: row.name }));
+  // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
+  // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
+  // určí rovnako ako inde (nastavenie účtovníka, inak reálne používaný rad).
+  const radPreTyp = await resolveSeriesDefault(database, input, documentContext.documentType);
   const vsetkyPredkontacie = byKind('predkontacie');
   if (vsetkyPredkontacie.length === 0) return false;
 
@@ -764,7 +768,7 @@ export async function maybeAiAccountingSuggestion(
       accounting: {
         predkontaciaId: validated.predkontacia_id,
         clenenieDphId: validated.clenenie_dph_id,
-        ciselnyRadId: validated.ciselny_rad_id,
+        ciselnyRadId: radPreTyp ?? validated.ciselny_rad_id,
         clenenieKvKod: kvKod,
       },
       clenenieDph: clenenie,
@@ -784,7 +788,7 @@ export async function maybeAiAccountingSuggestion(
        source='ai', confidence=excluded.confidence, reason=excluded.reason,
        based_on_document_id=NULL, rule_id=NULL, updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
-      validated.predkontacia_id ?? null, validated.clenenie_dph_id ?? null, validated.ciselny_rad_id ?? null,
+      validated.predkontacia_id ?? null, validated.clenenie_dph_id ?? null, radPreTyp ?? validated.ciselny_rad_id ?? null,
       kvKod ?? null,
       Math.min(0.8, Math.max(0, parsed.confidence)), `AI návrh z číselníkov: ${parsed.reason}`.slice(0, 500)],
   );

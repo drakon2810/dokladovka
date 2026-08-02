@@ -20,6 +20,7 @@ import {
   buildCodeListRequestXml,
 } from '../../data/pohoda/requestTemplates';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
+import { AGENDA_PRE_TYP } from '../../data/pohoda/agendas';
 import { Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
@@ -71,16 +72,6 @@ function downloadXml(xml: string, fileName: string): void {
   URL.revokeObjectURL(url);
 }
 
-// Typ dokladu → agenda číselného radu v POHODE. Rovnaké mapovanie ako na
-// serveri (accountingSuggestionService) — filtruje ponuku na zmysluplné rady.
-const AGENDA_PRE_TYP: Partial<Record<DocumentType, string>> = {
-  FP: 'prijate_faktury',
-  FV: 'vydane_faktury',
-  PD: 'pokladna',
-  BV: 'banka',
-  MZDY: 'interni_doklady',
-  OZ: 'ostatni_zavazky',
-};
 const TYP_LABEL: Partial<Record<DocumentType, string>> = {
   FP: 'Prijatá faktúra', FV: 'Vydaná faktúra', PD: 'Pokladničný doklad',
   BV: 'Bankový výpis', MZDY: 'Mzdy', OZ: 'Ostatný záväzok',
