@@ -120,7 +120,11 @@ export function normalizeExtractionResult(
       konstantnySymbol: result.constantSymbol,
       specifickySymbol: result.specificSymbol,
       datumVystavenia: result.issueDate ?? fallbackDate,
-      datumSplatnosti: result.dueDate,
+      // Splatnosť: keď ju doklad neuvádza, platí dňom vystavenia — presne ten
+      // fallback už používa export do POHODY (pohodaXml.ts), takže uložená
+      // hodnota konečne sedí s vyexportovanou. Že nepochádza z dokladu, vidno
+      // vo zvýraznení zdroja — pole ostane bez farby (rovnako ako datumDodania).
+      datumSplatnosti: result.dueDate ?? result.issueDate ?? fallbackDate,
       // DUZP: keď ho faktúra neuvádza (bežné pri zahraničných službách), odvodí
       // sa z dátumu vystavenia — rovnako ako to robí dphAdvisor. Inak by správny
       // návrh zaúčtovania blokovala validácia „chýba dátum dodania".

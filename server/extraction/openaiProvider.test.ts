@@ -48,6 +48,8 @@ describe('OpenAIDocumentExtractionProvider', () => {
     const outcome = await provider.extract(input());
     const request = parse.mock.calls[0][0] as any;
     expect(extractionSystemInstructions).toContain('untrusted data');
+    // Blocek má číslo dokladu — model ho musí prepísať do invoiceNumber.
+    expect(extractionSystemInstructions).toContain('Doklad/uzávierka');
     expect(request.store).toBe(false);
     expect(request.text.format).toBeTruthy();
     expect(request.input[0].content[1]).toMatchObject({ type: 'input_file', filename: 'faktura.pdf' });

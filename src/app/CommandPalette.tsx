@@ -130,9 +130,11 @@ export function CommandPalette({
       .sort((a, b) => (a.prijateDna < b.prijateDna ? 1 : -1))
       .slice(0, 8);
     for (const document of recent) {
+      // Pokladničný doklad je uhradený na mieste — nemôže byť po splatnosti.
       const overdue =
         !!document.extracted.datumSplatnosti &&
-        document.extracted.datumSplatnosti < new Date().toISOString().slice(0, 10);
+        document.extracted.datumSplatnosti < new Date().toISOString().slice(0, 10) &&
+        document.typ !== 'PD';
       list.push({
         id: `doc-${document.id}`,
         group: t('pal.doklady'),

@@ -219,7 +219,7 @@ describe('normalizácia SK/CZ faktúr', () => {
     expect(issues.find((i) => i.code === 'invalid_supplier_ico')?.severity).toBe('warning');
   });
 
-  it('zahraničný dodávateľ bez SK IČO/DIČ = varovanie; chýbajúca splatnosť = varovanie (žiadna blokujúca chyba)', () => {
+  it('zahraničný dodávateľ bez SK IČO/DIČ = varovanie; chýbajúca splatnosť sa doplní dňom vystavenia', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'AGS-MUDANÇAS LDA', ico: '123456', dic: 'PT999999', icDph: 'PT501234567' },
       buyer: { ico: '87654321' }, invoiceNumber: 'FT-284', issueDate: '2026-06-10', taxDate: '2026-06-10',
@@ -228,7 +228,9 @@ describe('normalizácia SK/CZ faktúr', () => {
     }, 'doc-foreign2', '2026-06-10');
     const issues = validateNormalizedExtraction(normalized, { ico: '87654321' });
     expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
-    expect(issues.find((i) => i.code === 'due_date_required')?.severity).toBe('warning');
+    // Doklad bez splatnosti je splatný dňom vystavenia — rovnaký fallback má aj export do POHODY.
+    expect(normalized.extracted.datumSplatnosti).toBe('2026-06-10');
+    expect(issues.find((i) => i.code === 'due_date_required')).toBeUndefined();
     expect(issues.find((i) => i.code === 'invalid_supplier_ico')?.severity).toBe('warning');
   });
 

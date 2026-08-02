@@ -1020,7 +1020,9 @@ export function DocumentsPage() {
                   {group.rows.map((document) => {
                     const organization = organizationMap.get(document.orgId);
                     const due = document.extracted.datumSplatnosti;
-                    const overdue = !!due && due < today;
+                    // Pokladničný doklad je uhradený na mieste — splatnosť sa mu
+                    // dopĺňa dňom vystavenia, takže by inak hneď svietil červeno.
+                    const overdue = !!due && due < today && document.typ !== 'PD';
                     const overdueDays = overdue ? Math.max(1, Math.round((Date.parse(today) - Date.parse(due!)) / 86_400_000)) : 0;
                     const manualLabel = manualProcessingLabel(document);
                     const isSelected = selected.has(document.id);
