@@ -501,6 +501,15 @@ export function DocumentsPage() {
   const selectionApproved = selectedDocuments.length > 0
     && selectedDocuments.every((document) => document.status === 'schvaleny')
     && data.role !== 'schvalovatel';
+  // Interné číslo = číslo, ktoré dokladu pridelila POHODA pri prenose. Vracia ho
+  // agent v response_meta prenosu; pred prenosom je stĺpec prázdny.
+  const pohodaNumberFor = (document: DocumentItem): string | undefined => {
+    for (const job of data.exportJobs ?? []) {
+      const result = job.responseMeta?.perDocument?.find((item) => item.documentId === document.id);
+      if (result?.pohodaNumber) return result.pohodaNumber;
+    }
+    return undefined;
+  };
   // Stav prenosu do POHODY pre stĺpec „Stav dokladu": čaká/beží → žltá, hotovo →
   // zelená, varovanie POHODY → oranžová, chyba → červená. Obnovuje sa s pollerom.
   const prenosStateFor = (document: DocumentItem): 'prenasa' | 'prenesene' | 'varovanie' | 'chyba' | null => {
@@ -541,10 +550,12 @@ export function DocumentsPage() {
     groups.push({ id: 'all', name: '', dot: '', rows: sortedDocuments, subtotal: grandTotal });
   }
 
+  // Stĺpce: [výber] [organizácia?] [typ] [dodávateľ] [číslo faktúry] [interné číslo]
+  // [dodanie] [splatnosť] [suma] [stav dokladu] [stav] [spracovanie] [AI]
   const gridTemplate = showOrganization
-    ? '24px minmax(140px,1.15fr) 40px minmax(180px,1.55fr) minmax(120px,1fr) minmax(86px,.78fr) minmax(96px,.82fr) minmax(96px,.86fr) minmax(112px,.95fr) minmax(118px,1fr) minmax(126px,1.05fr) 66px'
-    : '24px 40px minmax(180px,1.55fr) minmax(120px,1fr) minmax(86px,.78fr) minmax(96px,.82fr) minmax(96px,.86fr) minmax(112px,.95fr) minmax(118px,1fr) minmax(126px,1.05fr) 66px';
-  const gridMinWidth = showOrganization ? 1300 : 1160;
+    ? '24px minmax(140px,1.15fr) 40px minmax(180px,1.55fr) minmax(120px,1fr) minmax(96px,.8fr) minmax(86px,.78fr) minmax(96px,.82fr) minmax(96px,.86fr) minmax(112px,.95fr) minmax(118px,1fr) minmax(126px,1.05fr) 66px'
+    : '24px 40px minmax(180px,1.55fr) minmax(120px,1fr) minmax(96px,.8fr) minmax(86px,.78fr) minmax(96px,.82fr) minmax(96px,.86fr) minmax(112px,.95fr) minmax(118px,1fr) minmax(126px,1.05fr) 66px';
+  const gridMinWidth = showOrganization ? 1400 : 1260;
   const rowPadY = density === 'compact' ? '7px' : '13px';
 
   const selectTab = (tab: TabId) => {
@@ -729,6 +740,7 @@ export function DocumentsPage() {
       <HeaderCell label={t('doklady.st.typ')} sortKey="type" activeKey={sortKey} direction={sortDirection} onSort={changeSort} />
       <HeaderCell label={t('doklady.st.dodavatel')} sortKey="supplier" activeKey={sortKey} direction={sortDirection} onSort={changeSort} />
       <HeaderCell label={t('doklady.st.cislo')} sortKey="invoice" activeKey={sortKey} direction={sortDirection} onSort={changeSort} />
+      <HeaderCell label={t('doklady.st.interneCislo')} activeKey={sortKey} direction={sortDirection} onSort={changeSort} />
       <HeaderCell label={t('doklady.st.datumDodania')} sortKey="delivery" activeKey={sortKey} direction={sortDirection} onSort={changeSort} />
       <HeaderCell label={t('doklady.st.splatnost')} sortKey="due" activeKey={sortKey} direction={sortDirection} onSort={changeSort} />
       <HeaderCell label={t('doklady.st.suma')} sortKey="amount" activeKey={sortKey} direction={sortDirection} onSort={changeSort} align="right" />
@@ -1080,6 +1092,9 @@ export function DocumentsPage() {
                           <span className="block truncate font-medium">{document.extracted.cisloFaktury}</span>
                           <span className="block truncate text-[11.5px] text-ink-faint">VS {document.extracted.variabilnySymbol ?? '—'}</span>
                         </span>
+                        <span className="tnum min-w-0 truncate" title={pohodaNumberFor(document) ?? undefined}>
+                          {pohodaNumberFor(document) ?? <span className="text-ink-mute">—</span>}
+                        </span>
                         <span className="tnum whitespace-nowrap text-ink-soft">{formatDate(document.extracted.datumDodania)}</span>
                         <span className="tnum min-w-0">
                           <span className={`block whitespace-nowrap ${overdue ? 'font-semibold text-red-700' : 'text-ink-soft'}`}>
@@ -1394,7 +1409,7 @@ export function DocumentsPage() {
 }
 
 function TableSkeleton({ showOrganization }: { showOrganization: boolean }) {
-  const cols = showOrganization ? 12 : 11;
+  const cols = showOrganization ? 13 : 12;
   return (
     <div>
       <div className="mb-4 h-7 w-40 skeleton" />

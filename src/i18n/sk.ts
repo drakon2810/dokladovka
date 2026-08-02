@@ -326,6 +326,7 @@ export const sk = {
   'doklady.bulk.platbaQr': 'Platba QR',
   'doklady.bulk.exportPohoda': 'Export POHODA / XML',
   'doklady.st.stavDokladu': 'Stav dokladu',
+  'doklady.st.interneCislo': 'Interné číslo',
   'doklady.prenos.prenasa': 'Prenáša sa',
   'doklady.prenos.prenesene': 'Prenesené do POHODY',
   'doklady.prenos.varovanie': 'S varovaním',
