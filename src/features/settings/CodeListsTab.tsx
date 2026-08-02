@@ -82,7 +82,7 @@ export function CodeListsTab() {
     cinnosti: [],
     projekty: [],
   };
-  const { orgId, selectOrg } = useOrgSelection();
+  const { orgId } = useOrgSelection();
   const [preview, setPreview] = useState<CodeListImportPreview>();
   const [busy, setBusy] = useState(false);
   const [mostikBusy, setMostikBusy] = useState(false);
@@ -172,22 +172,10 @@ export function CodeListsTab() {
       <div className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
         {t('nast.cis.banner')}
       </div>
-      <label className="label" htmlFor="cis-org">
-        {t('detail.organizacia')}
-      </label>
-      <select
-        id="cis-org"
-        className="input mb-4 max-w-xs"
-        value={orgId}
-        disabled={busy}
-        onChange={(event) => selectOrg(event.target.value)}
-      >
-        {organizations.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.nazov}
-          </option>
-        ))}
-      </select>
+      {/* Organizácia sa preberá z globálneho prepínača v hlavičke. */}
+      <p className="mb-4 text-sm text-ink-soft">
+        {t('detail.organizacia')}: <strong className="text-ink">{organization?.nazov ?? '—'}</strong>
+      </p>
 
       <section className="card mb-4 p-4">
         <div className="flex flex-wrap gap-2">

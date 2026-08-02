@@ -520,6 +520,8 @@ export interface PohodaCompanyLink {
   preferredYear: 'latest' | string;
   matchedAt?: string;
   matchRule?: 'auto_ico' | 'manual';
+  /** Všetky ročníky firmy nájdené v POHODE (z heartbeatu agenta), najnovší prvý. */
+  availableYears?: Array<{ uctovnyRok: string; dbName: string }>;
 }
 
 export type ExportJobStatus = 'pending' | 'sent' | 'confirmed' | 'failed';

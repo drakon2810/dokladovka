@@ -157,6 +157,11 @@ function normalizeLink(value: Record<string, unknown>): PohodaCompanyLink {
     preferredYear: value.preferredYear ? String(value.preferredYear) : 'latest',
     matchedAt: value.matchedAt ? new Date(String(value.matchedAt)).toISOString() : undefined,
     matchRule: value.matchRule === 'manual' ? 'manual' : value.matchRule === 'auto_ico' ? 'auto_ico' : undefined,
+    availableYears: Array.isArray(value.availableYears)
+      ? (value.availableYears as Array<Record<string, unknown>>)
+          .filter((item) => item?.uctovnyRok && item?.dbName)
+          .map((item) => ({ uctovnyRok: String(item.uctovnyRok), dbName: String(item.dbName) }))
+      : undefined,
   };
 }
 

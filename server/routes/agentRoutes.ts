@@ -528,6 +528,17 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
             [selected.dbName, selected.uctovnyRok, organization.id, agent.tenant_id],
           );
         }
+        // Ponuka ročníkov je fakt o POHODE, nie voľba používateľa — zapisuje sa aj
+        // pri ručne nastavenej firme (bez match_rule guardu). Prázdny nález nič
+        // neprepíše, aby druhý agent bez prístupu k firme zoznam nevymazal.
+        if (matches.length > 0) {
+          await tx.query(
+            `UPDATE pohoda_company_links SET available_years=$1::jsonb, updated_at=now()
+              WHERE organization_id=$2 AND tenant_id=$3`,
+            [JSON.stringify(matches.map((company) => ({ uctovnyRok: company.uctovnyRok, dbName: company.dbName }))),
+              organization.id, agent.tenant_id],
+          );
+        }
       }
       await writeAudit(tx, { tenantId: agent.tenant_id, actorType: 'agent', actorId: agent.id, action: 'agent.heartbeat', entityType: 'agent_installation', entityId: agent.id, correlationId: request.id, metadata: { companyCount: body.companies.length, agentVersion: body.agentVersion } });
     });
@@ -725,7 +736,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const result = await database.query(
       `SELECT o.id AS "organizationId", o.name AS "organizationName", o.ico,
               l.db_name AS "dbName", l.accounting_year AS "uctovnyRok", l.preferred_year AS "preferredYear",
-              l.matched_at AS "matchedAt", l.match_rule AS "matchRule"
+              l.matched_at AS "matchedAt", l.match_rule AS "matchRule",
+              COALESCE(l.available_years, '[]'::jsonb) AS "availableYears"
          FROM organizations o
          JOIN organization_memberships m ON m.organization_id=o.id AND m.tenant_id=o.tenant_id
          LEFT JOIN pohoda_company_links l ON l.organization_id=o.id AND l.tenant_id=o.tenant_id
@@ -742,13 +754,16 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
     await requireOrganizationAccess(database, auth, organizationId);
     const body = z.object({ dbName: z.string().min(1).max(255), uctovnyRok: z.string().min(1).max(20), preferredYear: z.string().min(1).max(20).default('latest') }).strict().parse(request.body);
+    // „Najnovší účtovný rok" musí zostať auto_ico, inak heartbeat (ktorý prepisuje
+    // len auto_ico riadky) firmu nikdy neprepne na databázu nového roka.
+    const matchRule = body.preferredYear === 'latest' ? 'auto_ico' : 'manual';
     await database.query(
       `UPDATE pohoda_company_links SET db_name=$1, accounting_year=$2, preferred_year=$3,
-              matched_at=now(), match_rule='manual', updated_at=now()
-        WHERE organization_id=$4 AND tenant_id=$5`,
-      [body.dbName, body.uctovnyRok, body.preferredYear, organizationId, auth.tenantId],
+              matched_at=now(), match_rule=$4, updated_at=now()
+        WHERE organization_id=$5 AND tenant_id=$6`,
+      [body.dbName, body.uctovnyRok, body.preferredYear, matchRule, organizationId, auth.tenantId],
     );
-    return { organizationId, ...body, matchedAt: new Date().toISOString(), matchRule: 'manual' };
+    return { organizationId, ...body, matchedAt: new Date().toISOString(), matchRule };
   });
 
   // „Synchronizovať mostíkom": web požiada o okamžitú synchronizáciu číselníkov,

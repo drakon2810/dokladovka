@@ -152,7 +152,6 @@ export function CommandPalette({
       ['/doklady', t('nav.doklady')],
       ['/nespracovane', t('nav.nespracovane')],
       ['/partneri', t('nav.partneri')],
-      ['/uhrady', t('nav.uhrady')],
       ['/export', t('nav.export')],
     ];
     if (role === 'admin') pages.push(['/nastavenia', t('nav.nastavenia')]);

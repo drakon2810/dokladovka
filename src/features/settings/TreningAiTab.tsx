@@ -22,7 +22,7 @@ export function TreningAiTab() {
   const { data, loading, error } = useDataQuery();
   // Firma sa berie z globálneho prepínača — inak sa dá omylom nahrať história
   // pod inú firmu, než je práve otvorená.
-  const { orgId, selectOrg } = useOrgSelection();
+  const { orgId } = useOrgSelection();
   const [stats, setStats] = useState<{ schvalene: number; importovane: number }>();
   const [rows, setRows] = useState<ParsedTrainingRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -56,6 +56,7 @@ export function TreningAiTab() {
     setStats(undefined);
     setRules([]);
     setSuppliers([]);
+    setRows([]);
     void getAiTrainingStats(orgId)
       .then((next) => {
         if (active) setStats(next);
@@ -234,21 +235,10 @@ export function TreningAiTab() {
       <p className="max-w-3xl text-sm text-ink-soft">{t('trening.popis')}</p>
 
       <div className="flex flex-wrap items-end gap-3">
-        <label className="block">
-          <span className="label">{t('nast.tab.organizacie')}</span>
-          <select
-            className="input w-64"
-            value={orgId ?? ''}
-            onChange={(event) => {
-              selectOrg(event.target.value);
-              setRows([]);
-            }}
-          >
-            {organizations.map((org) => (
-              <option key={org.id} value={org.id}>{org.nazov}</option>
-            ))}
-          </select>
-        </label>
+        {/* Organizácia sa preberá z globálneho prepínača v hlavičke. */}
+        <p className="text-sm text-ink-soft">
+          {t('nast.tab.organizacie')}: <strong className="text-ink">{organizations.find((org) => org.id === orgId)?.nazov ?? '—'}</strong>
+        </p>
         <button
           type="button"
           className="btn btn-primary"

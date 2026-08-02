@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { ServerConfig } from './config.js';
 
@@ -8,6 +8,8 @@ export interface ObjectStorage {
   put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   get(key: string): Promise<Uint8Array>;
   signedDownloadUrl(key: string, expiresInSeconds?: number): Promise<string>;
+  /** Zmazanie neexistujúceho kľúča nie je chyba (mazanie musí byť opakovateľné). */
+  delete(key: string): Promise<void>;
 }
 
 export class MemoryObjectStorage implements ObjectStorage {
@@ -26,6 +28,10 @@ export class MemoryObjectStorage implements ObjectStorage {
   async signedDownloadUrl(key: string): Promise<string> {
     if (!this.objects.has(key)) throw new Error('object_not_found');
     return `memory://${encodeURIComponent(key)}`;
+  }
+
+  async delete(key: string): Promise<void> {
+    this.objects.delete(key);
   }
 }
 
@@ -55,6 +61,10 @@ class FilesystemObjectStorage implements ObjectStorage {
   async signedDownloadUrl(key: string): Promise<string> {
     await readFile(this.path(key));
     return `local-object://${encodeURIComponent(key)}`;
+  }
+
+  async delete(key: string): Promise<void> {
+    await rm(this.path(key), { force: true });
   }
 }
 
@@ -95,6 +105,10 @@ class S3ObjectStorage implements ObjectStorage {
       new GetObjectCommand({ Bucket: this.config.bucket, Key: key }),
       { expiresIn: Math.min(Math.max(expiresInSeconds, 30), 900) },
     );
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
   }
 }
 

@@ -38,30 +38,39 @@ function LinkYearEditor({
   disabled: boolean;
   onSaved: () => Promise<void>;
 }) {
-  const [year, setYear] = useState(link.uctovnyRok ?? '');
-  const [preferred, setPreferred] = useState(link.preferredYear);
+  // Ročníky hlási agent v heartbeate (všetky databázy StwPh_{ICO}_{rok} firmy).
+  // Kým prvý heartbeat nedorazí, ponúkne sa aspoň práve spárovaný ročník.
+  const roky = link.availableYears?.length
+    ? link.availableYears
+    : link.uctovnyRok && link.dbName ? [{ uctovnyRok: link.uctovnyRok, dbName: link.dbName }] : [];
+  const [volba, setVolba] = useState(link.preferredYear === 'latest' ? 'latest' : link.preferredYear);
+  // Voľba nesie ročník; databázu k nemu dohľadáme, lebo agent páruje podľa nej
+  // (poslať starú databázu s novým rokom by ročník potichu ignorovalo).
+  const vybrany = volba === 'latest' ? roky[0] : roky.find((rok) => rok.uctovnyRok === volba);
   return (
     <div className="flex min-w-[16rem] items-center gap-2">
       <select
-        className="input min-w-[10rem]"
-        value={preferred === 'latest' ? 'latest' : 'manual'}
-        disabled={disabled || !link.dbName}
-        onChange={(event) => setPreferred(event.target.value === 'latest' ? 'latest' : year)}
+        className="input min-w-[12rem]"
+        value={volba}
+        disabled={disabled || roky.length === 0}
+        onChange={(event) => setVolba(event.target.value)}
       >
-        <option value="latest">{t('mostik.najnovsiRok')}</option>
-        <option value="manual">{t('mostik.rok')}</option>
+        <option value="latest">
+          {t('mostik.najnovsiRok')}{roky[0] ? ` (${roky[0].uctovnyRok})` : ''}
+        </option>
+        {roky.map((rok) => (
+          <option key={rok.dbName} value={rok.uctovnyRok}>{rok.uctovnyRok} · {rok.dbName}</option>
+        ))}
       </select>
-      {preferred !== 'latest' && (
-        <input className="input w-24" value={year} onChange={(event) => setYear(event.target.value)} disabled={disabled} />
-      )}
       <button
         type="button"
         className="btn whitespace-nowrap"
-        disabled={disabled || !link.dbName || !year}
+        disabled={disabled || !vybrany}
         onClick={() => {
+          if (!vybrany) return;
           void updateMostikOrganizationLink(
             link.organizationId,
-            { dbName: link.dbName!, uctovnyRok: year, preferredYear: preferred === 'latest' ? 'latest' : year },
+            { dbName: vybrany.dbName, uctovnyRok: vybrany.uctovnyRok, preferredYear: volba === 'latest' ? 'latest' : vybrany.uctovnyRok },
           ).then(onSaved);
         }}
       >

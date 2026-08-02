@@ -289,7 +289,6 @@ export function MostikOnboarding({
               <dt className="text-ink-soft">{t('mostik.uctovnaJednotka')}</dt><dd>{link?.dbName ?? '—'}</dd>
               <dt className="text-ink-soft">{t('nast.org.ico')}</dt><dd className="tnum">{link?.ico ?? organization?.ico ?? '—'}</dd>
               <dt className="text-ink-soft">{t('mostik.rok')}</dt><dd className="tnum">{link?.uctovnyRok ?? '—'}</dd>
-              <dt className="text-ink-soft">{t('mostik.mserverStav')}</dt><dd>{connected && latestSync?.state === 'ok' ? t('mostik.dostupny') : t('mostik.vyzadujeKontrolu')}</dd>
               <dt className="text-ink-soft">{t('mostik.poslednaSynchronizacia')}</dt><dd>{formatDateTime(latestSync?.createdAt)}</dd>
               <dt className="text-ink-soft">{t('mostik.poslednyExport')}</dt><dd>{formatDateTime(latestExport?.createdAt)}</dd>
             </dl>

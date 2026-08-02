@@ -426,6 +426,30 @@ export async function archiveOrganization(id: string): Promise<void> {
   });
 }
 
+/**
+ * Trvalé zmazanie organizácie so všetkým, čo k nej v projekte patrí.
+ * V POHODE nemaže nič — mostík doklady iba číta a zakladá.
+ */
+export async function deleteOrganization(id: string): Promise<void> {
+  assertCapability(
+    storeApi.get().role,
+    'organization.manage',
+    'Organizáciu môže zmazať iba admin',
+  );
+  if (REST_DATA_MODE) {
+    await restRequest(`/api/organizations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await refreshRestSnapshot();
+    return;
+  }
+  const s = storeApi.get();
+  storeApi.set({
+    organizations: s.organizations.filter((o) => !(o.id === id && o.tenantId === MOCK_TENANT_ID)),
+    documents: s.documents.filter((document) => document.orgId !== id),
+    partners: s.partners.filter((partner) => partner.organizationId !== id),
+    currentOrgId: s.currentOrgId === id ? 'all' : s.currentOrgId,
+  });
+}
+
 // ===== Bankové účty organizácií =====
 
 export async function listBankAccounts(orgId?: string): Promise<OrganizationBankAccount[]> {

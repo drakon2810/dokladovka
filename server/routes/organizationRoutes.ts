@@ -6,6 +6,7 @@ import { writeAudit } from '../audit.js';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
+import type { ObjectStorage } from '../storage.js';
 import { insertCustomAlias, insertUniqueAlias, type AliasRecord } from '../services/organizationService.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
 import { loadUctovnyProfil } from '../services/accountingProfileService.js';
@@ -147,7 +148,7 @@ function mapAlias(row: AliasRow): AliasRecord {
   };
 }
 
-export function registerOrganizationRoutes(app: FastifyInstance, database: Database, config: ServerConfig): void {
+export function registerOrganizationRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage, config: ServerConfig): void {
   // Schvaľovanie podľa sumy — jedno pravidlo na organizáciu, upsert (admin).
   app.put('/api/organizations/:organizationId/approval-rule', async (request) => {
     const auth = await requireBrowserAuth(request, database);
@@ -507,6 +508,118 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     await requireOrganizationAccess(database, auth, id);
     await database.query('UPDATE organizations SET archived=true, updated_at=now() WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId]);
     await writeAudit(database, { tenantId: auth.tenantId, organizationId: id, actorType: 'user', actorId: auth.userId, action: 'organization.archived', entityType: 'organization', entityId: id, correlationId: request.id });
+    return reply.code(204).send();
+  });
+
+  /**
+   * Trvalé zmazanie organizácie aj všetkého, čo k nej v projekte patrí (doklady,
+   * súbory, fronty, číselníky, pravidlá, pamäť, prenosy, partneri, aliasy…).
+   * V POHODE nemaže NIČ — mostík je iba na čítanie a zakladanie dokladov.
+   * Poradie DELETE-ov rešpektuje cudzie kľúče medzi tabuľkami organizácie;
+   * väčšina z nich nemá ON DELETE CASCADE, takže zlý poriadok skončí chybou
+   * a celá transakcia sa vráti späť (nikdy nezostane polovične zmazaná firma).
+   */
+  app.delete('/api/organizations/:id', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, id);
+    const existing = await database.query<{ name: string; ico: string } & Record<string, unknown>>(
+      'SELECT name, ico FROM organizations WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId],
+    );
+    const organization = existing.rows[0];
+    if (!organization) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    // Posledná organizácia tenanta by nechala používateľa bez firmy — a bez
+    // organizácie sa v aplikácii nedá nič robiť (fronty, doklady, číselníky).
+    const remaining = await database.query<{ count: string } & Record<string, unknown>>(
+      'SELECT count(*)::text AS count FROM organizations WHERE tenant_id=$1 AND id<>$2', [auth.tenantId, id],
+    );
+    if (Number(remaining.rows[0]?.count ?? '0') === 0) {
+      throw new HttpError(409, 'last_organization', 'Poslednú organizáciu nie je možné zmazať');
+    }
+
+    // Kľúče súborov sa zbierajú PRED mazaním riadkov; samotné objekty sa mažú až
+    // po úspešnom commite (zlyhanie transakcie nesmie nechať dáta bez súborov).
+    const storageKeys = new Set<string>();
+    for (const query of [
+      `SELECT a.storage_key AS key FROM inbound_attachments a
+        WHERE a.tenant_id=$1 AND a.storage_key IS NOT NULL
+          AND (a.organization_id=$2 OR a.inbound_email_id IN (
+                SELECT e.id FROM inbound_emails e
+                 WHERE e.tenant_id=$1 AND (e.organization_id=$2
+                   OR e.alias_id IN (SELECT al.id FROM organization_email_aliases al WHERE al.organization_id=$2))))`,
+      `SELECT e.raw_message_storage_key AS key FROM inbound_emails e
+        WHERE e.tenant_id=$1 AND e.raw_message_storage_key IS NOT NULL
+          AND (e.organization_id=$2
+            OR e.alias_id IN (SELECT al.id FROM organization_email_aliases al WHERE al.organization_id=$2))`,
+      'SELECT storage_key AS key FROM organization_documents WHERE tenant_id=$1 AND organization_id=$2',
+    ]) {
+      const rows = await database.query<{ key: string } & Record<string, unknown>>(query, [auth.tenantId, id]);
+      for (const row of rows.rows) if (row.key) storageKeys.add(row.key);
+    }
+
+    await database.transaction(async (tx) => {
+      const scope = [auth.tenantId, id];
+      const emailScope = `(e.organization_id=$2 OR e.alias_id IN (SELECT al.id FROM organization_email_aliases al WHERE al.organization_id=$2))`;
+      // documents ↔ extraction_runs sa odkazujú navzájom — väzbu treba najprv rozpojiť.
+      await tx.query('UPDATE documents SET applied_extraction_run_id=NULL WHERE tenant_id=$1 AND organization_id=$2', scope);
+      // Doklad z inej firmy označený ako duplicita tohto — inak by FK zablokoval mazanie.
+      await tx.query(
+        `UPDATE documents SET duplicate_of_document_id=NULL
+          WHERE tenant_id=$1 AND duplicate_of_document_id IN (SELECT id FROM documents WHERE tenant_id=$1 AND organization_id=$2)`,
+        scope,
+      );
+      for (const table of ['processing_jobs', 'extraction_runs', 'accounting_suggestions', 'document_payments', 'ucto_decisions']) {
+        await tx.query(`DELETE FROM ${table} WHERE tenant_id=$1 AND organization_id=$2`, scope);
+      }
+      for (const table of ['export_batches', 'export_jobs']) {
+        await tx.query(`DELETE FROM ${table} WHERE tenant_id=$1 AND organization_id=$2`, scope);
+      }
+      await tx.query('DELETE FROM documents WHERE tenant_id=$1 AND organization_id=$2', scope);
+      await tx.query('DELETE FROM document_queues WHERE tenant_id=$1 AND organization_id=$2', scope);
+      await tx.query(
+        `DELETE FROM inbound_attachments a
+          WHERE a.tenant_id=$1 AND (a.organization_id=$2 OR a.inbound_email_id IN (
+                SELECT e.id FROM inbound_emails e WHERE e.tenant_id=$1 AND ${emailScope}))`,
+        scope,
+      );
+      await tx.query(`DELETE FROM inbound_emails e WHERE e.tenant_id=$1 AND ${emailScope}`, scope);
+      await tx.query('DELETE FROM organization_email_aliases WHERE organization_id=$2 AND tenant_id=$1', scope);
+      for (const table of [
+        'code_list_items', 'accounting_rules', 'organization_accounting_defaults', 'partners',
+        'note_templates', 'email_templates', 'approval_rules', 'organization_dph_profiles',
+        'organization_accounting_profiles', 'organization_bank_accounts', 'organization_documents',
+        'pohoda_company_links', 'agent_sync_runs', 'assistant_threads', 'organization_memberships',
+      ]) {
+        await tx.query(`DELETE FROM ${table} WHERE tenant_id=$1 AND organization_id=$2`, scope);
+      }
+      await tx.query('DELETE FROM agent_pairing_codes WHERE tenant_id=$1 AND organization_id=$2', scope);
+      // Audit sa nemaže — zostáva stopa, kto a kedy s firmou pracoval; iba sa
+      // odpojí od mazaného riadku, aby FK nebránil zmazaniu.
+      await tx.query('UPDATE audit_logs SET organization_id=NULL WHERE tenant_id=$1 AND organization_id=$2', scope);
+      await tx.query('DELETE FROM organizations WHERE id=$2 AND tenant_id=$1', scope);
+      await writeAudit(tx, {
+        tenantId: auth.tenantId,
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'organization.deleted',
+        entityType: 'organization',
+        entityId: id,
+        correlationId: request.id,
+        metadata: { name: organization.name, ico: organization.ico, storageObjects: storageKeys.size },
+      });
+    });
+
+    // Súbory až po commite. Zlyhanie jedného objektu nesmie zhodiť odpoveď —
+    // firma je z databázy preč a mazanie sa dá kedykoľvek zopakovať.
+    for (const key of storageKeys) {
+      try {
+        await storage.delete(key);
+      } catch (error) {
+        request.log.warn({ err: error, key }, 'organization_delete_storage_failed');
+      }
+    }
     return reply.code(204).send();
   });
 

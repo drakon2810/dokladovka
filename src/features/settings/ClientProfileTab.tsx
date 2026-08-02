@@ -90,7 +90,7 @@ function draftFromProfile(profil?: DphProfil): ProfilDraft {
 
 export function ClientProfileTab() {
   const { data, loading, error } = useDataQuery();
-  const { orgId, selectOrg } = useOrgSelection();
+  const { orgId } = useOrgSelection();
   const [drafts, setDrafts] = useState<Record<string, ProfilDraft>>({});
   const [busy, setBusy] = useState(false);
 
@@ -185,18 +185,11 @@ export function ClientProfileTab() {
     <div className="space-y-4">
       <p className="text-sm text-ink-soft">{t('nast.dph.popis')}</p>
 
-      <label className="block max-w-md">
-        <span className="label">{t('nast.dph.organizacia')}</span>
-        <select
-          className="input w-full"
-          value={orgId}
-          onChange={(event) => selectOrg(event.target.value)}
-        >
-          {organizations.map((org) => (
-            <option key={org.id} value={org.id}>{org.nazov}</option>
-          ))}
-        </select>
-      </label>
+      {/* Organizácia sa preberá z globálneho prepínača v hlavičke — vlastný výber
+          v záložke by ukazoval inú firmu, než na akej používateľ práve pracuje. */}
+      <p className="text-sm text-ink-soft">
+        {t('nast.dph.organizacia')}: <strong className="text-ink">{organizations.find((org) => org.id === orgId)?.nazov ?? '—'}</strong>
+      </p>
 
       <section className="card space-y-4 p-4">
         <h2 className="font-semibold text-ink">{t('nast.dph.sekcia')}</h2>

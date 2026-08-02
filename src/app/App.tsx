@@ -8,7 +8,6 @@ import { DocumentsPage } from '../features/documents/DocumentsPage';
 import { OtherDocumentPage } from '../features/documents/OtherDocumentPage';
 import { NespracovanePage } from '../features/nespracovane/NespracovanePage';
 import { ExportPage } from '../features/export/ExportPage';
-import { PaymentsPage } from '../features/payments/PaymentsPage';
 import { PartnersPage } from '../features/partners/PartnersPage';
 import { AssistantPage } from '../features/assistant/AssistantPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
@@ -78,7 +77,6 @@ export function App() {
             />
             <Route path="/nespracovane" element={<NespracovanePage />} />
             <Route path="/export" element={<ExportPage />} />
-            <Route path="/uhrady" element={<PaymentsPage />} />
             <Route path="/partneri" element={<PartnersPage />} />
             <Route path="/asistent" element={<AssistantPage />} />
             <Route path="/profil" element={<ProfilePage />} />

@@ -231,14 +231,41 @@ describe('agent backend contour', () => {
       method: 'POST',
       url: '/api/agent/heartbeat',
       headers: agentHeaders,
-      payload: { companies: [{ ico: '12345678', dbName: 'StwPh_12345678_2026.mdb', uctovnyRok: '2026' }], agentVersion: '0.2.0' },
+      // Firma má v POHODE viac ročníkov — všetky sa musia dostať do ponuky rokov.
+      payload: {
+        companies: [
+          { ico: '12345678', dbName: 'StwPh_12345678_2025.mdb', uctovnyRok: '2025' },
+          { ico: '12345678', dbName: 'StwPh_12345678_2026.mdb', uctovnyRok: '2026' },
+        ],
+        agentVersion: '0.2.0',
+      },
     });
     expect(heartbeat.statusCode).toBe(200);
-    const links = await database.query<{ db_name: string; matched_at?: string } & Record<string, unknown>>(
-      'SELECT db_name, matched_at FROM pohoda_company_links WHERE organization_id=$1', [seeded.organizationId],
+    const links = await database.query<{ db_name: string; matched_at?: string; available_years: Array<{ uctovnyRok: string; dbName: string }> } & Record<string, unknown>>(
+      'SELECT db_name, matched_at, available_years FROM pohoda_company_links WHERE organization_id=$1', [seeded.organizationId],
     );
     expect(links.rows[0]?.db_name).toBe('StwPh_12345678_2026.mdb');
     expect(links.rows[0]?.matched_at).toBeTruthy();
+    // Najnovší ročník je prvý — UI z neho robí predvoľbu „Najnovší účtovný rok".
+    expect(links.rows[0]?.available_years).toEqual([
+      { uctovnyRok: '2026', dbName: 'StwPh_12345678_2026.mdb' },
+      { uctovnyRok: '2025', dbName: 'StwPh_12345678_2025.mdb' },
+    ]);
+
+    // Ručný výber staršieho ročníka nesmie vymazať ponuku rokov.
+    const login2 = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `/api/mostik/organization-links/${seeded.organizationId}`,
+      headers: { cookie: String(login2.headers['set-cookie']).split(';')[0], 'x-csrf-token': login2.json().csrfToken as string },
+      payload: { dbName: 'StwPh_12345678_2025.mdb', uctovnyRok: '2025', preferredYear: '2025' },
+    });
+    expect(patched.statusCode, patched.body).toBe(200);
+    const afterPatch = await database.query<{ available_years: unknown[]; match_rule: string } & Record<string, unknown>>(
+      'SELECT available_years, match_rule FROM pohoda_company_links WHERE organization_id=$1', [seeded.organizationId],
+    );
+    expect(afterPatch.rows[0]?.available_years).toHaveLength(2);
+    expect(afterPatch.rows[0]?.match_rule).toBe('manual');
   }, 90_000);
 
   it('distinguishes expired pairing and publishes only complete signed releases', async () => {

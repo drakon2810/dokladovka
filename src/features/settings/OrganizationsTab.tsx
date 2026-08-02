@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   archiveOrganization,
   createOrganization,
+  deleteOrganization,
   updateOrganization,
   type CreateOrganizationResult,
 } from '../../data/api';
@@ -56,6 +57,7 @@ export function OrganizationsTab() {
   const [modal, setModal] = useState<'new' | Organization | null>(null);
   const [bankOrganization, setBankOrganization] = useState<Organization | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Organization | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Organization | null>(null);
   const [created, setCreated] = useState<CreateOrganizationResult | null>(null);
 
   return (
@@ -141,12 +143,19 @@ export function OrganizationsTab() {
                   {!org.archived && (
                     <button
                       type="button"
-                      className="btn btn-danger px-2 py-1 text-xs"
+                      className="btn btn-danger mr-1 px-2 py-1 text-xs"
                       onClick={() => setArchiveTarget(org)}
                     >
                       {t('nast.org.archivovat')}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="btn btn-danger px-2 py-1 text-xs"
+                    onClick={() => setDeleteTarget(org)}
+                  >
+                    {t('nast.org.zmazat')}
+                  </button>
                 </td>
               </tr>
             ))}
@@ -176,6 +185,13 @@ export function OrganizationsTab() {
       )}
 
 
+      {deleteTarget && (
+        <DeleteOrganizationModal
+          organization={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
+
       {bankOrganization && (
         <BankAccountsModal
           organization={bankOrganization}
@@ -183,6 +199,54 @@ export function OrganizationsTab() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Zmazanie firmy je nevratné a berie so sebou aj doklady a súbory, preto sa
+ * potvrdzuje prepísaním názvu — nie jedným kliknutím na červené tlačidlo.
+ */
+function DeleteOrganizationModal({ organization, onClose }: { organization: Organization; onClose: () => void }) {
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  const matches = confirmation.trim().toLocaleLowerCase('sk') === organization.nazov.trim().toLocaleLowerCase('sk');
+
+  async function submit(): Promise<void> {
+    setBusy(true);
+    try {
+      await deleteOrganization(organization.id);
+      showToast(t('nast.org.zmazana'));
+      onClose();
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`${t('nast.org.zmazat')}: ${organization.nazov}`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <p className="text-ink-soft">{t('nast.org.zmazatPopis')}</p>
+        <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">{t('nast.org.zmazatPohoda')}</p>
+        <label className="block">
+          <span className="label">{t('nast.org.zmazatPotvrdenie')}</span>
+          <input
+            className="input w-full"
+            value={confirmation}
+            disabled={busy}
+            placeholder={organization.nazov}
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+        </label>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>{t('akcia.zrusit')}</button>
+          <button type="button" className="btn btn-danger" disabled={busy || !matches} onClick={() => void submit()}>
+            {busy ? t('stav.nacitavam') : t('nast.org.zmazat')}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

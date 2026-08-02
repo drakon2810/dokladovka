@@ -79,7 +79,7 @@ export async function buildApp(input: {
   }));
 
   registerAuthRoutes(app, input.database, input.config, input.mailer ?? createMailer(input.config));
-  registerOrganizationRoutes(app, input.database, input.config);
+  registerOrganizationRoutes(app, input.database, input.storage, input.config);
   registerInboundRoutes(app, input.database, input.storage, input.config);
   registerDocumentRoutes(app, input.database, input.storage, input.config);
   registerAgentRoutes(app, input.database, input.config);
