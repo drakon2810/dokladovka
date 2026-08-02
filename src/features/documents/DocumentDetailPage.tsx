@@ -349,6 +349,7 @@ export function DocumentDetailPage() {
   const [activeSrc, setActiveSrc] = useState<string>();
   const [textLayerTick, setTextLayerTick] = useState(0);
   const autoFilledFor = useRef<string>();
+  const radFilledFor = useRef<string>();
   const splitRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -361,6 +362,7 @@ export function DocumentDetailPage() {
     setDirty(false);
     setAutoFilled(false);
     autoFilledFor.current = undefined;
+    radFilledFor.current = undefined;
     setPageNumber(1);
     setPageCount(0);
     setZoom(DEFAULT_ZOOM);
@@ -443,6 +445,24 @@ export function DocumentDetailPage() {
     });
     setDirty(true);
     setAutoFilled(true);
+  }, [draft, dirty, role, suggestion]);
+
+  // Číselný rad nie je úsudok AI, ale nastavenie firmy (Nastavenia → Číselníky,
+  // inak rad reálne používaný v POHODE). Predvyplní sa preto vždy, aj keď zvyšok
+  // návrhu čaká na tlačidlo pre nižšiu istotu — účtovník ho inak klikal ručne
+  // pri každom doklade. Prepisuje sa len prázdne pole nedotknutého konceptu.
+  useEffect(() => {
+    if (!draft || !suggestion?.ciselnyRadId) return;
+    if (suggestion.documentId !== draft.id || radFilledFor.current === draft.id) return;
+    if (role === 'schvalovatel') return;
+    if (!['extrahovany', 'na_kontrole'].includes(draft.status)) return;
+    if (dirty || draft.ucto.ciselnyRadId) return;
+    radFilledFor.current = draft.id;
+    setDraft((current) => current && {
+      ...current,
+      ucto: { ...current.ucto, ciselnyRadId: suggestion.ciselnyRadId },
+    });
+    setDirty(true);
   }, [draft, dirty, role, suggestion]);
 
   // DPH poradca sa prepočítava na serveri — po každej uloženej verzii dokladu
