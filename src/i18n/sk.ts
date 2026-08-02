@@ -870,6 +870,9 @@ export const sk = {
   'nast.cis.agenda': 'Agenda',
   'nast.cis.posledneCislo': 'Posledné číslo',
   'nast.cis.dalsieCislo': 'Ďalšie číslo',
+  'nast.cis.predvoleneRady': 'Predvolené číselné rady',
+  'nast.cis.predvoleneRadyPopis': 'Rad, ktorý sa doplní do nového dokladu. Pri voľbe „Automaticky\" vyberie systém ten rad, ktorý firma v POHODE reálne používa.',
+  'nast.cis.radAutomaticky': 'Automaticky (podľa POHODY)',
   'nast.cis.banner':
     'Číselníky môžete spravovať ručne alebo ich importovať z POHODY pomocou XML súboru.',
   'nast.cis.syncMostikom': 'Synchronizovať mostíkom',

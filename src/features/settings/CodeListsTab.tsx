@@ -4,11 +4,12 @@ import {
   addCodeListItem,
   deactivateCodeListItem,
   importPohodaCodeLists,
+  saveSeriesDefaults,
   updateCodeListItem,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import { useOrgSelection } from '../../data/orgSelection';
-import type { CodeListItem, CodeListKind } from '../../data/types';
+import type { CodeListItem, CodeListKind, DocumentType } from '../../data/types';
 import { decodePohodaXml } from '../../data/pohoda/encoding';
 import {
   parseCodeListResponse,
@@ -68,6 +69,75 @@ function downloadXml(xml: string, fileName: string): void {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+// Typ dokladu → agenda číselného radu v POHODE. Rovnaké mapovanie ako na
+// serveri (accountingSuggestionService) — filtruje ponuku na zmysluplné rady.
+const AGENDA_PRE_TYP: Partial<Record<DocumentType, string>> = {
+  FP: 'prijate_faktury',
+  FV: 'vydane_faktury',
+  PD: 'pokladna',
+  BV: 'banka',
+  MZDY: 'interni_doklady',
+  OZ: 'ostatni_zavazky',
+};
+const TYP_LABEL: Partial<Record<DocumentType, string>> = {
+  FP: 'Prijatá faktúra', FV: 'Vydaná faktúra', PD: 'Pokladničný doklad',
+  BV: 'Bankový výpis', MZDY: 'Mzdy', OZ: 'Ostatný záväzok',
+};
+
+/**
+ * Predvolený číselný rad na typ dokladu. Prázdna voľba = automatika: server
+ * vyberie rad, ktorý firma v POHODE reálne používa (podľa počtu použití
+ * a najvyššieho čísla radu).
+ */
+function SeriesDefaultsCard({ organizationId }: { organizationId: string }) {
+  const { data } = useDataQuery();
+  const [busy, setBusy] = useState(false);
+  const rady = (data?.codeLists.ciselneRady ?? []).filter((item) => item.orgId === organizationId && item.active);
+  const ulozene = new Map((data?.seriesDefaults ?? [])
+    .filter((item) => item.organizationId === organizationId)
+    .map((item) => [item.documentType, item.ciselnyRadId]));
+
+  async function uloz(documentType: DocumentType, ciselnyRadId: string): Promise<void> {
+    setBusy(true);
+    try {
+      await saveSeriesDefaults(organizationId, [{ documentType, ciselnyRadId: ciselnyRadId || null }]);
+      showToast(t('toast.ulozene'));
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card mb-4 p-4">
+      <h2 className="text-sm font-semibold">{t('nast.cis.predvoleneRady')}</h2>
+      <p className="mb-3 mt-1 max-w-3xl text-xs text-ink-soft">{t('nast.cis.predvoleneRadyPopis')}</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {(Object.keys(AGENDA_PRE_TYP) as DocumentType[]).map((typ) => {
+          const ponuka = rady.filter((item) => item.agenda === AGENDA_PRE_TYP[typ]);
+          return (
+            <label key={typ} className="flex items-center gap-2 text-sm">
+              <span className="w-40 shrink-0 text-ink-soft">{TYP_LABEL[typ]}</span>
+              <select
+                className="input min-w-0 flex-1"
+                value={ulozene.get(typ) ?? ''}
+                disabled={busy || ponuka.length === 0}
+                onChange={(event) => void uloz(typ, event.target.value)}
+              >
+                <option value="">{t('nast.cis.radAutomaticky')}</option>
+                {ponuka.map((item) => (
+                  <option key={item.id} value={item.id}>{item.kod} · {item.nazov}</option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 export function CodeListsTab() {
@@ -176,6 +246,8 @@ export function CodeListsTab() {
       <p className="mb-4 text-sm text-ink-soft">
         {t('detail.organizacia')}: <strong className="text-ink">{organization?.nazov ?? '—'}</strong>
       </p>
+
+      {organization && <SeriesDefaultsCard organizationId={organization.id} />}
 
       <section className="card mb-4 p-4">
         <div className="flex flex-wrap gap-2">

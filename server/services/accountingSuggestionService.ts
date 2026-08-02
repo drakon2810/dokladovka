@@ -180,6 +180,58 @@ function fromAccounting(accounting: Record<string, string | undefined>): Suggest
   };
 }
 
+// Typ dokladu → agenda číselného radu v POHODE (element „agenda" v exporte).
+const AGENDA_PRE_TYP: Record<string, string> = {
+  FP: 'prijate_faktury',
+  FV: 'vydane_faktury',
+  PD: 'pokladna',
+  BV: 'banka',
+  MZDY: 'interni_doklady',
+  OZ: 'ostatni_zavazky',
+};
+
+/**
+ * Predvolený číselný rad firmy pre daný typ dokladu:
+ * 1) čo účtovník nastavil v Nastaveniach, 2) inak rad, ktorý firma reálne
+ * používa — najprv podľa počtu použití v pamäti rozhodnutí, potom podľa
+ * najvyššieho čísla z POHODY (nepoužitý rad stojí na 1).
+ */
+async function resolveSeriesDefault(
+  tx: Queryable,
+  input: SuggestionInput,
+  documentType: string | undefined,
+): Promise<string | undefined> {
+  const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
+    `SELECT d.ciselny_rad_id
+       FROM organization_series_defaults d
+       JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true
+      WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type=$3`,
+    [input.tenantId, input.organizationId, documentType ?? ''],
+  );
+  if (explicit.rows[0]) return explicit.rows[0].ciselny_rad_id;
+
+  const agenda = documentType ? AGENDA_PRE_TYP[documentType] : undefined;
+  if (!agenda) return undefined;
+  const automatic = await tx.query<{ id: string } & Record<string, unknown>>(
+    `SELECT c.id
+       FROM code_list_items c
+       LEFT JOIN (
+         SELECT ciselny_rad_id, count(*) AS pouzitia
+           FROM ucto_decisions
+          WHERE tenant_id=$1 AND organization_id=$2 AND ciselny_rad_id IS NOT NULL AND excluded=false
+          GROUP BY ciselny_rad_id
+       ) u ON u.ciselny_rad_id=c.id
+      WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
+        AND c.active=true AND c.agenda=$3
+      ORDER BY COALESCE(u.pouzitia, 0) DESC,
+               COALESCE(NULLIF(regexp_replace(COALESCE(c.last_number, ''), '\\D', '', 'g'), ''), '0')::numeric DESC,
+               c.code
+      LIMIT 1`,
+    [input.tenantId, input.organizationId, agenda],
+  );
+  return automatic.rows[0]?.id;
+}
+
 async function onlyActiveIds(
   tx: Queryable,
   input: SuggestionInput,
@@ -208,11 +260,12 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   let kvKod: string | undefined;
   let ruleId: string | undefined;
 
-  const current = await tx.query<{ extracted: unknown } & Record<string, unknown>>(
-    'SELECT extracted FROM documents WHERE id=$1 AND tenant_id=$2',
+  const current = await tx.query<{ extracted: unknown; document_type?: string } & Record<string, unknown>>(
+    'SELECT extracted, document_type FROM documents WHERE id=$1 AND tenant_id=$2',
     [input.documentId, input.tenantId],
   );
   const lineText = normalizeLineText(current.rows[0]?.extracted);
+  const documentType = current.rows[0]?.document_type;
 
   // Pamäť rozhodnutí dodávateľa (najnovšie prvé). Načíta sa raz — použije sa na
   // doplnenie chýbajúcej predkontácie k VAT-only pravidlu aj ako samostatný
@@ -401,6 +454,12 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
       reason = 'Návrh podľa predvoleného nastavenia organizácie.';
     }
   }
+
+  // Číselný rad je vlastnosťou firmy, nie dodávateľa — pamäť rozhodnutí ani
+  // história dodávateľa ho často nenesú (import histórie bez stĺpca), a vetva
+  // predvolieb vyššie sa pýta len keď nenašlo NIČ. Preto sa dopĺňa samostatne:
+  // inak ostane pole prázdne aj pri inak trafenom návrhu.
+  candidate.ciselny_rad_id ??= await resolveSeriesDefault(tx, input, documentType);
 
   candidate = await onlyActiveIds(tx, input, candidate);
   if (!hasAccounting(candidate)) {

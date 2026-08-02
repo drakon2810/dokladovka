@@ -32,7 +32,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     const [
       queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
       extractionRuns, suggestions, payments, approvalRules, dphProfiles,
-      accountingProfiles, partners, noteTemplates, emailTemplates, orgDocuments, codeListRows,
+      accountingProfiles, partners, noteTemplates, emailTemplates, orgDocuments, codeListRows, seriesDefaults,
       users, batches, integration, installations, links, jobs,
     ] = await Promise.all([
       inScope('document_queues', 'name'),
@@ -64,6 +64,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       inScope('email_templates', 'name'),
       inScope('organization_documents'),
       inScope('code_list_items', 'code'),
+      inScope('organization_series_defaults', 'document_type'),
       database.query<Record<string, any>>(
         'SELECT id,tenant_id,name,email,role,language,notifications FROM users WHERE tenant_id=$1 AND active=true ORDER BY name',
         [auth.tenantId],
@@ -172,6 +173,9 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       approvalRules: approvalRules.rows.map((row) => ({
         organizationId: row.organization_id, tenantId: row.tenant_id,
         minAmount: Number(row.min_amount), requiredRole: row.required_role, active: row.active,
+      })),
+      seriesDefaults: seriesDefaults.rows.map((row) => ({
+        organizationId: row.organization_id, documentType: row.document_type, ciselnyRadId: row.ciselny_rad_id,
       })),
       dphProfiles: dphProfiles.rows.map(mapDphProfilRow),
       accountingProfiles: accountingProfiles.rows.map(mapUctovnyProfilRow),

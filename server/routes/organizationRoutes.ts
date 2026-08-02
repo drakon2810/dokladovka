@@ -282,6 +282,60 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
     return await loadUctovnyProfil(database, auth.tenantId, organizationId);
   });
 
+  // Predvolený číselný rad na typ dokladu — prázdna hodnota vráti automatiku
+  // (rad, ktorý firma v POHODE reálne používa).
+  app.put('/api/organizations/:organizationId/series-defaults', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const body = z.object({
+      defaults: z.array(z.object({
+        documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
+        ciselnyRadId: z.string().min(1).nullable(),
+      }).strict()).max(12),
+    }).strict().parse(request.body);
+    await database.transaction(async (tx) => {
+      for (const item of body.defaults) {
+        if (!item.ciselnyRadId) {
+          await tx.query(
+            'DELETE FROM organization_series_defaults WHERE organization_id=$1 AND tenant_id=$2 AND document_type=$3',
+            [organizationId, auth.tenantId, item.documentType],
+          );
+          continue;
+        }
+        // Rad musí patriť tejto firme a byť aktívny — inak by návrh ukazoval
+        // na položku, ktorú POHODA pri ďalšej synchronizácii vyradila.
+        const rad = await tx.query(
+          `SELECT 1 FROM code_list_items
+            WHERE id=$1 AND tenant_id=$2 AND organization_id=$3 AND kind='ciselneRady' AND active=true`,
+          [item.ciselnyRadId, auth.tenantId, organizationId],
+        );
+        if (rad.rowCount === 0) throw new HttpError(400, 'invalid_series', 'Číselný rad neexistuje alebo nie je aktívny');
+        await tx.query(
+          `INSERT INTO organization_series_defaults (organization_id, tenant_id, document_type, ciselny_rad_id)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (organization_id, document_type)
+           DO UPDATE SET ciselny_rad_id=excluded.ciselny_rad_id, updated_at=now()`,
+          [organizationId, auth.tenantId, item.documentType, item.ciselnyRadId],
+        );
+      }
+    });
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'organization.series_defaults_updated',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: request.id,
+      metadata: { count: body.defaults.length },
+    });
+    return { defaults: body.defaults };
+  });
+
   // Preddefinované poznámky — celý zoznam sa nahrádza naraz (jednoduchý PUT).
   app.put('/api/organizations/:organizationId/note-templates', async (request) => {
     const auth = await requireBrowserAuth(request, database);

@@ -11,6 +11,7 @@ import type {
   DphProfil,
   EmailTemplate,
   NoteTemplate,
+  SeriesDefault,
   Partner,
   UctovnyProfil,
   AgentInstallation,
@@ -58,6 +59,7 @@ export interface AppDataState {
   accountingProfiles: UctovnyProfil[];
   partners: Partner[];
   noteTemplates: NoteTemplate[];
+  seriesDefaults: SeriesDefault[];
   emailTemplates: EmailTemplate[];
   /** Voľné firemné dokumenty — v zozname dokladov ako „Iné doklady". */
   organizationDocuments?: OrgDocument[];
@@ -210,6 +212,7 @@ export function migratePersistedState(persisted: unknown, version: number): AppD
     accountingProfiles: state.accountingProfiles ?? [],
     partners: state.partners ?? [],
     noteTemplates: state.noteTemplates ?? [],
+    seriesDefaults: state.seriesDefaults ?? [],
     emailTemplates: state.emailTemplates ?? [],
   };
 }

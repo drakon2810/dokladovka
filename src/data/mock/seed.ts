@@ -874,6 +874,7 @@ export function buildSeedState() {
     accountingProfiles: [],
     partners: [],
     noteTemplates: [],
+    seriesDefaults: [],
     emailTemplates: [],
   };
 }

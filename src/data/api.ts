@@ -2614,6 +2614,19 @@ export async function archivePartner(partnerId: string): Promise<void> {
 }
 
 /** Uloženie preddefinovaných poznámok organizácie (nahrádza celý zoznam). */
+/** Predvolený číselný rad na typ dokladu; null vráti automatický výber. */
+export async function saveSeriesDefaults(
+  organizationId: string,
+  defaults: Array<{ documentType: DocumentType; ciselnyRadId: string | null }>,
+): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Predvolené číselné rady vyžadujú spustený backend');
+  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/series-defaults`, {
+    method: 'PUT',
+    body: JSON.stringify({ defaults }),
+  });
+  await refreshRestSnapshot();
+}
+
 export async function saveNoteTemplates(organizationId: string, poznamky: string[]): Promise<void> {
   if (!REST_DATA_MODE) throw new Error('Preddefinované poznámky vyžadujú spustený backend');
   await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/note-templates`, {

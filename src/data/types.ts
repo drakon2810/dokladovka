@@ -51,6 +51,13 @@ export interface Organization {
   senderWhitelist?: string[];
 }
 
+/** Predvolený číselný rad firmy pre daný typ dokladu (Nastavenia → Číselníky). */
+export interface SeriesDefault {
+  organizationId: string;
+  documentType: DocumentType;
+  ciselnyRadId: string;
+}
+
 /** Preddefinovaná poznámka pre pole „poznámka“ na doklade. */
 export interface NoteTemplate {
   id: string;

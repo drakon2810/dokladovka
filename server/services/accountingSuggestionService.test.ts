@@ -501,3 +501,72 @@ describe('zuzPonukuPredkontacii', () => {
     expect(zuzPonukuPredkontacii(vsetky, 'nafta', [])).toEqual(vsetky);
   });
 });
+
+describe('predvolený číselný rad', () => {
+  // Pamäť dodávateľa ani história číselný rad často nenesú (import histórie bez
+  // stĺpca) — bez samostatného doplnenia ostávalo pole v editore prázdne.
+  async function pripravFirmu() {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pouzivany = randomUUID();
+    const nepouzivany = randomUUID();
+    const pokladnicny = randomUUID();
+    await database.transaction(async (tx) => {
+      // Dva rady prijatých faktúr: jeden POHODA reálne používa (číslo 2026248),
+      // druhý stojí na 00001. Tretí patrí pokladni — nesmie sa ponúknuť pre FP.
+      for (const [id, code, agenda, lastNumber] of [
+        [pouzivany, '2026', 'prijate_faktury', '2026248'],
+        [nepouzivany, '26XX', 'prijate_faktury', '00001'],
+        [pokladnicny, '26PK', 'pokladna', '26PK017'],
+      ] as const) {
+        await tx.query(
+          `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,last_number)
+           VALUES ($1,$2,$3,'ciselneRady',$4,$4,'pohoda',$5,$6)`,
+          [id, seeded.tenantId, seeded.organizationId, code, agenda, lastNumber],
+        );
+      }
+      await tx.query(
+        `INSERT INTO documents
+          (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+         VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,0,'EUR')`,
+        [documentId, seeded.tenantId, seeded.organizationId,
+          JSON.stringify({ dodavatel: { nazov: 'Nový dodávateľ', ico: '11112222' }, cisloFaktury: 'X1', datumVystavenia: '2026-07-01', mena: 'EUR', rozpisDph: [], sumaSpolu: 0 })],
+      );
+    });
+    return { database, seeded, documentId, pouzivany, nepouzivany, pokladnicny };
+  }
+
+  const navrh = async (database: any, seeded: any, documentId: string) => {
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+      supplierIco: '11112222', supplierName: 'Nový dodávateľ',
+    });
+    const row = await database.query<{ ciselny_rad_id: string | null } & Record<string, unknown>>(
+      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    );
+    return row.rows[0]?.ciselny_rad_id ?? null;
+  };
+
+  it('automaticky vyberie rad, ktorý firma v POHODE reálne používa', async () => {
+    const { database, seeded, documentId, pouzivany } = await pripravFirmu();
+    expect(await navrh(database, seeded, documentId)).toBe(pouzivany);
+  }, 60_000);
+
+  it('rešpektuje nastavenie účtovníka pred automatikou', async () => {
+    const { database, seeded, documentId, nepouzivany } = await pripravFirmu();
+    await database.query(
+      `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id)
+       VALUES ($1,$2,'FP',$3)`,
+      [seeded.organizationId, seeded.tenantId, nepouzivany],
+    );
+    expect(await navrh(database, seeded, documentId)).toBe(nepouzivany);
+  }, 60_000);
+
+  it('neponúkne rad inej agendy (pokladňa pre prijatú faktúru)', async () => {
+    const { database, seeded, documentId, pokladnicny } = await pripravFirmu();
+    await database.query(`UPDATE code_list_items SET active=false WHERE agenda='prijate_faktury'`);
+    expect(await navrh(database, seeded, documentId)).not.toBe(pokladnicny);
+  }, 60_000);
+});
