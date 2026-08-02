@@ -168,13 +168,26 @@ describe('agent backend contour', () => {
       method: 'POST',
       url: '/api/mostik/export-jobs',
       headers: browserHeaders,
-      payload: { organizationId: seeded.organizationId, documentIds: [documentId], idempotencyKey: 'test-export-1' },
+      // „Nekontrolovať duplicity" z exportného dialógu putuje až k agentovi.
+      payload: { organizationId: seeded.organizationId, documentIds: [documentId], idempotencyKey: 'test-export-1', checkDuplicity: false },
     });
     expect(created.statusCode).toBe(201);
     const exportJobId = created.json().id as string;
+
+    // Druhý klik na Exportovať (iný idempotency key) nesmie založiť druhý prenos
+    // tých istých dokladov — POHODA by ich pri „Nekontrolovať duplicity" naimportovala dvakrát.
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/mostik/export-jobs',
+      headers: browserHeaders,
+      payload: { organizationId: seeded.organizationId, documentIds: [documentId], idempotencyKey: 'test-export-2' },
+    });
+    expect(duplicate.statusCode, duplicate.body).toBe(409);
+    expect(duplicate.json().code).toBe('documents_in_transfer');
+
     const queue = await app.inject({ method: 'GET', url: `/api/agent/export-queue?organizationId=${seeded.organizationId}`, headers: agentHeaders });
     expect(queue.statusCode).toBe(200);
-    expect(queue.json()[0]).toMatchObject({ exportJobId, idempotencyKey: 'test-export-1' });
+    expect(queue.json()[0]).toMatchObject({ exportJobId, idempotencyKey: 'test-export-1', checkDuplicity: false });
     expect(queue.json()[0].dataPackXml).toContain('ico="12345678"');
 
     const resultPayload = { exportJobId, perDocument: [{ documentId, state: 'ok', pohodaNumber: 'FP260001' }], rawResponseMeta: { responsePackState: 'ok' } };

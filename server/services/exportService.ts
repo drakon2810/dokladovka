@@ -57,10 +57,15 @@ export async function buildApprovedDocumentsXml(
     // Názov predkontácie ide do <inv:text> dokladu.
     if (row.kind === 'predkontacie') codeLists.predkontacieNazvy!.set(row.id, row.name);
   }
+  // Poradie v dataPacku = poradie vybrané v exportnom dialógu (dátum/číslo);
+  // SELECT ... = ANY($2) poradie vstupu nezachováva.
+  const order = new Map(uniqueIds.map((documentId, index) => [documentId, index]));
   return buildServerDataPack({
     id: input.packId,
     ico: input.ico,
-    documents: documents.rows.map((row) => ({ id: row.id, snapshot: row.approved_snapshot! })),
+    documents: [...documents.rows]
+      .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+      .map((row) => ({ id: row.id, snapshot: row.approved_snapshot! })),
     codeLists,
   });
 }

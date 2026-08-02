@@ -390,7 +390,7 @@ public sealed class AgentCycleRunner
                 await SendPermanentFailureAsync(pending, documentIds, $"Agent povoľuje iba vytváranie dokladov — dataPack obsahuje akciu {string.Join(", ", destructive)}.", stopwatch, cancellationToken);
                 return;
             }
-            var response = await mServer.PostXmlAsync(pending.Job.DataPackXml, pending.Job.IdempotencyKey, true, cancellationToken);
+            var response = await mServer.PostXmlAsync(pending.Job.DataPackXml, pending.Job.IdempotencyKey, pending.Job.CheckDuplicity, cancellationToken);
             var parsed = PohodaXml.ParseExportResponse(response, documentIds);
             await _backend.SendExportResultsAsync(pending.Job.ExportJobId, parsed.Results, new
             {

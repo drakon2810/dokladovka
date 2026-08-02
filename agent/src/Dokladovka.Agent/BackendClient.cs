@@ -29,7 +29,9 @@ public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyR
 // PosledneCislo: najvyššie použité číslo číselného radu (topNumber z exportu POHODY) —
 // web z neho predikuje interné číslo ďalšieho dokladu.
 public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null, string? PosledneCislo = null);
-public sealed record AgentExportJob(string ExportJobId, string DataPackXml, string IdempotencyKey);
+// CheckDuplicity=false: voľba „Nekontrolovať duplicity" v exportnom dialógu —
+// POHODA doklad naimportuje aj vtedy, keď tam s rovnakým číslom už je.
+public sealed record AgentExportJob(string ExportJobId, string DataPackXml, string IdempotencyKey, bool CheckDuplicity = true);
 public sealed record ExportDocumentResult(string DocumentId, string State, string? PohodaNumber = null, string? Message = null);
 public sealed record AgentRelease(
     bool Available,

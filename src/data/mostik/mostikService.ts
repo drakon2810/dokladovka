@@ -325,11 +325,17 @@ function approvedDocument(document: DocumentItem): DocumentItem {
 export async function createMostikExportJob(
   organizationId: string,
   documentIds: string[],
+  options?: { nekontrolovatDuplicity?: boolean },
 ): Promise<ExportJob> {
   if (MOSTIK_DATA_MODE === 'rest') {
     return restRequest('/api/mostik/export-jobs', {
       method: 'POST',
-      body: JSON.stringify({ organizationId, documentIds, idempotencyKey: crypto.randomUUID() }),
+      body: JSON.stringify({
+        organizationId,
+        documentIds,
+        idempotencyKey: crypto.randomUUID(),
+        checkDuplicity: !options?.nekontrolovatDuplicity,
+      }),
     });
   }
   requireExporter();

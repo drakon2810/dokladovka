@@ -27,6 +27,7 @@ interface ExportJobRow extends Record<string, unknown> {
   organization_id: string;
   document_ids: string[];
   status: 'pending' | 'sent' | 'confirmed' | 'failed';
+  check_duplicity: boolean;
   idempotency_key: string;
   request_xml: string;
   request_xml_hash: string;
@@ -143,6 +144,8 @@ async function createExportJob(
   auth: AuthContext,
   input: {
     organizationId: string; documentIds: string[]; idempotencyKey?: string;
+    /** false = „Nekontrolovať duplicity": POHODA doklad naimportuje aj keď tam už je. */
+    checkDuplicity?: boolean;
     /** Zopakovanie: nadväzuje na pôvodný prenos a berie aj doklady v stave „chyba". */
     retryOfJobId?: string; attempt?: number;
   },
@@ -160,6 +163,19 @@ async function createExportJob(
     'SELECT * FROM export_jobs WHERE tenant_id=$1 AND idempotency_key=$2', [auth.tenantId, idempotencyKey],
   );
   if (existing.rows[0]) return existing.rows[0];
+  // Doklad smie byť naraz len v jednom rozpracovanom prenose. Bez tejto poistky
+  // by druhý klik (alebo zopakovanie po čiastočnom multi-firm exporte) založil
+  // druhý job s tými istými dokladmi a POHODA by ich importovala dvakrát —
+  // garantovane pri voľbe „Nekontrolovať duplicity".
+  const inFlight = await database.query(
+    `SELECT 1 FROM export_jobs
+      WHERE tenant_id=$1 AND organization_id=$2 AND status IN ('pending','sent')
+        AND document_ids ?| $3::text[] LIMIT 1`,
+    [auth.tenantId, input.organizationId, [...new Set(input.documentIds)]],
+  );
+  if (inFlight.rowCount > 0) {
+    throw new HttpError(409, 'documents_in_transfer', 'Niektoré vybrané doklady už čakajú na prenos do POHODY');
+  }
   const id = randomUUID();
   const xml = await buildApprovedDocumentsXml(database, {
     tenantId: auth.tenantId,
@@ -173,11 +189,11 @@ async function createExportJob(
   const result = await database.query<ExportJobRow>(
     `INSERT INTO export_jobs
       (id, tenant_id, organization_id, document_ids, status, idempotency_key, request_xml,
-       request_xml_hash, created_by, attempt, retry_of_job_id)
-     VALUES ($1,$2,$3,$4::jsonb,'pending',$5,$6,$7,$8,$9,$10)
+       request_xml_hash, created_by, attempt, retry_of_job_id, check_duplicity)
+     VALUES ($1,$2,$3,$4::jsonb,'pending',$5,$6,$7,$8,$9,$10,$11)
      RETURNING *`,
     [id, auth.tenantId, input.organizationId, JSON.stringify([...new Set(input.documentIds)]), idempotencyKey, xml, hash, auth.userId,
-      input.attempt ?? 1, input.retryOfJobId ?? null],
+      input.attempt ?? 1, input.retryOfJobId ?? null, input.checkDuplicity ?? true],
   );
   await writeAudit(database, {
     tenantId: auth.tenantId,
@@ -416,7 +432,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       return pending.rows;
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
-    return jobs.map((job) => ({ exportJobId: job.id, dataPackXml: job.request_xml, idempotencyKey: job.idempotency_key }));
+    return jobs.map((job) => ({ exportJobId: job.id, dataPackXml: job.request_xml, idempotencyKey: job.idempotency_key, checkDuplicity: job.check_duplicity }));
   });
 
   app.post('/api/agent/export-results', async (request) => {
@@ -797,7 +813,12 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
     requireRole(auth, ['admin', 'uctovnik']);
-    const body = z.object({ organizationId: z.string().uuid(), documentIds: z.array(z.string().uuid()).min(1), idempotencyKey: z.string().max(200).optional() }).strict().parse(request.body);
+    const body = z.object({
+      organizationId: z.string().uuid(),
+      documentIds: z.array(z.string().uuid()).min(1),
+      idempotencyKey: z.string().max(200).optional(),
+      checkDuplicity: z.boolean().optional(),
+    }).strict().parse(request.body);
     return reply.code(201).send(publicJob(await createExportJob(database, auth, body, request.id)));
   });
 
@@ -830,12 +851,16 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
       [auth.tenantId, job.document_ids],
     );
     if (pending.rowCount === 0) throw new HttpError(409, 'nothing_to_retry', 'Všetky doklady prenosu už sú v POHODE');
+    // document_ids nesú poradie vybrané v exportnom dialógu — filter cez množinu
+    // ho zachová (SELECT = ANY() vracia riadky v ľubovoľnom poradí).
+    const pendingIds = new Set(pending.rows.map((row) => row.id));
     const next = await createExportJob(
       database,
       auth,
       {
         organizationId: job.organization_id,
-        documentIds: pending.rows.map((row) => row.id),
+        documentIds: job.document_ids.filter((documentId) => pendingIds.has(documentId)),
+        checkDuplicity: job.check_duplicity,
         retryOfJobId: job.id,
         attempt: job.attempt + 1,
       },
