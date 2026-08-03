@@ -8,6 +8,7 @@ import { writeAudit } from '../audit.js';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole, type AuthContext } from '../auth.js';
 import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
+import type { ObjectStorage } from '../storage.js';
 import { HttpError } from '../http.js';
 import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from '../security.js';
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
@@ -225,7 +226,7 @@ function publicJob(row: ExportJobRow) {
   };
 }
 
-export function registerAgentRoutes(app: FastifyInstance, database: Database, config: ServerConfig): void {
+export function registerAgentRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage, config: ServerConfig): void {
   app.post('/api/agent/pair', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (request, reply) => {
@@ -405,6 +406,35 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, co
     }
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
     return { imported: result.imported, duplicates: result.duplicates, rejected: result.rejected.length };
+  });
+
+  // Originálny sken dokladu pre agenta — po úspešnom prenose ho uloží do
+  // priečinka dokumentov POHODY, aby účtovník videl papier pri zázname.
+  // Agent smie stiahnuť len doklad, ktorý naozaj dostal na prenos; ukradnutý
+  // token tak nie je čítačkou celého archívu tenanta.
+  app.get<{ Params: { id: string } }>('/api/agent/documents/:id/file', async (request, reply) => {
+    const agent = await requireAgent(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const source = await database.query<{
+      storage_key?: string; detected_mime_type?: string; original_file_name: string;
+    } & Record<string, unknown>>(
+      `SELECT a.storage_key, a.detected_mime_type, a.original_file_name
+         FROM inbound_attachments a
+        WHERE a.document_id=$1 AND a.tenant_id=$2
+          AND EXISTS (SELECT 1 FROM export_jobs j
+                       WHERE j.tenant_id=a.tenant_id AND j.document_ids ? $1)
+        ORDER BY a.created_at LIMIT 1`,
+      [id, agent.tenant_id],
+    );
+    const attachment = source.rows[0];
+    if (!attachment?.storage_key) throw new HttpError(404, 'attachment_missing', 'Zdrojový súbor neexistuje');
+    const safeName = attachment.original_file_name.replace(/[\r\n"\\]/g, '_').slice(0, 180);
+    // Hlavička HTTP unesie len latin-1, takže diakritika ide v RFC 5987 filename*;
+    // agent číta práve tú a na ASCII variant padne len keď chýba.
+    const asciiName = safeName.replace(/[^\x20-\x7e]/g, '_') || 'doklad';
+    reply.header('Content-Type', attachment.detected_mime_type ?? 'application/octet-stream');
+    reply.header('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+    return reply.send(Buffer.from(await storage.get(attachment.storage_key)));
   });
 
   app.get('/api/agent/export-queue', async (request) => {

@@ -82,7 +82,7 @@ export async function buildApp(input: {
   registerOrganizationRoutes(app, input.database, input.storage, input.config);
   registerInboundRoutes(app, input.database, input.storage, input.config);
   registerDocumentRoutes(app, input.database, input.storage, input.config);
-  registerAgentRoutes(app, input.database, input.config);
+  registerAgentRoutes(app, input.database, input.storage, input.config);
   registerDataSnapshotRoutes(app, input.database);
   registerCodeListRoutes(app, input.database);
   registerOrgDocumentRoutes(app, input.database, input.storage, input.config);

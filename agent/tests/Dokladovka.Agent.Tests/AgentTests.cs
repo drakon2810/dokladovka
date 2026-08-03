@@ -1,4 +1,4 @@
-using Dokladovka.Agent;
+﻿using Dokladovka.Agent;
 using System.Net;
 using System.Text;
 using Xunit;
@@ -519,4 +519,73 @@ public sealed class AgentTests
             new MServerEndpointSettings { Id = "one", BaseUrl = "http://localhost:444", CompanyIco = "12345678" },
         ],
     };
+}
+
+public sealed class DocumentFolderTests
+{
+    [Theory]
+    [InlineData("FP")]
+    [InlineData("PD")]
+    [InlineData("MZDY")]
+    public void FolderRequestConformsToBundledOfficialSchema(string documentType)
+    {
+        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
+        var xml = PohodaXml.BuildDocumentFolderRequest("12345678", documentType, ["26HP026"], "folders-test");
+        Assert.NotNull(xml);
+        Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml!));
+    }
+    
+    [Fact]
+    public void SafeFileName_ocisti_meno_z_hlavicky()
+    {
+        // Cudzí vstup: cesta, traversal aj prázdna hodnota musia skončiť pri jednom mene súboru.
+        Assert.Equal("faktura.pdf", AgentCycleRunner.SafeFileName(@"..\..\Windows\faktura.pdf", "26HP026"));
+        Assert.Equal("26HP026.pdf", AgentCycleRunner.SafeFileName("..", "26HP026"));
+        Assert.Equal("26HP026.pdf", AgentCycleRunner.SafeFileName(null, "26HP026"));
+        Assert.Equal("ab.pdf", AgentCycleRunner.SafeFileName("a<b>.pdf", "26HP026"));
+        var dlhe = AgentCycleRunner.SafeFileName(new string('x', 200) + ".pdf", "26HP026");
+        Assert.Equal(90, dlhe.Length);
+        Assert.EndsWith(".pdf", dlhe);
+    }
+
+    [Fact]
+    public void ParsujePriecinokDokumentovZOdpovede()
+    {
+        // Cestu skladá POHODA — vrátane lokalizovaného segmentu a priečinka číselného radu.
+        var response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack version="2.0" state="ok"
+              xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd"
+              xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+              xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd"
+              xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
+              <rsp:responsePackItem version="2.0" state="ok">
+                <lst:listVoucher version="2.0">
+                  <lst:voucher>
+                    <vch:voucherHeader>
+                      <vch:number><typ:numberRequested>26HP026</typ:numberRequested></vch:number>
+                    </vch:voucherHeader>
+                    <vch:attachments>
+                      <typ:files>
+                        <typ:companyDocumentsFolder>C:\Pohoda SQL Komplet\Dokumenty\AGS\Podvojné účtovníctvo\Pokladňa</typ:companyDocumentsFolder>
+                        <typ:subFolder>26HP\26HP026</typ:subFolder>
+                      </typ:files>
+                    </vch:attachments>
+                  </lst:voucher>
+                </lst:listVoucher>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var folder = Assert.Single(PohodaXml.ParseDocumentFolders(response));
+        Assert.Equal("26HP026", folder.Cislo);
+        Assert.Equal(@"C:\Pohoda SQL Komplet\Dokumenty\AGS\Podvojné účtovníctvo\Pokladňa", folder.CompanyFolder);
+        Assert.Equal(@"26HP\26HP026", folder.SubFolder);
+    }
+
+    [Fact]
+    public void CitaIcoZHlavickyDataPacku()
+    {
+        var xml = PohodaXml.BuildCodeListRequest("35761571", "req-1");
+        Assert.Equal("35761571", PohodaXml.ReadDataPackIco(xml));
+    }
 }

@@ -124,6 +124,17 @@ public sealed class BackendClient
         CancellationToken cancellationToken) =>
         SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Post, "api/agent/export-results", new { exportJobId, perDocument, rawResponseMeta }), cancellationToken);
 
+    /// <summary>Originálny sken dokladu — ukladá sa do priečinka dokumentov POHODY.
+    /// Meno súboru nesie hlavička Content-Disposition; volajúci ho musí očistiť.</summary>
+    public async Task<(byte[] Bytes, string? FileName)> DownloadScanAsync(string documentId, CancellationToken cancellationToken)
+    {
+        using var response = await _http.GetAsync($"api/agent/documents/{Uri.EscapeDataString(documentId)}/file", cancellationToken);
+        if (!response.IsSuccessStatusCode) throw await ToException(response, cancellationToken);
+        var name = response.Content.Headers.ContentDisposition?.FileNameStar
+            ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"');
+        return (await response.Content.ReadAsByteArrayAsync(cancellationToken), name);
+    }
+
     public Task<AgentRelease> GetLatestReleaseAsync(CancellationToken cancellationToken) =>
         SendJsonAsync<AgentRelease>(() => new HttpRequestMessage(HttpMethod.Get, "api/agent/latest"), cancellationToken);
 

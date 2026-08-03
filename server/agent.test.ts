@@ -21,7 +21,8 @@ describe('agent backend contour', () => {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
-    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const storage = new MemoryObjectStorage();
+    const app = await buildApp({ database, storage, config: testConfig(), logger: false });
 
     const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
     const cookie = String(login.headers['set-cookie']).split(';')[0];
@@ -189,6 +190,31 @@ describe('agent backend contour', () => {
     expect(queue.statusCode).toBe(200);
     expect(queue.json()[0]).toMatchObject({ exportJobId, idempotencyKey: 'test-export-1', checkDuplicity: false });
     expect(queue.json()[0].dataPackXml).toContain('ico="12345678"');
+
+    // Sken pre priečinok Dokumenty v POHODE: agent ho smie stiahnuť len k dokladu,
+    // ktorý má prenos, a meno s diakritikou musí prejsť hlavičkou HTTP.
+    const emailId = randomUUID();
+    const attachmentId = randomUUID();
+    const storageKey = `upload/${seeded.tenantId}/${seeded.organizationId}/${attachmentId}.pdf`;
+    await storage.put(storageKey, new TextEncoder().encode('%PDF-1.4'));
+    await database.query(
+      `INSERT INTO inbound_emails
+        (id,tenant_id,organization_id,alias_id,provider,provider_message_id,envelope_recipients,sender_email,subject,received_at,status,correlation_id)
+       VALUES ($1,$2,$3,$4,'imap',$5,'[]'::jsonb,'a@b.sk','Faktúra',now(),'processed',$1)`,
+      [emailId, seeded.tenantId, seeded.organizationId, seeded.aliasId, `msg-${emailId}`],
+    );
+    await database.query(
+      `INSERT INTO inbound_attachments
+        (id,tenant_id,organization_id,inbound_email_id,document_id,original_file_name,safe_file_name,declared_mime_type,detected_mime_type,byte_size,sha256,storage_key,status)
+       VALUES ($1,$2,$3,$4,$5,'faktúra č.1.pdf','faktura-c1.pdf','application/pdf','application/pdf',8,$6,$7,'stored')`,
+      [attachmentId, seeded.tenantId, seeded.organizationId, emailId, documentId, `sha-${attachmentId}`, storageKey],
+    );
+    const scan = await app.inject({ method: 'GET', url: `/api/agent/documents/${documentId}/file`, headers: agentHeaders });
+    expect(scan.statusCode, scan.body).toBe(200);
+    expect(scan.headers['content-disposition']).toContain("filename*=UTF-8''");
+    expect(scan.rawPayload.toString('utf8')).toBe('%PDF-1.4');
+    const foreign = await app.inject({ method: 'GET', url: `/api/agent/documents/${randomUUID()}/file`, headers: agentHeaders });
+    expect(foreign.statusCode).toBe(404);
 
     const resultPayload = { exportJobId, perDocument: [{ documentId, state: 'ok', pohodaNumber: 'FP260001' }], rawResponseMeta: { responsePackState: 'ok' } };
     const result = await app.inject({ method: 'POST', url: '/api/agent/export-results', headers: agentHeaders, payload: resultPayload });

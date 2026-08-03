@@ -402,6 +402,10 @@ public sealed class AgentCycleRunner
             }, cancellationToken);
             _pendingJobs.Delete(pending.Job.ExportJobId);
             _cliExportAttempts.Remove(pending.Job.ExportJobId);
+            // Sken sa ukladá až po potvrdení prenosu — zlyhanie kopírovania nesmie
+            // zdržať cloud ani spôsobiť opakovaný import už zaúčtovaného dokladu.
+            try { await TryAttachScansAsync(pending, mServer, parsed.Results, cancellationToken); }
+            catch (Exception error) { _log.Error("scan_attach_failed", error, new { pending.Job.ExportJobId }); }
             _log.Info("export_completed", new { pending.Job.ExportJobId, durationMs = stopwatch.ElapsedMilliseconds, parsed.PackState });
         }
         catch (MServerException error) when (!error.IsTransient)
@@ -426,6 +430,86 @@ public sealed class AgentCycleRunner
             }
             _log.Error("export_deferred", error, new { pending.Job.ExportJobId, durationMs = stopwatch.ElapsedMilliseconds });
         }
+    }
+
+    /// <summary>
+    /// Uloží originálny sken k prenesenému dokladu do priečinka dokumentov POHODY
+    /// (záložka „Dokumenty"). Cestu pýtame od POHODY — pozná lokalizovaný segment
+    /// aj priečinok číselného radu. Beží až PO potvrdení prenosu a je best-effort:
+    /// zlyhanie kopírovania nesmie zhodiť ani zopakovať už zaúčtovaný doklad.
+    /// </summary>
+    private async Task TryAttachScansAsync(
+        PendingExport pending,
+        IPohodaClient pohoda,
+        IReadOnlyList<ExportDocumentResult> results,
+        CancellationToken cancellationToken)
+    {
+        // Len doklady, ktoré POHODA naozaj založila (varovanie = nezaložený doklad).
+        var prenesene = results.Where(result => result.State == "ok" && !string.IsNullOrWhiteSpace(result.PohodaNumber)).ToArray();
+        if (prenesene.Length == 0) return;
+        var typy = PohodaXml.ReadDataPackItemTypes(pending.Job.DataPackXml);
+        foreach (var skupina in prenesene.GroupBy(result => typy.GetValueOrDefault(result.DocumentId)))
+        {
+            if (skupina.Key is null) continue;
+            var cisla = skupina.Select(result => result.PohodaNumber!).Distinct(StringComparer.Ordinal).ToArray();
+            var requestXml = PohodaXml.BuildDocumentFolderRequest(
+                PohodaXml.ReadDataPackIco(pending.Job.DataPackXml) ?? string.Empty, skupina.Key, cisla, $"priecinky-{pending.Job.ExportJobId}");
+            if (requestXml is null) continue;
+            var response = await pohoda.PostXmlAsync(requestXml, $"priecinky-{pending.Job.ExportJobId}", false, cancellationToken);
+            var priecinky = PohodaXml.ParseDocumentFolders(response)
+                .ToDictionary(folder => folder.Cislo, StringComparer.OrdinalIgnoreCase);
+            foreach (var result in skupina)
+            {
+                if (!priecinky.TryGetValue(result.PohodaNumber!, out var folder) || string.IsNullOrWhiteSpace(folder.CompanyFolder))
+                {
+                    _log.Info("scan_folder_unknown", new { result.DocumentId, result.PohodaNumber });
+                    continue;
+                }
+                try
+                {
+                    await SaveScanAsync(result, folder, cancellationToken);
+                }
+                catch (Exception error)
+                {
+                    _log.Error("scan_save_failed", error, new { result.DocumentId, result.PohodaNumber });
+                }
+            }
+        }
+    }
+
+    private async Task SaveScanAsync(ExportDocumentResult result, PohodaXml.DocumentFolder folder, CancellationToken cancellationToken)
+    {
+        // subFolder je relatívny k priečinku firmy; absolútna hodnota by pri
+        // Path.Combine ticho zahodila koreň a zapísala mimo stromu Dokumenty.
+        var sub = folder.SubFolder?.Trim() ?? string.Empty;
+        var target = string.IsNullOrEmpty(sub) || Path.IsPathRooted(sub)
+            ? folder.CompanyFolder!
+            : Path.Combine(folder.CompanyFolder!, sub);
+        var (bytes, headerName) = await _backend.DownloadScanAsync(result.DocumentId, cancellationToken);
+        var fileName = SafeFileName(headerName, result.PohodaNumber!);
+        Directory.CreateDirectory(target);
+        var path = Path.Combine(target, fileName);
+        // Rovnaký sken sa druhýkrát neprepisuje (zopakovaný prenos, duplicita).
+        if (File.Exists(path))
+        {
+            _log.Info("scan_already_present", new { result.DocumentId, path });
+            return;
+        }
+        await File.WriteAllBytesAsync(path, bytes, cancellationToken);
+        _log.Info("scan_saved", new { result.DocumentId, result.PohodaNumber, bytes = bytes.Length });
+    }
+
+    /// <summary>Meno súboru z HTTP hlavičky je cudzí vstup — z cesty sa berie len
+    /// samotné meno, zakázané znaky padajú a dĺžka sa stráži kvôli limitu Windows.</summary>
+    public static string SafeFileName(string? headerName, string fallback)
+    {
+        var raw = Path.GetFileName(headerName?.Trim() ?? string.Empty);
+        var cleaned = new string(raw.Where(character => !Path.GetInvalidFileNameChars().Contains(character)).ToArray()).Trim();
+        // "." / ".." prežijú filter znakov, ale ako cesta ukazujú na priečinok.
+        if (cleaned.Length == 0 || cleaned.All(character => character == '.')) cleaned = $"{fallback}.pdf";
+        if (cleaned.Length <= 90) return cleaned;
+        var extension = Path.GetExtension(cleaned);
+        return string.Concat(Path.GetFileNameWithoutExtension(cleaned).AsSpan(0, Math.Max(1, 90 - extension.Length)), extension);
     }
 
     private async Task SendPermanentFailureAsync(PendingExport pending, IReadOnlyList<string> documentIds, string message, Stopwatch stopwatch, CancellationToken cancellationToken)

@@ -83,6 +83,117 @@ public static class PohodaXml
         return new ParsedTrainingDecisions(rows, warnings);
     }
 
+    /// <summary>Priečinok dokumentov jedného dokladu (záložka „Dokumenty").</summary>
+    public sealed record DocumentFolder(string Cislo, string? CompanyFolder, string? SubFolder);
+
+    // Agenda dokladu → element zoznamu v POHODE. Priečinok pýtame len pre agendy,
+    // ktoré vôbec exportujeme (faktúry, pokladňa, interné doklady).
+    private static (string Request, string Item, string VersionAttribute)? FolderRequestShape(string documentType) => documentType switch
+    {
+        "FP" or "FV" or "OZ" => ("listInvoiceRequest", "requestInvoice", "invoiceVersion"),
+        "PD" => ("listVoucherRequest", "requestVoucher", "voucherVersion"),
+        "MZDY" => ("listIntDocRequest", "requestIntDoc", "intDocVersion"),
+        _ => null,
+    };
+
+    /// <summary>
+    /// Dopyt na priečinok dokumentov konkrétnych dokladov. POHODA cestu pozná —
+    /// vrátane lokalizovaného segmentu („Podvojné účtovníctvo\Pokladňa") aj
+    /// priečinka číselného radu — takže ju neskladáme sami z nastavení.
+    /// </summary>
+    public static string? BuildDocumentFolderRequest(string ico, string documentType, IReadOnlyList<string> numbers, string requestId)
+    {
+        if (numbers.Count == 0) return null;
+        var shape = FolderRequestShape(documentType);
+        if (shape is null) return null;
+        // invoiceType je pri faktúrach povinný atribút dopytu.
+        var invoiceType = documentType switch { "FV" => "issuedInvoice", "OZ" => "commitment", _ => "receivedInvoice" };
+        var typeAttribute = shape.Value.Request == "listInvoiceRequest" ? $" invoiceType=\"{invoiceType}\"" : string.Empty;
+        var selected = string.Join("\n", numbers.Select(number =>
+            $"          <ftr:number><typ:numberRequested>{Escape(number)}</typ:numberRequested></ftr:number>"));
+        return $"""
+<?xml version="1.0" encoding="Windows-1250"?>
+<dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Priecinok dokumentov"
+  xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:ftr="http://www.stormware.cz/schema/version_2/filter.xsd"
+  xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
+  <dat:dataPackItem id="folders" version="2.0">
+    <lst:{shape.Value.Request} version="2.0"{typeAttribute} {shape.Value.VersionAttribute}="2.0">
+      <lst:{shape.Value.Item}>
+        <ftr:filter>
+          <ftr:selectedNumbers>
+{selected}
+          </ftr:selectedNumbers>
+        </ftr:filter>
+      </lst:{shape.Value.Item}>
+      <lst:restrictionData>
+        <lst:attachments>true</lst:attachments>
+      </lst:restrictionData>
+    </lst:{shape.Value.Request}>
+  </dat:dataPackItem>
+</dat:dataPack>
+""";
+    }
+
+    /// <summary>IČO účtovnej jednotky z hlavičky dataPacku.</summary>
+    public static string? ReadDataPackIco(string xml) =>
+        Trimmed(XDocument.Parse(xml, LoadOptions.None).Root?.Attribute("ico")?.Value);
+
+    /// <summary>Typ dokladu každej položky dataPacku (id → FP/FV/OZ/PD/MZDY).
+    /// Agenda sa číta z tela položky, nie z cloudu — dopyt na priečinok musí
+    /// ísť do tej agendy, do ktorej doklad naozaj išiel.</summary>
+    public static IReadOnlyDictionary<string, string> ReadDataPackItemTypes(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var types = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var item in document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "dataPackItem"))
+        {
+            var id = item.Attribute("id")?.Value;
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            var body = item.Elements().FirstOrDefault(child => IsStormware(child));
+            var typ = body?.Name.LocalName switch
+            {
+                "voucher" => "PD",
+                "intDoc" => "MZDY",
+                "invoice" => FindText(body, "invoiceType") switch
+                {
+                    "issuedInvoice" => "FV",
+                    "commitment" => "OZ",
+                    _ => "FP",
+                },
+                _ => null,
+            };
+            if (typ is not null) types[id] = typ;
+        }
+        return types;
+    }
+
+    /// <summary>Priečinky dokumentov z odpovede POHODY, kľúčované číslom dokladu.</summary>
+    public static IReadOnlyList<DocumentFolder> ParseDocumentFolders(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
+        var folders = new List<DocumentFolder>();
+        foreach (var header in document.Descendants().Where(item => IsStormware(item)
+            && item.Name.LocalName is "invoiceHeader" or "voucherHeader" or "intDocHeader"))
+        {
+            var doklad = header.Parent;
+            if (doklad is null) continue;
+            var number = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "number");
+            var cislo = Trimmed(number is null ? null : (FindText(number, "numberRequested") ?? number.Value));
+            if (cislo is null) continue;
+            // attachments je súrodenec hlavičky (v tele dokladu), nie jej dieťa.
+            var files = doklad.Descendants().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "files");
+            folders.Add(new DocumentFolder(
+                cislo,
+                files is null ? null : Trimmed(FindText(files, "companyDocumentsFolder")),
+                files is null ? null : Trimmed(FindText(files, "subFolder"))));
+        }
+        return folders;
+    }
+
     /// <summary>Ochrana POHODY: agent smie doklady len vytvárať. Vráti zoznam
     /// zakázaných prvkov (actionType update/delete a transformation — XSLT by
     /// mohla dataPack prepísať až v POHODE); prázdny zoznam = v poriadku.</summary>
