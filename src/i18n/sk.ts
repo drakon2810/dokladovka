@@ -1253,6 +1253,25 @@ export const sk = {
   'pravidla.vypnut': 'Vypnúť',
   'pravidla.prazdne': 'Zatiaľ tu nie je žiadne pravidlo.',
   'pravidla.chybaPovinne': 'Vyplňte názov aj text pravidla.',
+
+  // ===== Účtovný profil firmy (korpus histórie + kategórie plnení) =====
+  'uctoProfil.titulok': 'Účtovný profil firmy',
+  'uctoProfil.popis':
+    'Z celej histórie POHODY sa raz vytvoria kategórie plnení — čo firma nakupuje a ako to účtuje. Na rozdiel od pamäte podľa dodávateľa fungujú aj pri dodávateľovi, ktorého firma nikdy nemala.',
+  'uctoProfil.riadkov': 'Riadkov histórie',
+  'uctoProfil.dodavatelov': 'Dodávateľov',
+  'uctoProfil.roznychTextov': 'Rôznych textov',
+  'uctoProfil.preklopit': 'Preklopiť pamäť do histórie',
+  'uctoProfil.preklopene': 'Pamäť bola preklopená do histórie.',
+  'uctoProfil.spustitAnalyzu': 'Spustiť analýzu',
+  'uctoProfil.analyzujem': 'Analyzujem…',
+  'uctoProfil.analyzaHotova': 'Analýza dokončená.',
+  'uctoProfil.ziadneKategorie': 'Zatiaľ žiadne kategórie — najprv naimportujte históriu a spustite analýzu.',
+  'uctoProfil.st.kategoria': 'Kategória',
+  'uctoProfil.st.slovnik': 'Slovník',
+  'uctoProfil.st.ucet': 'Predkontácia',
+  'uctoProfil.st.dph': 'Členenie DPH',
+  'uctoProfil.st.pocet': 'Riadkov',
 } as const;
 
 export type SkKey = keyof typeof sk;

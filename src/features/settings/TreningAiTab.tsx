@@ -17,6 +17,7 @@ import type { CodeListKind } from '../../data/types';
 import { parseTrainingRows, validateTrainingRows, type ParsedTrainingRow, type TrainingKody } from './treningImport';
 import { extractPohodaDecisions } from './pohodaMdbImport';
 import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
+import { UctovnyProfil } from './UctovnyProfil';
 
 export function TreningAiTab() {
   const { data, loading, error } = useDataQuery();
@@ -233,6 +234,8 @@ export function TreningAiTab() {
   return (
     <div className="space-y-4">
       <p className="max-w-3xl text-sm text-ink-soft">{t('trening.popis')}</p>
+
+      {orgId && <UctovnyProfil orgId={orgId} />}
 
       <div className="flex flex-wrap items-end gap-3">
         {/* Organizácia sa preberá z globálneho prepínača v hlavičke. */}

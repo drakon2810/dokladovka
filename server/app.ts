@@ -17,6 +17,7 @@ import { registerPaymentRoutes } from './routes/paymentRoutes.js';
 import { registerPartnerRoutes } from './routes/partnerRoutes.js';
 import { registerAiTrainingRoutes } from './routes/aiTrainingRoutes.js';
 import { registerAiInstructionRoutes } from './routes/aiInstructionRoutes.js';
+import { registerUctoProfileRoutes } from './routes/uctoProfileRoutes.js';
 import { registerAssistantRoutes } from './routes/assistantRoutes.js';
 import { registerCompanyRegistryRoutes } from './routes/companyRegistryRoutes.js';
 import type { ObjectStorage } from './storage.js';
@@ -29,6 +30,7 @@ export async function buildApp(input: {
   logger?: boolean;
   mailer?: Mailer;
   aiRulesParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown }> };
+  uctoProfileParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown }> };
   assistantParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown; usage?: { input_tokens?: number; output_tokens?: number } }> };
 }): Promise<FastifyInstance> {
   const app = Fastify({
@@ -91,6 +93,7 @@ export async function buildApp(input: {
   registerPartnerRoutes(app, input.database);
   registerAiTrainingRoutes(app, input.database, input.config, input.aiRulesParser);
   registerAiInstructionRoutes(app, input.database);
+  registerUctoProfileRoutes(app, input.database, input.config, input.uctoProfileParser);
   registerAssistantRoutes(app, input.database, input.storage, input.config, input.assistantParser);
   registerCompanyRegistryRoutes(app, input.database, input.config);
 

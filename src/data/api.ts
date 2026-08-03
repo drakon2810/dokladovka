@@ -2871,3 +2871,61 @@ export async function deleteAiPokyn(id: string, organizationId?: string): Promis
   if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
   await restRequest(`${pokynyPath(organizationId)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+
+// ===== Účtovný profil firmy (korpus histórie + kategórie plnení) =====
+
+export interface UctoHistoryStats {
+  spolu: number;
+  podlaAgendy: Array<{ agenda: string; pocet: number }>;
+  dodavatelov: number;
+  roznychTextov: number;
+}
+
+export interface UctoKategoria {
+  id: string;
+  nazov: string;
+  popis?: string;
+  slovnik: string[];
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  clenenieKvKod?: string;
+  vynimky: Array<{ podmienka: string; predkontaciaKod: string | null }>;
+  agendy: string[];
+  pocet: number;
+  konflikt?: string;
+}
+
+export async function getUctoHistoryStats(orgId: string): Promise<UctoHistoryStats> {
+  if (!REST_DATA_MODE) return { spolu: 0, podlaAgendy: [], dodavatelov: 0, roznychTextov: 0 };
+  return restRequest<UctoHistoryStats>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-history/stats`,
+    { method: 'GET' },
+  );
+}
+
+export async function backfillUctoHistory(orgId: string): Promise<{ imported: number }> {
+  if (!REST_DATA_MODE) throw new Error('Účtovný profil je dostupný len s pripojeným serverom');
+  return restRequest<{ imported: number }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-history/backfill`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export async function analyzeUctoProfil(
+  orgId: string,
+): Promise<{ kategorii: number; textov: number; davok: number; pokrytieRiadkov: number }> {
+  if (!REST_DATA_MODE) throw new Error('Analýza je dostupná len s pripojeným serverom');
+  return restRequest(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/analyze`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
+export async function listUctoKategorie(orgId: string): Promise<UctoKategoria[]> {
+  if (!REST_DATA_MODE) return [];
+  const result = await restRequest<{ kategorie: UctoKategoria[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile`,
+    { method: 'GET' },
+  );
+  return result.kategorie;
+}
