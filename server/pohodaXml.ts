@@ -51,6 +51,9 @@ export interface PohodaCodeLookup {
   cleneniaDph: Map<string, string>;
   ciselneRady: Map<string, string>;
   strediska: Map<string, string>;
+  /** Analytické dimenzie POHODY: zákazka (contract) a činnosť (activity). */
+  zakazky?: Map<string, string>;
+  cinnosti?: Map<string, string>;
   /** Názvy predkontácií (id → názov) pre <inv:text>; kódy sú v `predkontacie`. */
   predkontacieNazvy?: Map<string, string>;
 }
@@ -113,12 +116,14 @@ const DETAIL_TAGS = {
 
 /**
  * Položkový rozpis dokladu (SPEC — rozpis na položky) pre invoice/voucher/intDoc.
- * Zaúčtovanie/členenie položky s návratom na hlavičku; členenie KV DPH z hlavičky.
+ * Každá dimenzia položky (zaúčtovanie, členenia, stredisko, činnosť, zákazka) sa
+ * pri prázdnej hodnote vracia na hlavičku — prázdne pole v editore znamená
+ * „ako doklad", nie „bez hodnoty".
  * Vráti prázdny reťazec, ak doklad nemá položky (vtedy sa importuje len súhrn).
  */
 function documentDetailXml(
   polozky: unknown,
-  header: { accounting: string; classificationVat: string; kv?: string },
+  header: { accounting: string; classificationVat: string; kv?: string; centre?: string; activity?: string; contract?: string },
   codeLists: PohodaCodeLookup,
   tag: (typeof DETAIL_TAGS)[keyof typeof DETAIL_TAGS],
 ): string {
@@ -128,7 +133,10 @@ function documentDetailXml(
     const { bezDph, dph, spolu, unitPrice } = lineItemAmounts(item);
     const accounting = codeLists.predkontacie.get(item.ucto?.predkontaciaId ?? '') ?? header.accounting;
     const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
-    const centre = codeLists.strediska.get(item.ucto?.strediskoId ?? '');
+    const kv = item.ucto?.clenenieKvKod || header.kv;
+    const centre = codeLists.strediska.get(item.ucto?.strediskoId ?? '') ?? header.centre;
+    const activity = codeLists.cinnosti?.get(item.ucto?.cinnostId ?? '') ?? header.activity;
+    const contract = codeLists.zakazky?.get(item.ucto?.zakazkaId ?? '') ?? header.contract;
     const lines = [
       // Text položky má v schéme 90 znakov, merná jednotka 10.
       `        <${ns}:text>${escapeXml(clamp(item.popis, 90))}</${ns}:text>`,
@@ -147,8 +155,11 @@ function documentDetailXml(
       `        </${ns}:homeCurrency>`,
       ...(accounting ? [`        <${ns}:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></${ns}:accounting>`] : []),
       ...(classificationVat ? [`        <${ns}:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></${ns}:classificationVAT>`] : []),
-      ...(header.kv ? [`        <${ns}:classificationKVDPH><typ:ids>${escapeXml(header.kv)}</typ:ids></${ns}:classificationKVDPH>`] : []),
+      ...(kv ? [`        <${ns}:classificationKVDPH><typ:ids>${escapeXml(kv)}</typ:ids></${ns}:classificationKVDPH>`] : []),
+      // Poradie centre → activity → contract je dané sekvenciou v XSD.
       ...(centre ? [`        <${ns}:centre><typ:ids>${escapeXml(centre)}</typ:ids></${ns}:centre>`] : []),
+      ...(activity ? [`        <${ns}:activity><typ:ids>${escapeXml(activity)}</typ:ids></${ns}:activity>`] : []),
+      ...(contract ? [`        <${ns}:contract><typ:ids>${escapeXml(contract)}</typ:ids></${ns}:contract>`] : []),
     ];
     return `      <${ns}:${tag.item}>\n${lines.join('\n')}\n      </${ns}:${tag.item}>`;
   });
@@ -259,6 +270,21 @@ export function buildServerDataPack(input: {
     const deliveryDate = isoDate(extracted.datumDodania);
     const taxDate = deliveryDate ?? issueDate;
     const dueDate = isoDate(extracted.datumSplatnosti) ?? issueDate;
+    // Analytické dimenzie hlavičky. Editor ich ponúka pri každom doklade, do
+    // POHODY sa však doteraz posielali len z položiek — hlavičkové sa zahadzovali.
+    const centre = input.codeLists.strediska.get(snapshot.ucto.strediskoId ?? '');
+    const activity = input.codeLists.cinnosti?.get(snapshot.ucto.cinnostId ?? '');
+    const contract = input.codeLists.zakazky?.get(snapshot.ucto.zakazkaId ?? '');
+    const headerDims = { centre, activity, contract };
+    // Poradie centre → activity → contract je dané sekvenciou v XSD.
+    const dimensionsXml = (ns: string) => [
+      centre ? `<${ns}:centre><typ:ids>${escapeXml(centre)}</typ:ids></${ns}:centre>` : '',
+      activity ? `<${ns}:activity><typ:ids>${escapeXml(activity)}</typ:ids></${ns}:activity>` : '',
+      contract ? `<${ns}:contract><typ:ids>${escapeXml(contract)}</typ:ids></${ns}:contract>` : '',
+    ].filter(Boolean).join('\n        ');
+    // Text zápisu si píše účtovník v karte „Text dokladu"; keď ho nechá prázdny,
+    // POHODA dostane názov predkontácie a až potom číslo dokladu.
+    const documentText = String(extracted.textPolozky ?? '').trim();
     if (snapshot.typ === 'PD') {
       const cashAccount = snapshot.ucto.pokladnaKod;
       const voucherType = snapshot.ucto.pokladnaTyp;
@@ -275,9 +301,12 @@ export function buildServerDataPack(input: {
         <vch:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></vch:accounting>
         <vch:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></vch:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<vch:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></vch:classificationKVDPH>` : ''}
-        <vch:text>${escapeXml(clamp(extracted.textPolozky ?? extracted.cisloFaktury ?? 'Pokladničný doklad', 240))}</vch:text>
+        <vch:text>${escapeXml(clamp(documentText || extracted.cisloFaktury || 'Pokladničný doklad', 240))}</vch:text>
         <vch:partnerIdentity>${partner}</vch:partnerIdentity>
-      </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.voucher)}
+        ${extracted.variabilnySymbol ? `<vch:symPar>${escapeXml(clamp(extracted.variabilnySymbol, 20))}</vch:symPar>` : ''}
+        ${dimensionsXml('vch')}
+        ${snapshot.ucto.poznamka ? `<vch:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</vch:note>` : ''}
+      </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.voucher)}
       <vch:voucherSummary><vch:homeCurrency>
         ${currency}
       </vch:homeCurrency></vch:voucherSummary>
@@ -302,9 +331,12 @@ export function buildServerDataPack(input: {
         <int:date>${issueDate}</int:date>
         <int:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></int:accounting>
         <int:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></int:classificationVAT>
-        <int:text>${escapeXml(clamp(extracted.textPolozky ?? `Mzdová páska ${extracted.cisloFaktury || extracted.datumVystavenia}`, 240))}</int:text>
+        ${snapshot.ucto.clenenieKvKod ? `<int:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></int:classificationKVDPH>` : ''}
+        <int:text>${escapeXml(clamp(documentText || `Mzdová páska ${extracted.cisloFaktury || extracted.datumVystavenia}`, 240))}</int:text>
         <int:partnerIdentity>${partner}</int:partnerIdentity>
-      </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.intDoc)}
+        ${dimensionsXml('int')}
+        ${snapshot.ucto.poznamka ? `<int:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</int:note>` : ''}
+      </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.intDoc)}
       <int:intDocSummary><int:homeCurrency>
         ${mzdyCurrency}
       </int:homeCurrency></int:intDocSummary>
@@ -314,9 +346,10 @@ export function buildServerDataPack(input: {
     const paymentAccount = skIbanAccount(supplier.iban);
     // Text dokladu = názov vybranej predkontácie (účtovník ho vidí v POHODE
     // namiesto predvoleného „Import FA z XML"); fallback na číslo faktúry.
-    const headerText = input.codeLists.predkontacieNazvy?.get(snapshot.ucto.predkontaciaId ?? '')
-      ?? extracted.cisloFaktury
-      ?? '';
+    const headerText = documentText
+      || input.codeLists.predkontacieNazvy?.get(snapshot.ucto.predkontaciaId ?? '')
+      || extracted.cisloFaktury
+      || '';
     return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
@@ -331,12 +364,15 @@ export function buildServerDataPack(input: {
         <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>
         <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
-        ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(clamp(extracted.cisloObjednavky, 32))}</inv:numberOrder>` : ''}
         ${headerText ? `<inv:text>${escapeXml(clamp(headerText, 240))}</inv:text>` : ''}
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
+        ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(clamp(extracted.cisloObjednavky, 32))}</inv:numberOrder>` : ''}
+        ${extracted.konstantnySymbol ? `<inv:symConst>${escapeXml(clamp(extracted.konstantnySymbol, 4))}</inv:symConst>` : ''}
+        ${extracted.specifickySymbol ? `<inv:symSpec>${escapeXml(clamp(extracted.specifickySymbol, 16))}</inv:symSpec>` : ''}
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
-        ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(snapshot.ucto.poznamka)}</inv:note>` : ''}
-      </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod }, input.codeLists, DETAIL_TAGS.invoice)}
+        ${dimensionsXml('inv')}
+        ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</inv:note>` : ''}
+      </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.invoice)}
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}
       </inv:homeCurrency></inv:invoiceSummary>

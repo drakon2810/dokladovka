@@ -50,10 +50,14 @@ export async function buildApprovedDocumentsXml(
     cleneniaDph: new Map(),
     ciselneRady: new Map(),
     strediska: new Map(),
+    zakazky: new Map(),
+    cinnosti: new Map(),
     predkontacieNazvy: new Map(),
   };
   for (const row of rows.rows) {
-    codeLists[row.kind].set(row.id, row.code);
+    // code_list_items pozná aj druhy, ktoré POHODA XML nepoužíva (projekty,
+    // clenenieKv) — bez tejto kontroly by export firmy s takým číselníkom spadol.
+    codeLists[row.kind]?.set(row.id, row.code);
     // Názov predkontácie ide do <inv:text> dokladu.
     if (row.kind === 'predkontacie') codeLists.predkontacieNazvy!.set(row.id, row.name);
   }

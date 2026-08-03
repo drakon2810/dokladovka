@@ -66,6 +66,7 @@ import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { InvoicePanel } from './InvoicePanel';
+import { ExportPohodaModal } from './ExportPohodaModal';
 import {
   SOURCE_SECTIONS,
   buildMarks,
@@ -338,9 +339,12 @@ export function DocumentDetailPage() {
   const [pdfError, setPdfError] = useState(false);
   const [localFileUrl, setLocalFileUrl] = useState<string>();
   const [localFileLoading, setLocalFileLoading] = useState(false);
-  const [splitPercent, setSplitPercent] = useState(50);
+  // Náhľad 42 % / editor 56 % podľa makety — účtovný zápis má viac stĺpcov než
+  // doklad, pri rovnakom delení sa tabuľka položiek nezmestí.
+  const [splitPercent, setSplitPercent] = useState(42);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [mostikStatus, setMostikStatus] = useState<OrganizationMostikStatus>();
   const [autoFilled, setAutoFilled] = useState(false);
@@ -1308,31 +1312,43 @@ export function DocumentDetailPage() {
 
         <div className="detail-stack min-w-0 space-y-4">
           {/* Panel „Úhrada" tu zámerne nie je — miesto patrí formuláru dokladu.
-              Úhrady sa spravujú v sekcii Úhrady a v hromadných akciách zoznamu. */}
-          <fieldset disabled={readOnly} className="space-y-4 disabled:opacity-75">
-            <InvoicePanel
-              key={draft.id}
-              draft={draft}
-              readOnly={readOnly}
-              codeLists={{
-                predkontacie: codeLists.predkontacie,
-                cleneniaDph: codeLists.cleneniaDph,
-                ciselneRady: codeLists.ciselneRady,
-                strediska: codeLists.strediska,
-              }}
-              suggestion={suggestion}
-              autoFilled={autoFilled}
-              src={srcMap}
-              srcEdited={srcEdited}
-              srcOn={srcOn}
-              activeSrc={activeSrc}
-              onHoverSrc={setActiveSrc}
-              setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
-              updateUcto={updateUcto}
-              updateExtracted={updateExtracted}
-              updateSupplier={updateSupplier}
-            />
-          </fieldset>
+              Úhrady sa spravujú v sekcii Úhrady a v hromadných akciách zoznamu.
+              Bez <fieldset disabled>: editor si stráži readOnly sám a tlačidlo
+              „Export do POHODA" musí fungovať aj pri exportovanom doklade. */}
+          <InvoicePanel
+            key={draft.id}
+            draft={draft}
+            readOnly={readOnly}
+            codeLists={{
+              predkontacie: codeLists.predkontacie,
+              cleneniaDph: codeLists.cleneniaDph,
+              ciselneRady: codeLists.ciselneRady,
+              strediska: codeLists.strediska,
+              cinnosti: codeLists.cinnosti,
+              zakazky: codeLists.zakazky,
+            }}
+            suggestion={suggestion}
+            autoFilled={autoFilled}
+            src={srcMap}
+            srcEdited={srcEdited}
+            srcOn={srcOn}
+            activeSrc={activeSrc}
+            onHoverSrc={setActiveSrc}
+            onExport={() => setExportModalOpen(true)}
+            exportDisabledReason={
+              draft.status !== 'schvaleny'
+                ? 'Exportovať sa dá až schválený doklad'
+                : dirty
+                  ? t('mostik.neulozeneZmeny')
+                  : !mostikStatus?.available
+                    ? t('mostik.nepripojenyTooltip')
+                    : undefined
+            }
+            setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
+            updateUcto={updateUcto}
+            updateExtracted={updateExtracted}
+            updateSupplier={updateSupplier}
+          />
 
           <Section title={t('detail.zdroj')}>
             <dl>
@@ -1644,6 +1660,15 @@ export function DocumentDetailPage() {
         </Suspense>
       )}
 
+
+      {exportModalOpen && (
+        <ExportPohodaModal
+          documents={[draft]}
+          organizations={data.organizations}
+          onClose={() => setExportModalOpen(false)}
+          onExported={() => setExportModalOpen(false)}
+        />
+      )}
 
       {rejectModalOpen && (
         <Modal

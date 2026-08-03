@@ -1,16 +1,21 @@
-// Panel úpravy faktúry — dizajn 1b (karty) z Claude Design, napojený na reálne
-// dáta dokladu (draft.extracted + draft.ucto + číselníky + návrh AI). Sekcie:
-// Základné údaje · Čiastka a DPH · Dodávateľ · Platobné údaje.
-import { useEffect, useState, type ReactNode } from 'react';
-import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentPreco, DocumentType, DocumentUcto } from '../../data/types';
+// Editor dokladu — maketa „Detail dokladu.dc.html" z Claude Design: účtovný
+// zápis tak, ako ho uvidí POHODA. Karty Základné informácie · Dodávateľ ·
+// Text dokladu · Položky dokladu · Rozpis DPH · Platba a zaokrúhlenie,
+// všetko s inline editáciou (DcCell / DcPick) napojenou na draft.extracted
+// a draft.ucto. Panel „Prečo?" (pôvod zaúčtovania) ostáva pri poliach
+// predkontácie, členenia DPH a kontrolného výkazu.
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { radyPreTyp } from '../../data/pohoda/agendas';
+import { lineItemEffective, round2 } from '../../lib/validate';
+import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { showToast } from '../../components/toast';
-import { DcDropdown, type DcOption } from './DcDropdown';
-import { ItemsSection } from './ItemsSection';
+import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
+import { ItemsSection, fmtMoney, parseNum, parseOpt, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
 import './invoicePanel.css';
 import './sourceHighlight.css';
@@ -30,12 +35,7 @@ const SOURCE_LABEL: Record<string, string> = {
 interface InvoicePanelProps {
   draft: DocumentItem;
   readOnly: boolean;
-  codeLists: {
-    predkontacie: CodeListItem[];
-    cleneniaDph: CodeListItem[];
-    ciselneRady: CodeListItem[];
-    strediska: CodeListItem[];
-  };
+  codeLists: ItemsCodeLists & { ciselneRady: CodeListItem[] };
   suggestion?: AccountingSuggestion;
   autoFilled: boolean;
   /** Zvýraznenie zdroja údajov — mapa polí, ktoré vyplnila AI. */
@@ -45,28 +45,26 @@ interface InvoicePanelProps {
   /** Práve zvýraznené pole (`cesta`) alebo celá sekcia (`sec:N`). */
   activeSrc?: string;
   onHoverSrc?: (anchor?: string) => void;
+  /** „Export do POHODA" v hlavičke — dialóg otvára detail dokladu. */
+  onExport?: () => void;
+  exportDisabledReason?: string;
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
   updateSupplier: (key: keyof DocumentExtractedData['dodavatel'], value: string) => void;
 }
 
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-const parseNum = (v: string) => { const n = Number(v.replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+/** Typ dokladu vrátane smeru pokladne — POHODA ich rozlišuje ako samostatné agendy. */
+const TYP_OPTIONS: Array<{ value: string; label: string; typ: DocumentType; pokladnaTyp?: 'receipt' | 'expense' }> = [
+  { value: 'PD:expense', label: 'Výdajový pokladničný doklad', typ: 'PD', pokladnaTyp: 'expense' },
+  { value: 'PD:receipt', label: 'Príjmový pokladničný doklad', typ: 'PD', pokladnaTyp: 'receipt' },
+  { value: 'FP', label: 'Faktúra prijatá', typ: 'FP' },
+  { value: 'FV', label: 'Faktúra vydaná', typ: 'FV' },
+  { value: 'OZ', label: 'Ostatný záväzok', typ: 'OZ' },
+  { value: 'MZDY', label: 'Interný doklad (mzdy)', typ: 'MZDY' },
+  { value: 'BV', label: 'Bankový výpis', typ: 'BV' },
+];
 
-// Farba syntetického účtu (badge na karte predkontácie) podľa prvej triedy účtu.
-const SYNT_COLOR: Record<string, string> = { '501': '#B45309', '502': '#0369A1', '504': '#7C3AED', '511': '#4338CA', '518': '#0E7A5F', '343': '#0369A1' };
-function syntOf(kod: string): string { const m = kod.match(/(\d{3})/); return m ? m[1] : kod.slice(0, 3).toUpperCase(); }
-function syntColor(synt: string): string { return SYNT_COLOR[synt] ?? '#5C645F'; }
-
-const TYP_META: Record<DocumentType, { label: string; color: string }> = {
-  FP: { label: 'Prijatá faktúra', color: '#0E7A5F' },
-  FV: { label: 'Vystavená faktúra', color: '#0369A1' },
-  OZ: { label: 'Ostatný záväzok', color: '#B45309' },
-  PD: { label: 'Pokladničný doklad', color: '#4338CA' },
-  BV: { label: 'Bankový výpis', color: '#7C3AED' },
-  MZDY: { label: 'Mzdy', color: '#166534' },
-};
 const KV_LABEL: Record<string, string> = {
   A1: 'A1 – Dodanie tovaru a služby', A2: 'A2 – Samozdanenie príjemcom',
   B1: 'B1 – Prenesenie daňovej povinnosti', B2: 'B2 – Prijaté faktúry s odpočtom',
@@ -75,14 +73,8 @@ const KV_LABEL: Record<string, string> = {
   KN: 'KN – Nezahŕňať do KV',
 };
 
-const CaretIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-);
-const AiIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.7 5.6L19.4 9l-5.7 1.4L12 16l-1.7-5.6L4.6 9l5.7-1.4z" /><path d="M19 13.5l.9 2.9 2.9.9-2.9.9-.9 2.9-.9-2.9-2.9-.9 2.9-.9z" /></svg>
-);
+const VAT_RATES: VatRate[] = [23, 19, 5, 0];
 
-// Ikony panelu „Prečo?" podľa makety — malé, dedia currentColor.
 const IcoCheck = ({ s = 11, w = 2 }: { s?: number; w?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
 );
@@ -100,6 +92,9 @@ const IcoExternal = () => (
 );
 const IcoQuestion = ({ s = 12 }: { s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 .3c0 1.6-2.5 2.2-2.5 3.7" /><path d="M12 17h.01" /></svg>
+);
+const IcoPencil = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
 );
 const Shimmer = ({ w }: { w: string }) => <span className="dv-skel" style={{ width: w }} />;
 
@@ -129,8 +124,7 @@ function PrecoIstota({ confidence }: { confidence: number }) {
 /**
  * Priebeh prípravy AI vysvetlenia. Server vracia odpoveď jednou požiadavkou bez
  * streamu, takže skutočné percento neexistuje — krivka sa zámerne spomaľuje a
- * zastaví na 95 %, aby nikdy netvrdila „hotovo" pred odpoveďou. Po dorazení
- * odpovede sa komponent odmontuje a pruh zmizne.
+ * zastaví na 95 %, aby nikdy netvrdila „hotovo" pred odpoveďou.
  * ponytail: odhadované percento; nahradiť skutočným priebehom, ak server začne streamovať
  */
 function VysvetlenieProgress() {
@@ -154,21 +148,22 @@ function VysvetlenieProgress() {
   );
 }
 
-const IcoPencil = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
-);
-
 /** Pod touto istotou pole dostane prerušovaný rám a odznak s percentom. */
 const LOW_CONFIDENCE = 0.5;
 
 export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
-  src, srcEdited, srcOn, activeSrc, onHoverSrc,
+  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason,
   setTyp, updateUcto, updateExtracted, updateSupplier,
 }: InvoicePanelProps) {
-  const [rozOpen, setRozOpen] = useState(false);
-  const [rozDodOpen, setRozDodOpen] = useState(false);
-  const [fyzickaOsoba, setFyzickaOsoba] = useState(false);
+  const ex = draft.extracted;
+  const dod = ex.dodavatel;
+  const ucto = draft.ucto;
+
+  const [itemsOn, setItemsOn] = useState((ex.polozky ?? []).length > 0);
+  // Položky odložené vypnutým prepínačom — aby ich omylom prepnutý prepínač
+  // nezmazal nenávratne skôr, než sa doklad uloží.
+  const [odlozene, setOdlozene] = useState<DocumentLineItem[]>([]);
   const [aiApplied, setAiApplied] = useState(false);
 
   // „Prečo?" — jeden zdieľaný stav: dáta sa načítajú raz na doklad, panel sa
@@ -225,7 +220,6 @@ export function InvoicePanel({
     setDovodSaving(false);
   };
 
-  // Hlavička panelu je rovnaká vo všetkých stavoch (maketa „Prečo - redesign").
   const precoHead = (chip?: ReactNode) => (
     <div className="dv-preco-head">
       <span className="dv-preco-head-label">Pôvod zaúčtovania</span>
@@ -358,29 +352,23 @@ export function InvoicePanel({
     );
   };
 
-  // Zámerne span, nie <button>: InvoicePanel býva vnútri <fieldset disabled>
-  // (readOnly pre schvaľovateľa/exportované doklady) a disabled fieldset by
-  // form control umŕtvil — pritom čítanie pôvodu má fungovať aj read-only.
-  const precoWrap = (field: PrecoField, dropdown: ReactNode) => (
-    <div className="dv-preco-field">
-      {dropdown}
+  // Zámerne span, nie <button>: čítanie pôvodu má fungovať aj pri readOnly.
+  const precoWrap = (field: PrecoField, control: ReactNode) => (
+    <div className="dv-preco-field dk-with-preco">
+      {control}
       <span
-        role="button" tabIndex={0}
+        role="button" tabIndex={0} title="Prečo práve táto hodnota?"
         className={`dv-preco-btn${precoOpen === field ? ' dv-open' : ''}`}
         onClick={() => togglePreco(field)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePreco(field); } }}
       >
-        <IcoQuestion />
-        Prečo?
+        ?
       </span>
       {precoOpen === field && renderPreco(field)}
     </div>
   );
 
   // ---- Zvýraznenie zdroja údajov -------------------------------------------
-  // Farba = sekcia, v ktorej pole žije; ten istý odtieň má obdĺžnik nad zdrojom
-  // v náhľade dokladu. Keď je prepínač vypnutý, všetky pomocníky vrátia prázdno
-  // a panel vyzerá presne ako predtým.
   const srcField = (path: string) => (srcOn ? src?.[path] : undefined);
   const isEdited = (path: string) => srcEdited?.has(path) ?? false;
   const isLow = (path: string) => {
@@ -397,44 +385,26 @@ export function InvoicePanel({
   const srcHover = (path: string) => (srcField(path)
     ? { onMouseEnter: () => onHoverSrc?.(path), onMouseLeave: () => onHoverSrc?.(undefined) }
     : {});
-  const srcChip = (path: string) => {
-    const field = srcField(path);
-    return field && !isEdited(path) ? <span className="dv-src-chip">{field.section}</span> : null;
-  };
   const srcLabel = (path: string, text: string) => {
     const field = srcField(path);
     return (
-      <>
-        {srcChip(path)}
+      <span className="dk-lbl" {...srcHover(path)}>
+        {field && !isEdited(path) ? <span className="dv-src-chip">{field.section}</span> : null}
         {text}
+        {isEdited(path) && <span className="dv-src-upravene" title="Hodnotu prepísal účtovník"><IcoPencil /></span>}
         {isLow(path) && field?.confidence !== undefined && (
-          <span className="dv-src-warn"><IcoWarn s={10} />{Math.round(field.confidence * 100)} %</span>
+          <span className="dv-src-warn" title={field.quote ? `Zdroj hodnoty: „${field.quote}"` : undefined}>
+            <IcoWarn s={10} />{Math.round(field.confidence * 100)} %
+          </span>
         )}
-      </>
+      </span>
     );
   };
-  /** Pod poľom: buď plaketa „Upravené", alebo citát z dokladu pri nízkej istote. */
-  const srcFoot = (path: string) => {
-    const field = srcField(path);
-    if (!field) return null;
-    if (isEdited(path)) return <span className="dv-src-upravene"><IcoPencil />Upravené</span>;
-    if (isLow(path) && field.quote) return <div className="dv-src-note">Zdroj hodnoty: „{field.quote}"</div>;
-    return null;
-  };
-  const secCls = (section: number) => (srcOn && src && Object.values(src).some((field) => field.section === section)
-    ? ` dv-src-sec dv-src-${section}` : '');
-  const secChip = (section: number) => (secCls(section) ? <span className="dv-src-chip">{section}</span> : null);
-  const secHover = (section: number) => (secCls(section)
-    ? { onMouseEnter: () => onHoverSrc?.(`sec:${section}`), onMouseLeave: () => onHoverSrc?.(undefined) }
-    : {});
+  const secChip = (section: number) => (srcOn && src && Object.values(src).some((field) => field.section === section)
+    ? <span className={`dv-src-sec dv-src-${section} dv-src-chip`} onMouseEnter={() => onHoverSrc?.(`sec:${section}`)} onMouseLeave={() => onHoverSrc?.(undefined)}>{section}</span>
+    : null);
 
-  const ex = draft.extracted;
-  const dod = ex.dodavatel;
-  const ucto = draft.ucto;
-  const typDokladu = TYP_META[draft.typ]?.label ?? 'Faktúra';
-
-  // „Synchronizovať mostíkom" v pätičke číselníkových dropdownov — agent stiahne
-  // číselníky z POHODY do ~1 minúty, zoznam sa obnoví sám (snapshot poller).
+  // ---- číselníky ------------------------------------------------------------
   const syncMostik = readOnly ? undefined : () => {
     requestMostikCodeListSync(draft.orgId)
       .then(() => showToast('Synchronizácia číselníkov cez Mostík je vyžiadaná — zoznam sa obnoví do minúty.'))
@@ -444,9 +414,6 @@ export function InvoicePanel({
   const toOpts = (items: CodeListItem[]): DcOption[] =>
     items.map((item) => ({ value: item.id, label: `${item.kod} · ${item.nazov}`, title: `${item.kod} · ${item.nazov}` }));
 
-  // Predikcia interného čísla: posledné číslo radu z POHODY (topNumber zo sync
-  // mostíkom) + 1. Skutočné číslo pridelí POHODA až pri prenose — toto je
-  // orientácia pre účtovníka, aby videl, pod akým číslom doklad zaeviduje.
   // Rad musí sedieť s agendou dokladu — pokladničný doklad nesmie dostať rad
   // prijatých faktúr. Už zvolený rad ostáva v ponuke, nech sa hodnota nestratí.
   const ponukaRadov = radyPreTyp(codeLists.ciselneRady, draft.typ);
@@ -456,36 +423,75 @@ export function InvoicePanel({
   const vybranyRad = codeLists.ciselneRady.find((item) => item.id === ucto.ciselnyRadId);
   const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo);
 
-  const predkOpts: DcOption[] = codeLists.predkontacie.map((item) => {
-    const synt = syntOf(item.kod);
-    return { value: item.id, title: item.nazov || item.kod, label: item.nazov || item.kod, synt, predk: item.kod, agenda: 'Faktúry', typDokladu, color: syntColor(synt) };
-  });
-  const typOpts: DcOption[] = (Object.keys(TYP_META) as DocumentType[]).map((t) => ({ value: t, label: TYP_META[t].label, badge: t, color: TYP_META[t].color }));
   const kvOpts: DcOption[] = CLENENIE_KV_KODY.map((kod) => ({ value: kod, label: KV_LABEL[kod] ?? kod, title: KV_LABEL[kod] ?? kod }));
   const menaOpts: DcOption[] = [
-    { value: 'EUR', label: 'EUR – Euro' }, { value: 'CZK', label: 'CZK – Česká koruna' }, { value: 'USD', label: 'USD – Americký dolár' },
+    { value: 'EUR', label: 'EUR' }, { value: 'CZK', label: 'CZK' }, { value: 'USD', label: 'USD' },
   ];
+  const rateOpts: DcOption[] = VAT_RATES.map((rate) => ({ value: String(rate), label: `${rate} %` }));
 
-  // Rozpis DPH po sadzbách (23/19/5/0) — mapované na pole rozpisDph.
-  const rowFor = (rate: number) => ex.rozpisDph.find((r) => r.sadzba === rate);
-  const setVat = (rate: number, patch: { zaklad?: number; dph?: number }) => {
-    const idx = ex.rozpisDph.findIndex((r) => r.sadzba === rate);
-    const next = idx >= 0
-      ? ex.rozpisDph.map((r, i) => (i === idx ? { ...r, ...patch } : r))
-      : [...ex.rozpisDph, { sadzba: rate, zaklad: 0, dph: 0, ...patch }];
-    updateExtracted('rozpisDph', next);
+  // ---- sumy -----------------------------------------------------------------
+  const polozky = ex.polozky ?? [];
+  const rozpis = ex.rozpisDph;
+  const totalZaklad = round2(rozpis.reduce((sum, row) => sum + (row.zaklad || 0), 0));
+  const totalDph = round2(rozpis.reduce((sum, row) => sum + (row.dph || 0), 0));
+  const rozpisSpolu = round2(totalZaklad + totalDph);
+  const sumaSpolu = ex.sumaSpolu ?? 0;
+  const zaokruhlenie = round2(sumaSpolu - rozpisSpolu);
+
+  /**
+   * Položky sú zdrojom pravdy pre rozpis DPH — inak sa doklad nedá schváliť.
+   * Rozpis sa však prepíše len vtedy, keď položky naozaj nesú sumy: prázdny
+   * zoznam ani čerstvo pridaný prázdny riadok nesmú zmazať rozpis, ktorý
+   * vytiahla AI (bez neho by doklad prišiel o DPH a už by sa nedal opraviť,
+   * lebo pri zapnutých položkách je rozpis zamknutý).
+   */
+  const setPolozky = (next: DocumentLineItem[]) => {
+    updateExtracted('polozky', next);
+    const derived = rozpisZPoloziek(next);
+    if (derived.some((row) => row.zaklad || row.dph)) updateExtracted('rozpisDph', derived);
   };
+  const toggleItems = (next: boolean) => {
+    setItemsOn(next);
+    if (next) {
+      // Späť zapnutý rozpis vráti položky, ktoré prepínač odložil.
+      if (odlozene.length > 0) { setPolozky(odlozene); setOdlozene([]); return; }
+      if (polozky.length > 0) updateExtracted('rozpisDph', rozpisZPoloziek(polozky));
+      return;
+    }
+    // Vypnutý rozpis znamená „účtuj jednou sumou" — položky musia z dokladu
+    // naozaj zmiznúť, inak by ich POHODA aj tak naimportovala a rozpor s ručne
+    // upraveným rozpisom DPH by sa ukázal až v účtovníctve. Rozpis DPH a celková
+    // suma ostávajú nedotknuté, takže peňažný obsah dokladu sa nestráca.
+    if (polozky.length > 0) {
+      setOdlozene(polozky);
+      updateExtracted('polozky', []);
+      showToast(`Rozpis na položky je vypnutý — ${polozky.length} položiek sa do POHODY neprenesie. Prepínačom ich vrátiš späť.`);
+    }
+  };
+  const setVatRow = (index: number, patch: Partial<VatBreakdownRow>) => {
+    updateExtracted('rozpisDph', rozpis.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+  };
+  const addVatRow = () => {
+    const used = new Set(rozpis.map((row) => row.sadzba));
+    const sadzba = VAT_RATES.find((rate) => !used.has(rate)) ?? 0;
+    updateExtracted('rozpisDph', [...rozpis, { sadzba, zaklad: 0, dph: 0 }]);
+  };
+  const removeVatRow = (index: number) => updateExtracted('rozpisDph', rozpis.filter((_, rowIndex) => rowIndex !== index));
 
-  const base = ex.rozpisDph.reduce((s, r) => s + (r.zaklad || 0), 0);
-  const dan = ex.rozpisDph.reduce((s, r) => s + (r.dph || 0), 0);
-  const expected = round2(base + dan);
-  const total = ex.sumaSpolu || 0;
-  const dphValid = Math.abs(expected - total) < 0.005 && total > 0;
-  // Bez DPH = celková suma mínus daň z rozpisu. Keď rozpis chýba (nulová daň),
-  // vyjde rovnaká suma ako s DPH — čo je pri neplatiteľovi správne.
-  const sumaBezDph = round2(total - dan);
-  const cisloErr = !String(ex.cisloFaktury || '').trim();
-  const icoErr = !fyzickaOsoba && Boolean(dod.ico) && !/^\d{8}$/.test(String(dod.ico || '').trim());
+  // ---- typ dokladu a režim zaúčtovania --------------------------------------
+  const typValue = draft.typ === 'PD' ? `PD:${ucto.pokladnaTyp ?? 'expense'}` : draft.typ;
+  const typLabel = TYP_OPTIONS.find((option) => option.value === typValue)?.label ?? draft.typ;
+  const setTypValue = (value: string) => {
+    const option = TYP_OPTIONS.find((item) => item.value === value);
+    if (!option) return;
+    if (option.typ !== draft.typ) setTyp(option.typ);
+    // Smer pokladne je vlastnosť dokladu, nie číselníka — pri inej agende ho
+    // necháme tak, POHODA ho pre faktúry ignoruje.
+    if (option.pokladnaTyp && option.pokladnaTyp !== ucto.pokladnaTyp) updateUcto({ pokladnaTyp: option.pokladnaTyp });
+  };
+  const jePokladna = draft.typ === 'PD';
+  const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);
+  const rezim = `${typLabel}${vybranyRad?.kod ? ` (${vybranyRad.kod})` : ''}`;
 
   const predkConfidence = suggestion && suggestion.source !== 'none' && suggestion.predkontaciaId && suggestion.predkontaciaId === ucto.predkontaciaId
     ? Math.round(suggestion.confidence * 100) : undefined;
@@ -502,247 +508,275 @@ export function InvoicePanel({
     setAiApplied(true);
   };
 
-  const numField = (label: string, value: number | undefined, onChange: (n: number) => void, dim?: boolean) => (
-    <div className="dv-field">
-      <label className="dv-label">{label}</label>
-      <input className={`dv-input${dim ? ' dv-dim' : ''}`} value={value === undefined ? '' : String(value)} disabled={readOnly}
-        onChange={(e) => onChange(parseNum(e.target.value))} inputMode="decimal" />
+  const itemsCodeLists = useMemo<ItemsCodeLists>(() => ({
+    predkontacie: codeLists.predkontacie,
+    cleneniaDph: codeLists.cleneniaDph,
+    strediska: codeLists.strediska,
+    cinnosti: codeLists.cinnosti,
+    zakazky: codeLists.zakazky,
+  }), [codeLists]);
+
+  const cisloErr = !String(ex.cisloFaktury || '').trim();
+  // Osemmiestne IČO je slovenské pravidlo — zahraničný dodávateľ ho nespĺňa
+  // a validácia dokladu ho pri ňom tiež preskakuje.
+  const icoErr = Boolean(dod.ico) && !isForeignSupplier(dod) && !/^\d{8}$/.test(String(dod.ico || '').trim());
+
+  /** Peňažná bunka: edituje sa surové číslo, v pokoji sa ukazuje naformátované. */
+  const money = (value: number | undefined, onCommit: (raw: string) => void, path?: string) => (
+    <div className="dk-r">
+      <DcCell
+        align="right" inputMode="decimal" disabled={readOnly}
+        srcClass={path ? srcCls(path) : ''}
+        value={value === undefined ? '' : String(value)}
+        display={value === undefined ? '' : fmtMoney(value, ex.mena)}
+        onCommit={onCommit}
+      />
     </div>
   );
 
   return (
-    <div className="dv-panel">
-      <div className="dv-body">
-
-        {/* Základné údaje */}
-        <section className="dv-section">
-          <div className="dv-h3-row">
-            <div className={`dv-h3-left${secCls(1)}`} {...secHover(1)}><span className="dv-accent-bar" /><h3 className="dv-h3">Základné údaje</h3>{secChip(1)}</div>
-            {/* Automatické zaúčtovanie patrí k poliam, ktoré vypĺňa — dole pod
-                položkami sa naň muselo skrolovať. */}
-            <button type="button" className="dv-btn-ai dv-btn-ai-inline" disabled={!canAi} onClick={applyAi}>
-              <AiIcon />
-              Použiť automatické účtovanie
+    <div className="dk-doc">
+      {/* Účtovný zápis v POHODE */}
+      <div className="dk-head">
+        <span className="dk-head-mark">P</span>
+        <span className="dk-head-title">Účtovný zápis v POHODE</span>
+        <div className="dk-head-actions">
+          <button type="button" className="dk-btn dk-btn-ai" disabled={!canAi} onClick={applyAi} title="Vyplniť zaúčtovanie podľa pravidiel firmy a pamäte rozhodnutí">
+            <IcoSpark />
+            Automatické účtovanie
+          </button>
+          {onExport && (
+            <button type="button" className="dk-btn" disabled={Boolean(exportDisabledReason)} title={exportDisabledReason} onClick={onExport}>
+              Export do POHODA
+              <IcoExternal />
             </button>
-          </div>
-          {/* Dva stĺpce: vľavo identifikácia dokladu a dátumy, vpravo zaúčtovanie
-              a suma. Všetko podstatné je na jednej obrazovke bez skrolovania. */}
-          <div className="dv-cols">
-            <div className="dv-fields">
-              <DcDropdown label="Typ faktúry" mode="simple" value={draft.typ} options={typOpts} disabled={readOnly} onChange={(v) => setTyp(v as DocumentType)} />
-              <DcDropdown label="Číselný rad / Pokladňa" mode="simple" searchable onMostikSync={syncMostik} value={ucto.ciselnyRadId} options={toOpts(radOpts)} disabled={readOnly} onChange={(v) => updateUcto({ ciselnyRadId: v })} />
-              {dalsieCislo && (
-                <p className="dv-next-number">Ďalšie číslo v POHODE: <strong className="tnum">{dalsieCislo}</strong></p>
-              )}
-              <div className={`dv-field${cisloErr ? ' dv-field-err' : ''}${srcCls('cisloFaktury')}`} {...srcHover('cisloFaktury')}>
-                <label className="dv-label">{srcLabel('cisloFaktury', 'Číslo faktúry')}</label>
-                <input className="dv-input dv-has-icon" value={ex.cisloFaktury ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('cisloFaktury', e.target.value)} />
-                <svg className="dv-field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18" /></svg>
-                {cisloErr && <div className="dv-err-msg">Zadajte číslo faktúry</div>}
-                {srcFoot('cisloFaktury')}
-              </div>
-              <div className={`dv-field${srcCls('datumVystavenia')}`} {...srcHover('datumVystavenia')}>
-                <label className="dv-label">{srcLabel('datumVystavenia', 'Dátum vydania')}</label>
-                <input type="date" className="dv-input" value={ex.datumVystavenia ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumVystavenia', e.target.value)} />
-                {srcFoot('datumVystavenia')}
-              </div>
-              <div className={`dv-field${srcCls('datumDodania')}`} {...srcHover('datumDodania')}>
-                <label className="dv-label">{srcLabel('datumDodania', 'Dátum dodania (DUZP)')}</label>
-                <input type="date" className="dv-input" value={ex.datumDodania ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumDodania', e.target.value || undefined)} />
-                {srcFoot('datumDodania')}
-              </div>
-              <div className={`dv-field${srcCls('datumSplatnosti')}`} {...srcHover('datumSplatnosti')}>
-                <label className="dv-label">{srcLabel('datumSplatnosti', 'Dátum splatnosti')}</label>
-                <input type="date" className="dv-input" value={ex.datumSplatnosti ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('datumSplatnosti', e.target.value || undefined)} />
-                {srcFoot('datumSplatnosti')}
-              </div>
-            </div>
+          )}
+        </div>
+      </div>
 
-            <div className="dv-fields">
-              {precoWrap('predkontacia',
-                <DcDropdown label="Účtovná položka" mode="account" searchable confidence={predkConfidence} onMostikSync={syncMostik} value={ucto.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(v) => updateUcto({ predkontaciaId: v })} />)}
-              {precoWrap('dph',
-                <DcDropdown label="Členenie DPH" mode="simple" searchable onMostikSync={syncMostik} value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly}
-                  onChange={(v) => {
-                    const picked = codeLists.cleneniaDph.find((item) => item.id === v);
-                    updateUcto({ clenenieDphId: v, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
-                  }} />)}
-              {precoWrap('kv',
-                <DcDropdown label="Členenie kontrolný výkaz" mode="simple" searchable value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(v) => updateUcto({ clenenieKvKod: v })} />)}
-              {/* Základ dane sa nezadáva — dopočíta sa z rozpisu DPH, takže sa
-                  nedá omylom rozísť s celkovou sumou. */}
-              <div className="dv-field">
-                <label className="dv-label">Celková suma bez DPH</label>
-                <span className="dv-money-sign">€</span>
-                <input className="dv-input dv-money dv-dim" value={sumaBezDph.toFixed(2)} readOnly tabIndex={-1} />
-              </div>
-              <div className={`dv-field${dphValid ? '' : ' dv-field-err'}${srcCls('sumaSpolu')}`} {...srcHover('sumaSpolu')}>
-                <label className="dv-label">{srcLabel('sumaSpolu', 'Celková suma s DPH')}</label>
-                <span className="dv-money-sign">€</span>
-                <input className="dv-input dv-money" value={ex.sumaSpolu === undefined ? '' : String(ex.sumaSpolu)} disabled={readOnly} inputMode="decimal" onChange={(e) => updateExtracted('sumaSpolu', parseNum(e.target.value))} />
-                {srcFoot('sumaSpolu')}
-              </div>
-              <div className={`dv-field${srcCls('dodavatel.nazov')}`} {...srcHover('dodavatel.nazov')}>
-                <label className="dv-label">{srcLabel('dodavatel.nazov', 'Názov spoločnosti')}</label>
-                <input className="dv-input" value={dod.nazov ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('nazov', e.target.value)} />
-                {srcFoot('dodavatel.nazov')}
-              </div>
-            </div>
-          </div>
+      <div className={`dk-mode${chybaPokladna ? ' dk-mode-warn' : ''}`}>
+        {chybaPokladna ? <IcoWarn s={16} /> : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0E7A5F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></svg>
+        )}
+        {chybaPokladna
+          ? <span>Pokladničný doklad potrebuje <strong>číslo pokladne</strong> a smer dokladu — bez nich ho POHODA neprijme.</span>
+          : <span>Doklad bude zaúčtovaný do POHODY v režime <strong>{rezim}</strong>.</span>}
+      </div>
 
-          <div className="dv-fields" style={{ marginTop: 18 }}>
-            <div className={`dv-expand${rozOpen ? ' dv-open' : ''}`}>
-              <div className="dv-expand-inner">
-                <DcDropdown label="Nákladové stredisko" mode="simple" searchable onMostikSync={syncMostik} value={ucto.strediskoId} options={toOpts(codeLists.strediska)} disabled={readOnly} onChange={(v) => updateUcto({ strediskoId: v })} />
-                <div className="dv-field">
-                  <label className="dv-label">Interné číslo</label>
-                  <input className="dv-input" value={ex.interneCislo ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('interneCislo', e.target.value || undefined)} placeholder="napr. INT-2026-014" />
-                </div>
-                <div className="dv-field">
-                  <label className="dv-label">Poznámka</label>
-                  <textarea className="dv-textarea" value={ucto.poznamka ?? ''} disabled={readOnly} onChange={(e) => updateUcto({ poznamka: e.target.value || undefined })} placeholder="Interná poznámka k dokladu…" />
-                </div>
-              </div>
-            </div>
-            <button type="button" className="dv-toggle" onClick={() => setRozOpen((o) => !o)}>
-              Rozšírené položky <span className={`dv-caret${rozOpen ? ' dv-up' : ''}`}><CaretIcon /></span>
-            </button>
-          </div>
-        </section>
+      <div className="dk-two">
+        {/* Základné informácie */}
+        <div className="dk-card">
+          <div className="dk-card-title">Základné informácie {secChip(1)}</div>
+          <div className="dk-grid dk-grid-main">
+            <span className="dk-lbl">Typ dokladu</span>
+            <DcPick value={typValue} options={TYP_OPTIONS} disabled={readOnly} onChange={setTypValue} />
 
-        <div className="dv-divider" />
+            <span className="dk-lbl">Číselný rad</span>
+            <DcPick value={ucto.ciselnyRadId} options={toOpts(radOpts)} disabled={readOnly} onMostikSync={syncMostik} onChange={(value) => updateUcto({ ciselnyRadId: value })} />
+
+            {srcLabel('cisloFaktury', 'Číslo dokladu')}
+            <DcCell
+              value={ex.cisloFaktury ?? ''} disabled={readOnly} tone={cisloErr ? 'err' : undefined}
+              title={cisloErr ? 'Zadajte číslo dokladu' : undefined}
+              srcClass={srcCls('cisloFaktury')}
+              onCommit={(raw) => updateExtracted('cisloFaktury', raw)}
+            />
+
+            {jePokladna && (
+              <>
+                <span className="dk-lbl">Číslo pokladne</span>
+                <DcCell
+                  value={ucto.pokladnaKod ?? ''} disabled={readOnly} placeholder="napr. HP1"
+                  tone={!ucto.pokladnaKod?.trim() ? 'err' : undefined}
+                  onCommit={(raw) => updateUcto({ pokladnaKod: raw || undefined })}
+                />
+              </>
+            )}
+
+            {srcLabel('datumVystavenia', 'Dátum vystavenia')}
+            <DcCell type="date" value={ex.datumVystavenia ?? ''} display={formatDateSk(ex.datumVystavenia)} disabled={readOnly} srcClass={srcCls('datumVystavenia')} onCommit={(raw) => updateExtracted('datumVystavenia', raw)} />
+
+            {srcLabel('datumSplatnosti', jePokladna ? 'Dátum platby' : 'Dátum splatnosti')}
+            <DcCell type="date" value={ex.datumSplatnosti ?? ''} display={formatDateSk(ex.datumSplatnosti)} disabled={readOnly} srcClass={srcCls('datumSplatnosti')} onCommit={(raw) => updateExtracted('datumSplatnosti', raw || undefined)} />
+
+            {srcLabel('datumDodania', 'Dátum daň. povinnosti')}
+            <DcCell type="date" value={ex.datumDodania ?? ''} display={formatDateSk(ex.datumDodania)} disabled={readOnly} srcClass={srcCls('datumDodania')} onCommit={(raw) => updateExtracted('datumDodania', raw || undefined)} />
+
+            <span className="dk-lbl">Predkontácia</span>
+            {precoWrap('predkontacia',
+              <DcPick value={ucto.predkontaciaId} options={toOpts(codeLists.predkontacie)} disabled={readOnly} onMostikSync={syncMostik}
+                title={predkConfidence != null ? `Návrh AI · istota ${predkConfidence} %` : undefined}
+                onChange={(value) => updateUcto({ predkontaciaId: value })} />)}
+
+            <span className="dk-lbl">Členenie DPH</span>
+            {precoWrap('dph',
+              <DcPick value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly} onMostikSync={syncMostik}
+                onChange={(value) => {
+                  const picked = codeLists.cleneniaDph.find((item) => item.id === value);
+                  updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
+                }} />)}
+
+            <span className="dk-lbl">Členenie KV DPH</span>
+            {precoWrap('kv',
+              <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => updateUcto({ clenenieKvKod: value })} />)}
+
+            <span className="dk-lbl">Stredisko</span>
+            <DcPick value={ucto.strediskoId} options={[{ value: '', label: '—' }, ...toOpts(codeLists.strediska)]} disabled={readOnly} onMostikSync={syncMostik} onChange={(value) => updateUcto({ strediskoId: value || undefined })} />
+          </div>
+          {dalsieCislo && <div className="dk-note">Ďalšie číslo v POHODE: <strong className="tnum">{dalsieCislo}</strong></div>}
+        </div>
 
         {/* Dodávateľ */}
-        <section className="dv-section">
-          <div className="dv-h3-row"><div className={`dv-h3-left${secCls(2)}`} {...secHover(2)}><span className="dv-accent-bar" /><h3 className="dv-h3">Dodávateľ</h3>{secChip(2)}</div></div>
-          <div className="dv-fields">
-            <label className="dv-check">
-              <input type="checkbox" checked={fyzickaOsoba} disabled={readOnly} onChange={(e) => setFyzickaOsoba(e.target.checked)} />
-              <span>Fyzická osoba nepodnikateľ</span>
-            </label>
-            {/* Názov spoločnosti je hore v Základných údajoch — tu už len IČO
-                a daňové identifikátory, nech sa pole needituje na dvoch miestach. */}
-            <div className={`dv-field${icoErr ? ' dv-field-warn' : ''}${srcCls('dodavatel.ico')}`} {...srcHover('dodavatel.ico')}>
-              <label className="dv-label">{srcLabel('dodavatel.ico', 'IČO')}</label>
-              <input className="dv-input" value={dod.ico ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('ico', e.target.value)} />
-              {icoErr && <div className="dv-warn-msg">IČO má mať 8 číslic</div>}
-              {srcFoot('dodavatel.ico')}
-            </div>
-            <div className={`dv-field${srcCls('dodavatel.icDph')}`} {...srcHover('dodavatel.icDph')}>
-              <label className="dv-label">{srcLabel('dodavatel.icDph', 'IČ DPH (voliteľné)')}</label>
-              <input className="dv-input" style={{ paddingRight: 78 }} value={dod.icDph ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('icDph', e.target.value)} />
-              {Boolean(dod.icDph) && (
-                <span className="dv-vies"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>VIES</span>
-              )}
-            </div>
-            <div className={`dv-expand${rozDodOpen ? ' dv-open' : ''}`}>
-              <div className="dv-expand-inner">
-                <div className={`dv-field${srcCls('dodavatel.dic')}`} {...srcHover('dodavatel.dic')}>
-                  <label className="dv-label">{srcLabel('dodavatel.dic', 'DIČ')}</label>
-                  <input className="dv-input" value={dod.dic ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('dic', e.target.value)} />
-                  {srcFoot('dodavatel.dic')}
-                </div>
-                <div className={`dv-field${srcCls('dodavatel.adresa')}`} {...srcHover('dodavatel.adresa')}>
-                  <label className="dv-label">{srcLabel('dodavatel.adresa', 'Adresa')}</label>
-                  <input className="dv-input" value={dod.adresa ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('adresa', e.target.value)} />
-                  {srcFoot('dodavatel.adresa')}
-                </div>
-              </div>
-            </div>
-            <button type="button" className="dv-toggle" onClick={() => setRozDodOpen((o) => !o)}>
-              Rozšírené položky <span className={`dv-caret${rozDodOpen ? ' dv-up' : ''}`}><CaretIcon /></span>
-            </button>
+        <div className="dk-card">
+          <div className="dk-card-title">Dodávateľ {secChip(2)}</div>
+          <div className="dk-grid dk-grid-sup">
+            {srcLabel('dodavatel.ico', 'IČO')}
+            <DcCell value={dod.ico ?? ''} disabled={readOnly} tone={icoErr ? 'warn' : undefined} title={icoErr ? 'IČO má mať 8 číslic' : undefined} srcClass={srcCls('dodavatel.ico')} onCommit={(raw) => updateSupplier('ico', raw)} />
+            {srcLabel('dodavatel.dic', 'DIČ')}
+            <DcCell value={dod.dic ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.dic')} onCommit={(raw) => updateSupplier('dic', raw)} />
+            {srcLabel('dodavatel.icDph', 'IČ DPH')}
+            <DcCell value={dod.icDph ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.icDph')} onCommit={(raw) => updateSupplier('icDph', raw)} />
+            {srcLabel('dodavatel.nazov', 'Firma')}
+            <DcCell value={dod.nazov ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.nazov')} onCommit={(raw) => updateSupplier('nazov', raw)} />
+            {srcLabel('dodavatel.adresa', 'Adresa')}
+            <DcCell value={dod.adresa ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplier('adresa', raw)} />
           </div>
-        </section>
-
-        <div className="dv-divider" />
-
-        {/* Čiastka a DPH */}
-        <section className="dv-section">
-          <div className="dv-h3-row">
-            <div className={`dv-h3-left${secCls(3)}`} {...secHover(3)}><span className="dv-accent-bar" /><h3 className="dv-h3">Čiastka a DPH</h3>{secChip(3)}</div>
-            {dphValid
-              ? <span className="dv-dph-ok"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg></span>
-              : <span className="dv-dph-warn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg></span>}
+          <div className="dk-sep" />
+          <div className="dk-grid dk-grid-pair">
+            {srcLabel('variabilnySymbol', 'Pár. symbol')}
+            <DcCell value={ex.variabilnySymbol ?? ''} disabled={readOnly} srcClass={srcCls('variabilnySymbol')} onCommit={(raw) => updateExtracted('variabilnySymbol', raw || undefined)} />
+            {srcLabel('mena', 'Mena')}
+            <DcPick value={ex.mena} options={menaOpts} disabled={readOnly} srcClass={srcCls('mena')} onChange={(value) => updateExtracted('mena', value as DocumentExtractedData['mena'])} />
           </div>
-          {/* Celková suma je hore v Základných údajoch — tu ostáva len rozpis. */}
-          <div className="dv-grid-2">
-            {/* Rozpis DPH po sadzbách sa nezvýrazňuje — evidencia AI ho vracia po
-                riadkoch bez väzby na konkrétne pole; sekciu nesie Mena. */}
-            <div className={srcCls('mena').trimStart()} {...srcHover('mena')}>
-              <DcDropdown label="Mena" chip={srcChip('mena')} mode="simple" value={ex.mena} options={menaOpts} disabled={readOnly} onChange={(v) => updateExtracted('mena', v as DocumentExtractedData['mena'])} />
-            </div>
-            <div />
-
-            {numField('Základ dane 23 %', rowFor(23)?.zaklad, (n) => setVat(23, { zaklad: n }))}
-            {numField('Daň 23 %', rowFor(23)?.dph, (n) => setVat(23, { dph: n }))}
-            {numField('Základ dane 19 %', rowFor(19)?.zaklad, (n) => setVat(19, { zaklad: n }), true)}
-            {numField('Daň 19 %', rowFor(19)?.dph, (n) => setVat(19, { dph: n }), true)}
-            {numField('Základ dane 5 %', rowFor(5)?.zaklad, (n) => setVat(5, { zaklad: n }), true)}
-            {numField('Daň 5 %', rowFor(5)?.dph, (n) => setVat(5, { dph: n }), true)}
-            {numField('Základ dane 0 %', rowFor(0)?.zaklad, (n) => setVat(0, { zaklad: n }), true)}
-          </div>
-          {!dphValid && (
-            <div className="dv-dph-msg">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9" /><path d="M12 8v4M12 16h.01" /></svg>
-              Rozpis DPH ({expected.toFixed(2)} €) sa nezhoduje s celkovou sumou ({total.toFixed(2)} €).
+          {!jePokladna && (
+            <div className="dk-grid dk-grid-sup" style={{ marginTop: 3 }}>
+              {srcLabel('dodavatel.iban', 'IBAN')}
+              <DcCell value={dod.iban ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.iban')} onCommit={(raw) => updateSupplier('iban', raw)} />
+              {srcLabel('konstantnySymbol', 'Konšt. symbol')}
+              <DcCell value={ex.konstantnySymbol ?? ''} disabled={readOnly} srcClass={srcCls('konstantnySymbol')} onCommit={(raw) => updateExtracted('konstantnySymbol', raw || undefined)} />
             </div>
           )}
-        </section>
+        </div>
+      </div>
 
-        <div className="dv-divider" />
-
-        {/* Platobné údaje */}
-        <section className="dv-section">
-          <div className="dv-h3-row"><div className={`dv-h3-left${secCls(4)}`} {...secHover(4)}><span className="dv-accent-bar" /><h3 className="dv-h3">Platobné údaje</h3>{secChip(4)}</div></div>
-          <div className="dv-fields">
-            <div className={`dv-field${srcCls('variabilnySymbol')}`} {...srcHover('variabilnySymbol')}>
-              <label className="dv-label">{srcLabel('variabilnySymbol', 'Variabilný symbol')}</label>
-              <input className="dv-input" value={ex.variabilnySymbol ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('variabilnySymbol', e.target.value || undefined)} />
-              {srcFoot('variabilnySymbol')}
-            </div>
-            <div className={`dv-field${srcCls('dodavatel.iban')}`} {...srcHover('dodavatel.iban')}>
-              <label className="dv-label">{srcLabel('dodavatel.iban', 'IBAN')}</label>
-              <input className="dv-input" style={{ letterSpacing: '.02em' }} value={dod.iban ?? ''} disabled={readOnly} onChange={(e) => updateSupplier('iban', e.target.value)} />
-              {srcFoot('dodavatel.iban')}
-            </div>
-            <div className={`dv-field${srcCls('konstantnySymbol')}`} {...srcHover('konstantnySymbol')}>
-              <label className="dv-label">{srcLabel('konstantnySymbol', 'Konštantný symbol')}</label>
-              <input className="dv-input" value={ex.konstantnySymbol ?? ''} disabled={readOnly} onChange={(e) => updateExtracted('konstantnySymbol', e.target.value || undefined)} />
-              {srcFoot('konstantnySymbol')}
-            </div>
-          </div>
-        </section>
-
-        <div className="dv-divider" />
-
-        {/* Položky (rozpis na položky) — dizajn 1b */}
-        <ItemsSection
-          polozky={ex.polozky ?? []}
-          rozpisDph={ex.rozpisDph}
-          celkovaSuma={ex.sumaSpolu ?? 0}
-          mena={ex.mena}
-          readOnly={readOnly}
-          srcSection={srcOn && src?.[ITEMS_PATH] ? 5 : undefined}
-          onHoverSrc={onHoverSrc}
-          codeLists={{
-            predkontacie: codeLists.predkontacie,
-            cleneniaDph: codeLists.cleneniaDph,
-            strediska: codeLists.strediska,
-          }}
-          onChange={(polozky) => updateExtracted('polozky', polozky)}
+      {/* Text dokladu — ide do POHODY ako text zápisu, poznámka ako <note>. */}
+      <div className="dk-card">
+        <div className="dk-card-title">Text dokladu</div>
+        <DcCell
+          value={ex.textPolozky ?? ''} disabled={readOnly}
+          placeholder="Popis plnenia, ktorý uvidíš v POHODE…"
+          onCommit={(raw) => updateExtracted('textPolozky', raw || undefined)}
         />
+        <div className="dk-grid dk-grid-pair" style={{ marginTop: 6 }}>
+          <span className="dk-lbl">Poznámka</span>
+          <DcCell
+            value={ucto.poznamka ?? ''} disabled={readOnly} placeholder="Interná poznámka…"
+            onCommit={(raw) => updateUcto({ poznamka: raw || undefined })}
+          />
+          <span className="dk-lbl">Interné číslo</span>
+          <DcCell
+            value={ex.interneCislo ?? ''} disabled={readOnly} placeholder="napr. INT-2026-014"
+            onCommit={(raw) => updateExtracted('interneCislo', raw || undefined)}
+          />
+        </div>
+      </div>
 
-        {/* Akcie — „Uložiť" je len v spodnej lište detailu, nie duplicitne tu. */}
-        {(autoFilled || aiApplied) && (
-          <div className="dv-actions">
-            <div className="dv-ai-done">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+      <ItemsSection
+        polozky={polozky}
+        rozpisDph={rozpis}
+        mena={ex.mena}
+        readOnly={readOnly}
+        enabled={itemsOn}
+        onToggle={toggleItems}
+        codeLists={itemsCodeLists}
+        onChange={setPolozky}
+        srcSection={srcOn && src?.[ITEMS_PATH] ? 5 : undefined}
+        onHoverSrc={onHoverSrc}
+      />
+
+      <div className="dk-two">
+        {/* Rozpis DPH */}
+        <div className="dk-card">
+          <div className="dk-card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>Rozpis DPH</span>
+            {secChip(3)}
+            <span className={`dk-tag${itemsOn ? '' : ' dk-tag-warn'}`}>{itemsOn ? 'počíta sa z položiek' : 'upravuje sa ručne'}</span>
+          </div>
+          <div className="dk-vat dk-vat-head">
+            <span>Sadzba</span><span className="dk-r">Základ</span><span className="dk-r">DPH</span><span className="dk-r">Spolu</span><span />
+          </div>
+          {rozpis.map((row, index) => (
+            <div className="dk-vat dk-vat-row" key={`${row.sadzba}-${index}`}>
+              {itemsOn ? (
+                <>
+                  <span>{row.sadzba} %</span>
+                  <span className="dk-r">{fmtMoney(row.zaklad || 0, ex.mena)}</span>
+                  <span className="dk-r">{fmtMoney(row.dph || 0, ex.mena)}</span>
+                  <span className="dk-r">{fmtMoney((row.zaklad || 0) + (row.dph || 0), ex.mena)}</span>
+                  <span />
+                </>
+              ) : (
+                <>
+                  <DcPick value={String(row.sadzba)} options={rateOpts} disabled={readOnly} onChange={(value) => setVatRow(index, { sadzba: Number(value) as VatRate })} />
+                  {money(row.zaklad, (raw) => setVatRow(index, { zaklad: parseNum(raw) }))}
+                  {money(row.dph, (raw) => setVatRow(index, { dph: parseNum(raw) }))}
+                  <span className="dk-r">{fmtMoney((row.zaklad || 0) + (row.dph || 0), ex.mena)}</span>
+                  <button type="button" className="dk-vat-del" title="Odstrániť sadzbu" disabled={readOnly || rozpis.length <= 1} onClick={() => removeVatRow(index)}>×</button>
+                </>
+              )}
+            </div>
+          ))}
+          {!itemsOn && (
+            <button type="button" className="dk-add" disabled={readOnly} onClick={addVatRow}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+              Pridať sadzbu
+            </button>
+          )}
+          <div className="dk-vat dk-vat-total">
+            <span>Celkom</span>
+            <span className="dk-r">{fmtMoney(totalZaklad, ex.mena)}</span>
+            <span className="dk-r">{fmtMoney(totalDph, ex.mena)}</span>
+            <span className="dk-r">{fmtMoney(rozpisSpolu, ex.mena)}</span>
+            <span />
+          </div>
+        </div>
+
+        {/* Platba a zaokrúhlenie */}
+        <div className="dk-card">
+          <div className="dk-card-title">Platba a zaokrúhlenie</div>
+          <div className="dk-grid dk-grid-pay">
+            {srcLabel('sumaSpolu', jePokladna ? 'Uhradená suma' : 'Celková suma')}
+            {money(ex.sumaSpolu, (raw) => updateExtracted('sumaSpolu', parseNum(raw)), 'sumaSpolu')}
+            {/* Kým rozpis DPH nemá sumy, nie je od čoho zaokrúhľovať: riadok by
+                ukazoval celú sumu dokladu ako „zaokrúhlenie" a jeho úprava by
+                celkovú sumu dokladu prepísala natvrdo. Kontroluje sa súčet, nie
+                počet riadkov — prázdny riadok 0/0 je rovnako bezcenný. */}
+            {rozpisSpolu !== 0 && (
+              <>
+                <span className="dk-lbl" title="Rozdiel medzi rozpisom DPH a celkovou sumou dokladu">Zaokrúhlenie</span>
+                <div className="dk-r">
+                  <DcCell
+                    align="right" inputMode="decimal" disabled={readOnly}
+                    value={String(zaokruhlenie)}
+                    display={fmtMoney(zaokruhlenie, ex.mena)}
+                    onCommit={(raw) => updateExtracted('sumaSpolu', round2(rozpisSpolu + (parseOpt(raw) ?? 0)))}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <div className="dk-sep" />
+          <div className="dk-pay-total">
+            <span>Zaplatiť celkom</span>
+            <span>{fmtMoney(sumaSpolu, ex.mena)}</span>
+          </div>
+          {(autoFilled || aiApplied) && (
+            <div className="dk-note" style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0A6650' }}>
+              <IcoCheck s={12} w={2.6} />
               Zaúčtované z pamäte{predkConfidence != null ? ` · istota ${predkConfidence} %` : ''}
             </div>
-          </div>
-        )}
-
+          )}
+        </div>
       </div>
     </div>
   );

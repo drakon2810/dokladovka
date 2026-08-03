@@ -26,28 +26,18 @@
 /* Prepísaná hodnota už nie je „z dokladu" — ostáva neutrálna. */
 .dv-src-edited { --src-tint: #fff; --src-border: #E3E6E2; --src-head: #8A928C; --src-rect: transparent; --src-line: #B8BFB9; }
 
-/* ---------- panel: nadpis sekcie ---------- */
-.dv-src-sec .dv-accent-bar { background: var(--src-head); }
-.dv-src-sec .dv-h3 { color: var(--src-head); }
-
-/* ---------- panel: pole vyplnené AI ---------- */
-.dv-panel .dv-src .dv-input,
-.dv-panel .dv-src .dv-textarea,
-.dv-panel .dv-src .dv-dd-btn {
+/* ---------- editor: hodnota vyplnená AI ---------- */
+/* Inline bunka nemá stály rám, farbu zdroja preto nesie podfarbenie a ľavý
+   pásik — rovnaký odtieň, aký má obdĺžnik nad zdrojovým textom v náhľade. */
+.dk-doc .dk-cell.dv-src {
   background: var(--src-tint);
   border-left: 3px solid var(--src-border);
+  border-radius: 4px 6px 6px 4px;
 }
-.dv-panel .dv-src .dv-input:disabled,
-.dv-panel .dv-src .dv-textarea:disabled { background: var(--src-tint); }
-/* Nízka istota sa nesie pruhom a odznakom, nie iným odtieňom. */
-.dv-panel .dv-src-low .dv-input,
-.dv-panel .dv-src-low .dv-textarea,
-.dv-panel .dv-src-low .dv-dd-btn { border-style: dashed; border-color: var(--src-border); }
-
-.dv-src-on .dv-input,
-.dv-src-on .dv-textarea,
-.dv-src-on .dv-dd-btn {
-  border-color: var(--src-border);
+.dk-doc .dk-cell.dv-src:hover { background: color-mix(in srgb, var(--src-head) 14%, #fff); }
+/* Nízka istota sa nesie prerušovaným pásikom a odznakom, nie iným odtieňom. */
+.dk-doc .dk-cell.dv-src-low { border-left-style: dashed; }
+.dk-doc .dk-cell.dv-src-on {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--src-head) 18%, transparent);
 }
 .dv-src-off { opacity: .45; }
@@ -56,9 +46,10 @@
 .dv-src-chip {
   display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 4px;
   background: var(--src-head); color: #fff; font-size: 9px; font-weight: 700; line-height: 1;
+  flex: none;
 }
 .dv-src-sec .dv-src-chip { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; }
-.dv-panel .dv-label { display: inline-flex; align-items: center; gap: 5px; }
+.dk-doc .dk-lbl { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 
 .dv-src-warn {
   display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px;
@@ -66,10 +57,10 @@
   color: var(--src-head); font-size: 10px; font-weight: 700;
 }
 .dv-src-note { margin-top: 5px; font-size: 11px; line-height: 1.4; color: #5C645F; }
+/* „Upravené" pri popise poľa — hodnota už nie je tá, ktorú vytiahla AI. */
 .dv-src-upravene {
-  position: absolute; top: -9px; right: 10px; z-index: 2;
-  display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 6px; border-radius: 999px;
-  border: 1px solid #E4E8E4; background: #fff; color: #5A635D; font-size: 10.5px; font-weight: 600;
+  display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 999px;
+  border: 1px solid #E4E8E4; background: #fff; color: #5A635D; flex: none;
 }
 
 /* ---------- náhľad dokladu: obdĺžnik nad zdrojovým textom ---------- */

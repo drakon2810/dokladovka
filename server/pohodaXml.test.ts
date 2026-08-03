@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildServerDataPack, splitPostalAddress, vatCountryIds, type PohodaCodeLookup } from './pohodaXml.js';
 
@@ -347,5 +349,100 @@ describe('splitPostalAddress a vatCountryIds', () => {
     expect(vatCountryIds('XI123456789')).toBe('GB');
     expect(vatCountryIds(undefined)).toBeUndefined();
     expect(vatCountryIds('12345')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Poradie elementov musí sedieť so sekvenciou v oficiálnej XSD schéme. POHODA
+// (aj validátor agenta) odmietne celý dataPack, keď je jediný element mimo
+// poradia — a taká chyba sa inak prejaví až pri reálnom importe u klienta.
+// Sekvencia sa číta priamo z priloženej schémy, nie z ručne prepísaného zoznamu.
+function xsdSequence(file: string, complexType: string): string[] {
+  const schema = readFileSync(join(process.cwd(), 'agent/vendor/pohoda-xsd', file), 'latin1');
+  const start = schema.indexOf(`<xsd:complexType name="${complexType}"`);
+  if (start < 0) throw new Error(`XSD typ ${complexType} sa nenašiel v ${file}`);
+  const names: string[] = [];
+  let depth = 0;
+  for (const token of schema.slice(start).matchAll(/<(\/?)xsd:(complexType|element)([^>]*?)(\/?)>/g)) {
+    const [, closing, , attributes, selfClosing] = token;
+    if (closing) {
+      depth -= 1;
+      if (depth === 0) break;
+      continue;
+    }
+    depth += 1;
+    if (depth === 2) {
+      const name = /name="([A-Za-z0-9_]+)"/.exec(attributes)?.[1];
+      if (name) names.push(name);
+    }
+    if (selfClosing) depth -= 1;
+  }
+  return names;
+}
+
+/** Priame deti jedného elementu v poradí, v akom ich generátor vypísal. */
+function emittedChildren(xml: string, prefix: string, wrapper: string): string[] {
+  const start = xml.indexOf(`<${prefix}:${wrapper}>`);
+  const end = xml.indexOf(`</${prefix}:${wrapper}>`, start);
+  const body = xml.slice(start + wrapper.length + prefix.length + 3, end);
+  return [...body.matchAll(new RegExp(`<${prefix}:([A-Za-z0-9]+)[\s>]`, 'g'))].map((match) => match[1]);
+}
+
+function assertOrder(emitted: string[], sequence: string[]): void {
+  const unknown = emitted.filter((name) => !sequence.includes(name));
+  expect(unknown, `elementy mimo schémy: ${unknown.join(', ')}`).toEqual([]);
+  const positions = emitted.map((name) => sequence.indexOf(name));
+  const sorted = [...positions].sort((left, right) => left - right);
+  expect(positions, `poradie ${emitted.join(' → ')}`).toEqual(sorted);
+}
+
+describe('buildServerDataPack — poradie elementov podľa XSD', () => {
+  const fullCodeLists: PohodaCodeLookup = {
+    ...codeLists,
+    strediska: new Map([['s1', '501998']]),
+    cinnosti: new Map([['a1', '211200']]),
+    zakazky: new Map([['z1', 'ZK-2026/014']]),
+  };
+  const analytics = { strediskoId: 's1', cinnostId: 'a1', zakazkaId: 'z1', clenenieKvKod: 'B2', poznamka: 'Poznámka' };
+  const polozka = {
+    id: 'i1', popis: 'Nákup PHM', mnozstvo: 2, jednotka: 'l', sadzbaDph: 23,
+    sumaBezDph: 70, sumaDph: 16.1, sumaSpolu: 86.1,
+    ucto: { predkontaciaId: 'p1', clenenieDphId: 'c1', strediskoId: 's1', clenenieKvKod: 'A1', cinnostId: 'a1', zakazkaId: 'z1' },
+  };
+
+  it('prijatá faktúra so všetkými poľami editora sedí so schémou', () => {
+    const document = invoiceDocument({
+      cisloObjednavky: 'OBJ-1', konstantnySymbol: '0308', specifickySymbol: '55',
+      textPolozky: 'Nákup PHM benzín EVO 95', polozky: [polozka],
+    });
+    document.snapshot.ucto = { ...document.snapshot.ucto, ...analytics };
+    const xml = buildServerDataPack({ id: 'pack-order-1', ico: '35761571', documents: [document], codeLists: fullCodeLists });
+    assertOrder(emittedChildren(xml, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
+    assertOrder(emittedChildren(xml, 'inv', 'invoiceItem'), xsdSequence('invoice.xsd', 'invoiceItemType'));
+    // Text zápisu si píše účtovník; názov predkontácie je až náhrada.
+    expect(xml).toContain('<inv:text>N&#225;kup PHM benz&#237;n EVO 95</inv:text>');
+    expect(xml).toContain('<inv:centre><typ:ids>501998</typ:ids></inv:centre>');
+    expect(xml).toContain('<inv:activity><typ:ids>211200</typ:ids></inv:activity>');
+    expect(xml).toContain('<inv:contract><typ:ids>ZK-2026/014</typ:ids></inv:contract>');
+    // Členenie KV z položky prebíja hlavičku.
+    expect(xml).toContain('<inv:classificationKVDPH><typ:ids>A1</typ:ids></inv:classificationKVDPH>');
+  });
+
+  it('pokladničný doklad a interný doklad sedia so schémou', () => {
+    const voucher = invoiceDocument({ textPolozky: 'Nákup PHM', polozky: [polozka] });
+    voucher.snapshot.typ = 'PD';
+    voucher.snapshot.extracted.variabilnySymbol = '13507';
+    voucher.snapshot.ucto = { ...voucher.snapshot.ucto, ...analytics, pokladnaKod: 'HP1', pokladnaTyp: 'expense' };
+    const voucherXml = buildServerDataPack({ id: 'pack-order-2', ico: '35761571', documents: [voucher], codeLists: fullCodeLists });
+    assertOrder(emittedChildren(voucherXml, 'vch', 'voucherHeader'), xsdSequence('voucher.xsd', 'voucherHeaderType'));
+    assertOrder(emittedChildren(voucherXml, 'vch', 'voucherItem'), xsdSequence('voucher.xsd', 'voucherItemType'));
+    expect(voucherXml).toContain('<vch:symPar>13507</vch:symPar>');
+
+    const intDoc = invoiceDocument({ textPolozky: 'Mzdy 06/2026', polozky: [polozka] });
+    intDoc.snapshot.typ = 'MZDY';
+    intDoc.snapshot.ucto = { ...intDoc.snapshot.ucto, ...analytics };
+    const intXml = buildServerDataPack({ id: 'pack-order-3', ico: '35761571', documents: [intDoc], codeLists: fullCodeLists });
+    assertOrder(emittedChildren(intXml, 'int', 'intDocHeader'), xsdSequence('intDoc.xsd', 'intDocHeaderType'));
+    assertOrder(emittedChildren(intXml, 'int', 'intDocItem'), xsdSequence('intDoc.xsd', 'intDocItemType'));
   });
 });

@@ -154,11 +154,16 @@ export interface DocumentLineItem {
   sumaBezDph?: number;
   sumaDph?: number;
   sumaSpolu?: number;
-  /** Pozičné zaúčtovanie: odlišná predkontácia/členenie/stredisko pre položku. */
+  /** Pozičné zaúčtovanie: odlišná predkontácia/členenie/stredisko pre položku.
+   *  Prázdne pole znamená „ako v hlavičke dokladu" — nie „bez hodnoty". */
   ucto?: {
     predkontaciaId?: string;
     clenenieDphId?: string;
     strediskoId?: string;
+    /** Sekcia kontrolného výkazu DPH pre položku (A1…D2, KN). */
+    clenenieKvKod?: string;
+    cinnostId?: string;
+    zakazkaId?: string;
   };
 }
 
