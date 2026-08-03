@@ -392,6 +392,17 @@ describe('accounting suggestions', () => {
       [decisionId, seeded.tenantId, seeded.organizationId, pred, dph],
     );
 
+    // Textové pravidlá (globálne + firemné) idú modelu spolu s príkladmi.
+    await database.query(
+      `INSERT INTO ai_instructions (id,scope,nazov,text,faza) VALUES ($1,'global','Globálne','Konzultácie účtuj na 518.','both')`,
+      [randomUUID()],
+    );
+    await database.query(
+      `INSERT INTO ai_instructions (id,scope,tenant_id,organization_id,nazov,text,faza)
+       VALUES ($1,'organization',$2,$3,'Firemné','Táto firma používa stredisko SPRAVA.','accounting')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId],
+    );
+
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '11112222', supplierName: 'Nový dodávateľ' };
     const parser = {
       parse: vi.fn().mockResolvedValue({
@@ -407,6 +418,9 @@ describe('accounting suggestions', () => {
     const payload = JSON.parse(firstCall.input[0].content[0].text);
     expect(payload.priklady).toHaveLength(1);
     expect(payload.priklady[0]).toMatchObject({ predkontaciaId: pred });
+    expect(payload.pravidla).toContain('Konzultácie účtuj na 518.');
+    expect(payload.pravidla.indexOf('Konzultácie účtuj na 518.'))
+      .toBeLessThan(payload.pravidla.indexOf('Táto firma používa stredisko SPRAVA.'));
 
     // Po vylúčení dodávateľa z učenia retrieval príklad už nepošle.
     await database.query('UPDATE ucto_decisions SET excluded=true WHERE id=$1', [decisionId]);

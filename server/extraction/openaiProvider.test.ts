@@ -74,6 +74,21 @@ describe('OpenAIDocumentExtractionProvider', () => {
     expect((bezRozmyslania.mock.calls[0][0] as any).reasoning).toBeUndefined();
   });
 
+  it('posiela pravidlá vlastným blokom pred dokladom', async () => {
+    const parse = vi.fn().mockResolvedValue({ output_parsed: wireResult() });
+    await new OpenAIDocumentExtractionProvider(config, { parse })
+      .extract({ ...input(), pokyny: 'ÚČTOVNÉ PRAVIDLÁ\nMzdy rozdeľ na položky.' });
+    const content = (parse.mock.calls[0][0] as any).input[0].content;
+    expect(content[1]).toEqual({ type: 'input_text', text: 'ÚČTOVNÉ PRAVIDLÁ\nMzdy rozdeľ na položky.' });
+    expect(content[2].type).toBe('input_file');
+    expect(extractionSystemInstructions).toContain('ÚČTOVNÉ PRAVIDLÁ');
+
+    // Bez pravidiel ostáva poradie ako predtým — doklad je druhá časť.
+    const bezPravidiel = vi.fn().mockResolvedValue({ output_parsed: wireResult() });
+    await new OpenAIDocumentExtractionProvider(config, { parse: bezPravidiel }).extract(input());
+    expect((bezPravidiel.mock.calls[0][0] as any).input[0].content[1].type).toBe('input_file');
+  });
+
   it('posiela obrázok ako input_image', async () => {
     const parse = vi.fn().mockResolvedValue({ output_parsed: wireResult() });
     const provider = new OpenAIDocumentExtractionProvider(config, { parse });

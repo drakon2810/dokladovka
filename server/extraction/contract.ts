@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v2';
+export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v3';
 export const EXTRACTION_SCHEMA_VERSION = '2';
 export const SUPPORTED_VAT_RATES = [23, 21, 19, 12, 5, 0] as const;
 export const SUPPORTED_EXTRACTION_MIME_TYPES = [
@@ -217,6 +217,8 @@ export interface ExtractionInput {
   fileName: string;
   bytes: Uint8Array;
   organizationContext: { nazov: string; ico: string; dic?: string; icDph?: string };
+  /** Textové pravidlá (globálne + firemné) — dôveryhodný blok pred dokladom. */
+  pokyny?: string;
   promptVersion: string;
   schemaVersion: string;
 }

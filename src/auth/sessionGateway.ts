@@ -69,7 +69,7 @@ export function isAuthSession(value: unknown): value is AuthSession {
       typeof session.user.tenantId === 'string' &&
       typeof session.user.name === 'string' &&
       typeof session.user.email === 'string' &&
-      ['uctovnik', 'schvalovatel', 'admin'].includes(session.user.role) &&
+      ['uctovnik', 'schvalovatel', 'admin', 'superadmin'].includes(session.user.role) &&
       Array.isArray(session.user.organizationIds) &&
       session.user.organizationIds.every((id) => typeof id === 'string') &&
       session.user.language === 'sk' &&

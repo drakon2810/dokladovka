@@ -517,15 +517,14 @@ export function DocumentDetailPage() {
       if (data.currentOrgId !== 'all' && item.orgId !== data.currentOrgId) return false;
       if (queueId && item.queueId !== queueId) return false;
       if (exactStatus && item.status !== exactStatus) return false;
-      if (!exactStatus && tab === 'na_kontrole' && !['extrahovany', 'na_kontrole'].includes(item.status)) return false;
-      if (!exactStatus && tab === 'schvalene' && item.status !== 'schvaleny') return false;
-      if (!exactStatus && tab === 'exportovane' && item.status !== 'exportovany') return false;
+      // Tab „Na kontrolu" obsahuje aj problémové doklady (rovnako ako zoznam).
       if (
         !exactStatus &&
-        tab === 'na_uhradu' &&
-        !['to_pay', 'payment_order', 'partially_paid'].includes(item.payment?.status ?? '')
+        tab === 'na_kontrole' &&
+        !['extrahovany', 'na_kontrole', ...problemStatuses].includes(item.status)
       ) return false;
-      if (!exactStatus && tab === 'problemy' && !problemStatuses.includes(item.status)) return false;
+      if (!exactStatus && tab === 'schvalene' && item.status !== 'schvaleny') return false;
+      if (!exactStatus && tab === 'exportovane' && item.status !== 'exportovany') return false;
       if (query) {
         const searchable = normalizeQueueText(
           `${item.extracted.dodavatel.nazov} ${item.extracted.cisloFaktury} ${item.extracted.variabilnySymbol ?? ''}`,

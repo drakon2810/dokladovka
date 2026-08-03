@@ -5,7 +5,10 @@ import type { Database } from './db/database.js';
 import { HttpError } from './http.js';
 import { randomToken, sha256 } from './security.js';
 
-export type UserRole = 'uctovnik' | 'schvalovatel' | 'admin';
+// 'superadmin' = správca platformy: píše globálne pravidlá pre AI a nemá
+// členstvo v žiadnej organizácii, takže sa k dátam firiem nedostane (ostatné
+// routy ho v requireRole neuvádzajú a requireOrganizationAccess ho odmietne).
+export type UserRole = 'uctovnik' | 'schvalovatel' | 'admin' | 'superadmin';
 
 interface SessionRow extends Record<string, unknown> {
   session_id: string;

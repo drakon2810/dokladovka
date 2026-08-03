@@ -42,7 +42,7 @@ const DOCUMENT_STATUSES: DocumentStatus[] = [
 ];
 const PROBLEM_STATUSES = new Set<DocumentStatus>(['chyba', 'karantena', 'duplicita']);
 
-type TabId = 'vsetky' | 'na_kontrole' | 'schvalene' | 'exportovane' | 'na_uhradu' | 'problemy' | 'ine' | 'kos';
+type TabId = 'vsetky' | 'na_kontrole' | 'schvalene' | 'exportovane' | 'ine' | 'kos';
 type SourceFilter = '' | DocumentItem['zdroj']['typ'];
 type ProcessingFilter = '' | 'caka' | 'spracuva' | 'hotovo' | 'chyba';
 type SortKey =
@@ -59,7 +59,7 @@ type SortKey =
 type SortDirection = 'asc' | 'desc';
 type Density = 'comfortable' | 'compact';
 
-const TAB_IDS: TabId[] = ['vsetky', 'na_kontrole', 'schvalene', 'exportovane', 'na_uhradu', 'problemy', 'ine', 'kos'];
+const TAB_IDS: TabId[] = ['vsetky', 'na_kontrole', 'schvalene', 'exportovane', 'ine', 'kos'];
 const COLLATOR = new Intl.Collator('sk', { sensitivity: 'base', numeric: true });
 
 const svg = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
@@ -164,15 +164,17 @@ function matchesTab(document: DocumentItem, tab: TabId): boolean {
   // „Iné doklady" sú voľné firemné súbory, nie účtovné doklady — majú vlastný
   // zoznam, takže sem nepatrí ani jeden doklad.
   if (tab === 'ine') return false;
+  // Problémové doklady (chyba/karanténa/duplicita) čakajú na účtovníka rovnako
+  // ako bežná kontrola — majú jeden spoločný tab, nie vlastný.
   if (tab === 'na_kontrole') {
-    return document.status === 'extrahovany' || document.status === 'na_kontrole';
+    return (
+      document.status === 'extrahovany' ||
+      document.status === 'na_kontrole' ||
+      PROBLEM_STATUSES.has(document.status)
+    );
   }
   if (tab === 'schvalene') return document.status === 'schvaleny';
   if (tab === 'exportovane') return document.status === 'exportovany';
-  if (tab === 'na_uhradu') {
-    return ['to_pay', 'payment_order', 'partially_paid'].includes(document.payment?.status ?? '');
-  }
-  if (tab === 'problemy') return PROBLEM_STATUSES.has(document.status);
   // Kôš: zamietnuté doklady žijú len tu — vo „Všetky" sa neukazujú.
   if (tab === 'kos') return document.status === 'zamietnuty';
   return document.status !== 'zamietnuty';
@@ -479,8 +481,6 @@ export function DocumentsPage() {
     { id: 'na_kontrole', label: t('doklady.tab.naKontrolu') },
     { id: 'schvalene', label: t('doklady.tab.schvalene') },
     { id: 'exportovane', label: t('doklady.tab.exportovane') },
-    { id: 'na_uhradu', label: t('doklady.tab.naUhradu') },
-    { id: 'problemy', label: t('doklady.tab.problemy') },
     { id: 'ine', label: t('doklady.tab.ine') },
     { id: 'kos', label: t('doklady.tab.kos') },
   ];

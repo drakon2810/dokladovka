@@ -31,6 +31,9 @@ const expected: Record<Role, readonly Capability[]> = {
     'document.reject',
     'document.comment',
   ],
+  // Správca platformy píše len globálne pravidlá pre AI — k dátam firiem nemá
+  // žiadne oprávnenie, ani na čítanie.
+  superadmin: [],
 };
 
 describe('capability allow-list', () => {

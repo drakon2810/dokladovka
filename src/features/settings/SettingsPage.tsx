@@ -14,6 +14,7 @@ import { ApprovalRulesTab } from './ApprovalRulesTab';
 import { ClientProfileTab } from './ClientProfileTab';
 import { TemplatesTab } from './TemplatesTab';
 import { TreningAiTab } from './TreningAiTab';
+import { AiPravidlaTab } from './AiPravidlaTab';
 
 const TABS = [
   { id: 'organizacie', label: 'nast.tab.organizacie' },
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'profil', label: 'nast.tab.profil' },
   { id: 'ciselniky', label: 'nast.tab.ciselniky' },
   { id: 'trening', label: 'nast.tab.trening' },
+  { id: 'pravidla', label: 'nast.tab.pravidla' },
   { id: 'pouzivatelia', label: 'nast.tab.pouzivatelia' },
   { id: 'schvalovanie', label: 'nast.tab.schvalovanie' },
   { id: 'sablony', label: 'nast.tab.sablony' },
@@ -67,6 +69,7 @@ export function SettingsPage() {
       {tab === 'profil' && <ClientProfileTab />}
       {tab === 'ciselniky' && <CodeListsTab />}
       {tab === 'trening' && <TreningAiTab />}
+      {tab === 'pravidla' && <AiPravidlaTab />}
       {tab === 'pouzivatelia' && <UsersTab />}
       {tab === 'schvalovanie' && <ApprovalRulesTab />}
       {tab === 'sablony' && <TemplatesTab />}

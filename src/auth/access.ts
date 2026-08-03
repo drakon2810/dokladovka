@@ -60,10 +60,13 @@ export const CAPABILITIES_BY_ROLE = Object.freeze({
   admin: Object.freeze([...CAPABILITIES]),
   uctovnik: Object.freeze([...ACCOUNTANT_CAPABILITIES]),
   schvalovatel: Object.freeze([...APPROVER_CAPABILITIES]),
+  // Správca platformy spravuje len globálne pravidlá pre AI — k dátam firiem
+  // nemá žiadne oprávnenie, ani na čítanie.
+  superadmin: Object.freeze([]),
 }) satisfies Readonly<Record<Role, readonly Capability[]>>;
 
 export function isKnownRole(role: unknown): role is Role {
-  return role === 'admin' || role === 'uctovnik' || role === 'schvalovatel';
+  return role === 'admin' || role === 'uctovnik' || role === 'schvalovatel' || role === 'superadmin';
 }
 
 export function hasCapability(role: unknown, capability: Capability): boolean {

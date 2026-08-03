@@ -16,6 +16,7 @@ import { registerOrgDocumentRoutes } from './routes/orgDocumentRoutes.js';
 import { registerPaymentRoutes } from './routes/paymentRoutes.js';
 import { registerPartnerRoutes } from './routes/partnerRoutes.js';
 import { registerAiTrainingRoutes } from './routes/aiTrainingRoutes.js';
+import { registerAiInstructionRoutes } from './routes/aiInstructionRoutes.js';
 import { registerAssistantRoutes } from './routes/assistantRoutes.js';
 import { registerCompanyRegistryRoutes } from './routes/companyRegistryRoutes.js';
 import type { ObjectStorage } from './storage.js';
@@ -89,6 +90,7 @@ export async function buildApp(input: {
   registerPaymentRoutes(app, input.database);
   registerPartnerRoutes(app, input.database);
   registerAiTrainingRoutes(app, input.database, input.config, input.aiRulesParser);
+  registerAiInstructionRoutes(app, input.database);
   registerAssistantRoutes(app, input.database, input.storage, input.config, input.assistantParser);
   registerCompanyRegistryRoutes(app, input.database, input.config);
 

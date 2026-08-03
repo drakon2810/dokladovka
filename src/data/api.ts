@@ -2818,3 +2818,56 @@ export function subscribeDataChanges(listener: SnapshotChangeListener): () => vo
   // sa surový nefiltrovaný store nikdy nedostal do query.ts ako „pushed".
   return useAppStore.subscribe(() => listener());
 }
+
+// ===== Pravidlá pre AI (písané textom) =====
+// Globálne píše správca platformy, firemné účtovník v nastaveniach firmy.
+// Obe cesty vracajú rovnaký tvar, líši sa len URL.
+
+export interface AiPokyn {
+  id: string;
+  scope: 'global' | 'organization';
+  nazov: string;
+  text: string;
+  faza: 'extraction' | 'accounting' | 'both';
+  typyDokladov: string[];
+  klucoveSlova: string[];
+  priorita: number;
+  active: boolean;
+  updatedAt?: string;
+}
+
+export type AiPokynVstup = Omit<AiPokyn, 'id' | 'scope' | 'updatedAt'>;
+
+function pokynyPath(organizationId?: string): string {
+  return organizationId
+    ? `/api/organizations/${encodeURIComponent(organizationId)}/instructions`
+    : '/api/global-instructions';
+}
+
+export async function listAiPokyny(organizationId?: string): Promise<AiPokyn[]> {
+  if (!REST_DATA_MODE) return [];
+  const result = await restRequest<{ pravidla: AiPokyn[] }>(pokynyPath(organizationId), { method: 'GET' });
+  return result.pravidla;
+}
+
+export async function createAiPokyn(vstup: AiPokynVstup, organizationId?: string): Promise<AiPokyn> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
+  return restRequest<AiPokyn>(pokynyPath(organizationId), { method: 'POST', body: JSON.stringify(vstup) });
+}
+
+export async function updateAiPokyn(
+  id: string,
+  zmena: Partial<AiPokynVstup>,
+  organizationId?: string,
+): Promise<AiPokyn> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
+  return restRequest<AiPokyn>(`${pokynyPath(organizationId)}/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(zmena),
+  });
+}
+
+export async function deleteAiPokyn(id: string, organizationId?: string): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
+  await restRequest(`${pokynyPath(organizationId)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}

@@ -11,6 +11,7 @@ import { ExportPage } from '../features/export/ExportPage';
 import { PartnersPage } from '../features/partners/PartnersPage';
 import { AssistantPage } from '../features/assistant/AssistantPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { GlobalRulesPage } from '../features/pravidla/GlobalRulesPage';
 import { useDataQuery } from '../data/query';
 import { t } from '../i18n/sk';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -36,6 +37,9 @@ function AppShell() {
     if (location.pathname === '/') return <LandingPage />;
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
+  // Správca platformy nemá firmy ani doklady — celá aplikácia je pre neho jedna
+  // obrazovka s globálnymi pravidlami (bez navigácie a bez snapshotu tenanta).
+  if (session.user.role === 'superadmin') return <GlobalRulesPage />;
   return <Layout />;
 }
 

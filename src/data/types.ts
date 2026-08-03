@@ -590,7 +590,9 @@ export interface AgentReleaseUnavailable {
 
 export type AgentReleaseState = AgentRelease | AgentReleaseUnavailable;
 
-export type Role = 'uctovnik' | 'schvalovatel' | 'admin';
+// 'superadmin' = správca platformy: jediný účet, vidí len globálne pravidlá pre
+// AI a nemá prístup k žiadnej firme ani jej dokladom.
+export type Role = 'uctovnik' | 'schvalovatel' | 'admin' | 'superadmin';
 
 export type UserLanguage = 'sk';
 

@@ -27,6 +27,7 @@ export const sk = {
   'rola.uctovnik': 'Účtovník',
   'rola.schvalovatel': 'Schvaľovateľ',
   'rola.admin': 'Admin',
+  'rola.superadmin': 'Správca platformy',
 
   // ===== Prihlásenie / účet =====
   'auth.vitajte': 'Vitajte, prihláste sa',
@@ -283,7 +284,6 @@ export const sk = {
   'doklady.tab.naKontrolu': 'Na kontrolu',
   'doklady.tab.schvalene': 'Schválené',
   'doklady.tab.exportovane': 'Exportované',
-  'doklady.tab.problemy': 'Problémy',
   'doklady.tab.kos': 'Kôš',
   'doklady.obnovit': 'Obnoviť',
   'doklady.obnovene': 'Doklad bol obnovený z koša.',
@@ -321,7 +321,6 @@ export const sk = {
   'doklady.prazdne':
     'Žiadne doklady. Nové doklady prídu automaticky na e-mail organizácie, napr.',
   'doklady.poSplatnosti': 'po splatnosti',
-  'doklady.tab.naUhradu': 'Na úhradu',
   'doklady.bulk.platbaQr': 'Platba QR',
   'doklady.bulk.exportPohoda': 'Export POHODA / XML',
   'doklady.st.stavDokladu': 'Stav dokladu',
@@ -1208,8 +1207,8 @@ export const sk = {
   'nespracovane.zmazatPotvrdenie':
     'E-mail aj jeho prílohy sa nenávratne zmažú. Doklad z nich už nevznikne.',
   'nespracovane.zmazaneOk': 'E-mail bol zmazaný.',
-  // ===== Iné doklady (voľné firemné dokumenty v zozname dokladov) =====
-  'doklady.tab.ine': 'Iné doklady',
+  // ===== Neúčtované doklady (voľné firemné dokumenty v zozname dokladov) =====
+  'doklady.tab.ine': 'Neúčtované doklady',
   'doklady.nahrat.cakaNaFirmu': 'súborov čaká — najprv vyberte firmu, do ktorej patria.',
   'ine.znacka': 'INÝ',
   'ine.prazdne': 'Zatiaľ tu nie je žiadny dokument. Pretiahnite súbor sem alebo použite Nahrať.',
@@ -1223,6 +1222,37 @@ export const sk = {
   'ine.stiahnut': 'Stiahnuť',
   'ine.aiPoznamka': 'Zhrnutie pripravila AI z obsahu súboru — pri dôležitých veciach si ho overte v dokumente.',
   'ine.zmazatPotvrdenie': 'Dokument sa nenávratne zmaže.',
+
+  // ===== Pravidlá pre AI (globálne od správcu platformy + pravidlá firmy) =====
+  'nast.tab.pravidla': 'Pravidlá pre AI',
+  'pravidla.global.titulok': 'Globálne pravidlá pre AI',
+  'pravidla.global.popis':
+    'Tieto pravidlá platia pre všetky firmy vo všetkých účtoch. AI ich číta pri každom doklade — najprv globálne, potom pravidlá firmy. Pri rozpore vyhráva pravidlo firmy.',
+  'pravidla.firma.popis': 'Pravidlá platia len pre firmu:',
+  'pravidla.vybertefirmu': 'Najprv vyberte firmu v prepínači vľavo.',
+  'pravidla.nove': 'Nové pravidlo',
+  'pravidla.nazov': 'Názov',
+  'pravidla.nazovPriklad': 'napr. Rekapitulácia miezd',
+  'pravidla.text': 'Pravidlo',
+  'pravidla.textPriklad':
+    'Napíšte pravidlo tak, ako by ste ho vysvetlili novému kolegovi — čo je to za doklad, ako ho rozdeliť na položky a s akou predkontáciou a členením ho zaúčtovať.',
+  'pravidla.faza': 'Kedy sa použije',
+  'pravidla.faza.both': 'Pri čítaní aj zaúčtovaní',
+  'pravidla.faza.extraction': 'Len pri čítaní dokladu',
+  'pravidla.faza.accounting': 'Len pri návrhu zaúčtovania',
+  'pravidla.typy': 'Typy dokladov',
+  'pravidla.typyHint': 'Nič nevybraté = pravidlo platí pre všetky doklady.',
+  'pravidla.klucoveSlova': 'Kľúčové slová',
+  'pravidla.klucoveSlovaPriklad': 'nájom, palivo (oddelené čiarkou)',
+  'pravidla.pridat': 'Pridať pravidlo',
+  'pravidla.ulozene': 'Pravidlo bolo uložené.',
+  'pravidla.zmazat': 'Zmazať',
+  'pravidla.zmazane': 'Pravidlo bolo zmazané.',
+  'pravidla.zmazatPotvrdenie': 'Zmazať toto pravidlo?',
+  'pravidla.zapnut': 'Zapnúť',
+  'pravidla.vypnut': 'Vypnúť',
+  'pravidla.prazdne': 'Zatiaľ tu nie je žiadne pravidlo.',
+  'pravidla.chybaPovinne': 'Vyplňte názov aj text pravidla.',
 } as const;
 
 export type SkKey = keyof typeof sk;

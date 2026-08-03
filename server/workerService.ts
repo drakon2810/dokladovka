@@ -22,6 +22,7 @@ import {
   rebuildAccountingSuggestion,
   type AiSuggestionDocumentContext,
 } from './services/accountingSuggestionService.js';
+import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.js';
 import { matchStatementPayments } from './services/paymentService.js';
 import { upsertPartnerZDokladu } from './services/partnerService.js';
 import type { ObjectStorage } from './storage.js';
@@ -552,12 +553,21 @@ export async function processNextJob(
         }
       }
     }
+    // Textové pravidlá pre čítanie dokladu (globálne + firemné). Typ dokladu
+    // ešte nepoznáme, takže sa neposiela filtrovaný výber — podmienku („platí
+    // pre MZDY") si model prečíta priamo v texte pravidla.
+    const pokyny = pokynyPreModel(await nacitajPokyny(database, {
+      tenantId: job.tenant_id,
+      organizationId: job.organization_id,
+      faza: 'extraction',
+    }));
     const startedAt = performance.now();
     const outcome = await provider.extract({
       documentId: prepared.documentId,
       mimeType: context.detected_mime_type as ExtractionInput['mimeType'],
       fileName: context.original_file_name,
       bytes,
+      pokyny,
       organizationContext: {
         nazov: context.organization_name,
         ico: context.organization_ico,
