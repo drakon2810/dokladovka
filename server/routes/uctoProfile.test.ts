@@ -135,6 +135,10 @@ describe('účtovný profil firmy', () => {
     const preprava = kategorie.find((item) => item.nazov === 'Preprava a špedícia');
     expect(preprava?.predkontaciaId).toBe(ids.get('predkontacie:518/321'));
     expect(preprava?.clenenieKvKod).toBe('B2');
+    // Početnosť sa počíta zo slovníka nad podkladom, nie odhadom: „preprava"
+    // sedí na všetkých 6 riadkov, „nic" na žiadny.
+    expect(preprava?.pocet).toBe(6);
+    expect(kategorie.find((item) => item.nazov === 'Vymyslená')?.pocet).toBe(0);
     // Účet, ktorý v podklade nebol, sa do profilu nedostane ani ako výnimka.
     const vymyslena = kategorie.find((item) => item.nazov === 'Vymyslená');
     expect(vymyslena?.predkontaciaKod).toBeUndefined();

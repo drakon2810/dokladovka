@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
-import { platnyKvKod } from './accountingSuggestionService.js';
+import { platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -164,7 +164,12 @@ export async function analyzujUctovnyProfil(
     });
     if (!response.output_parsed) continue;
     const parsed = davkaSchema.parse(response.output_parsed);
-    const pocetDavky = davka.reduce((sum, item) => sum + item.pocet, 0);
+    // Koľko riadkov histórie kategória naozaj pokrýva, sa NEODHADUJE: spočíta
+    // sa deterministicky cez jej vlastný slovník. Toto číslo rozhoduje, či sa
+    // návrh z kategórie smie predvyplniť, takže odhad by bol nebezpečný.
+    const pokrytie = (kategoria: z.infer<typeof kategoriaSchema>) => davka
+      .filter((item) => pocetZhodSlov(kategoria.slovnik, item.text) > 0)
+      .reduce((sum, item) => sum + item.pocet, 0);
     for (const kategoria of parsed.kategorie) {
       const cistyUcet = kategoria.predkontaciaKod && povoleneUcty.has(kategoria.predkontaciaKod)
         ? kategoria.predkontaciaKod : null;
@@ -176,7 +181,7 @@ export async function analyzujUctovnyProfil(
       if (existujuca) {
         // Rovnaká kategória z ďalšej dávky len dopĺňa slovník a počty.
         existujuca.slovnik = [...new Set([...existujuca.slovnik, ...kategoria.slovnik])].slice(0, 30);
-        existujuca.pocet += Math.round(pocetDavky / Math.max(1, parsed.kategorie.length));
+        existujuca.pocet += pokrytie(kategoria);
         existujuca.konflikt ??= kategoria.konflikt;
         continue;
       }
@@ -188,7 +193,7 @@ export async function analyzujUctovnyProfil(
         clenenieKvKod: platnyKvKod(kategoria.clenenieKvKod ?? undefined) ?? null,
         vynimky: kategoria.vynimky.filter((vynimka) =>
           vynimka.predkontaciaKod === null || povoleneUcty.has(vynimka.predkontaciaKod)),
-        pocet: Math.round(pocetDavky / Math.max(1, parsed.kategorie.length)),
+        pocet: pokrytie(kategoria),
         agendy: [...new Set(davka.flatMap((item) => item.agendy))],
       });
     }
