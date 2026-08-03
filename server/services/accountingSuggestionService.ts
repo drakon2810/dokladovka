@@ -128,6 +128,16 @@ export function matchKeywords(keywords: unknown, lineText: string): string | und
     .find((slovo) => text.includes(bezDiakritiky(slovo.trim())));
 }
 
+/**
+ * Predkontácie POHODY s kódom „BEZ…" (BEZ321100, BEZ325999…) znamenajú doklad
+ * BEZ zaúčtovania — údajová uzávierka, úhrada preplatku, záloha. Nie sú to
+ * účty, len technické záznamy, takže sa nesmú navrhovať ani sa z nich učiť.
+ */
+export const BEZ_PREDKONTACIA_SQL = "NOT (kind='predkontacie' AND code ILIKE 'BEZ%')";
+export function jeBezPredkontacia(kod: string | undefined | null): boolean {
+  return /^bez/i.test(kod?.trim() ?? '');
+}
+
 /** Od koľkých historických riadkov je kategória dosť overená na predvyplnenie. */
 const KATEGORIA_ISTOTA_OD = 20;
 
@@ -261,7 +271,8 @@ async function onlyActiveIds(
   if (ids.length === 0) return {};
   const active = await tx.query<{ id: string } & Record<string, unknown>>(
     `SELECT id FROM code_list_items
-      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])`,
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])
+        AND ${BEZ_PREDKONTACIA_SQL}`,
     [input.tenantId, input.organizationId, ids],
   );
   const allowed = new Set(active.rows.map((row) => row.id));
@@ -727,6 +738,7 @@ export async function maybeAiAccountingSuggestion(
     `SELECT id, kind, code, name FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
         AND kind IN ('predkontacie','cleneniaDph','ciselneRady')
+        AND ${BEZ_PREDKONTACIA_SQL}
       ORDER BY kind, code LIMIT 5000`,
     [input.tenantId, input.organizationId],
   );
@@ -842,7 +854,15 @@ export async function maybeAiAccountingSuggestion(
     ciselny_rad_id: parsed.ciselnyRadId ?? undefined,
   });
   if (!hasAccounting(validated)) return false;
-  const kvKod = platnyKvKod(await kvPreClenenie(database, input.tenantId, validated.clenenie_dph_id, undefined));
+  // Kategória, ktorú model nasledoval — nesie aj sekciu KV z reálnej histórie.
+  // Bez nej by KV ostalo prázdne: členenia DPH z POHODY nemajú vyplnenú
+  // kv_section, takže odvodenie z členenia nemá z čoho brať.
+  const kategoriaZhoda = kategorie.find((kategoria) =>
+    kategoria.predkontacia_id && kategoria.predkontacia_id === validated.predkontacia_id);
+  const kvKod = platnyKvKod(await kvPreClenenie(
+    database, input.tenantId, validated.clenenie_dph_id,
+    platnyKvKod(kategoriaZhoda?.clenenie_kv_kod),
+  ));
 
   // Deterministická kontrola po AI: návrh, ktorý by DPH poradca pri schválení
   // aj tak zablokoval (napr. neplatiteľ s odpočtom), sa nezobrazí ako návrh.
@@ -875,10 +895,9 @@ export async function maybeAiAccountingSuggestion(
   // automatického predvyplnenia (0.9) — účtovník ho musí prevziať sám. Ak sa
   // však model trafil do kategórie plnenia, ktorú firma reálne používa
   // dostatočne často, je to prax firmy, nie odhad — taký návrh sa predvyplní.
-  const kategoriaZhoda = kategorie.find((kategoria) =>
-    kategoria.predkontacia_id && kategoria.predkontacia_id === validated.predkontacia_id
-    && Number(kategoria.pocet ?? 0) >= KATEGORIA_ISTOTA_OD);
-  const strop = kategoriaZhoda ? 0.95 : 0.8;
+  const overenaKategoria = kategoriaZhoda && Number(kategoriaZhoda.pocet ?? 0) >= KATEGORIA_ISTOTA_OD
+    ? kategoriaZhoda : undefined;
+  const strop = overenaKategoria ? 0.95 : 0.8;
   const dovod = kategoriaZhoda
     ? `Podľa kategórie „${kategoriaZhoda.nazov}" z účtovného profilu firmy: ${parsed.reason}`
     : `AI návrh z číselníkov: ${parsed.reason}`;

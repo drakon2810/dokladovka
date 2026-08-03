@@ -191,5 +191,52 @@ describe('účtovný profil firmy', () => {
     expect(Number(suggestion.confidence)).toBeGreaterThanOrEqual(0.9);
     expect(suggestion.reason).toContain('Preprava a špedícia');
     expect(suggestion.predkontacia_id).toBe(ids.get('predkontacie:518/321'));
+    // KV berie z kategórie: členenia DPH z POHODY nemajú vyplnenú kv_section,
+    // takže bez tohto by členenie KV ostalo prázdne na každom doklade.
+    expect(suggestion.clenenie_kv_kod).toBe('B2');
+  }, 90_000);
+
+  it('predkontácie „BEZ…" sa neučia ani nenavrhujú', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const ids = await seedCodeLists(database, seeded, [
+      ['predkontacie', 'BEZ321100'], ['predkontacie', '518/321'], ['cleneniaDph', 'PD'],
+    ]);
+
+    // 1) Do korpusu sa BEZ kód nedostane ani ako text.
+    await importUctoHistory(database, {
+      ...seeded,
+      rows: [{ agenda: 'FP', lineText: 'Údajová uzávierka', predkontaciaKod: 'BEZ321100', clenenieDphKod: 'PD' }],
+      source: 'mdb',
+    });
+    const historia = await database.query<Record<string, any>>(
+      'SELECT predkontacia_kod, predkontacia_id FROM ucto_historia',
+    );
+    expect(historia.rows[0]).toMatchObject({ predkontacia_kod: null, predkontacia_id: null });
+
+    // 2) Model taký účet ani neuvidí v ponuke, a keby ho aj vrátil, zahodí sa.
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    const parser = {
+      parse: vi.fn().mockResolvedValue({
+        output_parsed: {
+          predkontaciaId: ids.get('predkontacie:BEZ321100'), clenenieDphId: null,
+          ciselnyRadId: null, confidence: 0.9, reason: 'Uzávierka',
+        },
+      }),
+    };
+    const context = { documentType: 'FP', supplierName: 'Dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Údajová uzávierka'] };
+    expect(await maybeAiAccountingSuggestion(
+      database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Dodávateľ' },
+      context, parser,
+    )).toBe(false);
+    const ponuka = JSON.parse((parser.parse.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(ponuka.ciselniky.predkontacie.map((item: any) => item.kod)).toEqual(['518/321']);
   }, 90_000);
 });

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Database, Queryable } from '../db/database.js';
-import { normalizeName, platnyKvKod } from './accountingSuggestionService.js';
+import { jeBezPredkontacia, normalizeName, platnyKvKod } from './accountingSuggestionService.js';
 
 // Korpus histórie zaúčtovaní (ucto_historia): úplná POHODA po riadkoch a cez
 // všetky agendy. Zdroj pravdy pre jednorazovú analýzu kategórií plnení.
@@ -118,8 +118,10 @@ export async function importUctoHistory(
       lineText,
       suma: row.suma ?? null,
       sadzbaDph: row.sadzbaDph ?? null,
-      predkontaciaKod: row.predkontaciaKod?.trim() || null,
-      predkontaciaId: id('predkontacie', row.predkontaciaKod),
+      // „BEZ…" nie je účet, ale doklad bez zaúčtovania — do korpusu sa nedostane
+      // ani ako kód, inak by z neho analýza spravila kategóriu s účtom BEZ321100.
+      predkontaciaKod: jeBezPredkontacia(row.predkontaciaKod) ? null : row.predkontaciaKod?.trim() || null,
+      predkontaciaId: jeBezPredkontacia(row.predkontaciaKod) ? null : id('predkontacie', row.predkontaciaKod),
       clenenieDphKod: row.clenenieDphKod?.trim() || null,
       clenenieDphId: id('cleneniaDph', row.clenenieDphKod),
       clenenieKvKod: platnyKvKod(row.clenenieKvKod) ?? null,
@@ -189,8 +191,8 @@ export async function backfillHistoryFromDecisions(
       lineText: row.line_text_normalized,
       suma: null,
       sadzbaDph: null,
-      predkontaciaKod: row.predkontacia_kod ?? null,
-      predkontaciaId: row.predkontacia_id ?? null,
+      predkontaciaKod: jeBezPredkontacia(row.predkontacia_kod) ? null : row.predkontacia_kod ?? null,
+      predkontaciaId: jeBezPredkontacia(row.predkontacia_kod) ? null : row.predkontacia_id ?? null,
       clenenieDphKod: row.clenenie_dph_kod ?? null,
       clenenieDphId: row.clenenie_dph_id ?? null,
       clenenieKvKod: row.clenenie_kv_kod ?? null,

@@ -8,7 +8,7 @@ import { writeAudit } from '../audit.js';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
-import { normalizeName, platnyKvKod } from '../services/accountingSuggestionService.js';
+import { BEZ_PREDKONTACIA_SQL, normalizeName, platnyKvKod } from '../services/accountingSuggestionService.js';
 
 // Tréning AI: import historických zaúčtovaní (Excel z POHODY) do pamäte
 // rozhodnutí. Riadky nesú KÓDY číselníkov — server ich preloží na aktívne
@@ -402,6 +402,7 @@ export function registerAiTrainingRoutes(
       `SELECT id, kind, code, name FROM code_list_items
         WHERE tenant_id=$1 AND organization_id=$2 AND active=true
           AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')
+          AND ${BEZ_PREDKONTACIA_SQL}
         ORDER BY kind, code LIMIT 400`,
       [auth.tenantId, id],
     );
@@ -457,7 +458,8 @@ export function registerAiTrainingRoutes(
     const codeLists = await database.query<{ id: string } & Record<string, unknown>>(
       `SELECT id FROM code_list_items
         WHERE tenant_id=$1 AND organization_id=$2 AND active=true
-          AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')`,
+          AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')
+          AND ${BEZ_PREDKONTACIA_SQL}`,
       [auth.tenantId, id],
     );
     const aktivneIds = new Set(codeLists.rows.map((row) => row.id));
