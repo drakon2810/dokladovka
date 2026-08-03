@@ -84,6 +84,23 @@ docker compose run --rm api node build/server/db/seed.js
 Создаст админа с `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` из `.env`.
 Теперь можно зайти на `https://dokladovka.site` и войти под ним.
 
+## 7. Аккаунт администратора платформы (один раз)
+
+Отдельный аккаунт для глобальных правил AI. Он живёт в собственном тенанте,
+не состоит ни в одной организации и поэтому не видит документы фирм. Второй
+такой аккаунт создать нельзя — уникальный индекс в миграции 0033.
+
+```bash
+docker compose run --rm \
+  -e SEED_PLATFORM_ADMIN_EMAIL=platforma@example.sk \
+  -e SEED_PLATFORM_ADMIN_PASSWORD='...' \
+  api node build/server/db/seed.js
+```
+
+После входа он видит один экран — «Globálne pravidlá pre AI». Пароль меняется
+только через «Забыли пароль?», поэтому почта аккаунта НЕ должна быть на домене
+приёма документов (catch-all): письмо со сбросом попало бы в «Nespracované».
+
 ---
 
 ## Обновление (новая версия кода)
