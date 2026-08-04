@@ -16,6 +16,7 @@ import { ExtractionProviderError, OpenAIDocumentExtractionProvider } from './ext
 import { PeppolDocumentExtractionProvider } from './extraction/peppolProvider.js';
 import { SepaStatementExtractionProvider } from './extraction/sepaProvider.js';
 import { classifyXml } from './inbound/xmlClassifier.js';
+import { nacitajCiselnikIndex, polozkySKodmi, zauctovanieZKodov } from "./extraction/codeResolution.js";
 import { normalizeExtractionResult, validateExtractionResult } from './extraction/normalize.js';
 import {
   maybeAiAccountingSuggestion,
@@ -328,6 +329,12 @@ async function completeRun(
   const buyerMismatch = issues.some((issue) => ['buyer_ico_mismatch', 'supplier_buyer_may_be_inverted'].includes(issue.code));
   const status = buyerMismatch ? 'karantena' : duplicateId ? 'duplicita' : 'na_kontrole';
   const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+  // Kódy predkontácií, členení a číselného radu, ktoré model opísal z pravidla,
+  // sa prekladajú na id číselníka firmy. Čo sa nespáruje, ostáva prázdne —
+  // doplní to účtovník, nikdy sa nehádže na najbližší kód.
+  const ciselnikIndex = prepared.isReprocess
+    ? undefined
+    : await nacitajCiselnikIndex(database, job.tenant_id, job.organization_id);
   // Ďalšie doklady z toho istého súboru sa normalizujú tou istou cestou ako
   // hlavný — hlavičku (dodávateľ, mena, číslo dokladu) dedia, vlastné majú
   // len to, čím sa líšia. Pri opakovanej extrakcii sa nezakladajú: tam si
@@ -336,6 +343,7 @@ async function completeRun(
     const id = randomUUID();
     return {
       id,
+      zdroj: dalsi,
       normalized: normalizeExtractionResult({
         ...result,
         documentType: dalsi.documentType,
@@ -374,15 +382,19 @@ async function completeRun(
     } else {
       await tx.query(
         `UPDATE documents SET document_type=$1,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
+                accounting=accounting || $15::jsonb,
                 field_confidence=$4::jsonb,confidence=$5,total_amount=$6,currency=$7,
                 quarantine_reason=$8,duplicate_of_document_id=$9,applied_extraction_run_id=$10,
                 source=source || jsonb_build_object('format', $11::text),updated_at=now()
           WHERE id=$12 AND tenant_id=$13 AND organization_id=$14`,
-        [normalized.documentType, status, JSON.stringify(normalized.extracted), JSON.stringify(normalized.fieldConfidence),
+        [normalized.documentType, status,
+          JSON.stringify(ciselnikIndex ? polozkySKodmi(ciselnikIndex, normalized.extracted, result.lineItems) : normalized.extracted),
+          JSON.stringify(normalized.fieldConfidence),
           normalized.confidence, normalized.totalAmount, normalized.currency,
           buyerMismatch ? 'buyer_ico_mismatch' : null, duplicateId ?? null, prepared.runId,
           sourceFormat(context.detected_mime_type, normalized.documentType),
-          prepared.documentId, job.tenant_id, job.organization_id],
+          prepared.documentId, job.tenant_id, job.organization_id,
+          JSON.stringify(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, result) : {})],
       );
       // Partner sa založí/doplní z dodávateľa ešte pred návrhom zaúčtovania,
       // aby predvoľby partnera platili už pre tento doklad.
@@ -420,12 +432,16 @@ async function completeRun(
             (id,tenant_id,organization_id,queue_id,document_type,status,processing_status,source,extracted,
              accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id)
            SELECT $1,tenant_id,organization_id,queue_id,$2,$3,'ready_for_review',source,$4::jsonb,
-             accounting,field_confidence,confidence,$5,$6,$7::jsonb,$8
+             accounting || $10::jsonb,field_confidence,confidence,$5,$6,$7::jsonb,$8
              FROM documents WHERE id=$8 AND tenant_id=$9`,
-          [dalsi.id, dalsi.normalized.documentType, status, JSON.stringify(dalsi.normalized.extracted),
+          [dalsi.id, dalsi.normalized.documentType, status,
+            JSON.stringify(ciselnikIndex
+              ? polozkySKodmi(ciselnikIndex, dalsi.normalized.extracted, dalsi.zdroj.lineItems)
+              : dalsi.normalized.extracted),
             dalsi.normalized.totalAmount, dalsi.normalized.currency,
             JSON.stringify([{ ts: new Date().toISOString(), user: 'Systém', akcia: 'Doklad vznikol rozdelením prijatého súboru podľa pravidla' }]),
-            prepared.documentId, job.tenant_id],
+            prepared.documentId, job.tenant_id,
+            JSON.stringify(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, dalsi.zdroj) : {})],
         );
         await rebuildAccountingSuggestion(tx, {
           tenantId: job.tenant_id,

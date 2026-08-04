@@ -1,6 +1,7 @@
 // Rekapitulácia miezd sa účtuje ako viac interných dokladov naraz. AI ich vráti
 // v `additionalDocuments` a worker z jedného prijatého súboru založí niekoľko
 // dokladov previazaných tou istou väzbou ako ručné rozdelenie.
+import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { createTestDatabase, seedTestUser, testConfig } from './testHelpers.js';
@@ -31,9 +32,12 @@ function rekapitulaciaWire() {
     variableSymbol: '202612', constantSymbol: null, specificSymbol: null,
     issueDate: '2026-04-30', taxDate: '2026-04-30', dueDate: null, currency: 'EUR',
     documentSummary: 'mzdy za 2026/04',
+    accountCode: null, vatClassificationCode: 'UN', numberSeriesCode: '26MZD',
     lineItems: [
-      { description: 'hrubá mzda', quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '9201.19', vatAmount: '0', amountTotal: '9201.19' },
-      { description: 'náhrada za PN', quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '225.71', vatAmount: '0', amountTotal: '225.71' },
+      // Kód opísaný z pravidla presne; server ho spáruje s číselníkom firmy.
+      { description: 'hrubá mzda', accountCode: '521100/331100 HM', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '9201.19', vatAmount: '0', amountTotal: '9201.19' },
+      // Kód bez chvosta — musí sa nájsť cez jednoznačný prefix.
+      { description: 'náhrada za PN', accountCode: '524100/331100', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '225.71', vatAmount: '0', amountTotal: '225.71' },
     ],
     vatBreakdown: [{ vatRate: '0', base: '9426.90', vat: '0', total: '9426.90' }],
     additionalDocuments: [
@@ -41,6 +45,7 @@ function rekapitulaciaWire() {
         documentType: 'MZDY',
         documentSummary: 'mzdy-tvorba SF 04/2026',
         variableSymbol: '202510',
+        accountCode: 'SF', vatClassificationCode: 'KN', numberSeriesCode: '26MZD',
         issueDate: '2026-04-30', taxDate: '2026-04-30',
         totalAmount: '51.88',
         lineItems: [],
@@ -50,6 +55,8 @@ function rekapitulaciaWire() {
         documentType: 'OZ',
         documentSummary: 'zúčt.zál.na fin.prísp.-stravné 04/26',
         variableSymbol: '202507',
+        // Kód s medzerami okolo lomky — musí sa spárovať s '331 / 335200'.
+        accountCode: '331/335200', vatClassificationCode: null, numberSeriesCode: 'NEEXISTUJE',
         issueDate: '2026-04-30', taxDate: null,
         totalAmount: '162.00',
         lineItems: [],
@@ -82,6 +89,25 @@ describe('viac dokladov z jedného súboru', () => {
     const headers = sessionHeaders(await app.inject({
       method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
     }));
+    // Číselník firmy — presne tie kódy, ktoré pravidlo menuje.
+    const ciselnik: Array<[string, string, string]> = [
+      ['predkontacie', '521100/331100 HM', 'Hrubá mzda zamestnanca'],
+      ['predkontacie', '524100/331100', 'Náhrada za PN'],
+      ['predkontacie', 'SF', 'Sociálny fond - zaúčtovanie prídelu'],
+      ['predkontacie', '331 / 335200', 'fin.príspevok na stravu'],
+      ['cleneniaDph', 'UN', 'Nezahŕňať do priznania DPH'],
+      ['ciselneRady', '26MZD', 'Interné doklady-Mzdy'],
+    ];
+    const kody = new Map<string, string>();
+    for (const [kind, code, name] of ciselnik) {
+      const id = randomUUID();
+      kody.set(code, id);
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$6,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code, name],
+      );
+    }
 
     const nahratie = await app.inject({
       method: 'POST', url: '/api/documents/upload', headers,
@@ -95,7 +121,7 @@ describe('viac dokladov z jedného súboru', () => {
     await processNextJob(database, config, 'w1', { storage, provider: new RekapitulaciaProvider() });
 
     const doklady = await database.query<Record<string, any>>(
-      `SELECT id, document_type, total_amount, extracted, split_from_document_id
+      `SELECT id, document_type, total_amount, extracted, accounting, split_from_document_id
          FROM documents WHERE organization_id=$1 ORDER BY created_at, split_from_document_id NULLS FIRST`,
       [seeded.organizationId],
     );
@@ -124,6 +150,22 @@ describe('viac dokladov z jedného súboru', () => {
     const zaloha = casti.find((row) => row.document_type === 'OZ');
     expect(Number(zaloha.total_amount)).toBe(162);
     expect(zaloha.extracted.variabilnySymbol).toBe('202507');
+
+    // Kódy z pravidla sú preložené na id číselníka firmy.
+    expect(hlavny.accounting).toMatchObject({
+      clenenieDphId: kody.get('UN'), ciselnyRadId: kody.get('26MZD'),
+    });
+    expect(hlavny.extracted.polozky[0].ucto.predkontaciaId).toBe(kody.get('521100/331100 HM'));
+    // Kód bez chvosta sa našiel cez jednoznačný prefix.
+    expect(hlavny.extracted.polozky[1].ucto.predkontaciaId).toBe(kody.get('524100/331100'));
+    expect(sf.accounting).toMatchObject({
+      predkontaciaId: kody.get('SF'), ciselnyRadId: kody.get('26MZD'), clenenieKvKod: 'KN',
+    });
+    // Medzery okolo lomky nevadia — „331/335200" sedí na „331 / 335200".
+    expect(zaloha.accounting.predkontaciaId).toBe(kody.get('331 / 335200'));
+    // Neznámy kód sa nehádže na najbližší: časť si necháva to, čo zdedila po
+    // hlavnom doklade (ide o ten istý súbor), a účtovník to prípadne prepíše.
+    expect(zaloha.accounting.ciselnyRadId).toBe(kody.get('26MZD'));
 
     // Každá časť má vlastný návrh zaúčtovania.
     const navrhy = await database.query(

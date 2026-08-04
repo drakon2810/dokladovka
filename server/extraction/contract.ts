@@ -29,8 +29,13 @@ const partyWireSchema = z.object({
 
 const buyerWireSchema = partyWireSchema.omit({ iban: true, bic: true }).strict();
 
+// accountCode/vatClassificationCode: kód z číselníka firmy, ktorý model OPÍŠE
+// z bloku ÚČTOVNÉ PRAVIDLÁ. Na id ho preloží až server podľa číselníka —
+// model číselník nevidí a nesmie si kódy vymýšľať.
 const lineItemWireSchema = z.object({
   description: nullableText,
+  accountCode: nullableShortText,
+  vatClassificationCode: nullableShortText,
   quantity: nullableDecimal,
   unit: nullableShortText,
   unitPriceWithoutVat: nullableDecimal,
@@ -58,6 +63,9 @@ const additionalDocumentWireSchema = z.object({
   documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
   documentSummary: nullableShortText,
   variableSymbol: nullableShortText,
+  accountCode: nullableShortText,
+  vatClassificationCode: nullableShortText,
+  numberSeriesCode: nullableShortText,
   issueDate: nullableIsoDate,
   taxDate: nullableIsoDate,
   totalAmount: nullableDecimal,
@@ -99,6 +107,9 @@ export const extractionWireSchema = z.object({
   dueDate: nullableIsoDate,
   currency: nullableShortText,
   documentSummary: nullableShortText,
+  accountCode: nullableShortText,
+  vatClassificationCode: nullableShortText,
+  numberSeriesCode: nullableShortText,
   lineItems: z.array(lineItemWireSchema).max(500),
   vatBreakdown: z.array(vatRowWireSchema).max(20),
   additionalDocuments: z.array(additionalDocumentWireSchema).max(5),
@@ -133,8 +144,14 @@ export interface ExtractionResult {
   currency?: string;
   /** Krátky popis plnenia — ide do POHODY ako text účtovného zápisu. */
   documentSummary?: string;
+  /** Kódy z číselníka firmy, ktoré model opísal z pravidla; server ich preloží na id. */
+  accountCode?: string;
+  vatClassificationCode?: string;
+  numberSeriesCode?: string;
   lineItems: Array<{
     description?: string;
+    accountCode?: string;
+    vatClassificationCode?: string;
     quantity?: string;
     unit?: string;
     unitPriceWithoutVat?: string;
@@ -159,6 +176,9 @@ export interface AdditionalDocumentResult {
   documentType: 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD';
   documentSummary?: string;
   variableSymbol?: string;
+  accountCode?: string;
+  vatClassificationCode?: string;
+  numberSeriesCode?: string;
   issueDate?: string;
   taxDate?: string;
   totalAmount?: string;
@@ -203,6 +223,9 @@ export function fromWireResult(value: unknown): ExtractionResult {
       dueDate: parsed.dueDate,
       currency: parsed.currency,
       documentSummary: parsed.documentSummary,
+      accountCode: parsed.accountCode,
+      vatClassificationCode: parsed.vatClassificationCode,
+      numberSeriesCode: parsed.numberSeriesCode,
       totalWithoutVat: parsed.totalWithoutVat,
       totalVat: parsed.totalVat,
       totalAmount: parsed.totalAmount,
@@ -214,6 +237,9 @@ export function fromWireResult(value: unknown): ExtractionResult {
       ...withoutNulls({
         documentSummary: doklad.documentSummary,
         variableSymbol: doklad.variableSymbol,
+        accountCode: doklad.accountCode,
+        vatClassificationCode: doklad.vatClassificationCode,
+        numberSeriesCode: doklad.numberSeriesCode,
         issueDate: doklad.issueDate,
         taxDate: doklad.taxDate,
         totalAmount: doklad.totalAmount,
@@ -250,8 +276,11 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
   issueDate: z.string().optional(), taxDate: z.string().optional(), dueDate: z.string().optional(),
   currency: z.string().optional(), documentSummary: z.string().optional(),
+  accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
+  numberSeriesCode: z.string().optional(),
   lineItems: z.array(z.object({
     description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
+    accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
     unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
     amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
   })),
@@ -260,9 +289,12 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   additionalDocuments: z.array(z.object({
     documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
     documentSummary: z.string().optional(), variableSymbol: z.string().optional(),
+    accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
+    numberSeriesCode: z.string().optional(),
     issueDate: z.string().optional(), taxDate: z.string().optional(), totalAmount: z.string().optional(),
     lineItems: z.array(z.object({
       description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
+      accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
       unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
       amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
     })),
