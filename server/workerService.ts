@@ -328,6 +328,29 @@ async function completeRun(
   const buyerMismatch = issues.some((issue) => ['buyer_ico_mismatch', 'supplier_buyer_may_be_inverted'].includes(issue.code));
   const status = buyerMismatch ? 'karantena' : duplicateId ? 'duplicita' : 'na_kontrole';
   const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+  // Ďalšie doklady z toho istého súboru sa normalizujú tou istou cestou ako
+  // hlavný — hlavičku (dodávateľ, mena, číslo dokladu) dedia, vlastné majú
+  // len to, čím sa líšia. Pri opakovanej extrakcii sa nezakladajú: tam si
+  // o osude dokladu rozhoduje účtovník ručným použitím behu.
+  const dalsieDoklady = prepared.isReprocess ? [] : (result.additionalDocuments ?? []).map((dalsi) => {
+    const id = randomUUID();
+    return {
+      id,
+      normalized: normalizeExtractionResult({
+        ...result,
+        documentType: dalsi.documentType,
+        documentSummary: dalsi.documentSummary ?? result.documentSummary,
+        variableSymbol: dalsi.variableSymbol,
+        issueDate: dalsi.issueDate ?? result.issueDate,
+        taxDate: dalsi.taxDate ?? result.taxDate,
+        totalAmount: dalsi.totalAmount,
+        lineItems: dalsi.lineItems,
+        vatBreakdown: dalsi.vatBreakdown,
+        additionalDocuments: [],
+        warnings: [],
+      }, id, fallbackDate),
+    };
+  });
 
   await database.transaction(async (tx) => {
     await tx.query(
@@ -386,6 +409,34 @@ async function completeRun(
         supplierIcDph: result.supplier.icDph,
         supplierIban: result.supplier.iban,
       });
+      // Jeden súbor, viac účtovných zápisov: rekapitulácia miezd dá samostatný
+      // interný doklad na mzdy, ďalší na tvorbu sociálneho fondu a ďalší na
+      // zúčtovanie zálohy. AI ich vráti len vtedy, keď to pravidlo firmy žiada.
+      // Väzba je tá istá ako pri ručnom rozdelení, takže časti dedia sken aj
+      // odkaz „zobraziť pôvodný doklad".
+      for (const dalsi of dalsieDoklady) {
+        await tx.query(
+          `INSERT INTO documents
+            (id,tenant_id,organization_id,queue_id,document_type,status,processing_status,source,extracted,
+             accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id)
+           SELECT $1,tenant_id,organization_id,queue_id,$2,$3,'ready_for_review',source,$4::jsonb,
+             accounting,field_confidence,confidence,$5,$6,$7::jsonb,$8
+             FROM documents WHERE id=$8 AND tenant_id=$9`,
+          [dalsi.id, dalsi.normalized.documentType, status, JSON.stringify(dalsi.normalized.extracted),
+            dalsi.normalized.totalAmount, dalsi.normalized.currency,
+            JSON.stringify([{ ts: new Date().toISOString(), user: 'Systém', akcia: 'Doklad vznikol rozdelením prijatého súboru podľa pravidla' }]),
+            prepared.documentId, job.tenant_id],
+        );
+        await rebuildAccountingSuggestion(tx, {
+          tenantId: job.tenant_id,
+          organizationId: job.organization_id,
+          documentId: dalsi.id,
+          supplierIco: result.supplier.ico,
+          supplierName: result.supplier.nazov,
+          supplierIcDph: result.supplier.icDph,
+          supplierIban: result.supplier.iban,
+        });
+      }
     }
     await tx.query(
       `UPDATE inbound_attachments SET status='document_created',document_id=$1,quarantine_reason=NULL

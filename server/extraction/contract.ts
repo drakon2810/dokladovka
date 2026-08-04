@@ -40,6 +40,31 @@ const lineItemWireSchema = z.object({
   amountTotal: nullableDecimal,
 }).strict();
 
+const vatRowWireSchema = z.object({
+  vatRate: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
+  base: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
+  vat: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
+  total: nullableDecimal,
+}).strict();
+
+/**
+ * Ďalší doklad z toho istého súboru. Jeden prijatý dokument sa niekedy účtuje
+ * ako viac zápisov — rekapitulácia miezd dá samostatný interný doklad na mzdy,
+ * ďalší na tvorbu sociálneho fondu a ďalší na zúčtovanie zálohy. Hlavičku
+ * (dodávateľ, mena) dedí od hlavného dokladu, vlastné má to, čím sa líši.
+ * Pole ostáva prázdne, kým to pravidlo účtovníka výslovne nevyžiada.
+ */
+const additionalDocumentWireSchema = z.object({
+  documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
+  documentSummary: nullableShortText,
+  variableSymbol: nullableShortText,
+  issueDate: nullableIsoDate,
+  taxDate: nullableIsoDate,
+  totalAmount: nullableDecimal,
+  lineItems: z.array(lineItemWireSchema).max(100),
+  vatBreakdown: z.array(vatRowWireSchema).max(20),
+}).strict();
+
 const evidenceItemWireSchema = z.object({
   page: z.number().int().positive().nullable(),
   text: nullableText,
@@ -75,12 +100,8 @@ export const extractionWireSchema = z.object({
   currency: nullableShortText,
   documentSummary: nullableShortText,
   lineItems: z.array(lineItemWireSchema).max(500),
-  vatBreakdown: z.array(z.object({
-    vatRate: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
-    base: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
-    vat: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
-    total: nullableDecimal,
-  }).strict()).max(20),
+  vatBreakdown: z.array(vatRowWireSchema).max(20),
+  additionalDocuments: z.array(additionalDocumentWireSchema).max(5),
   totalWithoutVat: nullableDecimal,
   totalVat: nullableDecimal,
   totalAmount: nullableDecimal,
@@ -123,12 +144,26 @@ export interface ExtractionResult {
     amountTotal?: string;
   }>;
   vatBreakdown: Array<{ vatRate: string; base: string; vat: string; total?: string }>;
+  /** Ďalšie doklady z toho istého súboru. Chýba pri bežnom doklade aj v behoch
+   *  uložených pred zavedením poľa — konzument číta cez `?? []`. */
+  additionalDocuments?: AdditionalDocumentResult[];
   totalWithoutVat?: string;
   totalVat?: string;
   totalAmount?: string;
   fieldConfidence: Record<string, number>;
   evidence: Record<string, Array<{ page?: number; text?: string }>>;
   warnings: Array<{ code: string; message: string; severity: 'info' | 'warning' | 'error' }>;
+}
+
+export interface AdditionalDocumentResult {
+  documentType: 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD';
+  documentSummary?: string;
+  variableSymbol?: string;
+  issueDate?: string;
+  taxDate?: string;
+  totalAmount?: string;
+  lineItems: ExtractionResult['lineItems'];
+  vatBreakdown: ExtractionResult['vatBreakdown'];
 }
 
 interface BuyerPartyResult {
@@ -174,6 +209,18 @@ export function fromWireResult(value: unknown): ExtractionResult {
     }),
     lineItems: parsed.lineItems.map((item) => withoutNulls(item)),
     vatBreakdown: parsed.vatBreakdown.map((item) => withoutNulls(item)) as ExtractionResult['vatBreakdown'],
+    additionalDocuments: parsed.additionalDocuments.map((doklad) => ({
+      documentType: doklad.documentType,
+      ...withoutNulls({
+        documentSummary: doklad.documentSummary,
+        variableSymbol: doklad.variableSymbol,
+        issueDate: doklad.issueDate,
+        taxDate: doklad.taxDate,
+        totalAmount: doklad.totalAmount,
+      }),
+      lineItems: doklad.lineItems.map((item) => withoutNulls(item)),
+      vatBreakdown: doklad.vatBreakdown.map((item) => withoutNulls(item)),
+    })) as AdditionalDocumentResult[],
     fieldConfidence: Object.fromEntries(
       parsed.fieldConfidence.map((entry) => [entry.field, entry.confidence]),
     ),
@@ -209,6 +256,18 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
     amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
   })),
   vatBreakdown: z.array(z.object({ vatRate: z.string(), base: z.string(), vat: z.string(), total: z.string().optional() })),
+  // Staršie uložené behy extrakcie toto pole nemajú — default drží spätnú kompatibilitu.
+  additionalDocuments: z.array(z.object({
+    documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
+    documentSummary: z.string().optional(), variableSymbol: z.string().optional(),
+    issueDate: z.string().optional(), taxDate: z.string().optional(), totalAmount: z.string().optional(),
+    lineItems: z.array(z.object({
+      description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
+      unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
+      amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
+    })),
+    vatBreakdown: z.array(z.object({ vatRate: z.string(), base: z.string(), vat: z.string(), total: z.string().optional() })),
+  })).optional(),
   totalWithoutVat: z.string().optional(), totalVat: z.string().optional(), totalAmount: z.string().optional(),
   fieldConfidence: z.record(z.number().min(0).max(1)),
   evidence: z.record(z.array(z.object({ page: z.number().optional(), text: z.string().optional() }))),
