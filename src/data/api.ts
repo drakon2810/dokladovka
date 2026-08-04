@@ -2872,6 +2872,34 @@ export async function deleteAiPokyn(id: string, organizationId?: string): Promis
   await restRequest(`${pokynyPath(organizationId)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+/** Návrh AI po vylepšení konceptu pravidla — nič sa neukladá, len sa vráti. */
+export interface AiPokynNavrh {
+  nazov: string;
+  text: string;
+  faza: AiPokyn['faza'];
+  typyDokladov: string[];
+  klucoveSlova: string[];
+}
+
+/**
+ * „Vylepšiť pravidlo": AI prepíše koncept účtovníka (a vzorový doklad) na
+ * pravidlo zrozumiteľné pre AI účtovanie. Súbor sa nikam neukladá.
+ */
+export async function improveAiPokyn(
+  vstup: { nazov: string; text: string; subor?: File },
+  organizationId?: string,
+): Promise<AiPokynNavrh> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
+  const subor = vstup.subor
+    ? { fileName: vstup.subor.name, contentBase64: await fileToBase64(vstup.subor) }
+    : undefined;
+  const result = await restRequest<{ navrh: AiPokynNavrh }>(`${pokynyPath(organizationId)}/improve`, {
+    method: 'POST',
+    body: JSON.stringify({ nazov: vstup.nazov, text: vstup.text, ...(subor ? { subor } : {}) }),
+  });
+  return result.navrh;
+}
+
 // ===== Účtovný profil firmy (korpus histórie + kategórie plnení) =====
 
 export interface UctoHistoryStats {

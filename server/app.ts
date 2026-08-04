@@ -92,7 +92,7 @@ export async function buildApp(input: {
   registerPaymentRoutes(app, input.database);
   registerPartnerRoutes(app, input.database);
   registerAiTrainingRoutes(app, input.database, input.config, input.aiRulesParser);
-  registerAiInstructionRoutes(app, input.database);
+  registerAiInstructionRoutes(app, input.database, input.config, input.aiRulesParser);
   registerUctoProfileRoutes(app, input.database, input.config, input.uctoProfileParser);
   registerAssistantRoutes(app, input.database, input.storage, input.config, input.assistantParser);
   registerCompanyRegistryRoutes(app, input.database, input.config);

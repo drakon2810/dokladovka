@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  createAiPokyn, deleteAiPokyn, listAiPokyny, updateAiPokyn,
+  createAiPokyn, deleteAiPokyn, improveAiPokyn, listAiPokyny, updateAiPokyn,
   type AiPokyn, type AiPokynVstup,
 } from '../../data/api';
 import { showToast } from '../../components/toast';
@@ -26,6 +26,11 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
   const [draft, setDraft] = useState<AiPokynVstup>(PRAZDNY);
   const [slovaText, setSlovaText] = useState('');
   const [busy, setBusy] = useState(false);
+  // Vzorový doklad pre „Vylepšiť pomocou AI" — nikam sa neukladá, poslúži len
+  // ako príklad, z ktorého AI napíše čitateľné pravidlo.
+  const [subor, setSubor] = useState<File>();
+  const [vylepsujem, setVylepsujem] = useState(false);
+  const suborRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -65,6 +70,36 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function vylepsi() {
+    if (!draft.text.trim() && !subor) {
+      showToast(t('pravidla.vylepsit.prazdne'), { tone: 'error' });
+      return;
+    }
+    setVylepsujem(true);
+    try {
+      const navrh = await improveAiPokyn(
+        { nazov: draft.nazov, text: draft.text, subor },
+        organizationId,
+      );
+      // Návrh AI predvyplní formulár; účtovník ho môže ďalej upraviť a až
+      // „Pridať pravidlo" ho uloží. Fáza a typy sa preberajú tiež — AI ich
+      // odvodila z obsahu pravidla.
+      setDraft({
+        ...draft,
+        nazov: navrh.nazov,
+        text: navrh.text,
+        faza: navrh.faza,
+        typyDokladov: navrh.typyDokladov.filter((typ): typ is (typeof TYPY)[number] => (TYPY as readonly string[]).includes(typ)),
+      });
+      setSlovaText(navrh.klucoveSlova.join(', '));
+      showToast(t('pravidla.vylepsit.hotovo'));
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setVylepsujem(false);
     }
   }
 
@@ -159,7 +194,56 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
           </div>
           <p className="mt-1 text-xs text-ink-faint">{t('pravidla.typyHint')}</p>
         </div>
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void pridaj()}>
+        {/* Vzorový doklad + vylepšenie AI: účtovník napíše koncept po svojom,
+            priloží príklad (PDF/fotografiu) a AI z toho spraví pravidlo, ktorému
+            bude AI účtovanie rozumieť — vrátane konkrétnych predkontácií firmy. */}
+        <div className="rounded-xl border border-dashed border-line bg-app/40 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={suborRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file && file.size > 20 * 1024 * 1024) {
+                  showToast(t('pravidla.vylepsit.velkySubor'), { tone: 'error' });
+                  return;
+                }
+                setSubor(file ?? undefined);
+              }}
+            />
+            <button type="button" className="btn" disabled={vylepsujem} onClick={() => suborRef.current?.click()}>
+              {t('pravidla.vylepsit.prilozit')}
+            </button>
+            {subor && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-2.5 py-1 text-xs text-ink-soft">
+                {subor.name}
+                <button
+                  type="button"
+                  className="text-ink-faint hover:text-red-700"
+                  aria-label={t('pravidla.vylepsit.odobratSubor')}
+                  onClick={() => {
+                    setSubor(undefined);
+                    if (suborRef.current) suborRef.current.value = '';
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn ml-auto"
+              disabled={vylepsujem || busy || (!draft.text.trim() && !subor)}
+              onClick={() => void vylepsi()}
+            >
+              {vylepsujem ? t('pravidla.vylepsit.pracujem') : t('pravidla.vylepsit')}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-ink-faint">{t('pravidla.vylepsit.hint')}</p>
+        </div>
+        <button type="button" className="btn btn-primary" disabled={busy || vylepsujem} onClick={() => void pridaj()}>
           {busy ? t('stav.nacitavam') : t('pravidla.pridat')}
         </button>
       </section>

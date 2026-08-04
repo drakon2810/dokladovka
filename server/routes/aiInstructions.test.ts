@@ -109,4 +109,85 @@ describe('pravidlá pre AI', () => {
     expect(extrakcia.lokalne).toHaveLength(1);
     expect(pokynyPreModel(extrakcia)).toContain('platí pre doklady: MZDY');
   }, 120_000);
+
+  it('vylepšenie pravidla pošle AI číselníky firmy a vzorový doklad, nič neukladá', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    // Fixný AI parser namiesto OpenAI: zachytí telo požiadavky na kontrolu.
+    const volania: any[] = [];
+    const app = await buildApp({
+      database,
+      storage: new MemoryObjectStorage(),
+      config: testConfig(),
+      logger: false,
+      aiRulesParser: {
+        parse: async (body: unknown) => {
+          volania.push(body);
+          return {
+            output_parsed: {
+              nazov: 'Rekapitulácia miezd',
+              text: 'Rekapituláciu miezd zaúčtuj ako interný doklad: hrubé mzdy na 521/331, odvody na 524/336.',
+              faza: 'both',
+              typyDokladov: ['MZDY'],
+              klucoveSlova: ['Mzdy ', 'rekapitulácia', 'mzdy'],
+            },
+          };
+        },
+      },
+    });
+    const headers = sessionHeaders(await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
+    }));
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','Preprava a služby','manual')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId],
+    );
+
+    // Prázdny koncept bez súboru sa odmietne skôr, než sa volá AI.
+    expect((await app.inject({
+      method: 'POST', url: `/api/organizations/${seeded.organizationId}/instructions/improve`,
+      headers, payload: { nazov: '', text: '' },
+    })).statusCode).toBe(422);
+
+    // Nepodporovaný súbor (nie PDF/obrázok) sa odmietne podľa bajtov.
+    expect((await app.inject({
+      method: 'POST', url: `/api/organizations/${seeded.organizationId}/instructions/improve`,
+      headers,
+      payload: { nazov: '', text: 'x', subor: { fileName: 'a.txt', contentBase64: Buffer.from('hello').toString('base64') } },
+    })).statusCode).toBe(422);
+
+    const pdf = Buffer.from('%PDF-1.4 vzorova rekapitulacia');
+    const improved = await app.inject({
+      method: 'POST', url: `/api/organizations/${seeded.organizationId}/instructions/improve`,
+      headers,
+      payload: {
+        nazov: 'Mzdy',
+        text: 'ked pride rekapitulacia miezd tak zrazkova dan a odvody',
+        subor: { fileName: 'rekapitulacia.pdf', contentBase64: pdf.toString('base64') },
+      },
+    });
+    expect(improved.statusCode, improved.body).toBe(200);
+    const navrh = improved.json().navrh;
+    expect(navrh.text).toContain('521/331');
+    expect(navrh.typyDokladov).toEqual(['MZDY']);
+    // Kľúčové slová sa normalizujú (malé písmená, bez duplicít).
+    expect(navrh.klucoveSlova).toEqual(['mzdy', 'rekapitulácia']);
+
+    // AI dostala číselníky firmy aj vzorový doklad ako input_file.
+    const telo = volania[0];
+    const obsah = telo.input[0].content;
+    expect(obsah[0].text).toContain('Code lists of this company');
+    expect(obsah[0].text).toContain('518/321');
+    expect(obsah[1].type).toBe('input_file');
+    expect(obsah[1].filename).toBe('rekapitulacia.pdf');
+
+    // Nič sa neuložilo — uloženie je samostatný krok účtovníka.
+    const zoznam = await app.inject({
+      method: 'GET', url: `/api/organizations/${seeded.organizationId}/instructions`, headers,
+    });
+    expect(zoznam.json().pravidla).toHaveLength(0);
+    await app.close();
+  }, 120_000);
 });

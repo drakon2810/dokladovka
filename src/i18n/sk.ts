@@ -1253,6 +1253,15 @@ export const sk = {
   'pravidla.vypnut': 'Vypnúť',
   'pravidla.prazdne': 'Zatiaľ tu nie je žiadne pravidlo.',
   'pravidla.chybaPovinne': 'Vyplňte názov aj text pravidla.',
+  'pravidla.vylepsit': 'Vylepšiť pomocou AI',
+  'pravidla.vylepsit.pracujem': 'AI píše pravidlo…',
+  'pravidla.vylepsit.prilozit': 'Priložiť vzorový doklad',
+  'pravidla.vylepsit.odobratSubor': 'Odobrať súbor',
+  'pravidla.vylepsit.hint':
+    'Napíšte pravidlo po svojom (alebo len priložte vzorový doklad — PDF či fotografiu) a AI ho prepíše tak, aby mu AI účtovanie spoľahlivo rozumelo. Pri firemných pravidlách doplní aj konkrétne predkontácie a členenia z číselníkov firmy. Návrh len predvyplní formulár — uložíte ho tlačidlom Pridať pravidlo. Vzorový doklad sa nikam neukladá.',
+  'pravidla.vylepsit.hotovo': 'AI pripravila návrh pravidla — skontrolujte ho a uložte.',
+  'pravidla.vylepsit.prazdne': 'Napíšte aspoň koncept pravidla alebo priložte vzorový doklad.',
+  'pravidla.vylepsit.velkySubor': 'Súbor je príliš veľký (limit 20 MB).',
 
   // ===== Účtovný profil firmy (korpus histórie + kategórie plnení) =====
   'uctoProfil.titulok': 'Účtovný profil firmy',
