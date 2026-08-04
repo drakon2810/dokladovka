@@ -43,6 +43,16 @@ async function scopedDocument(database: Database, tenantId: string, id: string):
 }
 
 /**
+ * Doklad, na ktorom visí zdrojová príloha. Časti rozdelenia (či už ich vyrobil
+ * účtovník ručne, alebo pravidlo firmy z jedného rozboru miezd) vlastný záznam
+ * v inbound_attachments nemajú — zdieľajú sken pôvodného dokladu. Bez tohto
+ * presmerovania sa im náhľad aj sťahovanie skončí na „Zdrojový súbor neexistuje".
+ */
+function dokladSPrilohou(document: DocumentScope, id: string): string {
+  return document.split_from_document_id ?? id;
+}
+
+/**
  * Sumy dokladu po presune položiek. Rozpis DPH sa skladá zo sadzieb položiek —
  * inak by po rozdelení jedna časť niesla DPH tej druhej a doklad by neprešiel
  * validáciou pred schválením.
@@ -108,7 +118,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     await requireOrganizationAccess(database, auth, document.organization_id);
     const details = await database.query<Record<string, unknown>>('SELECT * FROM documents WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId]);
     const attachment = await database.query<{ storage_key?: string } & Record<string, unknown>>(
-      'SELECT storage_key FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId],
+      'SELECT storage_key FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2',
+      [dokladSPrilohou(document, id), auth.tenantId],
     );
     const storageKey = attachment.rows[0]?.storage_key;
     return { ...details.rows[0], fileUrl: storageKey ? await storage.signedDownloadUrl(storageKey, 300) : undefined };
@@ -124,7 +135,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     } & Record<string, unknown>>(
       `SELECT storage_key,detected_mime_type,original_file_name FROM inbound_attachments
         WHERE document_id=$1 AND tenant_id=$2 AND organization_id=$3 ORDER BY created_at LIMIT 1`,
-      [id, auth.tenantId, document.organization_id],
+      [dokladSPrilohou(document, id), auth.tenantId, document.organization_id],
     );
     const source = attachment.rows[0];
     if (!source?.storage_key) throw new HttpError(404, 'attachment_missing', 'Zdrojový súbor neexistuje');
@@ -659,6 +670,12 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
+    // Časť rozdelenia sa preextrahovať nedá: sken je celý pôvodný súbor, takže
+    // by ju extrakcia prepísala celým dokladom namiesto jej podielu. Opakovať sa
+    // dá len pôvodný doklad — a ten si časti vytvorí nanovo.
+    if (document.split_from_document_id) {
+      throw new HttpError(409, 'document_is_split_part', 'Časť rozdeleného dokladu sa nedá spracovať znova — spustite to na pôvodnom doklade');
+    }
     const attachment = await database.query<{ id: string } & Record<string, unknown>>('SELECT id FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
     if (!attachment.rows[0]) throw new HttpError(409, 'attachment_missing', 'Doklad nemá zdrojovú prílohu');
     await database.query(

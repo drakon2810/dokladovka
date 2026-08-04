@@ -166,4 +166,66 @@ describe('rozdelenie dokladu', () => {
     expect(nedotknuty.rows[0].version).toBe(1);
     await app.close();
   }, 120_000);
+
+  /**
+   * Časť rozdelenia nemá vlastný riadok v inbound_attachments — zdieľa sken
+   * pôvodného dokladu. Kým sa príloha hľadala len podľa id otvoreného dokladu,
+   * účtovníkovi sa v náhľade zobrazilo „PDF sa nepodarilo načítať" a doklad
+   * nemal ako skontrolovať.
+   */
+  it('časť rozdelenia otvorí sken pôvodného dokladu a preextrahovať sa nedá', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const storage = new MemoryObjectStorage();
+    const app = await buildApp({ database, storage, config: testConfig(), logger: false });
+    const headers = sessionHeaders(await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
+    }));
+
+    const documentId = randomUUID();
+    const emailId = randomUUID();
+    const attachmentId = randomUUID();
+    const storageKey = `upload/${seeded.tenantId}/${seeded.organizationId}/${attachmentId}.pdf`;
+    await storage.put(storageKey, new TextEncoder().encode('%PDF-1.4 rozbor'));
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'MZDY','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,3000,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId, JSON.stringify(EXTRACTED)],
+    );
+    await database.query(
+      `INSERT INTO inbound_emails
+        (id,tenant_id,organization_id,alias_id,provider,provider_message_id,envelope_recipients,sender_email,subject,received_at,status,correlation_id)
+       VALUES ($1,$2,$3,$4,'imap',$5,'[]'::jsonb,'a@b.sk','Rozbor miezd',now(),'processed',$1)`,
+      [emailId, seeded.tenantId, seeded.organizationId, seeded.aliasId, `msg-${emailId}`],
+    );
+    await database.query(
+      `INSERT INTO inbound_attachments
+        (id,tenant_id,organization_id,inbound_email_id,document_id,original_file_name,safe_file_name,declared_mime_type,detected_mime_type,byte_size,sha256,storage_key,status)
+       VALUES ($1,$2,$3,$4,$5,'Rozbor AGS.pdf','rozbor-ags.pdf','application/pdf','application/pdf',15,$6,$7,'stored')`,
+      [attachmentId, seeded.tenantId, seeded.organizationId, emailId, documentId, `sha-${attachmentId}`, storageKey],
+    );
+
+    const split = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/split`, headers,
+      payload: { polozkaIds: ['p2'], typ: 'MZDY', expectedVersion: 1 },
+    });
+    expect(split.statusCode, split.body).toBe(201);
+    const castId = split.json().id as string;
+
+    const subor = await app.inject({ method: 'GET', url: `/api/documents/${castId}/file`, headers });
+    expect(subor.statusCode, subor.body).toBe(200);
+    expect(subor.rawPayload.toString('utf8')).toBe('%PDF-1.4 rozbor');
+
+    // Detail dáva odkaz na stiahnutie tým istým presmerovaním.
+    const detail = await app.inject({ method: 'GET', url: `/api/documents/${castId}`, headers });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().fileUrl).toBeTruthy();
+
+    // Preextrahovanie časti by ju prepísalo celým rozborom — musí ostať zakázané.
+    const znova = await app.inject({ method: 'POST', url: `/api/documents/${castId}/reprocess`, headers });
+    expect(znova.statusCode).toBe(409);
+    expect(znova.json().code).toBe('document_is_split_part');
+    await app.close();
+  }, 120_000);
 });
