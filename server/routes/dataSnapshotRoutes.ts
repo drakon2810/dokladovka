@@ -130,6 +130,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         extracted: row.extracted, ucto: row.accounting, history: row.history, comments: row.comments,
         exportId: row.export_id ?? undefined, quarantineReason: row.quarantine_reason ?? undefined,
         duplicateOfDocumentId: row.duplicate_of_document_id ?? undefined, notDuplicate: row.not_duplicate,
+        splitFromDocumentId: row.split_from_document_id ?? undefined,
         appliedExtractionRunId: row.applied_extraction_run_id ?? undefined,
         version: row.version, approvedVersion: row.approved_version ?? undefined, approvedSnapshot: row.approved_snapshot ?? undefined,
       })),

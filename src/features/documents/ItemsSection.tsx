@@ -40,6 +40,8 @@ interface ItemsSectionProps {
   onToggle: (enabled: boolean) => void;
   codeLists: ItemsCodeLists;
   onChange: (polozky: DocumentLineItem[]) => void;
+  /** „Rozdeliť doklad" — časť položiek pôjde do nového dokladu inej agendy. */
+  onSplit?: () => void;
   /**
    * Kódy z hlavičky dokladu (predkontácia, členenie DPH, KV). Položka bez
    * vlastnej hodnoty ich preberá — presne tak ich zdedí aj export do POHODY
@@ -144,7 +146,7 @@ export function rozpisZPoloziek(polozky: DocumentLineItem[]): VatBreakdownRow[] 
 }
 
 export function ItemsSection({
-  polozky, rozpisDph, mena, readOnly, enabled, onToggle, codeLists, onChange, headerUcto, srcSection, onHoverSrc,
+  polozky, rozpisDph, mena, readOnly, enabled, onToggle, codeLists, onChange, onSplit, headerUcto, srcSection, onHoverSrc,
 }: ItemsSectionProps) {
   /** Tooltip stĺpca s dedením: povie, čo položka prevezme z hlavičky. */
   const zdedene = (nazov: string, index: number, kod?: string) =>
@@ -268,6 +270,12 @@ export function ItemsSection({
               <button type="button" className="dk-pick-opt" onClick={addItem}><span className="dk-pick-tick" />Pridať položku</button>
               <button type="button" className="dk-pick-opt" onClick={zRozpisu}><span className="dk-pick-tick" />Položky z rozpisu DPH</button>
               <button type="button" className="dk-pick-opt" onClick={clearAll}><span className="dk-pick-tick" />Vymazať všetky položky</button>
+              {/* Rozdelenie má zmysel až od dvoch položiek — jednu deliť nie je čo. */}
+              {onSplit && polozky.length > 1 && (
+                <button type="button" className="dk-pick-opt" onClick={() => { setMenuOpen(false); onSplit(); }}>
+                  <span className="dk-pick-tick" />Rozdeliť doklad…
+                </button>
+              )}
             </div>
           )}
         </div>

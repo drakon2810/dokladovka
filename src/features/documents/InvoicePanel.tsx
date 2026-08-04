@@ -48,6 +48,8 @@ interface InvoicePanelProps {
   /** „Export do POHODA" v hlavičke — dialóg otvára detail dokladu. */
   onExport?: () => void;
   exportDisabledReason?: string;
+  /** „Rozdeliť doklad“ v ponuke položiek — dialóg otvára detail dokladu. */
+  onSplit?: () => void;
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
@@ -61,7 +63,7 @@ const TYP_OPTIONS: Array<{ value: string; label: string; typ: DocumentType; pokl
   { value: 'FP', label: 'Faktúra prijatá', typ: 'FP' },
   { value: 'FV', label: 'Faktúra vydaná', typ: 'FV' },
   { value: 'OZ', label: 'Ostatný záväzok', typ: 'OZ' },
-  { value: 'MZDY', label: 'Interný doklad (mzdy)', typ: 'MZDY' },
+  { value: 'MZDY', label: 'Interný doklad (INT)', typ: 'MZDY' },
   { value: 'BV', label: 'Bankový výpis', typ: 'BV' },
 ];
 
@@ -153,7 +155,7 @@ const LOW_CONFIDENCE = 0.5;
 
 export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
-  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason,
+  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit,
   setTyp, updateUcto, updateExtracted, updateSupplier,
 }: InvoicePanelProps) {
   const ex = draft.extracted;
@@ -721,6 +723,7 @@ export function InvoicePanel({
           zakazka: codeLists.zakazky.find((item) => item.id === ucto.zakazkaId)?.kod,
         }}
         onChange={setPolozky}
+        onSplit={readOnly ? undefined : onSplit}
         srcSection={srcOn && src?.[ITEMS_PATH] ? 5 : undefined}
         onHoverSrc={onHoverSrc}
       />

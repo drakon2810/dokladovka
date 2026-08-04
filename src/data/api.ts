@@ -2872,6 +2872,24 @@ export async function deleteAiPokyn(id: string, organizationId?: string): Promis
   await restRequest(`${pokynyPath(organizationId)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+/**
+ * Rozdelenie dokladu: vybrané položky sa presunú do nového dokladu inej agendy
+ * (napr. odvody z rekapitulácie miezd ako ostatný záväzok). Vráti id nového
+ * dokladu; sken ostáva pri pôvodnom a do POHODY sa skopíruje k obom.
+ */
+export async function splitDocument(
+  id: string,
+  vstup: { polozkaIds: string[]; typ: DocumentType; expectedVersion: number },
+): Promise<string> {
+  if (!REST_DATA_MODE) throw new Error('Rozdelenie dokladu je dostupné len s pripojeným serverom');
+  const result = await restRequest<{ id: string }>(`/api/documents/${encodeURIComponent(id)}/split`, {
+    method: 'POST',
+    body: JSON.stringify(vstup),
+  });
+  await refreshRestSnapshot();
+  return result.id;
+}
+
 /** Návrh AI po vylepšení konceptu pravidla — nič sa neukladá, len sa vráti. */
 export interface AiPokynNavrh {
   nazov: string;
@@ -2886,16 +2904,17 @@ export interface AiPokynNavrh {
  * pravidlo zrozumiteľné pre AI účtovanie. Súbor sa nikam neukladá.
  */
 export async function improveAiPokyn(
-  vstup: { nazov: string; text: string; subor?: File },
+  vstup: { nazov: string; text: string; subory?: File[] },
   organizationId?: string,
 ): Promise<AiPokynNavrh> {
   if (!REST_DATA_MODE) throw new Error('Pravidlá sú dostupné len s pripojeným serverom');
-  const subor = vstup.subor
-    ? { fileName: vstup.subor.name, contentBase64: await fileToBase64(vstup.subor) }
-    : undefined;
+  const subory = await Promise.all((vstup.subory ?? []).map(async (file) => ({
+    fileName: file.name,
+    contentBase64: await fileToBase64(file),
+  })));
   const result = await restRequest<{ navrh: AiPokynNavrh }>(`${pokynyPath(organizationId)}/improve`, {
     method: 'POST',
-    body: JSON.stringify({ nazov: vstup.nazov, text: vstup.text, ...(subor ? { subor } : {}) }),
+    body: JSON.stringify({ nazov: vstup.nazov, text: vstup.text, subory }),
   });
   return result.navrh;
 }

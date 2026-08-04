@@ -67,6 +67,7 @@ import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { InvoicePanel } from './InvoicePanel';
 import { ExportPohodaModal } from './ExportPohodaModal';
+import { SplitDocumentModal } from './SplitDocumentModal';
 import {
   SOURCE_SECTIONS,
   buildMarks,
@@ -345,6 +346,7 @@ export function DocumentDetailPage() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [splitModalOpen, setSplitModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [mostikStatus, setMostikStatus] = useState<OrganizationMostikStatus>();
   const [autoFilled, setAutoFilled] = useState(false);
@@ -1051,6 +1053,19 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
+      {/* Časť rozdeleného dokladu: sken sedí na pôvodnom, preto sa naň dá skočiť. */}
+      {draft.splitFromDocumentId && (
+        <div className="anim-in flex flex-wrap items-center gap-3 rounded-xl border border-line bg-app px-4 py-2.5 text-sm text-ink-soft">
+          <span>{t('rozdelenie.zCasti')}</span>
+          <button
+            type="button"
+            className="btn ml-auto"
+            onClick={() => goToDocument(draft.splitFromDocumentId)}
+          >
+            {t('rozdelenie.zobrazitPovodny')}
+          </button>
+        </div>
+      )}
       {buyerMismatch && (
         <div className="anim-in rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">{t('detail.icoMismatch')}</p>
@@ -1347,6 +1362,7 @@ export function DocumentDetailPage() {
             activeSrc={activeSrc}
             onHoverSrc={setActiveSrc}
             onExport={() => setExportModalOpen(true)}
+            onSplit={() => setSplitModalOpen(true)}
             exportDisabledReason={
               draft.status !== 'schvaleny'
                 ? 'Exportovať sa dá až schválený doklad'
@@ -1677,6 +1693,17 @@ export function DocumentDetailPage() {
         </Suspense>
       )}
 
+
+      {splitModalOpen && (
+        <SplitDocumentModal
+          doklad={draft}
+          onClose={() => setSplitModalOpen(false)}
+          onSplit={(novyId) => {
+            setSplitModalOpen(false);
+            goToDocument(novyId);
+          }}
+        />
+      )}
 
       {exportModalOpen && (
         <ExportPohodaModal

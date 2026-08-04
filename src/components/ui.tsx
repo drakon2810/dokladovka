@@ -75,7 +75,9 @@ export function TypBadge({ typ }: { typ: DocumentType }) {
       className="tnum inline-flex items-center rounded-md border border-line bg-app px-2 py-0.5 text-xs font-semibold text-ink-soft"
       title={t(`typ.${typ}.dlhy` as SkKey)}
     >
-      {typ}
+      {/* Skratka je jazykový reťazec, nie kód z databázy — MZDY sa účtovníkovi
+          ukazuje ako INT (interný doklad v POHODE). */}
+      {t(`typ.${typ}` as SkKey)}
     </span>
   );
 }

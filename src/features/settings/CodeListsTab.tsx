@@ -74,7 +74,7 @@ function downloadXml(xml: string, fileName: string): void {
 
 const TYP_LABEL: Partial<Record<DocumentType, string>> = {
   FP: 'Prijatá faktúra', FV: 'Vydaná faktúra', PD: 'Pokladničný doklad',
-  BV: 'Bankový výpis', MZDY: 'Mzdy', OZ: 'Ostatný záväzok',
+  BV: 'Bankový výpis', MZDY: 'Interný doklad', OZ: 'Ostatný záväzok',
 };
 
 /**

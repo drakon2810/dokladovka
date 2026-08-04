@@ -409,6 +409,8 @@ export interface DocumentItem {
   exportId?: string;
   quarantineReason?: string; // napr. buyer_ico_mismatch (SPEC §11.7)
   duplicateOfDocumentId?: string; // účtovná duplicita (SPEC §11.11)
+  /** Doklad vznikol rozdelením iného — nesie časť jeho položiek a jeho sken. */
+  splitFromDocumentId?: string;
   notDuplicate?: boolean; // rozhodnutie „Nie je duplicita" sa ukladá (SPEC §11.11)
   appliedExtractionRunId?: string; // evidence/warnings patria k explicitne použitému behu
   version: number;

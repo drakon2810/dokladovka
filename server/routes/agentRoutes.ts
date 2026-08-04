@@ -418,9 +418,13 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     const source = await database.query<{
       storage_key?: string; detected_mime_type?: string; original_file_name: string;
     } & Record<string, unknown>>(
+      // Doklad vzniknutý rozdelením nemá vlastnú prílohu — sken drží pôvodný
+      // doklad a do POHODY patrí k obom častiam.
       `SELECT a.storage_key, a.detected_mime_type, a.original_file_name
          FROM inbound_attachments a
-        WHERE a.document_id=$1 AND a.tenant_id=$2
+        WHERE a.tenant_id=$2
+          AND a.document_id = COALESCE(
+            (SELECT d.split_from_document_id FROM documents d WHERE d.id=$1 AND d.tenant_id=$2), $1)
           AND EXISTS (SELECT 1 FROM export_jobs j
                        WHERE j.tenant_id=a.tenant_id AND j.document_ids ? $1)
         ORDER BY a.created_at LIMIT 1`,

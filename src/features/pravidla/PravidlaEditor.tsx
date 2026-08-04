@@ -4,12 +4,17 @@ import {
   type AiPokyn, type AiPokynVstup,
 } from '../../data/api';
 import { showToast } from '../../components/toast';
-import { t } from '../../i18n/sk';
+import { t, type SkKey } from '../../i18n/sk';
 
 // Editor textových pravidiel pre AI. Jeden komponent pre obe úrovne — rozdiel
 // je len v tom, či dostane organizationId (pravidlá firmy) alebo nie (globálne).
 
 const TYPY = ['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD'] as const;
+/** Musí sedieť so serverom (aiInstructionRoutes) — tam je strop autoritatívny. */
+const MAX_SUBOROV = 6;
+const MAX_SUBOR_BAJTOV = 20 * 1024 * 1024;
+/** Súčet bajtov: base64 dávku nafúkne o tretinu a telo požiadavky má 30 MB. */
+const MAX_SPOLU_BAJTOV = 20 * 1024 * 1024;
 
 const PRAZDNY: AiPokynVstup = {
   nazov: '',
@@ -26,9 +31,10 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
   const [draft, setDraft] = useState<AiPokynVstup>(PRAZDNY);
   const [slovaText, setSlovaText] = useState('');
   const [busy, setBusy] = useState(false);
-  // Vzorový doklad pre „Vylepšiť pomocou AI" — nikam sa neukladá, poslúži len
-  // ako príklad, z ktorého AI napíše čitateľné pravidlo.
-  const [subor, setSubor] = useState<File>();
+  // Vzorové doklady pre „Vylepšiť pomocou AI" — nikam sa neukladajú, poslúžia
+  // len ako príklad, z ktorého AI napíše čitateľné pravidlo. Viac naraz má
+  // zmysel: samotný doklad plus snímky z POHODY, ako sa zaúčtoval.
+  const [subory, setSubory] = useState<File[]>([]);
   const [vylepsujem, setVylepsujem] = useState(false);
   const suborRef = useRef<HTMLInputElement>(null);
 
@@ -64,6 +70,9 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
       }, organizationId);
       setDraft(PRAZDNY);
       setSlovaText('');
+      // Prílohy patrili k práve uloženému pravidlu — bez vyčistenia by sa ticho
+      // priložili aj k nasledujúcemu a AI by písala pravidlo z cudzieho dokladu.
+      setSubory([]);
       await obnov();
       showToast(t('pravidla.ulozene'));
     } catch (cause) {
@@ -74,14 +83,14 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
   }
 
   async function vylepsi() {
-    if (!draft.text.trim() && !subor) {
+    if (!draft.text.trim() && subory.length === 0) {
       showToast(t('pravidla.vylepsit.prazdne'), { tone: 'error' });
       return;
     }
     setVylepsujem(true);
     try {
       const navrh = await improveAiPokyn(
-        { nazov: draft.nazov, text: draft.text, subor },
+        { nazov: draft.nazov, text: draft.text, subory },
         organizationId,
       );
       // Návrh AI predvyplní formulár; účtovník ho môže ďalej upraviť a až
@@ -94,7 +103,11 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
         faza: navrh.faza,
         typyDokladov: navrh.typyDokladov.filter((typ): typ is (typeof TYPY)[number] => (TYPY as readonly string[]).includes(typ)),
       });
-      setSlovaText(navrh.klucoveSlova.join(', '));
+      // Kľúčové slová sa zlučujú, neprepisujú: AI ich odvodila z textu pravidla,
+      // ale tie, ktoré účtovník napísal sám, pozná z praxe a nesmú zmiznúť.
+      const rucne = slovaText.split(',').map((slovo) => slovo.trim()).filter(Boolean);
+      const spojene = [...new Set([...rucne, ...navrh.klucoveSlova])].slice(0, 10);
+      setSlovaText(spojene.join(', '));
       showToast(t('pravidla.vylepsit.hotovo'));
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
@@ -187,7 +200,7 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
                       : [...draft.typyDokladov, typ],
                   })}
                 >
-                  {typ}
+                  {t(`typ.${typ}`)}
                 </button>
               );
             })}
@@ -202,45 +215,75 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
             <input
               ref={suborRef}
               type="file"
+              multiple
               accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
               className="hidden"
               onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file && file.size > 20 * 1024 * 1024) {
-                  showToast(t('pravidla.vylepsit.velkySubor'), { tone: 'error' });
+                const pridane = [...(event.target.files ?? [])];
+                // Rovnaký input sa používa opakovane — hodnotu zahodíme, inak by
+                // sa ten istý súbor nedal pridať druhýkrát po odobratí.
+                if (suborRef.current) suborRef.current.value = '';
+                // Ten istý súbor druhýkrát je vždy omyl — poslal by sa (a platil) dvakrát.
+                const nove = pridane.filter((file) => !subory.some(
+                  (uz) => uz.name === file.name && uz.size === file.size,
+                ));
+                const velky = nove.find((file) => file.size > MAX_SUBOR_BAJTOV);
+                if (velky) {
+                  showToast(`${velky.name}: ${t('pravidla.vylepsit.velkySubor')}`, { tone: 'error' });
                   return;
                 }
-                setSubor(file ?? undefined);
+                const spolu = [...subory, ...nove];
+                if (spolu.length > MAX_SUBOROV) {
+                  showToast(t('pravidla.vylepsit.privelaSuborov'), { tone: 'error' });
+                  return;
+                }
+                // Strop na súčet drží požiadavku pod limitom tela — server by
+                // väčšiu dávku odmietol skôr, než by sa dostala k obsluhe.
+                if (spolu.reduce((sucet, file) => sucet + file.size, 0) > MAX_SPOLU_BAJTOV) {
+                  showToast(t('pravidla.vylepsit.velkeSpolu'), { tone: 'error' });
+                  return;
+                }
+                setSubory(spolu);
               }}
             />
-            <button type="button" className="btn" disabled={vylepsujem} onClick={() => suborRef.current?.click()}>
+            <button
+              type="button"
+              className="btn"
+              disabled={vylepsujem || subory.length >= MAX_SUBOROV}
+              onClick={() => suborRef.current?.click()}
+            >
               {t('pravidla.vylepsit.prilozit')}
             </button>
-            {subor && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-2.5 py-1 text-xs text-ink-soft">
-                {subor.name}
-                <button
-                  type="button"
-                  className="text-ink-faint hover:text-red-700"
-                  aria-label={t('pravidla.vylepsit.odobratSubor')}
-                  onClick={() => {
-                    setSubor(undefined);
-                    if (suborRef.current) suborRef.current.value = '';
-                  }}
-                >
-                  ×
-                </button>
-              </span>
-            )}
             <button
               type="button"
               className="btn ml-auto"
-              disabled={vylepsujem || busy || (!draft.text.trim() && !subor)}
+              disabled={vylepsujem || busy || (!draft.text.trim() && subory.length === 0)}
               onClick={() => void vylepsi()}
             >
               {vylepsujem ? t('pravidla.vylepsit.pracujem') : t('pravidla.vylepsit')}
             </button>
           </div>
+          {subory.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {subory.map((file, index) => (
+                <span
+                  key={`${file.name}-${index}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-2.5 py-1 text-xs text-ink-soft"
+                >
+                  {file.name}
+                  <button
+                    type="button"
+                    className="text-ink-faint hover:text-red-700"
+                    aria-label={`${t('pravidla.vylepsit.odobratSubor')}: ${file.name}`}
+                    disabled={vylepsujem}
+                    onClick={() => setSubory((doterajsie) => doterajsie.filter((_, poradie) => poradie !== index))}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <p className="mt-2 text-xs text-ink-faint">{t('pravidla.vylepsit.hint')}</p>
         </div>
         <button type="button" className="btn btn-primary" disabled={busy || vylepsujem} onClick={() => void pridaj()}>
@@ -262,7 +305,7 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
               </span>
               {pravidlo.typyDokladov.map((typ) => (
                 <span key={typ} className="rounded-md border border-line px-1.5 py-0.5 text-[11px] font-semibold text-ink-soft">
-                  {typ}
+                  {t(`typ.${typ}` as SkKey)}
                 </span>
               ))}
               <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => void prepni(pravidlo)}>

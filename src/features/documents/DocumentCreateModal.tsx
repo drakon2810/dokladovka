@@ -220,7 +220,7 @@ export function DocumentCreateModal({
             <select className="input" value={typ} onChange={(event) => setTyp(event.target.value as DocumentType)}>
               {DOCUMENT_TYPES.map((type) => (
                 <option key={type} value={type}>
-                  {type} — {t(TYPE_LABELS[type])}
+                  {t(`typ.${type}` as SkKey)} — {t(TYPE_LABELS[type])}
                 </option>
               ))}
             </select>

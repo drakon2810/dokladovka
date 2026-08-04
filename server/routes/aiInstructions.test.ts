@@ -155,17 +155,22 @@ describe('pravidlá pre AI', () => {
     expect((await app.inject({
       method: 'POST', url: `/api/organizations/${seeded.organizationId}/instructions/improve`,
       headers,
-      payload: { nazov: '', text: 'x', subor: { fileName: 'a.txt', contentBase64: Buffer.from('hello').toString('base64') } },
+      payload: { nazov: '', text: 'x', subory: [{ fileName: 'a.txt', contentBase64: Buffer.from('hello').toString('base64') }] },
     })).statusCode).toBe(422);
 
+    // Doklad + snímka z POHODY naraz: obe idú do AI ako samostatné prílohy.
     const pdf = Buffer.from('%PDF-1.4 vzorova rekapitulacia');
+    const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('pohoda-screenshot')]);
     const improved = await app.inject({
       method: 'POST', url: `/api/organizations/${seeded.organizationId}/instructions/improve`,
       headers,
       payload: {
         nazov: 'Mzdy',
         text: 'ked pride rekapitulacia miezd tak zrazkova dan a odvody',
-        subor: { fileName: 'rekapitulacia.pdf', contentBase64: pdf.toString('base64') },
+        subory: [
+          { fileName: 'rekapitulacia.pdf', contentBase64: pdf.toString('base64') },
+          { fileName: 'pohoda.png', contentBase64: png.toString('base64') },
+        ],
       },
     });
     expect(improved.statusCode, improved.body).toBe(200);
@@ -175,19 +180,51 @@ describe('pravidlá pre AI', () => {
     // Kľúčové slová sa normalizujú (malé písmená, bez duplicít).
     expect(navrh.klucoveSlova).toEqual(['mzdy', 'rekapitulácia']);
 
-    // AI dostala číselníky firmy aj vzorový doklad ako input_file.
+    // AI dostala číselníky firmy aj oba vzorové súbory v správnom type prílohy.
     const telo = volania[0];
     const obsah = telo.input[0].content;
     expect(obsah[0].text).toContain('Code lists of this company');
     expect(obsah[0].text).toContain('518/321');
+    expect(obsah[0].text).toContain('rekapitulacia.pdf, pohoda.png');
     expect(obsah[1].type).toBe('input_file');
     expect(obsah[1].filename).toBe('rekapitulacia.pdf');
+    // Snímka ide ako obrázok — input_file by Responses API pri PNG odmietlo.
+    expect(obsah[2].type).toBe('input_image');
+    expect(obsah[2].image_url.startsWith('data:image/png;base64,')).toBe(true);
 
     // Nič sa neuložilo — uloženie je samostatný krok účtovníka.
     const zoznam = await app.inject({
       method: 'GET', url: `/api/organizations/${seeded.organizationId}/instructions`, headers,
     });
     expect(zoznam.json().pravidla).toHaveLength(0);
+    await app.close();
+  }, 120_000);
+
+  it('odmietnutý súbor od AI dá zrozumiteľnú hlášku, nie surovú 500', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({
+      database,
+      storage: new MemoryObjectStorage(),
+      config: testConfig(),
+      logger: false,
+      aiRulesParser: {
+        // Presne to, čo vráti OpenAI pri orezanom PNG: HTTP 400.
+        parse: async () => { throw Object.assign(new Error('400 invalid image'), { status: 400 }); },
+      },
+    });
+    const headers = sessionHeaders(await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
+    }));
+    const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('orezane')]);
+    const odpoved = await app.inject({
+      method: 'POST', url: `/api/organizations/${seeded.organizationId}/instructions/improve`,
+      headers,
+      payload: { nazov: '', text: 'x', subory: [{ fileName: 'orezane.png', contentBase64: png.toString('base64') }] },
+    });
+    expect(odpoved.statusCode).toBe(422);
+    expect(odpoved.json().message).toContain('odmietla priložený súbor');
     await app.close();
   }, 120_000);
 });

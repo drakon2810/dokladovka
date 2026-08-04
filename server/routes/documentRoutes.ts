@@ -29,15 +29,43 @@ interface DocumentScope extends Record<string, unknown> {
   extracted: Record<string, unknown>;
   accounting: Record<string, string | undefined>;
   history: Array<Record<string, unknown>>;
+  split_from_document_id?: string | null;
 }
 
 async function scopedDocument(database: Database, tenantId: string, id: string): Promise<DocumentScope> {
   const result = await database.query<DocumentScope>(
-    `SELECT id, organization_id, status, processing_status, version, document_type, extracted, accounting, history
+    `SELECT id, organization_id, status, processing_status, version, document_type, extracted, accounting,
+            history, split_from_document_id
        FROM documents WHERE id=$1 AND tenant_id=$2`, [id, tenantId],
   );
   if (!result.rows[0]) throw new HttpError(404, 'document_not_found', 'Doklad neexistuje');
   return result.rows[0];
+}
+
+/**
+ * Sumy dokladu po presune položiek. Rozpis DPH sa skladá zo sadzieb položiek —
+ * inak by po rozdelení jedna časť niesla DPH tej druhej a doklad by neprešiel
+ * validáciou pred schválením.
+ */
+function sumyZPoloziek(polozky: Array<Record<string, any>>): { rozpisDph: Array<Record<string, number>>; sumaSpolu: number } {
+  const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+  const podlaSadzby = new Map<number, { sadzba: number; zaklad: number; dph: number }>();
+  let sumaSpolu = 0;
+  for (const polozka of polozky) {
+    const sadzba = Number(polozka?.sadzbaDph ?? 0);
+    const zaklad = Number(polozka?.sumaBezDph ?? 0);
+    const dph = Number(polozka?.sumaDph ?? 0);
+    const riadok = podlaSadzby.get(sadzba) ?? { sadzba, zaklad: 0, dph: 0 };
+    riadok.zaklad = round2(riadok.zaklad + (Number.isFinite(zaklad) ? zaklad : 0));
+    riadok.dph = round2(riadok.dph + (Number.isFinite(dph) ? dph : 0));
+    podlaSadzby.set(sadzba, riadok);
+    const spolu = Number(polozka?.sumaSpolu ?? 0);
+    sumaSpolu = round2(sumaSpolu + (Number.isFinite(spolu) ? spolu : 0));
+  }
+  return {
+    rozpisDph: [...podlaSadzby.values()].sort((left, right) => right.sadzba - left.sadzba),
+    sumaSpolu,
+  };
 }
 
 /** Zvolené členenie DPH dokladu rozpísané z číselníka (pre dphAdvisor). */
@@ -461,6 +489,80 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     );
     await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.process_manually', entityType: 'document', entityId: id, correlationId: request.id });
     return result.rows[0];
+  });
+
+  /**
+   * Rozdelenie dokladu: vybrané položky sa presunú do NOVÉHO dokladu (spravidla
+   * inej agendy). Jeden prijatý súbor tak môže skončiť v POHODE ako dva zápisy —
+   * napr. rekapitulácia miezd: hrubé mzdy interným dokladom, odvody poisťovni
+   * ako ostatný záväzok. Sken ostáva pri pôvodnom doklade, nový sa naň odkazuje.
+   */
+  app.post('/api/documents/:id/split', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      polozkaIds: z.array(z.string().min(1).max(64)).min(1).max(200),
+      typ: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
+      expectedVersion: z.number().int().positive(),
+    }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.status === 'exportovany') {
+      throw new HttpError(409, 'document_exported', 'Exportovaný doklad nie je možné rozdeliť');
+    }
+    if (document.version !== body.expectedVersion) {
+      throw new HttpError(409, 'version_conflict', 'Doklad medzitým niekto zmenil, načítajte ho znova');
+    }
+    // Rozdeľovať sa dá len doklad, ktorý vznikol priamo zo súboru — reťaz
+    // rozdelení by rozbila väzbu na sken aj prehľad, čo z čoho vzniklo.
+    if (document.split_from_document_id) {
+      throw new HttpError(409, 'already_split', 'Časť rozdeleného dokladu sa už ďalej rozdeliť nedá');
+    }
+
+    const extracted = (document.extracted ?? {}) as Record<string, any>;
+    const polozky: Array<Record<string, any>> = Array.isArray(extracted.polozky) ? extracted.polozky : [];
+    const vybrane = polozky.filter((polozka) => body.polozkaIds.includes(String(polozka?.id)));
+    const zostavajuce = polozky.filter((polozka) => !body.polozkaIds.includes(String(polozka?.id)));
+    if (vybrane.length === 0) throw new HttpError(422, 'no_items', 'Vyberte aspoň jednu položku');
+    if (zostavajuce.length === 0) {
+      throw new HttpError(422, 'all_items', 'V pôvodnom doklade musí ostať aspoň jedna položka — inak stačí zmeniť jeho typ');
+    }
+
+    const noveId = randomUUID();
+    const teraz = new Date().toISOString();
+    const novyExtracted = { ...extracted, polozky: vybrane, ...sumyZPoloziek(vybrane) };
+    const povodnyExtracted = { ...extracted, polozky: zostavajuce, ...sumyZPoloziek(zostavajuce) };
+
+    await database.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO documents
+          (id,tenant_id,organization_id,queue_id,document_type,status,processing_status,source,extracted,
+           accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id)
+         SELECT $1,tenant_id,organization_id,queue_id,$2,'na_kontrole','ready_for_review',source,$3::jsonb,
+           accounting,field_confidence,confidence,$4,currency,$5::jsonb,$6
+           FROM documents WHERE id=$6 AND tenant_id=$7`,
+        [noveId, body.typ, JSON.stringify(novyExtracted), novyExtracted.sumaSpolu,
+          JSON.stringify([{ ts: teraz, user: auth.name, akcia: `Doklad vznikol rozdelením dokladu ${extracted.cisloFaktury ?? id}` }]),
+          id, auth.tenantId],
+      );
+      await tx.query(
+        `UPDATE documents SET extracted=$1::jsonb, total_amount=$2, version=version+1,
+                status=CASE WHEN status='schvaleny' THEN 'na_kontrole' ELSE status END,
+                approved_version=NULL, approved_snapshot=NULL, history=$3::jsonb, updated_at=now()
+          WHERE id=$4 AND tenant_id=$5 AND version=$6`,
+        [JSON.stringify(povodnyExtracted), povodnyExtracted.sumaSpolu,
+          JSON.stringify([...document.history, { ts: teraz, user: auth.name, akcia: `Z dokladu bolo oddelených ${vybrane.length} položiek` }]),
+          id, auth.tenantId, body.expectedVersion],
+      );
+    });
+    await writeAudit(database, {
+      tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,
+      action: 'document.split', entityType: 'document', entityId: id, correlationId: request.id,
+      metadata: { noveId, polozky: vybrane.length, typ: body.typ },
+    });
+    return reply.code(201).send({ id: noveId });
   });
 
   // „Nie je duplicita" — rozhodnutie, že technicky zhodný doklad je predsa len

@@ -19,7 +19,7 @@ import type {
 } from '../../data/types';
 import { OrgDot, TypBadge, Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
-import { t } from '../../i18n/sk';
+import { t, type SkKey } from '../../i18n/sk';
 import { formatDate, formatMoney } from '../../lib/format';
 import { UploadModal } from './UploadModal';
 import { ExportPohodaModal } from './ExportPohodaModal';
@@ -851,7 +851,7 @@ export function DocumentsPage() {
           <select className={selectCls} value={typeFilter} aria-label={t('doklady.filter.typ')} onChange={(event) => setTypeFilter(event.target.value as DocumentType | '')}>
             <option value="">{t('doklady.filter.vsetko')}</option>
             {DOCUMENT_TYPES.map((type) => (
-              <option key={type} value={type}>{type}</option>
+              <option key={type} value={type}>{t(`typ.${type}` as SkKey)}</option>
             ))}
           </select>
         </FilterPill>

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import type { DocumentItem, Organization, Role } from '../data/types';
-import { t } from '../i18n/sk';
+import { t, type SkKey } from '../i18n/sk';
 
 const stroke = {
   fill: 'none',
@@ -139,7 +139,7 @@ export function CommandPalette({
         id: `doc-${document.id}`,
         group: t('pal.doklady'),
         title: `${document.extracted.dodavatel.nazov} — ${document.extracted.sumaSpolu.toLocaleString('sk-SK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`,
-        subtitle: `${document.typ} · VS ${document.extracted.variabilnySymbol ?? '—'}${overdue ? ` · ${t('platby.stav.po_splatnosti').toLowerCase()}` : ''}`,
+        subtitle: `${t(`typ.${document.typ}` as SkKey)} · VS ${document.extracted.variabilnySymbol ?? '—'}${overdue ? ` · ${t('platby.stav.po_splatnosti').toLowerCase()}` : ''}`,
         icon: iconDoc,
         run: () => {
           onPickOrg(document.orgId);

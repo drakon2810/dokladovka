@@ -195,7 +195,7 @@ export function QueuesTab() {
                                 key={documentType}
                                 className="tnum rounded border border-line bg-app px-1.5 py-0.5 text-xs"
                               >
-                                {documentType}
+                                {t(`typ.${documentType}` as SkKey)}
                               </span>
                             ))}
                           </span>
