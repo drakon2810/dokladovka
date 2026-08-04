@@ -137,7 +137,7 @@ A good rule states: (1) how to RECOGNIZE the document or line item (layout, labe
 When a list of the company's code lists (predkontácie, členenia DPH, číselné rady, strediská) is provided, name the concrete codes with their meaning, e.g. „predkontácia 501/321 (Nákup materiálu)". Use ONLY codes from the provided lists — never invent codes. Without lists, describe the accounts generically (e.g. „účet 501 — spotreba materiálu").
 Keep every concrete instruction the accountant wrote (accounts, percentages, conditions) — you clarify and structure, you never drop or contradict their intent. Do not pad the rule with generic accounting advice; when unsure, keep it short.
 Write as short imperative paragraphs or bullets („- Ak …, potom …"). Maximum 8000 characters.
-When one incoming document has to end up as TWO postings in POHODA (e.g. a payroll recapitulation where wages go to an internal document and the levy owed to an insurer is a separate liability), say so explicitly: name which part belongs to which document type and which accounts, so the accountant can split it.
+When one incoming file has to end up as SEVERAL postings in POHODA (a payroll recapitulation is the typical case: wages one internal document, the social-fund contribution another, the settlement of an advance a third), write the rule so the reading AI can create them by itself. State the count, and for EACH posting on its own line: the document type, the exact text that goes into POHODA, the variable symbol when the source document gives one, which amounts or lines belong to it, and the predkontácia. Be explicit that the file becomes that many separate documents — a vague „rozdeľ podľa potreby" produces nothing.
 nazov: short Slovak title (max 120 chars) — keep the accountant's title unless empty or unclear.
 faza: "extraction" if the rule only affects reading/splitting the document, "accounting" if it only affects booking, otherwise "both".
 typyDokladov: document types the rule applies to (FP FV BV MZDY OZ PD), empty = all.
@@ -216,7 +216,7 @@ export function registerAiInstructionRoutes(
           WHERE tenant_id=$1 AND organization_id=$2 AND active=true
             AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')
             AND ${BEZ_PREDKONTACIA_SQL}
-          ORDER BY kind, code LIMIT 400`,
+          ORDER BY kind, code LIMIT 1500`,
         [ciel.tenantId, ciel.organizationId],
       );
       if (rows.rows.length > 0) {
