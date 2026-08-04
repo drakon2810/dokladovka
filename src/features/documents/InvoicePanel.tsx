@@ -565,7 +565,16 @@ export function InvoicePanel({
         )}
         {chybaPokladna
           ? <span>Pokladničný doklad potrebuje <strong>číslo pokladne</strong> a smer dokladu — bez nich ho POHODA neprijme.</span>
-          : <span>Doklad bude zaúčtovaný do POHODY v režime <strong>{rezim}</strong>.</span>}
+          : (
+            <span>
+              Doklad bude zaúčtovaný do POHODY v režime <strong>{rezim}</strong>
+              {/* Skutočné číslo prideľuje POHODA až pri prenose; toto je odhad
+                  z posledného čísla radu, ktoré priniesol Mostík. */}
+              {dalsieCislo && (
+                <> a dostane číslo <strong className="tnum" title="Odhad z posledného čísla číselného radu v POHODE. Skutočné číslo pridelí POHODA až pri prenose.">{dalsieCislo}</strong></>
+              )}.
+            </span>
+          )}
       </div>
 
       <div className="dk-two">

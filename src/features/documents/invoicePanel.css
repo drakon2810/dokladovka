@@ -31,13 +31,9 @@
 }
 .dk-doc *, .dk-doc *::before, .dk-doc *::after { box-sizing: border-box; }
 
-/* Na širokej obrazovke editor vypĺňa celú výšku okna: šesť kariet sa mierne
-   roztiahne a sekcia Zdroj (nasleduje pod editorom) začína až pod ohybom —
-   po otvorení dokladu je vidno práve zaúčtovanie. */
-@media (min-width: 1280px) {
-  .dk-doc { min-height: calc(100vh - 5.5rem); }
-  .dk-doc > .dk-two { flex: 1; align-items: stretch; }
-}
+/* Karty majú výšku svojho obsahu. Roztiahnutie na výšku okna tu kedysi bolo,
+   aby sekcia Zdroj začínala pod ohybom — po zhustení editora už netreba a
+   robilo pod poslednými riadkami každej karty desiatky prázdnych pixelov. */
 
 @keyframes dkPop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
