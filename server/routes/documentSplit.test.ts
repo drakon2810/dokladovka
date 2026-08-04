@@ -81,6 +81,47 @@ describe('rozdelenie dokladu', () => {
     await app.close();
   }, 120_000);
 
+  it('pôvodný doklad sa dá rozdeliť opakovane — rekapitulácia miezd dá tri interné doklady', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const headers = sessionHeaders(await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
+    }));
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'MZDY','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,3000,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId, JSON.stringify(EXTRACTED)],
+    );
+
+    // 1. odčlenenie: tvorba sociálneho fondu
+    const prve = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/split`, headers,
+      payload: { polozkaIds: ['p2'], typ: 'MZDY', expectedVersion: 1 },
+    });
+    expect(prve.statusCode, prve.body).toBe(201);
+
+    // 2. odčlenenie z toho istého (už zmenšeného) dokladu — verzia medzitým stúpla
+    const druhe = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/split`, headers,
+      payload: { polozkaIds: ['p3'], typ: 'MZDY', expectedVersion: 2 },
+    });
+    expect(druhe.statusCode, druhe.body).toBe(201);
+
+    const casti = await database.query<Record<string, any>>(
+      'SELECT id, extracted, total_amount FROM documents WHERE split_from_document_id=$1 ORDER BY created_at',
+      [documentId],
+    );
+    expect(casti.rowCount).toBe(2);
+    expect(casti.rows.map((row) => Number(row.total_amount))).toEqual([800, 200]);
+    const zvysok = await database.query<Record<string, any>>('SELECT extracted FROM documents WHERE id=$1', [documentId]);
+    expect(zvysok.rows[0].extracted.polozky.map((p: any) => p.id)).toEqual(['p1']);
+    expect(zvysok.rows[0].extracted.sumaSpolu).toBe(2000);
+    await app.close();
+  }, 120_000);
+
   it('odmietne zastaranú verziu, prázdny výber aj odobratie všetkých položiek', async () => {
     const database = await createTestDatabase();
     databases.push(database);
