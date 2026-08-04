@@ -571,8 +571,27 @@ export function InvoicePanel({
             <span className="dk-lbl">Typ dokladu</span>
             <DcPick value={typValue} options={TYP_OPTIONS} disabled={readOnly} onChange={setTypValue} />
 
+            {/* Číselný rad a pokladňa sú krátke kódy — na jednom riadku ušetria
+                výšku, ktorú editor potrebuje, aby sa zmestil bez skrolovania.
+                Predikcia ďalšieho čísla ide do tooltipu, nie na vlastný riadok. */}
             <span className="dk-lbl">Číselný rad</span>
-            <DcPick value={ucto.ciselnyRadId} options={toOpts(radOpts)} disabled={readOnly} onMostikSync={syncMostik} onChange={(value) => updateUcto({ ciselnyRadId: value })} />
+            <div className="dk-pairline">
+              <DcPick
+                value={ucto.ciselnyRadId} options={toOpts(radOpts)} disabled={readOnly} onMostikSync={syncMostik}
+                title={dalsieCislo ? `Ďalšie číslo v POHODE: ${dalsieCislo}` : undefined}
+                onChange={(value) => updateUcto({ ciselnyRadId: value })}
+              />
+              {jePokladna && (
+                <>
+                  <span className="dk-lbl">Pokladňa</span>
+                  <DcCell
+                    value={ucto.pokladnaKod ?? ''} disabled={readOnly} placeholder="HP1"
+                    tone={!ucto.pokladnaKod?.trim() ? 'err' : undefined}
+                    onCommit={(raw) => updateUcto({ pokladnaKod: raw || undefined })}
+                  />
+                </>
+              )}
+            </div>
 
             {srcLabel('cisloFaktury', 'Číslo dokladu')}
             <DcCell
@@ -581,17 +600,6 @@ export function InvoicePanel({
               srcClass={srcCls('cisloFaktury')}
               onCommit={(raw) => updateExtracted('cisloFaktury', raw)}
             />
-
-            {jePokladna && (
-              <>
-                <span className="dk-lbl">Číslo pokladne</span>
-                <DcCell
-                  value={ucto.pokladnaKod ?? ''} disabled={readOnly} placeholder="napr. HP1"
-                  tone={!ucto.pokladnaKod?.trim() ? 'err' : undefined}
-                  onCommit={(raw) => updateUcto({ pokladnaKod: raw || undefined })}
-                />
-              </>
-            )}
 
             {srcLabel('datumVystavenia', 'Dátum vystavenia')}
             <DcCell type="date" value={ex.datumVystavenia ?? ''} display={formatDateSk(ex.datumVystavenia)} disabled={readOnly} srcClass={srcCls('datumVystavenia')} onCommit={(raw) => updateExtracted('datumVystavenia', raw)} />
@@ -619,11 +627,7 @@ export function InvoicePanel({
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',
               <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => updateUcto({ clenenieKvKod: value })} />)}
-
-            <span className="dk-lbl">Stredisko</span>
-            <DcPick value={ucto.strediskoId} options={[{ value: '', label: '—' }, ...toOpts(codeLists.strediska)]} disabled={readOnly} onMostikSync={syncMostik} onChange={(value) => updateUcto({ strediskoId: value || undefined })} />
           </div>
-          {dalsieCislo && <div className="dk-note">Ďalšie číslo v POHODE: <strong className="tnum">{dalsieCislo}</strong></div>}
         </div>
 
         {/* Dodávateľ */}
@@ -647,6 +651,11 @@ export function InvoicePanel({
             <DcCell value={ex.variabilnySymbol ?? ''} disabled={readOnly} srcClass={srcCls('variabilnySymbol')} onCommit={(raw) => updateExtracted('variabilnySymbol', raw || undefined)} />
             {srcLabel('mena', 'Mena')}
             <DcPick value={ex.mena} options={menaOpts} disabled={readOnly} srcClass={srcCls('mena')} onChange={(value) => updateExtracted('mena', value as DocumentExtractedData['mena'])} />
+            {/* Stredisko stojí tu, nie v Základných informáciách: tá karta je
+                vyššia a o výške dvojice rozhoduje práve tá vyššia z nich. */}
+            <span className="dk-lbl">Stredisko</span>
+            <DcPick value={ucto.strediskoId} options={[{ value: '', label: '—' }, ...toOpts(codeLists.strediska)]} disabled={readOnly} onMostikSync={syncMostik} onChange={(value) => updateUcto({ strediskoId: value || undefined })} />
+            <span /><span />
           </div>
           {!jePokladna && (
             <div className="dk-grid dk-grid-sup" style={{ marginTop: 3 }}>

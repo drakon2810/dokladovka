@@ -2,7 +2,8 @@
 // z Claude Design. Na rozdiel od `DcDropdown` nemajú vlastný popisok ani rám:
 // sedia priamo v mriežke „popis vľavo, hodnota vpravo" ako v POHODE a rám
 // dostanú až pri hovere/editácii.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface DcOption {
   value: string;
@@ -121,17 +122,38 @@ export function DcPick({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [active, setActive] = useState(0);
+  const [kotva, setKotva] = useState<DOMRect>();
   const rootRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Zoznam sa vykresľuje do <body>: tabuľka položiek má vodorovný posun, ktorý
+  // by inak rozbaľovací zoznam orezal — presne to sa dialo pri členení DPH,
+  // kontrolnom výkaze a predkontácii v riadku položky.
+  const zmerajKotvu = useCallback(() => {
+    const element = rootRef.current;
+    if (element) setKotva(element.getBoundingClientRect());
+  }, []);
 
   useEffect(() => {
     if (!open) return undefined;
+    zmerajKotvu();
     const onDoc = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || popRef.current?.contains(target)) return;
+      setOpen(false);
     };
+    // capture: zachytí aj posun vnútri tabuľky, nielen posun stránky.
+    const onMove = () => zmerajKotvu();
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [open, zmerajKotvu]);
 
   const withSearch = searchable ?? options.length > SEARCH_FROM;
   useEffect(() => {
@@ -147,6 +169,19 @@ export function DcPick({
   const activeIdx = Math.min(active, Math.max(filtered.length - 1, 0));
 
   const pick = (next: string) => { onChange(next); setOpen(false); setSearch(''); };
+
+  /** Zoznam ide pod bunku; keď tam nie je miesto, vyklopí sa nahor. */
+  const popStyle = (): CSSProperties => {
+    if (!kotva) return { visibility: 'hidden' };
+    const podKotvou = window.innerHeight - kotva.bottom;
+    const nahor = podKotvou < 220 && kotva.top > podKotvou;
+    return {
+      left: Math.max(8, Math.min(kotva.left - 2, window.innerWidth - 348)),
+      minWidth: Math.max(kotva.width + 4, 190),
+      maxHeight: (nahor ? kotva.top : podKotvou) - 14,
+      ...(nahor ? { bottom: window.innerHeight - kotva.top + 4 } : { top: kotva.bottom + 4 }),
+    };
+  };
 
   return (
     <div ref={rootRef} className={`dk-pick${open ? ' dk-open' : ''}`}>
@@ -164,8 +199,8 @@ export function DcPick({
       >
         {shown || placeholder}
       </span>
-      {open && (
-        <div className="dk-pick-pop">
+      {open && createPortal(
+        <div ref={popRef} className="dk-pick-pop" style={popStyle()}>
           {withSearch && (
             <input
               ref={searchRef}
@@ -202,7 +237,8 @@ export function DcPick({
               Synchronizovať mostíkom
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

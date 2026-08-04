@@ -21,9 +21,10 @@
   --dk-card-shadow: 0 1px 2px rgba(27, 31, 29, .04), 0 8px 24px -12px rgba(27, 31, 29, .08);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.32;
   color: var(--dk-ink);
   -webkit-font-smoothing: antialiased;
   container-type: inline-size;
@@ -35,42 +36,42 @@
 .dk-card {
   background: #fff;
   border: 1px solid var(--dk-border);
-  border-radius: 14px;
-  padding: 14px 16px 16px;
+  border-radius: 12px;
+  padding: 6px 10px;
   box-shadow: var(--dk-card-shadow);
 }
-.dk-card-title { font-weight: 600; margin-bottom: 10px; }
-.dk-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.dk-card-title { font-weight: 600; margin-bottom: 4px; }
+.dk-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: start; }
 /* Editor býva vedľa náhľadu dokladu — o počte stĺpcov rozhoduje jeho vlastná
    šírka, nie šírka okna. */
 @container (max-width: 560px) {
   .dk-two { grid-template-columns: 1fr; }
 }
-.dk-sep { height: 1px; background: var(--dk-line); margin: 12px 0; }
+.dk-sep { height: 1px; background: var(--dk-line); margin: 5px 0; }
 
 /* ---- hlavička „Účtovný zápis v POHODE" ---- */
 .dk-head {
   display: flex; align-items: center; gap: 12px;
   background: #fff; border: 1px solid var(--dk-border); border-radius: 14px;
-  padding: 12px 16px; box-shadow: var(--dk-card-shadow);
+  padding: 5px 10px; box-shadow: var(--dk-card-shadow);
 }
 .dk-head-mark {
-  width: 24px; height: 24px; border-radius: 7px; background: var(--dk-pohoda);
+  width: 21px; height: 21px; border-radius: 6px; background: var(--dk-pohoda);
   color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex: none;
 }
-.dk-head-title { font-size: 16px; font-weight: 600; color: var(--dk-pohoda); }
+.dk-head-title { font-size: 14.5px; font-weight: 600; color: var(--dk-pohoda); }
 .dk-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 .dk-btn {
   display: inline-flex; align-items: center; gap: 7px;
   border: 1px solid var(--dk-border); border-radius: 10px; background: #fff;
-  padding: 8px 13px; font-family: inherit; font-size: 13px; font-weight: 500;
+  padding: 4px 10px; font-family: inherit; font-size: 12.5px; font-weight: 500;
   color: var(--dk-ink); cursor: pointer;
   transition: border-color .16s ease, color .16s ease, background .16s ease;
 }
 .dk-btn:hover:not(:disabled) { border-color: #A7D9C9; color: var(--dk-accent-dark); }
 .dk-btn:disabled { opacity: .5; cursor: not-allowed; }
-.dk-btn-sm { padding: 7px 12px; }
+.dk-btn-sm { padding: 5px 10px; }
 .dk-btn-ai {
   border-color: transparent; color: #fff;
   background: linear-gradient(135deg, #0E7A5F, #0A6650);
@@ -82,19 +83,22 @@
 .dk-mode {
   display: flex; align-items: center; gap: 10px;
   background: #F1F8F4; border: 1px solid #CFE6DA; border-radius: 12px;
-  padding: 11px 14px; color: #0A5C48; line-height: 1.45;
+  padding: 4px 11px; color: #0A5C48; line-height: 1.35;
 }
 .dk-mode svg { flex: none; }
 .dk-mode strong { font-weight: 600; }
 .dk-mode-warn { background: rgba(180, 83, 9, .08); border-color: rgba(180, 83, 9, .28); color: #92400E; }
 
 /* ---- mriežka popis → hodnota ---- */
-.dk-grid { display: grid; gap: 3px 10px; align-items: center; }
-.dk-grid-main { grid-template-columns: 138px minmax(0, 1fr); }
+.dk-grid { display: grid; gap: 0 10px; align-items: center; }
+.dk-grid-main { grid-template-columns: 132px minmax(0, 1fr); }
 .dk-grid-sup { grid-template-columns: 104px minmax(0, 1fr); }
-.dk-grid-pair { grid-template-columns: 104px minmax(0, 1fr) 54px 92px; }
-.dk-grid-pay { grid-template-columns: 1fr 118px; gap: 4px 10px; }
+.dk-grid-pair { grid-template-columns: 100px minmax(0, 1fr) 82px minmax(0, 1fr); }
+.dk-grid-pay { grid-template-columns: 1fr 112px; gap: 0 10px; }
 .dk-lbl { color: var(--dk-soft); }
+/* Dve krátke hodnoty na jednom riadku mriežky (číselný rad + pokladňa). */
+.dk-pairline { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(58px, 84px); gap: 8px; align-items: center; min-width: 0; }
+.dk-pairline:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }
 /* Bunka s otáznikom „Prečo?" — hodnota si drží celú šírku, otáznik sedí vedľa. */
 .dk-with-preco { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .dk-with-preco > .dk-pick, .dk-with-preco > .dk-cell { flex: 1; min-width: 0; }
@@ -102,7 +106,7 @@
 /* ---- inline bunka (Cell.dc.html) ---- */
 .dk-cell {
   display: block; width: 100%; min-width: 0;
-  border: 1px solid transparent; border-radius: 6px; padding: 3px 6px;
+  border: 1px solid transparent; border-radius: 5px; padding: 1px 6px;
   font: inherit; color: var(--dk-ink); background: transparent;
   font-variant-numeric: tabular-nums; text-align: inherit;
   cursor: text; outline: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -126,15 +130,24 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 .dk-pick { position: relative; min-width: 0; }
 .dk-pick.dk-open { z-index: 60; }
 .dk-pick-btn { cursor: pointer; }
+/* Zoznam žije v <body> (portál) — tabuľka položiek má vodorovný posun, ktorý by
+   ho inak orezal. Pozíciu počíta DcPick z rámčeka bunky. */
 .dk-pick-pop {
-  position: absolute; z-index: 70; top: calc(100% + 5px); left: -2px; min-width: 190px; max-width: 340px;
-  background: #fff; border: 1px solid var(--dk-border); border-radius: 10px;
+  position: fixed; z-index: 200; max-width: 340px;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 13px; color: #16201B;
+  background: #fff; border: 1px solid #E4E8E4; border-radius: 10px;
   box-shadow: 0 12px 32px -8px rgba(31, 41, 55, .18);
   padding: 5px; text-align: left; display: flex; flex-direction: column; gap: 1px;
-  animation: dkPop .14s ease both;
+  overflow: hidden; animation: dkPop .14s ease both;
 }
-/* Výber v pravej polovici mriežky by inak pretiekol mimo karty. */
-.dk-right + .dk-pick-pop, .dk-pick-pop.dk-pop-right { left: auto; right: -2px; }
+.dk-pick-pop * { box-sizing: border-box; }
+/* Ponuka „Upraviť položky" ostáva ukotvená pri tlačidle — nie je v portáli. */
+.dk-menu {
+  position: absolute; z-index: 80; top: calc(100% + 5px); right: 0; min-width: 200px;
+  background: #fff; border: 1px solid var(--dk-border); border-radius: 10px;
+  box-shadow: 0 12px 32px -8px rgba(31, 41, 55, .18);
+  padding: 5px; display: flex; flex-direction: column; gap: 1px; animation: dkPop .14s ease both;
+}
 .dk-pick-search {
   width: 100%; border: 1px solid var(--dk-border); border-radius: 7px; padding: 6px 9px;
   font: inherit; font-size: 12.5px; color: var(--dk-ink); outline: none; margin-bottom: 3px;
@@ -174,11 +187,11 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 .dk-switch.dk-on::after { left: 20px; }
 
 /* ---- položky dokladu ---- */
-.dk-items-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.dk-items-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .dk-items-title { font-weight: 600; color: var(--dk-pohoda); }
 .dk-items-off {
   background: var(--dk-panel); border: 1px solid var(--dk-line); border-radius: 11px;
-  padding: 14px 15px; color: var(--dk-soft); line-height: 1.6;
+  padding: 10px 12px; color: var(--dk-soft); line-height: 1.5;
 }
 .dk-items-off strong { font-weight: 600; color: var(--dk-ink); }
 /* Tabuľka má desať stĺpcov — v úzkom editore sa posúva sama, nikdy nerozťahuje
@@ -186,17 +199,22 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 .dk-items-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
 .dk-row {
   display: grid;
-  min-width: 600px;
-  grid-template-columns: 22px minmax(110px, 1.7fr) minmax(60px, .95fr) minmax(56px, .9fr) minmax(56px, .9fr)
-    minmax(44px, .6fr) minmax(52px, .75fr) minmax(52px, .75fr) minmax(70px, 1.25fr) 22px;
+  min-width: 520px;
+  grid-template-columns: 20px minmax(104px, 1.9fr) minmax(62px, .95fr) minmax(58px, .9fr)
+    minmax(42px, .55fr) minmax(50px, .8fr) minmax(50px, .8fr) minmax(68px, 1.25fr) 22px;
   gap: 6px; align-items: center;
 }
 .dk-row-head {
   font-size: 11.5px; color: var(--dk-soft);
-  padding: 0 0 7px; border-bottom: 1px solid var(--dk-line);
+  padding: 0 0 5px; border-bottom: 1px solid var(--dk-line);
 }
-.dk-row-item { padding: 9px 0; border-bottom: 1px solid var(--dk-line); }
-.dk-row-total { padding: 12px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Hlavička a súčtový riadok sa nesmú lámať na dva riadky — zalomenie pridá
+   výšku, kvôli ktorej sa editor prestane zmestiť na obrazovku. */
+.dk-row-head > span, .dk-row-total > span {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dk-row-item { padding: 3px 0; border-bottom: 1px solid var(--dk-line); }
+.dk-row-total { padding: 6px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .dk-row-no { color: var(--dk-muted); }
 .dk-neg, .dk-neg .dk-cell { color: var(--dk-err); }
 .dk-strong { font-weight: 600; }
@@ -211,18 +229,25 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
   display: grid; grid-template-columns: 110px minmax(0, 1fr) 84px minmax(0, 1fr) 84px minmax(0, 1fr);
   gap: 4px 10px; align-items: center;
   background: var(--dk-panel); border: 1px solid var(--dk-line); border-radius: 11px;
-  padding: 11px 13px; margin: 9px 0 0;
+  padding: 6px 10px; margin: 5px 0 0;
 }
 .dk-items-empty {
-  border: 1px dashed #D2D8D3; border-radius: 11px; padding: 18px;
+  border: 1px dashed #D2D8D3; border-radius: 11px; padding: 12px;
   text-align: center; color: var(--dk-soft); line-height: 1.55;
 }
+/* Odstránenie položky sedí v rozbalenom riadku, nie v hlavnom — hlavný riadok
+   má desať stĺpcov a ďalšie tlačidlo by ho pretlačilo do vodorovného posunu. */
+.dk-sub-del {
+  border: 1px solid var(--dk-border); border-radius: 8px; background: #fff; padding: 2px 10px;
+  font-family: inherit; font-size: 12px; color: var(--dk-soft); cursor: pointer; justify-self: end;
+}
+.dk-sub-del:hover { border-color: rgba(192, 57, 43, .45); color: var(--dk-err); background: #FBEBEA; }
 
 /* ---- rozpis DPH ---- */
 .dk-vat { display: grid; grid-template-columns: 82px 1fr 1fr 1fr 22px; gap: 8px; align-items: center; }
-.dk-vat-head { font-size: 11.5px; color: var(--dk-soft); padding-bottom: 8px; border-bottom: 1px solid var(--dk-line); }
-.dk-vat-row { padding: 7px 0; border-bottom: 1px solid var(--dk-line); font-variant-numeric: tabular-nums; }
-.dk-vat-total { padding: 11px 0 0; margin-top: 9px; border-top: 1px solid var(--dk-line); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dk-vat-head { font-size: 11.5px; color: var(--dk-soft); padding-bottom: 5px; border-bottom: 1px solid var(--dk-line); }
+.dk-vat-row { padding: 3px 0; border-bottom: 1px solid var(--dk-line); font-variant-numeric: tabular-nums; }
+.dk-vat-total { padding: 6px 0 0; margin-top: 4px; border-top: 1px solid var(--dk-line); font-weight: 600; font-variant-numeric: tabular-nums; }
 .dk-vat-del {
   display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px;
   background: transparent; color: var(--dk-faint); cursor: pointer; font-size: 14px; font-family: inherit;
@@ -245,7 +270,7 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 .dk-tag-warn { color: var(--dk-warn); background: rgba(180, 83, 9, .12); }
 .dk-pay-total { display: grid; grid-template-columns: 1fr 118px; gap: 10px; align-items: center; font-weight: 600; color: var(--dk-accent-dark); }
 .dk-pay-total span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-.dk-note { margin-top: 6px; font-size: 11px; color: var(--dk-faint); }
+.dk-note { margin-top: 3px; font-size: 10.5px; color: var(--dk-faint); }
 
 /* ===== „Prečo?" — pôvod zaúčtovania poľa =====
    Panel ostáva z pôvodného dizajnu; v hustej mriežke sa ukotvuje na bunku,

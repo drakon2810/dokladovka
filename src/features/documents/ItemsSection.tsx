@@ -252,7 +252,7 @@ export function ItemsSection({
             Upraviť položky
           </button>
           {menuOpen && (
-            <div className="dk-pick-pop dk-pop-right">
+            <div className="dk-menu">
               <button type="button" className="dk-pick-opt" onClick={addItem}><span className="dk-pick-tick" />Pridať položku</button>
               <button type="button" className="dk-pick-opt" onClick={zRozpisu}><span className="dk-pick-tick" />Položky z rozpisu DPH</button>
               <button type="button" className="dk-pick-opt" onClick={clearAll}><span className="dk-pick-tick" />Vymazať všetky položky</button>
@@ -273,13 +273,12 @@ export function ItemsSection({
         <div className="dk-items-scroll">
           <div className="dk-row dk-row-head">
             <span>#</span>
-            <span>Text položky / Názov položky</span>
+            <span>Text položky</span>
             <span className="dk-r">Celkom</span>
-            <span className="dk-r">Bez DPH</span>
             <span className="dk-r">Suma DPH</span>
             <span>DPH</span>
             <span>Členenie DPH</span>
-            <span>Kontrolný výkaz</span>
+            <span>Kontr. výkaz</span>
             <span>Predkontácia</span>
             <span />
           </div>
@@ -297,7 +296,6 @@ export function ItemsSection({
                     onCommit={(raw) => patch(item.id, { sumaSpolu: parseOpt(raw) }, 'sumaSpolu')}
                   />
                 </div>
-                {money(item.sumaBezDph, (raw) => patch(item.id, { sumaBezDph: parseOpt(raw) }, 'sumaBezDph'), (item.sumaBezDph ?? 0) < 0)}
                 {money(item.sumaDph, (raw) => patch(item.id, { sumaDph: parseOpt(raw) }, 'sumaDph'), (item.sumaDph ?? 0) < 0)}
                 <DcPick
                   value={item.sadzbaDph != null ? String(item.sadzbaDph) : undefined}
@@ -322,26 +320,33 @@ export function ItemsSection({
               {open[item.id] && (
                 <>
                   <div className="dk-sub">
+                    <span className="dk-lbl">Bez DPH</span>
+                    <DcCell inputMode="decimal" disabled={readOnly} value={item.sumaBezDph === undefined ? '' : String(item.sumaBezDph)} onCommit={(raw) => patch(item.id, { sumaBezDph: parseOpt(raw) }, 'sumaBezDph')} />
                     <span className="dk-lbl">Počet</span>
                     <DcCell inputMode="decimal" disabled={readOnly} value={item.mnozstvo === undefined ? '' : String(item.mnozstvo)} onCommit={(raw) => patch(item.id, { mnozstvo: parseOpt(raw) }, 'mnozstvo')} />
-                    <span className="dk-lbl">Jednotka</span>
-                    <DcPick value={item.jednotka} options={unitOpts(item.jednotka)} disabled={readOnly} onChange={(value) => patch(item.id, { jednotka: value || undefined })} />
                     <span className="dk-lbl">Jedn. cena</span>
                     <DcCell inputMode="decimal" disabled={readOnly} value={item.jednotkovaCenaBezDph === undefined ? '' : String(item.jednotkovaCenaBezDph)} onCommit={(raw) => patch(item.id, { jednotkovaCenaBezDph: parseOpt(raw) }, 'jednotkovaCenaBezDph')} />
                   </div>
                   <div className="dk-sub">
+                    <span className="dk-lbl">Jednotka</span>
+                    <DcPick value={item.jednotka} options={unitOpts(item.jednotka)} disabled={readOnly} onChange={(value) => patch(item.id, { jednotka: value || undefined })} />
                     <span className="dk-lbl">Stredisko</span>
                     <DcPick value={item.ucto?.strediskoId} options={strediskoOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { strediskoId: value })} />
                     <span className="dk-lbl">Činnosť</span>
                     <DcPick value={item.ucto?.cinnostId} options={cinnostOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { cinnostId: value })} />
+                  </div>
+                  <div className="dk-sub">
                     <span className="dk-lbl">Zákazka</span>
                     <DcPick value={item.ucto?.zakazkaId} options={zakazkaOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { zakazkaId: value })} />
+                    <span className="dk-lbl" />
+                    <span />
+                    <span className="dk-lbl" />
+                    {!readOnly && (
+                      <button type="button" className="dk-sub-del" onClick={() => removeItem(item.id)}>
+                        Odstrániť položku
+                      </button>
+                    )}
                   </div>
-                  {!readOnly && (
-                    <button type="button" className="dk-add" style={{ borderStyle: 'solid' }} onClick={() => removeItem(item.id)}>
-                      Odstrániť položku {index + 1}
-                    </button>
-                  )}
                 </>
               )}
             </div>
