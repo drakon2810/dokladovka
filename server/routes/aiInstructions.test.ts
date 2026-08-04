@@ -110,6 +110,28 @@ describe('pravidlá pre AI', () => {
     expect(pokynyPreModel(extrakcia)).toContain('platí pre doklady: MZDY');
   }, 120_000);
 
+  it('podrobné pravidlo na maximálnu dĺžku sa do promptu zmestí celé', async () => {
+    // Regresia: rozpočet bol 6 000 znakov, takže pravidlo pre rekapituláciu
+    // miezd (6 477 znakov) sa zahodilo celé a k modelu sa nikdy nedostalo.
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const dlheP = `Rozdeľ rozbor miezd na tri interné doklady. ${'Podrobný postup pre účtovníka. '.repeat(250)}`.slice(0, 8_000);
+    await database.query(
+      `INSERT INTO ai_instructions (id,scope,tenant_id,organization_id,nazov,text,faza)
+       VALUES ($1,'organization',$2,$3,'Rekapitulácia miezd',$4,'both')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, dlheP],
+    );
+    const pokyny = await nacitajPokyny(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, faza: 'extraction',
+    });
+    expect(pokyny.lokalne).toHaveLength(1);
+    const blok = pokynyPreModel(pokyny) ?? '';
+    // Do promptu ide celý text vrátane konca — nie orezaný začiatok.
+    expect(blok).toContain('Rozdeľ rozbor miezd na tri interné doklady.');
+    expect(blok).toContain(dlheP.slice(-60));
+  }, 120_000);
+
   it('vylepšenie pravidla pošle AI číselníky firmy a vzorový doklad, nič neukladá', async () => {
     const database = await createTestDatabase();
     databases.push(database);

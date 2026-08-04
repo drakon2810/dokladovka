@@ -19,7 +19,11 @@ export interface Pokyn {
  *  neohraničený text by sa premietol do ceny každej extrakcie. Nad limit sa
  *  pravidlá zahodia podľa priority (najnižšia priorita padá prvá) a vypíše sa
  *  koľko ich vypadlo. */
-const ROZPOCET_ZNAKOV = 6_000;
+// Rozpočet na celý blok pravidiel v prompte. Musí byť násobkom limitu jedného
+// pravidla (8 000 znakov v editore) — pravidlo, ktoré sa doň nezmestí, sa totiž
+// zahodí celé a účtovník sa o tom nedozvie. Podrobné pravidlo (rekapitulácia
+// miezd rozpísaná na tri doklady) má reálne cez 6 000 znakov.
+const ROZPOCET_ZNAKOV = 24_000;
 
 function bezDiakritiky(value: string): string {
   return value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('sk');
