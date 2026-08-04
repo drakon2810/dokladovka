@@ -130,6 +130,9 @@ export function normalizeExtractionResult(
       // návrh zaúčtovania blokovala validácia „chýba dátum dodania".
       datumDodania: result.taxDate ?? result.issueDate ?? fallbackDate,
       mena: currency,
+      // AI zhrnutie plnenia — predvyplní „Text dokladu", ktorý ide do POHODY
+      // ako text účtovného zápisu; účtovník ho môže prepísať.
+      textPolozky: result.documentSummary,
       rozpisDph: result.vatBreakdown.flatMap((row) => {
         const sadzba = Number(row.vatRate.replace(',', '.'));
         const zaklad = parseDecimal(row.base);

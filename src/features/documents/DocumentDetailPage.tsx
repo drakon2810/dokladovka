@@ -339,9 +339,9 @@ export function DocumentDetailPage() {
   const [pdfError, setPdfError] = useState(false);
   const [localFileUrl, setLocalFileUrl] = useState<string>();
   const [localFileLoading, setLocalFileLoading] = useState(false);
-  // Náhľad 42 % / editor 56 % podľa makety — účtovný zápis má viac stĺpcov než
-  // doklad, pri rovnakom delení sa tabuľka položiek nezmestí.
-  const [splitPercent, setSplitPercent] = useState(42);
+  // Náhľad 52 % / editor 46 % — doklad otvorený na predvolených 155 % je
+  // ~845 px široký a pri užšom náhľade ho editor vizuálne prekrýval.
+  const [splitPercent, setSplitPercent] = useState(52);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -982,12 +982,17 @@ export function DocumentDetailPage() {
       className="-m-1 space-y-3 border-l-[3px] p-1 pl-4"
       style={{ borderLeftColor: organization.farba }}
     >
-      {/* Jeden riadok: pri zalomení na dva zožral hlavičkový pruh celý priestor,
-          ktorý patrí účtovnému zápisu. Stredný blok sa preto smie zmenšovať. */}
-      <div className="flex items-center gap-3">
-        <Link className="btn shrink-0" to={`/doklady${location.search}`}>
-          ← {t('detail.spat')}
-        </Link>
+      {/* Hlavička je zložená do úzkeho pruhu a vysunie sa až pri prejdení myšou —
+          jej výška patrí náhľadu a editoru. Návrat do zoznamu je dole v akčnom
+          pruhu, takže sa bez hlavičky dá z dokladu kedykoľvek odísť. */}
+      <div className="group/head relative z-30">
+        <div className="flex h-3 cursor-pointer items-center justify-center" title={t('detail.titulok')}>
+          <span className="h-1 w-24 rounded-full bg-line transition-colors group-hover/head:bg-accent" />
+        </div>
+        {/* opacity + pointer-events namiesto visibility: skryté tlačidlá tak
+            ostávajú v tab-orderi a Tab hlavičku vysunie aj bez myši. */}
+        <div className="pointer-events-none absolute inset-x-0 top-full z-30 opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 group-hover/head:pointer-events-auto group-hover/head:opacity-100">
+          <div className="flex items-center gap-3 rounded-xl border border-line bg-surface p-3 shadow-lg">
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold leading-tight">{t('detail.titulok')}</h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-2">
@@ -1037,6 +1042,8 @@ export function DocumentDetailPage() {
           >
             {t('detail.nasledujuci')} →
           </button>
+        </div>
+          </div>
         </div>
       </div>
 
@@ -1537,12 +1544,17 @@ export function DocumentDetailPage() {
       )}
 
       <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-line/80 bg-surface/75 px-4 py-2 shadow-[0_-8px_24px_-16px_rgba(27,31,29,0.12)] backdrop-blur-md">
-        {dirty && (
-          <span className="anim-in mr-auto inline-flex items-center gap-1.5 text-xs text-amber-800">
-            <span className="h-[7px] w-[7px] rounded-full bg-amber-600" aria-hidden />
-            {t('detail.neulozeneZmeny')}
-          </span>
-        )}
+        <div className="mr-auto flex shrink-0 items-center gap-3">
+          <Link className="btn" to={`/doklady${location.search}`}>
+            ← {t('detail.spat')}
+          </Link>
+          {dirty && (
+            <span className="anim-in inline-flex items-center gap-1.5 text-xs text-amber-800">
+              <span className="h-[7px] w-[7px] rounded-full bg-amber-600" aria-hidden />
+              {t('detail.neulozeneZmeny')}
+            </span>
+          )}
+        </div>
         {draft.status === 'schvaleny' && role !== 'schvalovatel' && (
           <button
             type="button"

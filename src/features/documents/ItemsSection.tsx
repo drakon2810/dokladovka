@@ -40,6 +40,15 @@ interface ItemsSectionProps {
   onToggle: (enabled: boolean) => void;
   codeLists: ItemsCodeLists;
   onChange: (polozky: DocumentLineItem[]) => void;
+  /**
+   * Kódy z hlavičky dokladu (predkontácia, členenie DPH, KV). Položka bez
+   * vlastnej hodnoty ich preberá — presne tak ich zdedí aj export do POHODY
+   * (pohodaXml.ts) — a tabuľka ich preto ukazuje našedo ako predvolené.
+   */
+  headerUcto?: {
+    predkontacia?: string; clenenieDph?: string; clenenieKv?: string;
+    stredisko?: string; cinnost?: string; zakazka?: string;
+  };
   /** Číslo sekcie pri zvýraznení zdroja údajov, inak nezafarbené. */
   srcSection?: number;
   onHoverSrc?: (anchor?: string) => void;
@@ -135,8 +144,11 @@ export function rozpisZPoloziek(polozky: DocumentLineItem[]): VatBreakdownRow[] 
 }
 
 export function ItemsSection({
-  polozky, rozpisDph, mena, readOnly, enabled, onToggle, codeLists, onChange, srcSection, onHoverSrc,
+  polozky, rozpisDph, mena, readOnly, enabled, onToggle, codeLists, onChange, headerUcto, srcSection, onHoverSrc,
 }: ItemsSectionProps) {
+  /** Tooltip stĺpca s dedením: povie, čo položka prevezme z hlavičky. */
+  const zdedene = (nazov: string, index: number, kod?: string) =>
+    `${nazov} položky ${index + 1}${kod ? ` — bez vlastnej hodnoty platí hlavička dokladu: ${kod}` : ''}`;
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -302,10 +314,11 @@ export function ItemsSection({
                   options={rateOpts(item.sadzbaDph)} disabled={readOnly}
                   onChange={(value) => patch(item.id, { sadzbaDph: Number(value) as VatRate }, 'sadzbaDph')}
                 />
-                {/* title je zároveň prístupný názov — bez neho je pri hodnote „—" tlačidlo bezmenné. */}
-                <DcPick title={`Členenie DPH položky ${index + 1}`} value={item.ucto?.clenenieDphId} options={dphOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieDphId: value })} />
-                <DcPick title={`Kontrolný výkaz položky ${index + 1}`} value={item.ucto?.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieKvKod: value })} />
-                <DcPick title={`Predkontácia položky ${index + 1}`} value={item.ucto?.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { predkontaciaId: value })} />
+                {/* title je zároveň prístupný názov — bez neho je pri hodnote „—" tlačidlo bezmenné.
+                    Prázdna položka ukazuje našedo kód z hlavičky — ten pri exporte zdedí. */}
+                <DcPick title={zdedene('Členenie DPH', index, headerUcto?.clenenieDph)} placeholder={headerUcto?.clenenieDph ?? '—'} value={item.ucto?.clenenieDphId} options={dphOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieDphId: value })} />
+                <DcPick title={zdedene('Kontrolný výkaz', index, headerUcto?.clenenieKv)} placeholder={headerUcto?.clenenieKv ?? '—'} value={item.ucto?.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieKvKod: value })} />
+                <DcPick title={zdedene('Predkontácia', index, headerUcto?.predkontacia)} placeholder={headerUcto?.predkontacia ?? '—'} value={item.ucto?.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { predkontaciaId: value })} />
                 <button
                   type="button"
                   className="dk-caret"
@@ -331,13 +344,13 @@ export function ItemsSection({
                     <span className="dk-lbl">Jednotka</span>
                     <DcPick value={item.jednotka} options={unitOpts(item.jednotka)} disabled={readOnly} onChange={(value) => patch(item.id, { jednotka: value || undefined })} />
                     <span className="dk-lbl">Stredisko</span>
-                    <DcPick value={item.ucto?.strediskoId} options={strediskoOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { strediskoId: value })} />
+                    <DcPick title={zdedene('Stredisko', index, headerUcto?.stredisko)} placeholder={headerUcto?.stredisko ?? '—'} value={item.ucto?.strediskoId} options={strediskoOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { strediskoId: value })} />
                     <span className="dk-lbl">Činnosť</span>
-                    <DcPick value={item.ucto?.cinnostId} options={cinnostOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { cinnostId: value })} />
+                    <DcPick title={zdedene('Činnosť', index, headerUcto?.cinnost)} placeholder={headerUcto?.cinnost ?? '—'} value={item.ucto?.cinnostId} options={cinnostOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { cinnostId: value })} />
                   </div>
                   <div className="dk-sub">
                     <span className="dk-lbl">Zákazka</span>
-                    <DcPick value={item.ucto?.zakazkaId} options={zakazkaOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { zakazkaId: value })} />
+                    <DcPick title={zdedene('Zákazka', index, headerUcto?.zakazka)} placeholder={headerUcto?.zakazka ?? '—'} value={item.ucto?.zakazkaId} options={zakazkaOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { zakazkaId: value })} />
                     <span className="dk-lbl" />
                     <span />
                     <span className="dk-lbl" />

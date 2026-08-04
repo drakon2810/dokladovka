@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v3';
+export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v4';
 export const EXTRACTION_SCHEMA_VERSION = '2';
 export const SUPPORTED_VAT_RATES = [23, 21, 19, 12, 5, 0] as const;
 export const SUPPORTED_EXTRACTION_MIME_TYPES = [
@@ -73,6 +73,7 @@ export const extractionWireSchema = z.object({
   taxDate: nullableIsoDate,
   dueDate: nullableIsoDate,
   currency: nullableShortText,
+  documentSummary: nullableShortText,
   lineItems: z.array(lineItemWireSchema).max(500),
   vatBreakdown: z.array(z.object({
     vatRate: z.string().regex(/^-?\d+(?:[.,]\d+)?$/),
@@ -109,6 +110,8 @@ export interface ExtractionResult {
   taxDate?: string;
   dueDate?: string;
   currency?: string;
+  /** Krátky popis plnenia — ide do POHODY ako text účtovného zápisu. */
+  documentSummary?: string;
   lineItems: Array<{
     description?: string;
     quantity?: string;
@@ -164,6 +167,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
       taxDate: parsed.taxDate,
       dueDate: parsed.dueDate,
       currency: parsed.currency,
+      documentSummary: parsed.documentSummary,
       totalWithoutVat: parsed.totalWithoutVat,
       totalVat: parsed.totalVat,
       totalAmount: parsed.totalAmount,
@@ -198,7 +202,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),
   constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
   issueDate: z.string().optional(), taxDate: z.string().optional(), dueDate: z.string().optional(),
-  currency: z.string().optional(),
+  currency: z.string().optional(), documentSummary: z.string().optional(),
   lineItems: z.array(z.object({
     description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
     unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),

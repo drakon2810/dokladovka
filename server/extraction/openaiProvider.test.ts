@@ -15,6 +15,7 @@ function wireResult() {
     invoiceNumber: '2026-001', orderNumber: null, deliveryNoteNumber: null,
     variableSymbol: null, constantSymbol: null, specificSymbol: null,
     issueDate: '2026-07-14', taxDate: '2026-07-14', dueDate: '2026-07-28', currency: 'CZK',
+    documentSummary: 'Konzultačné služby',
     lineItems: [],
     vatBreakdown: [{ vatRate: '21', base: '100.00', vat: '21.00', total: '121.00' }],
     totalWithoutVat: '100.00', totalVat: '21.00', totalAmount: '121.00',

@@ -31,6 +31,14 @@
 }
 .dk-doc *, .dk-doc *::before, .dk-doc *::after { box-sizing: border-box; }
 
+/* Na širokej obrazovke editor vypĺňa celú výšku okna: šesť kariet sa mierne
+   roztiahne a sekcia Zdroj (nasleduje pod editorom) začína až pod ohybom —
+   po otvorení dokladu je vidno práve zaúčtovanie. */
+@media (min-width: 1280px) {
+  .dk-doc { min-height: calc(100vh - 5.5rem); }
+  .dk-doc > .dk-two { flex: 1; align-items: stretch; }
+}
+
 @keyframes dkPop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 .dk-card {
@@ -49,7 +57,7 @@
 }
 .dk-sep { height: 1px; background: var(--dk-line); margin: 5px 0; }
 
-/* ---- hlavička „Účtovný zápis v POHODE" ---- */
+/* ---- hlavička „Zaúčtovanie dokladu" ---- */
 .dk-head {
   display: flex; align-items: center; gap: 12px;
   background: #fff; border: 1px solid var(--dk-border); border-radius: 14px;

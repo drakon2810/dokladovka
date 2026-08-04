@@ -155,8 +155,9 @@ function vatRateName(sadzba: number | undefined): 'high' | 'low' | 'third' | 'no
 }
 
 /**
- * Riadky <inv:invoiceDetail> z položiek dokladu. Zaúčtovanie/členenie položky
- * s návratom na hlavičku; členenie KV DPH z hlavičky. Prázdne pole = bez rozpisu.
+ * Riadky <inv:invoiceDetail> z položiek dokladu. Zaúčtovanie, členenie DPH aj
+ * členenie KV položky s návratom na hlavičku — rovnako ako server
+ * (server/pohodaXml.ts). Prázdne pole = bez rozpisu.
  */
 function invoiceDetailLines(
   polozky: DocumentLineItem[] | undefined,
@@ -189,7 +190,8 @@ function invoiceDetailLines(
     lines.push('          </inv:homeCurrency>');
     if (accounting) lines.push(`          <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>`);
     if (clenenie) lines.push(`          <inv:classificationVAT><typ:ids>${escapeXml(clenenie)}</typ:ids></inv:classificationVAT>`);
-    if (header.kv) lines.push(`          <inv:classificationKVDPH><typ:ids>${escapeXml(header.kv)}</typ:ids></inv:classificationKVDPH>`);
+    const kv = item.ucto?.clenenieKvKod || header.kv;
+    if (kv) lines.push(`          <inv:classificationKVDPH><typ:ids>${escapeXml(kv)}</typ:ids></inv:classificationKVDPH>`);
     if (centre) lines.push(`          <inv:centre><typ:ids>${escapeXml(centre)}</typ:ids></inv:centre>`);
     lines.push('        </inv:invoiceItem>');
   }

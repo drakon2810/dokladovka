@@ -536,10 +536,10 @@ export function InvoicePanel({
 
   return (
     <div className="dk-doc">
-      {/* Účtovný zápis v POHODE */}
+      {/* Zaúčtovanie dokladu (účtovný zápis pre POHODU) */}
       <div className="dk-head">
         <span className="dk-head-mark">P</span>
-        <span className="dk-head-title">Účtovný zápis v POHODE</span>
+        <span className="dk-head-title">Zaúčtovanie dokladu</span>
         <div className="dk-head-actions">
           <button type="button" className="dk-btn dk-btn-ai" disabled={!canAi} onClick={applyAi} title="Vyplniť zaúčtovanie podľa pravidiel firmy a pamäte rozhodnutí">
             <IcoSpark />
@@ -698,6 +698,14 @@ export function InvoicePanel({
         enabled={itemsOn}
         onToggle={toggleItems}
         codeLists={itemsCodeLists}
+        headerUcto={{
+          predkontacia: codeLists.predkontacie.find((item) => item.id === ucto.predkontaciaId)?.kod,
+          clenenieDph: codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod,
+          clenenieKv: ucto.clenenieKvKod,
+          stredisko: codeLists.strediska.find((item) => item.id === ucto.strediskoId)?.kod,
+          cinnost: codeLists.cinnosti.find((item) => item.id === ucto.cinnostId)?.kod,
+          zakazka: codeLists.zakazky.find((item) => item.id === ucto.zakazkaId)?.kod,
+        }}
         onChange={setPolozky}
         srcSection={srcOn && src?.[ITEMS_PATH] ? 5 : undefined}
         onHoverSrc={onHoverSrc}
