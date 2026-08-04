@@ -33,6 +33,9 @@
   background: var(--src-tint);
   border-left: 3px solid var(--src-border);
   border-radius: 4px 6px 6px 4px;
+  /* 3px pásika kompenzuje užší padding (1px priehľadný rám + 6px padding
+     bežnej bunky = 7px) — zapnutie zvýraznenia text nikam neposúva. */
+  padding-left: 4px;
 }
 .dk-doc .dk-cell.dv-src:hover { background: color-mix(in srgb, var(--src-head) 14%, #fff); }
 /* Nízka istota sa nesie prerušovaným pásikom a odznakom, nie iným odtieňom. */

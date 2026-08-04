@@ -436,6 +436,10 @@ export function DocumentDetailPage() {
     if (dirty || draft.ucto.predkontaciaId || draft.ucto.clenenieDphId || draft.ucto.ciselnyRadId
       || draft.ucto.strediskoId || draft.ucto.clenenieKvKod) return;
     autoFilledFor.current = draft.id;
+    // KV chýbajúce v návrhu sa odvodí zo sekcie KV členenia DPH — rovnako ako
+    // tlačidlo „Automatické účtovanie" a ručný výber členenia.
+    const kvKod = suggestion.clenenieKvKod
+      ?? data?.codeLists.cleneniaDph.find((item) => item.id === suggestion.clenenieDphId)?.kvSekcia;
     setDraft((current) => current && {
       ...current,
       ucto: {
@@ -444,12 +448,12 @@ export function DocumentDetailPage() {
         ...(suggestion.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
         ...(suggestion.ciselnyRadId ? { ciselnyRadId: suggestion.ciselnyRadId } : {}),
         ...(suggestion.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
-        ...(suggestion.clenenieKvKod ? { clenenieKvKod: suggestion.clenenieKvKod } : {}),
+        ...(kvKod ? { clenenieKvKod: kvKod } : {}),
       },
     });
     setDirty(true);
     setAutoFilled(true);
-  }, [draft, dirty, role, suggestion]);
+  }, [data, draft, dirty, role, suggestion]);
 
   // Číselný rad nie je úsudok AI, ale nastavenie firmy (Nastavenia → Číselníky,
   // inak rad reálne používaný v POHODE). Predvyplní sa preto vždy, aj keď zvyšok

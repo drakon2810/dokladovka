@@ -385,11 +385,12 @@ export function InvoicePanel({
   const srcHover = (path: string) => (srcField(path)
     ? { onMouseEnter: () => onHoverSrc?.(path), onMouseLeave: () => onHoverSrc?.(undefined) }
     : {});
+  // Bez číselného chipu pri popise — posúval text a sekciu aj tak nesie
+  // farebný pásik hodnoty; čísla sekcií ostávajú na nadpisoch kariet.
   const srcLabel = (path: string, text: string) => {
     const field = srcField(path);
     return (
       <span className="dk-lbl" {...srcHover(path)}>
-        {field && !isEdited(path) ? <span className="dv-src-chip">{field.section}</span> : null}
         {text}
         {isEdited(path) && <span className="dv-src-upravene" title="Hodnotu prepísal účtovník"><IcoPencil /></span>}
         {isLow(path) && field?.confidence !== undefined && (
@@ -498,12 +499,16 @@ export function InvoicePanel({
   const canAi = !readOnly && suggestion != null && suggestion.source !== 'none' && Boolean(suggestion.predkontaciaId);
   const applyAi = () => {
     if (!suggestion) return;
+    // KV chýbajúce v návrhu sa odvodí zo sekcie KV zvoleného členenia DPH —
+    // rovnaká logika ako pri ručnom výbere členenia nižšie.
+    const kvKod = suggestion.clenenieKvKod
+      ?? codeLists.cleneniaDph.find((item) => item.id === suggestion.clenenieDphId)?.kvSekcia;
     updateUcto({
       predkontaciaId: suggestion.predkontaciaId,
       clenenieDphId: suggestion.clenenieDphId,
       ciselnyRadId: suggestion.ciselnyRadId,
       strediskoId: suggestion.strediskoId,
-      clenenieKvKod: suggestion.clenenieKvKod,
+      clenenieKvKod: kvKod,
     });
     setAiApplied(true);
   };
