@@ -15,6 +15,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Testy poradia elementov (pohodaXml.test.ts) čítajú oficiálne XSD schémy
+      # POHODY. Sú vendorované a gitignorované (agent/vendor/pohoda-xsd/, 1,3 MB
+      # od Stormware), takže v čistom checkoute chýbajú a `npm test` padal na
+      # ENOENT — CI bola preto červená od zavedenia tých testov.
+      - shell: pwsh
+        run: ./agent/scripts/fetch-pohoda-xsd.ps1
       - run: npm test
       - run: npm run build
       - run: docker build -t dokladovka:${{ github.sha }} .

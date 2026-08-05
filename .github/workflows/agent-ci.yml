@@ -13,6 +13,11 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet restore .\agent\Dokladovka.Agent.sln
+      # Schémy musia byť na disku už pred testami — csproj ich linkuje do outputu
+      # a AgentTests ich číta. Doteraz ich sťahoval až publish.ps1 o krok nižšie,
+      # takže `dotnet test` padal na chýbajúcom data.xsd.
+      - shell: pwsh
+        run: .\agent\scripts\fetch-pohoda-xsd.ps1
       - run: dotnet test .\agent\Dokladovka.Agent.sln --configuration Release
       - shell: pwsh
         run: .\agent\scripts\publish.ps1 -Runtime win-x64 -Version 0.1.0
