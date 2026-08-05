@@ -203,24 +203,40 @@ export function splitPostalAddress(value: unknown): { street?: string; city?: st
   return { street, city, zip };
 }
 
-/** typ:address partnera — prázdne prvky sa vynechávajú, krajina sa odvodí z IČ DPH. */
+/**
+ * Adresa dodávateľa po častiach. Ručne vyplnené polia (ulica/psc/obec/krajina)
+ * majú prednosť; kým sú undefined, odvodí sa ulica/PSČ/obec z voľnej `adresa`
+ * a krajina z IČ DPH — a keď je prázdne, z DIČ, lebo extrakcia zahraničný daňový
+ * identifikátor (DE813960018, ATU61252600) často uloží do poľa DIČ. Bez toho
+ * fallbacku POHODA importovala dodávateľa bez krajiny. Prázdny reťazec je vedomé
+ * vymazanie, preto `??` a nie `||`. Zhoda so src/data/xml/pohodaDataPack.ts.
+ */
+export function supplierAddressParts(supplier: Record<string, any>): {
+  ulica?: string; psc?: string; obec?: string; krajina?: string;
+} {
+  const split = splitPostalAddress(supplier.adresa);
+  return {
+    ulica: supplier.ulica ?? split.street,
+    psc: supplier.psc ?? split.zip,
+    obec: supplier.obec ?? split.city,
+    krajina: supplier.krajina ?? vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic),
+  };
+}
+
+/** typ:address partnera — prázdne prvky sa vynechávajú. */
 function partnerAddressXml(supplier: Record<string, any>): string {
-  const address = splitPostalAddress(supplier.adresa);
-  // Krajina sa odvodí z IČ DPH, a keď je prázdne, z DIČ — extrakcia zahraničný
-  // daňový identifikátor (DE813960018, ATU61252600) často uloží do poľa DIČ.
-  // Bez tohto fallbacku POHODA importovala dodávateľa bez krajiny.
-  const country = vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic);
+  const address = supplierAddressParts(supplier);
   // Limity podľa oficiálnej type.xsd: company 255, city 45, street 64, zip 15,
-  // ico 15, dic 18, icDph 18.
+  // ico 15, dic 18, icDph 18, country ids 32.
   const lines = [`<typ:company>${escapeXml(clamp(supplier.nazov, 255))}</typ:company>`];
-  if (address.city) lines.push(`<typ:city>${escapeXml(clamp(address.city, 45))}</typ:city>`);
-  if (address.street) lines.push(`<typ:street>${escapeXml(clamp(address.street, 64))}</typ:street>`);
-  if (address.zip) lines.push(`<typ:zip>${escapeXml(clamp(address.zip, 15))}</typ:zip>`);
+  if (address.obec) lines.push(`<typ:city>${escapeXml(clamp(address.obec, 45))}</typ:city>`);
+  if (address.ulica) lines.push(`<typ:street>${escapeXml(clamp(address.ulica, 64))}</typ:street>`);
+  if (address.psc) lines.push(`<typ:zip>${escapeXml(clamp(address.psc, 15))}</typ:zip>`);
   if (supplier.ico) lines.push(`<typ:ico>${escapeXml(identifier(supplier.ico, 15))}</typ:ico>`);
   if (supplier.dic) lines.push(`<typ:dic>${escapeXml(identifier(supplier.dic, 18))}</typ:dic>`);
   if (supplier.icDph) lines.push(`<typ:icDph>${escapeXml(identifier(supplier.icDph, 18))}</typ:icDph>`);
   // Krajina sa vypĺňa vždy (aj tuzemsko SK) — POHODA ju pri importe páruje na číselník krajín.
-  if (country) lines.push(`<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
+  if (address.krajina) lines.push(`<typ:country><typ:ids>${escapeXml(clamp(address.krajina, 32))}</typ:ids></typ:country>`);
   return `<typ:address>
           ${lines.join('\n          ')}
         </typ:address>`;

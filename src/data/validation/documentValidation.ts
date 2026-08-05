@@ -126,13 +126,20 @@ export function validateDocument(
   if (!['EUR', 'CZK', 'USD'].includes(extracted.mena)) {
     issues.push({ code: 'unsupported_currency', field: 'mena' });
   }
-  if (!['BV', 'MZDY'].includes(doc.typ) && extracted.rozpisDph.length === 0) {
+  // Mzdy a bankový výpis sa zaúčtujú aj bez rozpisu DPH — celá suma ide do
+  // priceNone (pohodaXml.ts). Server to tak vyhodnocuje tiež.
+  const smieBytBezRozpisu = ['BV', 'MZDY'].includes(doc.typ);
+  if (!smieBytBezRozpisu && extracted.rozpisDph.length === 0) {
     issues.push({ code: 'vat_breakdown_required', field: 'rozpisDph' });
   }
   if (extracted.rozpisDph.some((row) => !isVatRowConsistent(row))) {
     issues.push({ code: 'invalid_vat_row', field: 'rozpisDph' });
   }
-  if (!isTotalConsistent(extracted.rozpisDph, extracted.sumaSpolu)) {
+  // Prázdny rozpis pri mzdách nie je nesúlad, ale „bez DPH" — porovnávať nulu
+  // s celkovou sumou znamenalo, že mzdový doklad bez rozpisu sa nedal schváliť,
+  // hoci mu rozpis nikdy nechýbal.
+  if ((extracted.rozpisDph.length > 0 || !smieBytBezRozpisu)
+    && !isTotalConsistent(extracted.rozpisDph, extracted.sumaSpolu)) {
     issues.push({ code: 'total_mismatch', field: 'sumaSpolu' });
   }
   if (!Number.isFinite(extracted.sumaSpolu)) {

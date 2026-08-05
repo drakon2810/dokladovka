@@ -100,6 +100,9 @@
 .dk-grid-pair { grid-template-columns: 100px minmax(0, 1fr) 82px minmax(0, 1fr); }
 .dk-grid-pay { grid-template-columns: 1fr 112px; gap: 0 10px; }
 .dk-lbl { color: var(--dk-soft); }
+/* PSČ + obec + kód krajiny na jednom riadku mriežky — usporiadanie z POHODY.
+   76px je najmenšia šírka, do ktorej sa „811 01" zmestí bez orezania. */
+.dk-addrline { display: grid; grid-template-columns: 76px minmax(0, 1fr) 44px; gap: 8px; align-items: center; min-width: 0; }
 /* Dve krátke hodnoty na jednom riadku mriežky (číselný rad + pokladňa). */
 .dk-pairline { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(58px, 84px); gap: 8px; align-items: center; min-width: 0; }
 .dk-pairline:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }

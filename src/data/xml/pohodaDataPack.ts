@@ -80,24 +80,47 @@ export function splitPostalAddress(value: string | undefined): { street?: string
   return { street, city, zip };
 }
 
-/** Riadky typ:address partnera — prázdne prvky sa vynechávajú, krajina z IČ DPH. */
+export interface SupplierAddress {
+  ulica?: string;
+  psc?: string;
+  obec?: string;
+  krajina?: string;
+}
+
+/**
+ * Adresa dodávateľa po častiach. Ručne vyplnené polia majú prednosť; kým sú
+ * undefined, odvodí sa ulica/PSČ/obec z voľnej `adresa` a krajina z IČ DPH
+ * (a keď je prázdne, z DIČ — extrakcia zahraničný daňový identifikátor
+ * DE813960018 často uloží do DIČ). Prázdny reťazec je vedomé vymazanie, preto
+ * `??` a nie `||`. Musí zostať v zhode so server/pohodaXml.ts.
+ */
+export function supplierAddressParts(
+  supplier: SupplierAddress & { dic?: string; icDph?: string; adresa?: string },
+): SupplierAddress {
+  const split = splitPostalAddress(supplier.adresa);
+  return {
+    ulica: supplier.ulica ?? split.street,
+    psc: supplier.psc ?? split.zip,
+    obec: supplier.obec ?? split.city,
+    krajina: supplier.krajina ?? vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic),
+  };
+}
+
+/** Riadky typ:address partnera — prázdne prvky sa vynechávajú. */
 function partnerAddressLines(
-  supplier: { nazov: string; ico?: string; dic?: string; icDph?: string; adresa?: string },
+  supplier: SupplierAddress & { nazov: string; ico?: string; dic?: string; icDph?: string; adresa?: string },
   indent: string,
 ): string[] {
-  const address = splitPostalAddress(supplier.adresa);
-  // Krajina z IČ DPH, a keď je prázdne, z DIČ — extrakcia zahraničný daňový
-  // identifikátor (DE813960018) často uloží do DIČ. Zhoda so server/pohodaXml.ts.
-  const country = vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic);
+  const address = supplierAddressParts(supplier);
   const lines = [`${indent}<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
-  if (address.city) lines.push(`${indent}<typ:city>${escapeXml(address.city)}</typ:city>`);
-  if (address.street) lines.push(`${indent}<typ:street>${escapeXml(address.street)}</typ:street>`);
-  if (address.zip) lines.push(`${indent}<typ:zip>${escapeXml(address.zip)}</typ:zip>`);
+  if (address.obec) lines.push(`${indent}<typ:city>${escapeXml(address.obec)}</typ:city>`);
+  if (address.ulica) lines.push(`${indent}<typ:street>${escapeXml(address.ulica)}</typ:street>`);
+  if (address.psc) lines.push(`${indent}<typ:zip>${escapeXml(address.psc)}</typ:zip>`);
   if (supplier.ico) lines.push(`${indent}<typ:ico>${escapeXml(supplier.ico)}</typ:ico>`);
   if (supplier.dic) lines.push(`${indent}<typ:dic>${escapeXml(supplier.dic)}</typ:dic>`);
   if (supplier.icDph) lines.push(`${indent}<typ:icDph>${escapeXml(supplier.icDph.replace(/\s+/g, ''))}</typ:icDph>`);
   // Krajina sa vypĺňa vždy (aj tuzemsko SK) — POHODA ju pri importe páruje na číselník krajín.
-  if (country) lines.push(`${indent}<typ:country><typ:ids>${country}</typ:ids></typ:country>`);
+  if (address.krajina) lines.push(`${indent}<typ:country><typ:ids>${escapeXml(address.krajina)}</typ:ids></typ:country>`);
   return lines;
 }
 

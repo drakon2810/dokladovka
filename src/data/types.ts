@@ -323,7 +323,18 @@ export interface DocumentExtractedData {
     ico?: string;
     dic?: string;
     icDph?: string;
+    /** Voľná adresa z extrakcie — zdroj pravdy len dokým účtovník neupraví časti nižšie. */
     adresa?: string;
+    /**
+     * Adresa po častiach ako v POHODE. Kým sú undefined, odvodia sa z `adresa`
+     * (splitPostalAddress) a krajina z IČ DPH; po ručnej úprave sa zapíšu všetky
+     * štyri naraz — aj prázdne — takže vymazaná časť sa už nedoplní späť.
+     */
+    ulica?: string;
+    psc?: string;
+    obec?: string;
+    /** ISO kód krajiny (SK, CZ, DE) — POHODA ho páruje na číselník krajín. */
+    krajina?: string;
     iban?: string;
     bic?: string;
   };

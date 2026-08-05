@@ -275,6 +275,19 @@ describe('buildDataPack — krajina a rozpis na položky', () => {
     expect(xml).toContain('<typ:country><typ:ids>SK</typ:ids></typ:country>');
   });
 
+  it('ručne upravené časti adresy prebijú voľnú adresu aj odvodenú krajinu', () => {
+    const doc = mkDoc();
+    doc.extracted.dodavatel.icDph = 'SK2020273893';
+    doc.extracted.dodavatel.adresa = 'Riazanská 62, 811 01 Bratislava';
+    // Vymazaná ulica (prázdny reťazec) sa nesmie doplniť späť z voľnej adresy.
+    Object.assign(doc.extracted.dodavatel, { ulica: '', psc: '900 27', obec: 'Bernolakovo', krajina: 'CZ' });
+    const xml = buildDataPack(ORG, [doc], CODE_LISTS);
+    expect(xml).not.toContain('<typ:street>');
+    expect(xml).toContain('<typ:zip>900 27</typ:zip>');
+    expect(xml).toContain('<typ:city>Bernolakovo</typ:city>');
+    expect(xml).toContain('<typ:country><typ:ids>CZ</typ:ids></typ:country>');
+  });
+
   it('doklad bez položiek nemá invoiceDetail', () => {
     const xml = buildDataPack(ORG, [mkDoc()], CODE_LISTS_S);
     expect(xml).not.toContain('<inv:invoiceDetail>');

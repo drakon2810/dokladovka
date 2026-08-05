@@ -13,6 +13,7 @@ import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { radyPreTyp } from '../../data/pohoda/agendas';
 import { lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
+import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { ItemsSection, fmtMoney, parseNum, parseOpt, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
@@ -50,13 +51,14 @@ interface InvoicePanelProps {
   exportDisabledReason?: string;
   /** „Rozdeliť doklad“ v ponuke položiek — dialóg otvára detail dokladu. */
   onSplit?: () => void;
-  /** Koľko častí toho istého rozdeleného súboru ide do rovnakého radu pred týmto
-   *  dokladom. Bez toho by všetky sľubovali to isté číslo z POHODY. */
-  radOdstup?: number;
+  /** Koľko ďalších dokladov ešte čaká na číslo z toho istého radu. Kým čaká
+   *  aspoň jeden, konkrétne číslo sa sľúbiť nedá — rozhodne poradie prenosu. */
+  cakajuceVRade?: number;
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
   updateSupplier: (key: keyof DocumentExtractedData['dodavatel'], value: string) => void;
+  updateSupplierAddress: (patch: { ulica?: string; psc?: string; obec?: string; krajina?: string }) => void;
 }
 
 /** Typ dokladu vrátane smeru pokladne — POHODA ich rozlišuje ako samostatné agendy. */
@@ -158,11 +160,14 @@ const LOW_CONFIDENCE = 0.5;
 
 export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
-  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, radOdstup = 0,
-  setTyp, updateUcto, updateExtracted, updateSupplier,
+  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, cakajuceVRade = 0,
+  setTyp, updateUcto, updateExtracted, updateSupplier, updateSupplierAddress,
 }: InvoicePanelProps) {
   const ex = draft.extracted;
   const dod = ex.dodavatel;
+  // Ulica/PSČ/obec/krajina ako v POHODE. Kým ich účtovník neupravil, odvodia sa
+  // z voľnej adresy z extrakcie — presne tak, ako ich uvidí export do POHODY.
+  const adr = supplierAddressParts(dod);
   const ucto = draft.ucto;
 
   const [itemsOn, setItemsOn] = useState((ex.polozky ?? []).length > 0);
@@ -427,7 +432,13 @@ export function InvoicePanel({
     ? ponukaRadov
     : [...ponukaRadov, ...codeLists.ciselneRady.filter((item) => item.id === ucto.ciselnyRadId)];
   const vybranyRad = codeLists.ciselneRady.find((item) => item.id === ucto.ciselnyRadId);
-  const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo, radOdstup);
+  // Prvé voľné číslo radu. Keď naň čakajú aj iné doklady, je to spodná hranica,
+  // nie sľub — POHODA pridelí najbližšie voľné až v okamihu prenosu.
+  const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo);
+  const cisloJeIste = cakajuceVRade === 0;
+  const cisloTitle = cisloJeIste
+    ? 'Odhad z posledného čísla číselného radu v POHODE. Skutočné číslo pridelí POHODA až pri prenose.'
+    : `Na tento rad čaká ešte ${cakajuceVRade} ${cakajuceVRade === 1 ? 'ďalší doklad' : 'ďalších dokladov'}. POHODA prideľuje najbližšie voľné číslo v okamihu prenosu, takže o poradí rozhoduje to, ktorý doklad prenesiete skôr.`;
 
   const kvOpts: DcOption[] = CLENENIE_KV_KODY.map((kod) => ({ value: kod, label: KV_LABEL[kod] ?? kod, title: KV_LABEL[kod] ?? kod }));
   const menaOpts: DcOption[] = [
@@ -575,8 +586,9 @@ export function InvoicePanel({
               Doklad bude zaúčtovaný do POHODY v režime <strong>{rezim}</strong>
               {/* Skutočné číslo prideľuje POHODA až pri prenose; toto je odhad
                   z posledného čísla radu, ktoré priniesol Mostík. */}
-              {dalsieCislo && (
-                <> a dostane číslo <strong className="tnum" title="Odhad z posledného čísla číselného radu v POHODE. Skutočné číslo pridelí POHODA až pri prenose.">{dalsieCislo}</strong></>
+              {dalsieCislo && (cisloJeIste
+                ? <> a dostane číslo <strong className="tnum" title={cisloTitle}>{dalsieCislo}</strong></>
+                : <> a dostane ďalšie voľné číslo radu — od <strong className="tnum" title={cisloTitle}>{dalsieCislo}</strong></>
               )}.
             </span>
           )}
@@ -597,7 +609,7 @@ export function InvoicePanel({
             <div className="dk-pairline">
               <DcPick
                 value={ucto.ciselnyRadId} options={toOpts(radOpts)} disabled={readOnly} onMostikSync={syncMostik}
-                title={dalsieCislo ? `Ďalšie číslo v POHODE: ${dalsieCislo}` : undefined}
+                title={dalsieCislo ? `${cisloJeIste ? 'Ďalšie číslo v POHODE' : 'Prvé voľné číslo v POHODE'}: ${dalsieCislo}` : undefined}
                 onChange={(value) => updateUcto({ ciselnyRadId: value })}
               />
               {jePokladna && (
@@ -661,8 +673,16 @@ export function InvoicePanel({
             <DcCell value={dod.icDph ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.icDph')} onCommit={(raw) => updateSupplier('icDph', raw)} />
             {srcLabel('dodavatel.nazov', 'Firma')}
             <DcCell value={dod.nazov ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.nazov')} onCommit={(raw) => updateSupplier('nazov', raw)} />
-            {srcLabel('dodavatel.adresa', 'Adresa')}
-            <DcCell value={dod.adresa ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplier('adresa', raw)} />
+            {srcLabel('dodavatel.adresa', 'Ulica')}
+            <DcCell value={adr.ulica ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplierAddress({ ulica: raw })} />
+            {/* PSČ, obec a krajina na jednom riadku ako v POHODE — karta by inak
+                prerástla susednú „Základné informácie" o tri riadky. */}
+            {srcLabel('dodavatel.adresa', 'PSČ, Obec')}
+            <div className="dk-addrline">
+              <DcCell value={adr.psc ?? ''} disabled={readOnly} title="PSČ" srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplierAddress({ psc: raw })} />
+              <DcCell value={adr.obec ?? ''} disabled={readOnly} title="Obec" srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplierAddress({ obec: raw })} />
+              <DcCell value={adr.krajina ?? ''} disabled={readOnly} title="Kód krajiny pre číselník POHODY (SK, CZ, DE…)" onCommit={(raw) => updateSupplierAddress({ krajina: raw })} />
+            </div>
           </div>
           <div className="dk-sep" />
           <div className="dk-grid dk-grid-pair">

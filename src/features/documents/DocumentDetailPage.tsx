@@ -42,6 +42,7 @@ import type {
   VatBreakdownRow,
 } from '../../data/types';
 import { CLENENIE_KV_KODY } from '../../data/types';
+import { cisloMzdovehoDokladu, pocetCakajucichVRade } from '../../data/pohoda/numbering';
 import {
   ConfidenceIndicator,
   Modal,
@@ -61,6 +62,7 @@ import {
   vatBreakdownTotal,
 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
+import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { t, type SkKey } from '../../i18n/sk';
 import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
@@ -356,6 +358,7 @@ export function DocumentDetailPage() {
   const [textLayerTick, setTextLayerTick] = useState(0);
   const autoFilledFor = useRef<string>();
   const radFilledFor = useRef<string>();
+  const cisloFilledFor = useRef<string>();
   const splitRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -369,6 +372,7 @@ export function DocumentDetailPage() {
     setAutoFilled(false);
     autoFilledFor.current = undefined;
     radFilledFor.current = undefined;
+    cisloFilledFor.current = undefined;
     setPageNumber(1);
     setPageCount(0);
     setZoom(DEFAULT_ZOOM);
@@ -434,25 +438,25 @@ export function DocumentDetailPage() {
     if (suggestion.documentId !== draft.id || autoFilledFor.current === draft.id) return;
     if (role === 'schvalovatel') return; // read-only rola koncept nemení
     if (!['extrahovany', 'na_kontrole'].includes(draft.status)) return;
-    // Nič sa neprepisuje: koncept musí byť nedotknutý a zaúčtovanie úplne prázdne.
-    if (dirty || draft.ucto.predkontaciaId || draft.ucto.clenenieDphId || draft.ucto.ciselnyRadId
-      || draft.ucto.strediskoId || draft.ucto.clenenieKvKod) return;
-    autoFilledFor.current = draft.id;
+    // Nič sa neprepisuje: koncept musí byť nedotknutý a dopĺňajú sa len prázdne
+    // polia. Podmienka „zaúčtovanie úplne prázdne" tu bola dovtedy, kým doklad
+    // prichádzal bez zaúčtovania — odkedy si členenie DPH a číselný rad nesie
+    // z pravidla, zhodila celé predvyplnenie a predkontácia ostávala prázdna.
+    if (dirty) return;
     // KV chýbajúce v návrhu sa odvodí zo sekcie KV členenia DPH — rovnako ako
     // tlačidlo „Automatické účtovanie" a ručný výber členenia.
     const kvKod = suggestion.clenenieKvKod
       ?? data?.codeLists.cleneniaDph.find((item) => item.id === suggestion.clenenieDphId)?.kvSekcia;
-    setDraft((current) => current && {
-      ...current,
-      ucto: {
-        ...current.ucto,
-        ...(suggestion.predkontaciaId ? { predkontaciaId: suggestion.predkontaciaId } : {}),
-        ...(suggestion.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
-        ...(suggestion.ciselnyRadId ? { ciselnyRadId: suggestion.ciselnyRadId } : {}),
-        ...(suggestion.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
-        ...(kvKod ? { clenenieKvKod: kvKod } : {}),
-      },
-    });
+    const doplnene = {
+      ...(suggestion.predkontaciaId && !draft.ucto.predkontaciaId ? { predkontaciaId: suggestion.predkontaciaId } : {}),
+      ...(suggestion.clenenieDphId && !draft.ucto.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
+      ...(suggestion.ciselnyRadId && !draft.ucto.ciselnyRadId ? { ciselnyRadId: suggestion.ciselnyRadId } : {}),
+      ...(suggestion.strediskoId && !draft.ucto.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
+      ...(kvKod && !draft.ucto.clenenieKvKod ? { clenenieKvKod: kvKod } : {}),
+    };
+    autoFilledFor.current = draft.id;
+    if (Object.keys(doplnene).length === 0) return;
+    setDraft((current) => current && { ...current, ucto: { ...current.ucto, ...doplnene } });
     setDirty(true);
     setAutoFilled(true);
   }, [data, draft, dirty, role, suggestion]);
@@ -474,6 +478,25 @@ export function DocumentDetailPage() {
     });
     setDirty(true);
   }, [draft, dirty, role, suggestion]);
+
+  // Mzdy nemajú na páske číslo dokladu — účtovník ho píše ako kód číselného radu
+  // + mesiac dokladu (26MZD03). Dopĺňa sa len do prázdneho poľa a až keď je rad
+  // známy (predvyplní ho efekt vyššie), takže ručnú hodnotu nikdy neprepíše.
+  useEffect(() => {
+    if (!draft || draft.typ !== 'MZDY' || cisloFilledFor.current === draft.id) return;
+    if (role === 'schvalovatel') return;
+    if (!['extrahovany', 'na_kontrole'].includes(draft.status)) return;
+    if (String(draft.extracted.cisloFaktury ?? '').trim()) return;
+    const radKod = data?.codeLists.ciselneRady.find((item) => item.id === draft.ucto.ciselnyRadId)?.kod;
+    const cislo = cisloMzdovehoDokladu(radKod, draft.extracted.datumVystavenia);
+    if (!cislo) return;
+    cisloFilledFor.current = draft.id;
+    setDraft((current) => current && {
+      ...current,
+      extracted: { ...current.extracted, cisloFaktury: cislo },
+    });
+    setDirty(true);
+  }, [data, draft, role]);
 
   // DPH poradca sa prepočítava na serveri — po každej uloženej verzii dokladu
   // sa načíta znova, aby varovania zodpovedali aktuálnemu zaúčtovaniu.
@@ -726,12 +749,14 @@ export function DocumentDetailPage() {
 
   // Časti rozdeleného súboru sú už načítané v snapshote — stačí ich vyfiltrovať.
   const casti = splitGroup(draft, data.documents);
-  // Odhad čísla z POHODY počíta len s posledným číslom radu, takže tri časti
-  // jedného rozboru miezd sľubovali všetky 26MZD013. Rátame, koľko predošlých
-  // častí ide do toho istého radu — iné rady si číslujú nezávisle.
-  const radOdstup = casti
-    .slice(0, Math.max(0, casti.findIndex((cast) => cast.id === draft.id)))
-    .filter((cast) => cast.ucto.ciselnyRadId === draft.ucto.ciselnyRadId).length;
+  // Koľko ďalších dokladov ešte čaká na číslo z toho istého radu — detail podľa
+  // toho ukáže buď konkrétne číslo, alebo len spodnú hranicu „od …".
+  const cakajuceVRade = pocetCakajucichVRade(
+    { id: draft.id, orgId: draft.orgId, ciselnyRadId: draft.ucto.ciselnyRadId },
+    data.documents.map((item) => ({
+      id: item.id, orgId: item.orgId, status: item.status, ciselnyRadId: item.ucto.ciselnyRadId,
+    })),
+  );
   const hasAttachedFile = Boolean(draft.zdroj.localFileKey || draft.pdfUrl);
   const fileUrl = draft.zdroj.localFileKey ? localFileUrl : draft.pdfUrl || undefined;
   const imagePreview = ['image/jpeg', 'image/png', 'image/webp'].includes(draft.zdroj.mimeType ?? '');
@@ -811,6 +836,39 @@ export function DocumentDetailPage() {
         dodavatel: { ...current.extracted.dodavatel, [key]: value || undefined },
       },
     }));
+  };
+
+  /**
+   * Adresa sa ukladá po častiach naraz — vrátane prázdnych. Keby sa zapisovala
+   * len upravená časť, ostatné by ostali undefined a `supplierAddressParts` by
+   * ich pri exporte znovu doplnil z pôvodnej voľnej `adresa`, takže vymazaná
+   * ulica by sa vrátila. `adresa` sa drží v súlade — číta ju párovanie partnera
+   * aj kontext pre AI.
+   */
+  const updateSupplierAddress = (patch: {
+    ulica?: string; psc?: string; obec?: string; krajina?: string;
+  }) => {
+    markDirty((current) => {
+      const dodavatel = current.extracted.dodavatel;
+      const parts = { ...supplierAddressParts(dodavatel), ...patch };
+      const ulica = parts.ulica ?? '';
+      const psc = parts.psc ?? '';
+      const obec = parts.obec ?? '';
+      return {
+        ...current,
+        extracted: {
+          ...current.extracted,
+          dodavatel: {
+            ...dodavatel,
+            ulica,
+            psc,
+            obec,
+            krajina: (parts.krajina ?? '').toUpperCase(),
+            adresa: [ulica, [psc, obec].filter(Boolean).join(' ')].filter(Boolean).join(', ') || undefined,
+          },
+        },
+      };
+    });
   };
 
   const updateExtracted = <K extends keyof DocumentExtractedData>(
@@ -1375,7 +1433,7 @@ export function DocumentDetailPage() {
             }}
             suggestion={suggestion}
             autoFilled={autoFilled}
-            radOdstup={radOdstup}
+            cakajuceVRade={cakajuceVRade}
             src={srcMap}
             srcEdited={srcEdited}
             srcOn={srcOn}
@@ -1396,6 +1454,7 @@ export function DocumentDetailPage() {
             updateUcto={updateUcto}
             updateExtracted={updateExtracted}
             updateSupplier={updateSupplier}
+            updateSupplierAddress={updateSupplierAddress}
           />
 
           <Section title={t('detail.zdroj')}>

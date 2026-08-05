@@ -505,6 +505,21 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
               WHERE id=$3 AND tenant_id=$4 AND organization_id=$5`,
             [job.id, JSON.stringify([{ ts: new Date().toISOString(), user: 'POHODA', akcia: `Prenos potvrdený${item.pohodaNumber ? ` č. ${item.pohodaNumber}` : ''}` }]), item.documentId, agent.tenant_id, job.organization_id],
           );
+          // Skutočné číslo pridelila POHODA — posunie ním číselný rad dokladu.
+          // Bez toho odhad „dostane číslo …" vychádzal z posledného stiahnutia
+          // číselníkov a po každom prenose zaostával o prenesené doklady: účtovník
+          // videl číslo, ktoré POHODA už použila. Porovnáva sa číslicová časť,
+          // aby prenos mimo poradia rad nikdy nevrátil späť.
+          if (item.pohodaNumber) {
+            await tx.query(
+              `UPDATE code_list_items SET last_number=$1, updated_at=now()
+                WHERE tenant_id=$2 AND organization_id=$3 AND kind='ciselneRady'
+                  AND id=(SELECT accounting->>'ciselnyRadId' FROM documents WHERE id=$4 AND tenant_id=$2)
+                  AND COALESCE(NULLIF(regexp_replace(COALESCE(last_number, ''), '\\D', '', 'g'), ''), '0')::numeric
+                    < COALESCE(NULLIF(regexp_replace($1, '\\D', '', 'g'), ''), '0')::numeric`,
+              [item.pohodaNumber, agent.tenant_id, job.organization_id, item.documentId],
+            );
+          }
         } else if (item.state === 'error') {
           await tx.query(
             `UPDATE documents SET status='chyba', history=history || $1::jsonb, updated_at=now()

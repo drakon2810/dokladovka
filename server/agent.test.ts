@@ -216,13 +216,47 @@ describe('agent backend contour', () => {
     const foreign = await app.inject({ method: 'GET', url: `/api/agent/documents/${randomUUID()}/file`, headers: agentHeaders });
     expect(foreign.statusCode).toBe(404);
 
-    const resultPayload = { exportJobId, perDocument: [{ documentId, state: 'ok', pohodaNumber: 'FP260001' }], rawResponseMeta: { responsePackState: 'ok' } };
+    const resultPayload = { exportJobId, perDocument: [{ documentId, state: 'ok', pohodaNumber: '26FP2026301' }], rawResponseMeta: { responsePackState: 'ok' } };
     const result = await app.inject({ method: 'POST', url: '/api/agent/export-results', headers: agentHeaders, payload: resultPayload });
     expect(result.json()).toMatchObject({ accepted: true, idempotent: false, status: 'confirmed' });
     const repeated = await app.inject({ method: 'POST', url: '/api/agent/export-results', headers: agentHeaders, payload: resultPayload });
     expect(repeated.json()).toMatchObject({ accepted: true, idempotent: true, status: 'confirmed' });
     const document = await database.query<{ status: string; export_id: string } & Record<string, unknown>>('SELECT status, export_id FROM documents WHERE id=$1', [documentId]);
     expect(document.rows[0]).toEqual({ status: 'exportovany', export_id: exportJobId });
+
+    // Skutočné číslo z POHODY posunulo číselný rad — odhad ďalšieho čísla už
+    // nevychádza zo zastaraného stiahnutia číselníkov.
+    const radPoPrenose = async () => (await database.query<{ last_number: string } & Record<string, unknown>>(
+      'SELECT last_number FROM code_list_items WHERE id=$1', [syncedIds.ciselneRady],
+    )).rows[0].last_number;
+    expect(await radPoPrenose()).toBe('26FP2026301');
+
+    // Prenos mimo poradia prinesie nižšie číslo — rad sa nesmie vrátiť späť,
+    // inak by web sľuboval číslo, ktoré POHODA už použila.
+    const druhyId = randomUUID();
+    await database.query(
+      `INSERT INTO documents
+        (id,tenant_id,organization_id,document_type,status,processing_status,source,extracted,accounting,
+         confidence,total_amount,currency,version,approved_version,approved_snapshot)
+       VALUES ($1,$2,$3,'FP','schvaleny','ready_for_review','{}'::jsonb,$4::jsonb,$5::jsonb,1,123,'EUR',1,1,$6::jsonb)`,
+      [druhyId, seeded.tenantId, seeded.organizationId, JSON.stringify(snapshot.extracted), JSON.stringify(snapshot.ucto), JSON.stringify(snapshot)],
+    );
+    const druhyExport = await app.inject({
+      method: 'POST', url: '/api/mostik/export-jobs', headers: browserHeaders,
+      payload: { organizationId: seeded.organizationId, documentIds: [druhyId], idempotencyKey: 'test-export-3' },
+    });
+    expect(druhyExport.statusCode, druhyExport.body).toBe(201);
+    await app.inject({ method: 'GET', url: `/api/agent/export-queue?organizationId=${seeded.organizationId}`, headers: agentHeaders });
+    const spatny = await app.inject({
+      method: 'POST', url: '/api/agent/export-results', headers: agentHeaders,
+      payload: {
+        exportJobId: druhyExport.json().id as string,
+        perDocument: [{ documentId: druhyId, state: 'ok', pohodaNumber: '26FP2026299' }],
+        rawResponseMeta: { responsePackState: 'ok' },
+      },
+    });
+    expect(spatny.json()).toMatchObject({ accepted: true, status: 'confirmed' });
+    expect(await radPoPrenose()).toBe('26FP2026301');
 
     await app.close();
   }, 90_000);

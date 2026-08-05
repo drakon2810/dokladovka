@@ -76,9 +76,12 @@ export interface ZauctovanieZPravidla {
 /** Hlavičkové zaúčtovanie dokladu podľa kódov, ktoré model opísal z pravidla. */
 export function zauctovanieZKodov(
   index: CodeIndex,
-  zdroj: Pick<ExtractionResult, 'accountCode' | 'vatClassificationCode' | 'numberSeriesCode'>,
+  zdroj: Pick<ExtractionResult, 'accountCode' | 'vatClassificationCode' | 'vatControlStatementCode' | 'numberSeriesCode'>,
 ): ZauctovanieZPravidla {
-  const kv = String(zdroj.vatClassificationCode ?? '').trim().toUpperCase();
+  // Sekcia KV má vlastné pole — doklad má bežne obidve naraz („UN" ako členenie
+  // DPH a „KN" do kontrolného výkazu). Kým bolo pole jedno, KN sa nedalo poslať
+  // bez toho, aby vypadlo členenie. Fallback drží behy uložené pred zmenou.
+  const kv = String(zdroj.vatControlStatementCode ?? zdroj.vatClassificationCode ?? '').trim().toUpperCase();
   return {
     ...(najdiKod(index, 'predkontacie', zdroj.accountCode) ? { predkontaciaId: najdiKod(index, 'predkontacie', zdroj.accountCode) } : {}),
     ...(najdiKod(index, 'cleneniaDph', zdroj.vatClassificationCode) ? { clenenieDphId: najdiKod(index, 'cleneniaDph', zdroj.vatClassificationCode) } : {}),

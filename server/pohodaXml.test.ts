@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildServerDataPack, splitPostalAddress, vatCountryIds, type PohodaCodeLookup } from './pohodaXml.js';
+import { buildServerDataPack, splitPostalAddress, supplierAddressParts, vatCountryIds, type PohodaCodeLookup } from './pohodaXml.js';
 
 const codeLists: PohodaCodeLookup = {
   predkontacie: new Map([['p1', '518/321']]),
@@ -349,6 +349,41 @@ describe('splitPostalAddress a vatCountryIds', () => {
     expect(vatCountryIds('XI123456789')).toBe('GB');
     expect(vatCountryIds(undefined)).toBeUndefined();
     expect(vatCountryIds('12345')).toBeUndefined();
+  });
+});
+
+describe('supplierAddressParts', () => {
+  it('bez ručných polí sa odvodí z voľnej adresy a IČ DPH', () => {
+    expect(supplierAddressParts({ adresa: 'Riazanská 62\n811 01 Bratislava', icDph: 'SK2020309247' }))
+      .toEqual({ ulica: 'Riazanská 62', psc: '811 01', obec: 'Bratislava', krajina: 'SK' });
+  });
+
+  it('ručné polia majú prednosť a prázdna hodnota sa nedoplní z adresy', () => {
+    expect(supplierAddressParts({
+      adresa: 'Riazanská 62, 811 01 Bratislava',
+      icDph: 'SK2020309247',
+      ulica: '',
+      psc: '900 27',
+      obec: 'Bernolákovo',
+      krajina: 'CZ',
+    })).toEqual({ ulica: '', psc: '900 27', obec: 'Bernolákovo', krajina: 'CZ' });
+  });
+
+  it('vymazaná ulica sa nedostane do XML', () => {
+    const doc = invoiceDocument({});
+    doc.snapshot.extracted.dodavatel = {
+      ...doc.snapshot.extracted.dodavatel,
+      adresa: 'Riazanská 62, 811 01 Bratislava',
+      ulica: '',
+      psc: '811 01',
+      obec: 'Bratislava',
+      krajina: 'SK',
+    } as typeof doc.snapshot.extracted.dodavatel;
+    const xml = buildServerDataPack({ id: 'pack-adr', ico: '35761571', documents: [doc], codeLists });
+    expect(xml).not.toContain('<typ:street>');
+    expect(xml).toContain('<typ:city>Bratislava</typ:city>');
+    expect(xml).toContain('<typ:zip>811 01</typ:zip>');
+    expect(xml).toContain('<typ:country><typ:ids>SK</typ:ids></typ:country>');
   });
 });
 

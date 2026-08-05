@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v4';
+export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v5';
 export const EXTRACTION_SCHEMA_VERSION = '2';
 export const SUPPORTED_VAT_RATES = [23, 21, 19, 12, 5, 0] as const;
 export const SUPPORTED_EXTRACTION_MIME_TYPES = [
@@ -65,6 +65,7 @@ const additionalDocumentWireSchema = z.object({
   variableSymbol: nullableShortText,
   accountCode: nullableShortText,
   vatClassificationCode: nullableShortText,
+  vatControlStatementCode: nullableShortText,
   numberSeriesCode: nullableShortText,
   issueDate: nullableIsoDate,
   taxDate: nullableIsoDate,
@@ -109,6 +110,7 @@ export const extractionWireSchema = z.object({
   documentSummary: nullableShortText,
   accountCode: nullableShortText,
   vatClassificationCode: nullableShortText,
+  vatControlStatementCode: nullableShortText,
   numberSeriesCode: nullableShortText,
   lineItems: z.array(lineItemWireSchema).max(500),
   vatBreakdown: z.array(vatRowWireSchema).max(20),
@@ -147,6 +149,9 @@ export interface ExtractionResult {
   /** Kódy z číselníka firmy, ktoré model opísal z pravidla; server ich preloží na id. */
   accountCode?: string;
   vatClassificationCode?: string;
+  /** Sekcia kontrolného výkazu (A1…D2, KN). Vlastné pole, lebo doklad má bežne
+   *  obidve naraz — členenie DPH „UN" aj sekciu KV „KN". */
+  vatControlStatementCode?: string;
   numberSeriesCode?: string;
   lineItems: Array<{
     description?: string;
@@ -178,6 +183,7 @@ export interface AdditionalDocumentResult {
   variableSymbol?: string;
   accountCode?: string;
   vatClassificationCode?: string;
+  vatControlStatementCode?: string;
   numberSeriesCode?: string;
   issueDate?: string;
   taxDate?: string;
@@ -225,6 +231,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
       documentSummary: parsed.documentSummary,
       accountCode: parsed.accountCode,
       vatClassificationCode: parsed.vatClassificationCode,
+      vatControlStatementCode: parsed.vatControlStatementCode,
       numberSeriesCode: parsed.numberSeriesCode,
       totalWithoutVat: parsed.totalWithoutVat,
       totalVat: parsed.totalVat,
@@ -239,6 +246,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
         variableSymbol: doklad.variableSymbol,
         accountCode: doklad.accountCode,
         vatClassificationCode: doklad.vatClassificationCode,
+        vatControlStatementCode: doklad.vatControlStatementCode,
         numberSeriesCode: doklad.numberSeriesCode,
         issueDate: doklad.issueDate,
         taxDate: doklad.taxDate,
@@ -277,6 +285,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   issueDate: z.string().optional(), taxDate: z.string().optional(), dueDate: z.string().optional(),
   currency: z.string().optional(), documentSummary: z.string().optional(),
   accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
+  vatControlStatementCode: z.string().optional(),
   numberSeriesCode: z.string().optional(),
   lineItems: z.array(z.object({
     description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
@@ -290,6 +299,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
     documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
     documentSummary: z.string().optional(), variableSymbol: z.string().optional(),
     accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
+    vatControlStatementCode: z.string().optional(),
     numberSeriesCode: z.string().optional(),
     issueDate: z.string().optional(), taxDate: z.string().optional(), totalAmount: z.string().optional(),
     lineItems: z.array(z.object({

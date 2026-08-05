@@ -66,8 +66,20 @@ describe('zauctovanieZKodov', () => {
   it('sekciu kontrolného výkazu berie priamo, nie z číselníka', () => {
     // KN nie je členenie DPH firmy — je to štatutárna sekcia KV.
     expect(zauctovanieZKodov(CISELNIK, {
-      accountCode: undefined, vatClassificationCode: 'kn', numberSeriesCode: undefined,
+      accountCode: undefined, vatControlStatementCode: 'kn', numberSeriesCode: undefined,
     })).toEqual({ clenenieKvKod: 'KN' });
+  });
+
+  it('členenie DPH a sekciu KV vráti naraz', () => {
+    // Mzdy: „UN" je členenie DPH firmy, „KN" sekcia kontrolného výkazu. Kým
+    // bolo pole jedno, jedno z nich vždy vypadlo.
+    expect(zauctovanieZKodov(CISELNIK, {
+      vatClassificationCode: 'UN', vatControlStatementCode: 'KN',
+    })).toEqual({ clenenieDphId: 'd-un', clenenieKvKod: 'KN' });
+  });
+
+  it('staršie behy so sekciou v poli členenia stále fungujú', () => {
+    expect(zauctovanieZKodov(CISELNIK, { vatClassificationCode: 'KN' })).toEqual({ clenenieKvKod: 'KN' });
   });
 
   it('neznáme kódy vynechá, nie nahradí', () => {

@@ -32,7 +32,8 @@ function rekapitulaciaWire() {
     variableSymbol: '202612', constantSymbol: null, specificSymbol: null,
     issueDate: '2026-04-30', taxDate: '2026-04-30', dueDate: null, currency: 'EUR',
     documentSummary: 'mzdy za 2026/04',
-    accountCode: null, vatClassificationCode: 'UN', numberSeriesCode: '26MZD',
+    // Mzdy idú do POHODY ako „UN" + sekcia KV „KN" — obidve naraz, každá vo svojom poli.
+    accountCode: null, vatClassificationCode: 'UN', vatControlStatementCode: 'KN', numberSeriesCode: '26MZD',
     lineItems: [
       // Kód opísaný z pravidla presne; server ho spáruje s číselníkom firmy.
       { description: 'hrubá mzda', accountCode: '521100/331100 HM', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '9201.19', vatAmount: '0', amountTotal: '9201.19' },
@@ -45,7 +46,7 @@ function rekapitulaciaWire() {
         documentType: 'MZDY',
         documentSummary: 'mzdy-tvorba SF 04/2026',
         variableSymbol: '202510',
-        accountCode: 'SF', vatClassificationCode: 'KN', numberSeriesCode: '26MZD',
+        accountCode: 'SF', vatClassificationCode: null, vatControlStatementCode: 'KN', numberSeriesCode: '26MZD',
         issueDate: '2026-04-30', taxDate: '2026-04-30',
         totalAmount: '51.88',
         lineItems: [],
@@ -56,7 +57,7 @@ function rekapitulaciaWire() {
         documentSummary: 'zúčt.zál.na fin.prísp.-stravné 04/26',
         variableSymbol: '202507',
         // Kód s medzerami okolo lomky — musí sa spárovať s '331 / 335200'.
-        accountCode: '331/335200', vatClassificationCode: null, numberSeriesCode: 'NEEXISTUJE',
+        accountCode: '331/335200', vatClassificationCode: null, vatControlStatementCode: null, numberSeriesCode: 'NEEXISTUJE',
         issueDate: '2026-04-30', taxDate: null,
         totalAmount: '162.00',
         lineItems: [],
@@ -152,8 +153,9 @@ describe('viac dokladov z jedného súboru', () => {
     expect(zaloha.extracted.variabilnySymbol).toBe('202507');
 
     // Kódy z pravidla sú preložené na id číselníka firmy.
+    // Členenie DPH aj sekcia KV naraz — mzdy idú do POHODY ako „UN" + „KN".
     expect(hlavny.accounting).toMatchObject({
-      clenenieDphId: kody.get('UN'), ciselnyRadId: kody.get('26MZD'),
+      clenenieDphId: kody.get('UN'), ciselnyRadId: kody.get('26MZD'), clenenieKvKod: 'KN',
     });
     expect(hlavny.extracted.polozky[0].ucto.predkontaciaId).toBe(kody.get('521100/331100 HM'));
     // Kód bez chvosta sa našiel cez jednoznačný prefix.

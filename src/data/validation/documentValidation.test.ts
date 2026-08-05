@@ -85,3 +85,41 @@ describe('validateDocument — DIČ s prefixom neblokuje schválenie', () => {
     )).toContainEqual({ code: 'invalid_dic', field: 'odberatel.dic' });
   });
 });
+
+// Mzdy nemajú DPH: doklad bez rozpisu je bežný a POHODA dá celú sumu do
+// priceNone. Porovnanie prázdneho rozpisu s celkovou sumou preto blokovalo
+// schválenie mzdového dokladu, hoci mu nič nechýbalo.
+describe('validateDocument — mzdy bez rozpisu DPH', () => {
+  function mzdy(extracted: Record<string, unknown>): DocumentItem {
+    return {
+      ...prijataFaktura({}),
+      typ: 'MZDY',
+      extracted: {
+        dodavatel: { nazov: 'AGS BRATISLAVA INTERN.MOVERS' },
+        cisloFaktury: '',
+        datumVystavenia: '2026-03-31',
+        datumDodania: '2026-03-31',
+        datumSplatnosti: '2026-03-31',
+        mena: 'EUR',
+        rozpisDph: [],
+        sumaSpolu: 206.54,
+        ...extracted,
+      },
+    } as unknown as DocumentItem;
+  }
+
+  it('prázdny rozpis pri mzdách schválenie neblokuje', () => {
+    expect(validateDocument(mzdy({}), organization)).toEqual([]);
+  });
+
+  it('vyplnený rozpis sa pri mzdách kontroluje ďalej', () => {
+    expect(validateDocument(mzdy({ rozpisDph: [{ sadzba: 0, zaklad: 100, dph: 0 }] }), organization))
+      .toContainEqual({ code: 'total_mismatch', field: 'sumaSpolu' });
+  });
+
+  it('prijatej faktúre prázdny rozpis naďalej chýba', () => {
+    const issues = validateDocument(prijataFaktura({ rozpisDph: [] }), organization);
+    expect(issues).toContainEqual({ code: 'vat_breakdown_required', field: 'rozpisDph' });
+    expect(issues).toContainEqual({ code: 'total_mismatch', field: 'sumaSpolu' });
+  });
+});
