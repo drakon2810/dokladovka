@@ -24,8 +24,11 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/dokladovka-api:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/dokladovka-api:latest
 
+  # Podmienka NESMIE byť na úrovni jobu (`if:`) — kontext `secrets` sa tam
+  # nevyhodnocuje a celý súbor sa stane neplatným. GitHub taký workflow odmietne
+  # ešte pred spustením, takže s ním padal aj backend-image a do GHCR sa
+  # nedostal žiadny image. Guard preto patrí do kroku, kde `secrets` fungujú.
   frontend-cloudflare-pages:
-    if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,9 +36,26 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - uses: cloudflare/wrangler-action@v3
+      - id: guard
+        # Doména sa do buildu zapečie (VITE_*), bez nej frontend spadne hneď pri
+        # štarte v prehliadači — radšej Pages preskočiť ako nasadiť bielu stránku.
+        run: |
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] \
+            && [ -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ] \
+            && [ -n "${{ vars.VITE_PUBLIC_MAIL_RECEIVING_DOMAIN }}" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Cloudflare Pages preskočené — chýba CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID alebo premenná VITE_PUBLIC_MAIL_RECEIVING_DOMAIN.'
+          fi
+      - if: steps.guard.outputs.ready == 'true'
+        run: npm ci
+      - if: steps.guard.outputs.ready == 'true'
+        run: npm run build
+        env:
+          VITE_PUBLIC_MAIL_RECEIVING_DOMAIN: ${{ vars.VITE_PUBLIC_MAIL_RECEIVING_DOMAIN }}
+      - if: steps.guard.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
