@@ -2942,6 +2942,44 @@ export interface UctoKategoria {
   konflikt?: string;
 }
 
+/** Riadok histórie zaúčtovaní — musí sedieť s historyRowSchema na serveri. */
+export interface UctoHistoryRow {
+  agenda: 'FP' | 'FV' | 'PD' | 'BV' | 'MZDY' | 'OZ' | 'INE';
+  dokladCislo?: string;
+  riadokIndex?: number;
+  datum?: string;
+  supplierIco?: string;
+  supplierName?: string;
+  lineText: string;
+  suma?: number;
+  sadzbaDph?: number;
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  clenenieKvKod?: string;
+  strediskoKod?: string;
+}
+
+/** Server berie najviac 20 000 riadkov na požiadavku — väčší import sa dávkuje. */
+const UCTO_HISTORY_DAVKA = 20_000;
+
+export async function importUctoHistoryRows(
+  orgId: string,
+  rows: UctoHistoryRow[],
+): Promise<{ imported: number; duplicates: number; bezKodu: number }> {
+  if (!REST_DATA_MODE) throw new Error('Import histórie je dostupný len s pripojeným serverom');
+  const sucet = { imported: 0, duplicates: 0, bezKodu: 0 };
+  for (let start = 0; start < rows.length; start += UCTO_HISTORY_DAVKA) {
+    const result = await restRequest<typeof sucet>(
+      `/api/organizations/${encodeURIComponent(orgId)}/ucto-history`,
+      { method: 'PUT', body: JSON.stringify({ rows: rows.slice(start, start + UCTO_HISTORY_DAVKA) }) },
+    );
+    sucet.imported += result.imported;
+    sucet.duplicates += result.duplicates;
+    sucet.bezKodu += result.bezKodu;
+  }
+  return sucet;
+}
+
 export async function getUctoHistoryStats(orgId: string): Promise<UctoHistoryStats> {
   if (!REST_DATA_MODE) return { spolu: 0, podlaAgendy: [], dodavatelov: 0, roznychTextov: 0 };
   return restRequest<UctoHistoryStats>(
@@ -2975,4 +3013,34 @@ export async function listUctoKategorie(orgId: string): Promise<UctoKategoria[]>
     { method: 'GET' },
   );
   return result.kategorie;
+}
+
+/** Ručná úprava kategórie z analýzy — kódy sa na serveri previažu na číselníky. */
+export interface UctoKategoriaZmena {
+  nazov?: string;
+  popis?: string | null;
+  slovnik?: string[];
+  predkontaciaKod?: string | null;
+  clenenieDphKod?: string | null;
+  clenenieKvKod?: string | null;
+}
+
+export async function updateUctoKategoria(
+  orgId: string,
+  kategoriaId: string,
+  zmena: UctoKategoriaZmena,
+): Promise<UctoKategoria> {
+  if (!REST_DATA_MODE) throw new Error('Úprava kategórií je dostupná len s pripojeným serverom');
+  return restRequest<UctoKategoria>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/${encodeURIComponent(kategoriaId)}`,
+    { method: 'PATCH', body: JSON.stringify(zmena) },
+  );
+}
+
+export async function deleteUctoKategoria(orgId: string, kategoriaId: string): Promise<void> {
+  if (!REST_DATA_MODE) throw new Error('Úprava kategórií je dostupná len s pripojeným serverom');
+  await restRequest(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/${encodeURIComponent(kategoriaId)}`,
+    { method: 'DELETE' },
+  );
 }

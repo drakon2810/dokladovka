@@ -10,7 +10,13 @@ import {
   historyStats,
   importUctoHistory,
 } from '../services/uctoHistoryService.js';
-import { analyzujUctovnyProfil, listUctoKategorie } from '../services/uctoProfileService.js';
+import {
+  analyzujUctovnyProfil,
+  deleteUctoKategoria,
+  kategoriaZmenaSchema,
+  listUctoKategorie,
+  updateUctoKategoria,
+} from '../services/uctoProfileService.js';
 
 // Účtovný profil firmy: import úplnej histórie z POHODY (po riadkoch, všetky
 // agendy) a jednorazová analýza, ktorá z nej spraví kategórie plnení.
@@ -82,5 +88,49 @@ export function registerUctoProfileRoutes(
   app.get('/api/organizations/:id/ucto-profile', async (request) => {
     const { auth, organizationId } = await pristup(request, false);
     return { kategorie: await listUctoKategorie(database, auth.tenantId, organizationId) };
+  });
+
+  // Ručná úprava kategórie po analýze — účtovník opraví názov, slovník či kódy
+  // bez toho, aby musel celú analýzu púšťať znova.
+  const kategoriaSchema = z.object({ kategoriaId: z.string().uuid() });
+
+  app.patch('/api/organizations/:id/ucto-profile/:kategoriaId', async (request) => {
+    const { auth, organizationId } = await pristup(request, true);
+    const { kategoriaId } = kategoriaSchema.parse(request.params);
+    const zmena = kategoriaZmenaSchema.parse(request.body);
+    const kategoria = await updateUctoKategoria(
+      database, auth.tenantId, organizationId, kategoriaId, zmena,
+    );
+    // Kategórie riadia návrhy zaúčtovania — ich zmena patrí do audit logu
+    // rovnako ako spustenie analýzy.
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'ucto_profile.kategoria_updated',
+      entityType: 'ucto_kategoria',
+      entityId: kategoriaId,
+      correlationId: request.id,
+      metadata: { polia: Object.keys(zmena) },
+    });
+    return kategoria;
+  });
+
+  app.delete('/api/organizations/:id/ucto-profile/:kategoriaId', async (request) => {
+    const { auth, organizationId } = await pristup(request, true);
+    const { kategoriaId } = kategoriaSchema.parse(request.params);
+    await deleteUctoKategoria(database, auth.tenantId, organizationId, kategoriaId);
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'ucto_profile.kategoria_deleted',
+      entityType: 'ucto_kategoria',
+      entityId: kategoriaId,
+      correlationId: request.id,
+    });
+    return { ok: true };
   });
 }

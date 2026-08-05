@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
-import { platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
+import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -250,20 +250,8 @@ export interface UctoKategoria {
   konflikt?: string;
 }
 
-export async function listUctoKategorie(
-  database: Database,
-  tenantId: string,
-  organizationId: string,
-): Promise<UctoKategoria[]> {
-  const result = await database.query<Record<string, any>>(
-    `SELECT id, nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
-            clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt
-       FROM ucto_kategorie
-      WHERE tenant_id=$1 AND organization_id=$2 AND active=true
-      ORDER BY pocet DESC, nazov`,
-    [tenantId, organizationId],
-  );
-  return result.rows.map((row) => ({
+function mapKategoria(row: Record<string, any>): UctoKategoria {
+  return {
     id: row.id,
     nazov: row.nazov,
     popis: row.popis ?? undefined,
@@ -277,5 +265,114 @@ export async function listUctoKategorie(
     agendy: Array.isArray(row.agendy) ? row.agendy : [],
     pocet: Number(row.pocet ?? 0),
     konflikt: row.konflikt ?? undefined,
-  }));
+  };
+}
+
+export async function listUctoKategorie(
+  database: Database,
+  tenantId: string,
+  organizationId: string,
+): Promise<UctoKategoria[]> {
+  const result = await database.query<Record<string, any>>(
+    `SELECT id, nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
+            clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt
+       FROM ucto_kategorie
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true
+      ORDER BY pocet DESC, nazov`,
+    [tenantId, organizationId],
+  );
+  return result.rows.map(mapKategoria);
+}
+
+/** Ručná úprava kategórie účtovníkom po analýze. */
+export const kategoriaZmenaSchema = z.object({
+  nazov: z.string().trim().min(1).max(80).optional(),
+  popis: z.string().trim().max(300).nullable().optional(),
+  slovnik: z.array(z.string().trim().min(1).max(40)).min(1).max(30).optional(),
+  predkontaciaKod: z.string().trim().max(100).nullable().optional(),
+  clenenieDphKod: z.string().trim().max(100).nullable().optional(),
+  clenenieKvKod: z.string().trim().max(20).nullable().optional(),
+}).strict();
+
+export type KategoriaZmena = z.infer<typeof kategoriaZmenaSchema>;
+
+/**
+ * Upraví kategóriu. Kód predkontácie/členenia sa previaže na id aktívnej
+ * položky číselníka; neznámy kód ostáva ako text s prázdnym id — rovnako ako
+ * pri importe histórie, aby sa nestratila prax mimo aktívnych číselníkov.
+ */
+export async function updateUctoKategoria(
+  database: Database,
+  tenantId: string,
+  organizationId: string,
+  kategoriaId: string,
+  zmena: KategoriaZmena,
+): Promise<UctoKategoria> {
+  const polia: string[] = [];
+  const hodnoty: unknown[] = [tenantId, organizationId, kategoriaId];
+  const pridaj = (sql: string, hodnota: unknown, cast = '') => {
+    hodnoty.push(hodnota);
+    polia.push(`${sql}$${hodnoty.length}${cast}`);
+  };
+
+  if (zmena.nazov !== undefined) pridaj('nazov=', zmena.nazov);
+  if (zmena.popis !== undefined) pridaj('popis=', zmena.popis);
+  if (zmena.slovnik !== undefined) pridaj('slovnik=', JSON.stringify(zmena.slovnik), '::jsonb');
+  if (zmena.clenenieKvKod !== undefined) {
+    const kv = zmena.clenenieKvKod === null ? null : platnyKvKod(zmena.clenenieKvKod);
+    if (zmena.clenenieKvKod !== null && !kv) {
+      throw new HttpError(400, 'invalid_kv', 'Neplatná sekcia kontrolného výkazu');
+    }
+    pridaj('clenenie_kv_kod=', kv);
+  }
+  const kodovePolia = [
+    { zmenaKod: zmena.predkontaciaKod, kind: 'predkontacie', kod: 'predkontacia_kod=', id: 'predkontacia_id=' },
+    { zmenaKod: zmena.clenenieDphKod, kind: 'cleneniaDph', kod: 'clenenie_dph_kod=', id: 'clenenie_dph_id=' },
+  ] as const;
+  for (const pole of kodovePolia) {
+    if (pole.zmenaKod === undefined) continue;
+    const kod = pole.zmenaKod?.trim() || null;
+    // „BEZ…" nie je účet, ale doklad bez zaúčtovania — do kategórií sa nesmie
+    // dostať ani ručne (migrácia 0035 presne tento stav čistila).
+    if (pole.kind === 'predkontacie' && jeBezPredkontacia(kod ?? undefined)) {
+      throw new HttpError(400, 'bez_predkontacia', 'Predkontácia „BEZ…" sa v kategóriách nepoužíva — nechajte pole prázdne');
+    }
+    let id: string | null = null;
+    if (kod) {
+      const najdene = await database.query<{ id: string } & Record<string, unknown>>(
+        `SELECT id FROM code_list_items
+          WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind=$3 AND trim(code)=$4`,
+        [tenantId, organizationId, pole.kind, kod],
+      );
+      id = najdene.rows[0]?.id ?? null;
+    }
+    pridaj(pole.kod, kod);
+    pridaj(pole.id, id);
+  }
+
+  if (polia.length === 0) throw new HttpError(400, 'empty_update', 'Niet čo upraviť');
+  const result = await database.query<Record<string, any>>(
+    `UPDATE ucto_kategorie SET ${polia.join(', ')}, updated_at=now()
+      WHERE tenant_id=$1 AND organization_id=$2 AND id=$3 AND active=true
+      RETURNING id, nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
+                clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt`,
+    hodnoty,
+  );
+  if (result.rows.length === 0) throw new HttpError(404, 'not_found', 'Kategória neexistuje');
+  return mapKategoria(result.rows[0]);
+}
+
+/** Mäkké zmazanie — kategória zmizne zo zoznamu aj z návrhov zaúčtovania. */
+export async function deleteUctoKategoria(
+  database: Database,
+  tenantId: string,
+  organizationId: string,
+  kategoriaId: string,
+): Promise<void> {
+  const result = await database.query(
+    `UPDATE ucto_kategorie SET active=false, updated_at=now()
+      WHERE tenant_id=$1 AND organization_id=$2 AND id=$3 AND active=true`,
+    [tenantId, organizationId, kategoriaId],
+  );
+  if (result.rowCount === 0) throw new HttpError(404, 'not_found', 'Kategória neexistuje');
 }

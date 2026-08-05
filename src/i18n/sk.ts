@@ -647,7 +647,7 @@ export const sk = {
   'nast.tab.mostik': 'Mostík',
   'nast.tab.trening': 'Tréning AI',
   'trening.popis':
-    'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — alebo priamo databázu POHODA (.mdb), z ktorej systém sám vytiahne prijaté faktúry vrátane IČO. Nové faktúry rovnakých dodávateľov potom navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',
+    'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — alebo priamo databázu POHODA (.mdb): z nej systém vytiahne prijaté faktúry do pamäte dodávateľov a zároveň celú históriu dokladov (faktúry, pokladňu aj interné doklady; banku zatiaľ nie) do účtovného profilu. Nové faktúry rovnakých dodávateľov potom navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',
   'trening.pamat': 'V pamäti rozhodnutí',
   'trening.schvalene': 'zo schválených dokladov',
   'trening.importovane': 'z importu histórie',
@@ -1245,6 +1245,8 @@ export const sk = {
   'pravidla.klucoveSlova': 'Kľúčové slová',
   'pravidla.klucoveSlovaPriklad': 'nájom, palivo (oddelené čiarkou)',
   'pravidla.pridat': 'Pridať pravidlo',
+  'pravidla.uprava': 'Úprava pravidla',
+  'pravidla.upravene': 'Pravidlo bolo upravené.',
   'pravidla.ulozene': 'Pravidlo bolo uložené.',
   'pravidla.zmazat': 'Zmazať',
   'pravidla.zmazane': 'Pravidlo bolo zmazané.',
@@ -1297,6 +1299,16 @@ export const sk = {
   'uctoProfil.st.ucet': 'Predkontácia',
   'uctoProfil.st.dph': 'Členenie DPH',
   'uctoProfil.st.pocet': 'Riadkov',
+  'uctoProfil.historiaNahrata': 'História pre účtovný profil naimportovaná',
+  'uctoProfil.kategoriaUlozena': 'Kategória bola uložená.',
+  'uctoProfil.kategoriaZmazana': 'Kategória bola zmazaná.',
+  'uctoProfil.kategoriaZmazatPotvrdenie': 'Zmazať túto kategóriu? Prestane sa používať pri návrhoch zaúčtovania.',
+  'uctoProfil.kategoriaChybaPovinne': 'Vyplňte názov a aspoň jedno slovo slovníka.',
+  'uctoProfil.slovnikLimit': 'Slovník: najviac 30 slov a 40 znakov na slovo.',
+  'uctoProfil.analyzaPrepise': 'Analýza nanovo vytvorí všetky kategórie — ručné úpravy aj zmazané kategórie sa stratia. Pokračovať?',
+  'uctoProfil.popisPlaceholder': 'Popis (voliteľný)',
+  'uctoProfil.slovnikPlaceholder': 'slová oddelené čiarkou',
+  'uctoProfil.kvZiadne': 'KV —',
 } as const;
 
 export type SkKey = keyof typeof sk;

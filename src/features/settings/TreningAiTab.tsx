@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   activateAiRule, analyzeAiTraining, confirmAiRules, deleteAiRule,
   excludeAiTrainingSupplier, getAiTrainingStats, importAiTraining,
-  listAiRules, listAiTrainingSuppliers,
+  importUctoHistoryRows, listAiRules, listAiTrainingSuppliers,
   type AiRule, type AiRuleProposal, type AiTrainingSupplier,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
@@ -15,7 +15,7 @@ import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import type { CodeListKind } from '../../data/types';
 import { parseTrainingRows, validateTrainingRows, type ParsedTrainingRow, type TrainingKody } from './treningImport';
-import { extractPohodaDecisions } from './pohodaMdbImport';
+import { extractPohodaDecisions, extractPohodaHistory } from './pohodaMdbImport';
 import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
 import { UctovnyProfil } from './UctovnyProfil';
 
@@ -31,6 +31,8 @@ export function TreningAiTab() {
   const [checked, setChecked] = useState<boolean[]>([]);
   const [rules, setRules] = useState<AiRule[]>([]);
   const [suppliers, setSuppliers] = useState<AiTrainingSupplier[]>([]);
+  // Po importe histórie z .mdb sa profil (štatistiky korpusu) načíta nanovo.
+  const [profilVerzia, setProfilVerzia] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const organizations = data?.organizations.filter((org) => !org.archived) ?? [];
@@ -124,6 +126,22 @@ export function TreningAiTab() {
           `${t('trening.mdbNacitane')}: ${summary.unikatne} (${summary.prijate} ${t('trening.prijatych')}, ${summary.vydane} ${t('trening.vydanychPreskocene')})`,
         );
         if (extracted.length === 0) showToast(t('trening.ziadneRiadky'), { tone: 'error' });
+        // Z tej istej databázy sa naplní aj korpus histórie pre účtovný profil —
+        // všetky dokladové agendy (faktúry, pokladňa, interné doklady), banka
+        // zatiaľ nie. Zlyhanie tu nesmie zhodiť náhľad pamäte vyššie.
+        try {
+          const historia = extractPohodaHistory(reader);
+          if (historia.rows.length > 0) {
+            const vysledok = await importUctoHistoryRows(orgId, historia.rows);
+            const agendy = Object.entries(historia.summary.poAgende)
+              .map(([agenda, pocet]) => `${agenda} ${pocet}`)
+              .join(', ');
+            showToast(`${t('uctoProfil.historiaNahrata')}: ${vysledok.imported} (${agendy})`);
+            setProfilVerzia((verzia) => verzia + 1);
+          }
+        } catch (cause) {
+          showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+        }
         return;
       }
       const XLSX = await import('xlsx');
@@ -235,7 +253,7 @@ export function TreningAiTab() {
     <div className="space-y-4">
       <p className="max-w-3xl text-sm text-ink-soft">{t('trening.popis')}</p>
 
-      {orgId && <UctovnyProfil orgId={orgId} />}
+      {orgId && <UctovnyProfil key={profilVerzia} orgId={orgId} />}
 
       <div className="flex flex-wrap items-end gap-3">
         {/* Organizácia sa preberá z globálneho prepínača v hlavičke. */}

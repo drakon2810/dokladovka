@@ -30,6 +30,9 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
   const [pravidla, setPravidla] = useState<AiPokyn[]>();
   const [draft, setDraft] = useState<AiPokynVstup>(PRAZDNY);
   const [slovaText, setSlovaText] = useState('');
+  // Id pravidla, ktoré sa práve upravuje — formulár hore vtedy ukladá zmenu
+  // namiesto vytvorenia nového pravidla.
+  const [upravovaneId, setUpravovaneId] = useState<string>();
   const [busy, setBusy] = useState(false);
   // Vzorové doklady pre „Vylepšiť pomocou AI" — nikam sa neukladajú, poslúžia
   // len ako príklad, z ktorého AI napíše čitateľné pravidlo. Viac naraz má
@@ -41,6 +44,11 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
   useEffect(() => {
     let active = true;
     setPravidla(undefined);
+    // Rozpísaná úprava patrila k predchádzajúcej firme — nesmie sa preniesť.
+    setUpravovaneId(undefined);
+    setDraft(PRAZDNY);
+    setSlovaText('');
+    setSubory([]);
     void listAiPokyny(organizationId)
       .then((next) => {
         if (active) setPravidla(next);
@@ -57,6 +65,32 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
     setPravidla(await listAiPokyny(organizationId).catch(() => []));
   }
 
+  function vycistiFormular() {
+    setDraft(PRAZDNY);
+    setSlovaText('');
+    // Prílohy patrili k práve uloženému pravidlu — bez vyčistenia by sa ticho
+    // priložili aj k nasledujúcemu a AI by písala pravidlo z cudzieho dokladu.
+    setSubory([]);
+    setUpravovaneId(undefined);
+  }
+
+  function zacniUpravu(pravidlo: AiPokyn) {
+    setUpravovaneId(pravidlo.id);
+    setDraft({
+      nazov: pravidlo.nazov,
+      text: pravidlo.text,
+      faza: pravidlo.faza,
+      typyDokladov: pravidlo.typyDokladov.filter((typ): typ is (typeof TYPY)[number] => (TYPY as readonly string[]).includes(typ)),
+      klucoveSlova: pravidlo.klucoveSlova,
+      priorita: pravidlo.priorita,
+      active: pravidlo.active,
+    });
+    setSlovaText(pravidlo.klucoveSlova.join(', '));
+    setSubory([]);
+    // Formulár je nad zoznamom — pri dlhom zozname by úprava inak nebola vidieť.
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   async function pridaj() {
     if (!draft.nazov.trim() || !draft.text.trim()) {
       showToast(t('pravidla.chybaPovinne'), { tone: 'error' });
@@ -64,17 +98,16 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
     }
     setBusy(true);
     try {
-      await createAiPokyn({
+      const telo = {
         ...draft,
         klucoveSlova: slovaText.split(',').map((slovo) => slovo.trim()).filter(Boolean),
-      }, organizationId);
-      setDraft(PRAZDNY);
-      setSlovaText('');
-      // Prílohy patrili k práve uloženému pravidlu — bez vyčistenia by sa ticho
-      // priložili aj k nasledujúcemu a AI by písala pravidlo z cudzieho dokladu.
-      setSubory([]);
+      };
+      if (upravovaneId) await updateAiPokyn(upravovaneId, telo, organizationId);
+      else await createAiPokyn(telo, organizationId);
+      const upravene = Boolean(upravovaneId);
+      vycistiFormular();
       await obnov();
-      showToast(t('pravidla.ulozene'));
+      showToast(t(upravene ? 'pravidla.upravene' : 'pravidla.ulozene'));
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
     } finally {
@@ -129,6 +162,7 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
     if (!window.confirm(t('pravidla.zmazatPotvrdenie'))) return;
     try {
       await deleteAiPokyn(pravidlo.id, organizationId);
+      if (pravidlo.id === upravovaneId) vycistiFormular();
       await obnov();
       showToast(t('pravidla.zmazane'));
     } catch (cause) {
@@ -139,7 +173,7 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
   return (
     <div className="space-y-4">
       <section className="card space-y-3 p-4">
-        <p className="font-medium text-ink">{t('pravidla.nove')}</p>
+        <p className="font-medium text-ink">{t(upravovaneId ? 'pravidla.uprava' : 'pravidla.nove')}</p>
         <label className="block">
           <span className="label">{t('pravidla.nazov')}</span>
           <input
@@ -286,9 +320,16 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
           )}
           <p className="mt-2 text-xs text-ink-faint">{t('pravidla.vylepsit.hint')}</p>
         </div>
-        <button type="button" className="btn btn-primary" disabled={busy || vylepsujem} onClick={() => void pridaj()}>
-          {busy ? t('stav.nacitavam') : t('pravidla.pridat')}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn btn-primary" disabled={busy || vylepsujem} onClick={() => void pridaj()}>
+            {busy ? t('stav.nacitavam') : t(upravovaneId ? 'akcia.ulozit' : 'pravidla.pridat')}
+          </button>
+          {upravovaneId && (
+            <button type="button" className="btn" disabled={busy || vylepsujem} onClick={vycistiFormular}>
+              {t('akcia.zrusit')}
+            </button>
+          )}
+        </div>
       </section>
 
       {pravidla === undefined ? (
@@ -308,10 +349,20 @@ export function PravidlaEditor({ organizationId }: { organizationId?: string }) 
                   {t(`typ.${typ}` as SkKey)}
                 </span>
               ))}
-              <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => void prepni(pravidlo)}>
+              <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy || vylepsujem} onClick={() => zacniUpravu(pravidlo)}>
+                {t('akcia.upravit')}
+              </button>
+              {/* Prepnutie upravovaného pravidla by uložený formulár vzápätí
+                  potichu vrátil — draft nesie starý stav `active`. */}
+              <button
+                type="button"
+                className="btn px-2.5 py-1 text-xs"
+                disabled={busy || vylepsujem || pravidlo.id === upravovaneId}
+                onClick={() => void prepni(pravidlo)}
+              >
                 {pravidlo.active ? t('pravidla.vypnut') : t('pravidla.zapnut')}
               </button>
-              <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => void zmaz(pravidlo)}>
+              <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy || vylepsujem} onClick={() => void zmaz(pravidlo)}>
                 {t('pravidla.zmazat')}
               </button>
             </div>

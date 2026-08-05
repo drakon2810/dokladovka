@@ -4,7 +4,9 @@ import { maybeAiAccountingSuggestion } from '../services/accountingSuggestionSer
 import {
   agregujHistoriu,
   analyzujUctovnyProfil,
+  deleteUctoKategoria,
   listUctoKategorie,
+  updateUctoKategoria,
 } from '../services/uctoProfileService.js';
 import {
   backfillHistoryFromDecisions,
@@ -194,6 +196,62 @@ describe('účtovný profil firmy', () => {
     // KV berie z kategórie: členenia DPH z POHODY nemajú vyplnenú kv_section,
     // takže bez tohto by členenie KV ostalo prázdne na každom doklade.
     expect(suggestion.clenenie_kv_kod).toBe('B2');
+  }, 90_000);
+
+  it('ručná úprava kategórie previaže známy kód na číselník, neznámy nechá ako text', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const ids = await seedCodeLists(database, seeded, [['predkontacie', '518/321'], ['cleneniaDph', 'PD']]);
+    const kategoriaId = randomUUID();
+    await database.query(
+      `INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,slovnik,agendy,pocet)
+       VALUES ($1,$2,$3,'Preprava','["preprava"]'::jsonb,'["FP"]'::jsonb,10)`,
+      [kategoriaId, seeded.tenantId, seeded.organizationId],
+    );
+
+    const upravena = await updateUctoKategoria(database, seeded.tenantId, seeded.organizationId, kategoriaId, {
+      nazov: 'Preprava a špedícia',
+      popis: 'Doprava tovaru',
+      slovnik: ['preprava', 'freight'],
+      predkontaciaKod: '518/321',
+      clenenieDphKod: 'NEEXISTUJE',
+      clenenieKvKod: 'B2',
+    });
+    expect(upravena).toMatchObject({
+      nazov: 'Preprava a špedícia',
+      slovnik: ['preprava', 'freight'],
+      predkontaciaKod: '518/321',
+      predkontaciaId: ids.get('predkontacie:518/321'),
+      clenenieDphKod: 'NEEXISTUJE',
+      clenenieKvKod: 'B2',
+    });
+    // Neznámy kód ostáva ako text s prázdnym id — rovnako ako pri importe histórie.
+    expect(upravena.clenenieDphId).toBeUndefined();
+
+    // Vymazanie kódu zruší aj väzbu na číselník.
+    const bezUctu = await updateUctoKategoria(
+      database, seeded.tenantId, seeded.organizationId, kategoriaId, { predkontaciaKod: null },
+    );
+    expect(bezUctu.predkontaciaKod).toBeUndefined();
+    expect(bezUctu.predkontaciaId).toBeUndefined();
+
+    // Neplatná sekcia KV sa odmietne.
+    await expect(updateUctoKategoria(
+      database, seeded.tenantId, seeded.organizationId, kategoriaId, { clenenieKvKod: 'X9' },
+    )).rejects.toMatchObject({ statusCode: 400 });
+
+    // „BEZ…" predkontácia sa do kategórie nedostane ani ručnou úpravou.
+    await expect(updateUctoKategoria(
+      database, seeded.tenantId, seeded.organizationId, kategoriaId, { predkontaciaKod: 'BEZ321100' },
+    )).rejects.toMatchObject({ statusCode: 400, code: 'bez_predkontacia' });
+
+    // Mäkké zmazanie: kategória zmizne zo zoznamu, ďalšia úprava je 404.
+    await deleteUctoKategoria(database, seeded.tenantId, seeded.organizationId, kategoriaId);
+    expect(await listUctoKategorie(database, seeded.tenantId, seeded.organizationId)).toHaveLength(0);
+    await expect(updateUctoKategoria(
+      database, seeded.tenantId, seeded.organizationId, kategoriaId, { nazov: 'X' },
+    )).rejects.toMatchObject({ statusCode: 404 });
   }, 90_000);
 
   it('predkontácie „BEZ…" sa neučia ani nenavrhujú', async () => {

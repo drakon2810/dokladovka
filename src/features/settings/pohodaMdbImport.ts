@@ -1,9 +1,10 @@
-// Extrakcia zaúčtovaní priamo z POHODA databázy (.mdb) do riadkov pre pamäť
-// rozhodnutí. Číta agendu prijatých faktúr (FA) a rozvíja jej väzby na
-// číselníky: predkontácia (pPK), členenie DPH (sDPH) a sekcia KV (sKVDPH).
+// Extrakcia zaúčtovaní priamo z POHODA databázy (.mdb): riadky pre pamäť
+// rozhodnutí (len prijaté faktúry) a plná história pre účtovný profil (všetky
+// agendy okrem banky). Väzby na číselníky sa rozvíjajú rovnako: predkontácia
+// (pPK), členenie DPH (sDPH) a sekcia KV (sKVDPH).
 // Čistá logika bez prehliadača/servera — mdb-reader dodá dáta, tu sa len
 // spájajú a filtrujú. Autoritatívna validácia kódov beží na serveri pri importe.
-import type { AiTrainingRow } from '../../data/api';
+import type { AiTrainingRow, UctoHistoryRow } from '../../data/api';
 import { CLENENIE_KV_KODY } from '../../data/types';
 
 // Typy dokladov agendy FA, ktoré sú PRIJATÉ faktúry (dodávateľské):
@@ -11,6 +12,9 @@ import { CLENENIE_KV_KODY } from '../../data/types';
 // Vydané doklady (1,2,5 → uskutočnené plnenia „UD/UN") sa vynechávajú — ich
 // „Firma" je odberateľ, do pamäte dodávateľov nepatria.
 const PRIJATE_TYPY = new Set([11, 12, 15]);
+// Vydané faktúry (1 = faktúra, 2 = dobropis, 5 = zálohová) — do pamäte
+// dodávateľov nejdú, ale do histórie pre účtovný profil áno.
+const VYDANE_TYPY = new Set([1, 2, 5]);
 
 // Minimálne rozhranie mdb-reader (Node aj browser build) — pre testovateľnosť.
 export interface MdbLike {
@@ -95,4 +99,100 @@ export function extractPohodaDecisions(reader: MdbLike): PohodaExtractResult {
     rows,
     summary: { spolu: fa.length, prijate, vydane, bezUctovania, unikatne: rows.length },
   };
+}
+
+// ===== Plná história pre účtovný profil =====
+
+export interface PohodaHistoryResult {
+  rows: UctoHistoryRow[];
+  summary: { spolu: number; bezZauctovania: number; poAgende: Record<string, number> };
+}
+
+// Tabuľky dokladových agend v POHODA databáze (názvy podľa dokumentácie
+// Stormware „Přehled tabulek"). Agenda FA nesie prijaté aj vydané faktúry a
+// ostatné pohľadávky/záväzky — rozlišuje ich RelTpFak. BV (banka) sa zámerne
+// vynecháva — banka sa do profilu zatiaľ neučí.
+// ponytail: hlavičky dokladov (SText); položkové tabuľky (FApol, HOpol,
+// pINTpol) doplniť, až keď bude k dispozícii reálna .mdb na overenie stĺpcov.
+const HISTORICKE_TABULKY: Array<{ table: string; agenda?: UctoHistoryRow['agenda'] }> = [
+  { table: 'FA' }, // agenda podľa RelTpFak
+  { table: 'HO', agenda: 'PD' }, // pokladňa
+  { table: 'pINT', agenda: 'INE' }, // interné doklady
+];
+
+/** Stĺpce spoločné pre dokladové tabuľky POHODY; chýbajúce sa preskočia. */
+const HISTORICKE_STLPCE = ['RelTpFak', 'Cislo', 'Datum', 'Firma', 'ICO', 'SText', 'RelPk', 'RelTpDPH', 'RelTpKVDPH'];
+
+/** mdb-reader vracia dátumy ako Date; história ich chce ako yyyy-mm-dd. */
+function isoDatum(value: unknown): string | undefined {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    // mdb-reader stavia dátum ako UTC polnoc — lokálne gettery by západne od
+    // UTC posunuli každý doklad o deň (a rozbili dedup odtlačok na serveri).
+    const rok = value.getUTCFullYear();
+    if (rok > 9999) return undefined; // preklep v Accesse; nepadnúť kvôli nemu celou dávkou
+    const pad = (part: number, len = 2) => String(part).padStart(len, '0');
+    return `${pad(rok, 4)}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`;
+  }
+  return /^\d{4}-\d{2}-\d{2}/.exec(String(value ?? ''))?.[0];
+}
+
+function agendaFaktury(relTpFak: unknown): UctoHistoryRow['agenda'] {
+  const typ = Number(relTpFak);
+  if (PRIJATE_TYPY.has(typ)) return 'FP';
+  if (VYDANE_TYPY.has(typ)) return 'FV';
+  return 'INE'; // ostatné pohľadávky/záväzky a neznáme typy — text a kódy majú váhu aj tak
+}
+
+/**
+ * Prejde všetky dokladové agendy databázy (okrem banky) a vráti riadky pre
+ * korpus histórie (ucto_historia). Na rozdiel od extractPohodaDecisions sa
+ * neduplikuje — početnosť je pre analýzu hlavný signál a dedup rieši server
+ * cez odtlačok (agenda + číslo dokladu + dátum).
+ */
+export function extractPohodaHistory(reader: MdbLike): PohodaHistoryResult {
+  const predkontacie = mapaIdNaKod(reader, 'pPK');
+  const cleneniaDph = mapaIdNaKod(reader, 'sDPH');
+  const kvSekcie = mapaIdNaKod(reader, 'sKVDPH');
+  const nazvyTabuliek = reader.getTableNames();
+
+  const rows: UctoHistoryRow[] = [];
+  const poAgende: Record<string, number> = {};
+  let spolu = 0;
+  let bezZauctovania = 0;
+
+  for (const { table, agenda } of HISTORICKE_TABULKY) {
+    if (!nazvyTabuliek.includes(table)) continue;
+    const tabulka = reader.getTable(table);
+    const dostupne = new Set(tabulka.getColumnNames());
+    const columns = HISTORICKE_STLPCE.filter((stlpec) => dostupne.has(stlpec));
+    if (!columns.includes('SText')) continue; // bez textu nemá riadok pre analýzu signál
+    for (const doklad of tabulka.getData({ columns })) {
+      spolu += 1;
+      const lineText = String(doklad.SText ?? '').trim().slice(0, 2000);
+      const predkontaciaKod = predkontacie.get(doklad.RelPk);
+      const clenenieDphKod = cleneniaDph.get(doklad.RelTpDPH);
+      if (!lineText || (!predkontaciaKod && !clenenieDphKod)) {
+        bezZauctovania += 1;
+        continue;
+      }
+      const riadokAgenda = agenda ?? agendaFaktury(doklad.RelTpFak);
+      rows.push({
+        agenda: riadokAgenda,
+        // Jedna hlavička = jeden riadok; pevná nula drží serverový odtlačok
+        // (agenda + číslo + dátum + poradie) stabilný pri opakovanom importe.
+        riadokIndex: 0,
+        dokladCislo: String(doklad.Cislo ?? '').trim().slice(0, 60) || undefined,
+        datum: isoDatum(doklad.Datum),
+        supplierIco: String(doklad.ICO ?? '').replace(/\D/g, '').slice(0, 20) || undefined,
+        supplierName: String(doklad.Firma ?? '').trim().slice(0, 300) || undefined,
+        lineText,
+        predkontaciaKod,
+        clenenieDphKod,
+        clenenieKvKod: zakladnaKvSekcia(kvSekcie.get(doklad.RelTpKVDPH)),
+      });
+      poAgende[riadokAgenda] = (poAgende[riadokAgenda] ?? 0) + 1;
+    }
+  }
+
+  return { rows, summary: { spolu, bezZauctovania, poAgende } };
 }

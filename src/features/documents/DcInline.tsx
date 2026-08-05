@@ -174,10 +174,16 @@ export function DcPick({
   const popStyle = (): CSSProperties => {
     if (!kotva) return { visibility: 'hidden' };
     const podKotvou = window.innerHeight - kotva.bottom;
-    const nahor = podKotvou < 220 && kotva.top > podKotvou;
+    const nahor = podKotvou < 300 && kotva.top > podKotvou;
+    // Šírka zoznamu je daná obsahom (min 260, max 560 z CSS) a pred vykreslením
+    // nie je známa. Pri pravom okraji sa preto zoznam kotví za PRAVÚ hranu bunky
+    // a rastie doľava — ostane pri bunke bez ohľadu na skutočnú šírku.
+    const priPravomOkraji = kotva.left + 568 > window.innerWidth;
     return {
-      left: Math.max(8, Math.min(kotva.left - 2, window.innerWidth - 348)),
-      minWidth: Math.max(kotva.width + 4, 190),
+      ...(priPravomOkraji
+        ? { right: Math.max(8, window.innerWidth - kotva.right - 2) }
+        : { left: Math.max(8, kotva.left - 2) }),
+      minWidth: Math.max(kotva.width + 4, 260),
       maxHeight: (nahor ? kotva.top : podKotvou) - 14,
       ...(nahor ? { bottom: window.innerHeight - kotva.top + 4 } : { top: kotva.bottom + 4 }),
     };
