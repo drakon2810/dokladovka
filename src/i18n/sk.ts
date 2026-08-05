@@ -1277,8 +1277,7 @@ export const sk = {
   'rozdelenie.hotovo': 'Doklad bol rozdelený — otvárame novú časť.',
   'rozdelenie.vsetkyPolozky': 'V pôvodnom doklade musí ostať aspoň jedna položka. Ak má ísť celý doklad do inej agendy, stačí zmeniť jeho typ.',
   'rozdelenie.tlacidlo': 'Rozdeliť doklad',
-  'rozdelenie.zCasti': 'Časť rozdeleného dokladu',
-  'rozdelenie.zobrazitPovodny': 'Zobraziť pôvodný doklad',
+  'rozdelenie.casti': 'Jeden prijatý súbor, viac zápisov — časti tohto dokladu:',
 
   // ===== Účtovný profil firmy (korpus histórie + kategórie plnení) =====
   'uctoProfil.titulok': 'Účtovný profil firmy',

@@ -51,7 +51,7 @@ import {
   StatusBadge,
 } from '../../components/ui';
 import { showToast } from '../../components/toast';
-import { formatDateTime } from '../../lib/format';
+import { formatDateTime, formatMoney } from '../../lib/format';
 import {
   isTotalConsistent,
   isVatRowConsistent,
@@ -67,7 +67,7 @@ import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { InvoicePanel } from './InvoicePanel';
 import { ExportPohodaModal } from './ExportPohodaModal';
-import { SplitDocumentModal } from './SplitDocumentModal';
+import { SplitDocumentModal, splitGroup } from './SplitDocumentModal';
 import {
   SOURCE_SECTIONS,
   buildMarks,
@@ -724,6 +724,14 @@ export function DocumentDetailPage() {
     );
   }
 
+  // Časti rozdeleného súboru sú už načítané v snapshote — stačí ich vyfiltrovať.
+  const casti = splitGroup(draft, data.documents);
+  // Odhad čísla z POHODY počíta len s posledným číslom radu, takže tri časti
+  // jedného rozboru miezd sľubovali všetky 26MZD013. Rátame, koľko predošlých
+  // častí ide do toho istého radu — iné rady si číslujú nezávisle.
+  const radOdstup = casti
+    .slice(0, Math.max(0, casti.findIndex((cast) => cast.id === draft.id)))
+    .filter((cast) => cast.ucto.ciselnyRadId === draft.ucto.ciselnyRadId).length;
   const hasAttachedFile = Boolean(draft.zdroj.localFileKey || draft.pdfUrl);
   const fileUrl = draft.zdroj.localFileKey ? localFileUrl : draft.pdfUrl || undefined;
   const imagePreview = ['image/jpeg', 'image/png', 'image/webp'].includes(draft.zdroj.mimeType ?? '');
@@ -1053,17 +1061,28 @@ export function DocumentDetailPage() {
         </div>
       </div>
 
-      {/* Časť rozdeleného dokladu: sken sedí na pôvodnom, preto sa naň dá skočiť. */}
-      {draft.splitFromDocumentId && (
-        <div className="anim-in flex flex-wrap items-center gap-3 rounded-xl border border-line bg-app px-4 py-2.5 text-sm text-ink-soft">
-          <span>{t('rozdelenie.zCasti')}</span>
-          <button
-            type="button"
-            className="btn ml-auto"
-            onClick={() => goToDocument(draft.splitFromDocumentId)}
-          >
-            {t('rozdelenie.zobrazitPovodny')}
-          </button>
+      {/* Sken je spoločný, zápisy do POHODY sú samostatné. Bez zoznamu všetkých
+          častí účtovník doúčtuje tú, ktorú otvoril, a o zvyšku sa nedozvie. */}
+      {casti.length > 0 && (
+        <div className="anim-in rounded-xl border border-line bg-app px-4 py-2.5 text-sm text-ink-soft">
+          <p className="mb-1.5">{t('rozdelenie.casti')}</p>
+          <div className="flex flex-wrap gap-2">
+            {casti.map((cast, index) => {
+              const popis = `${index + 1}/${casti.length} · ${cast.extracted.textPolozky || cast.extracted.dodavatel.nazov || t('rozdelenie.bezTextu')} · ${formatMoney(cast.extracted.sumaSpolu, cast.extracted.mena)}`;
+              return cast.id === draft.id ? (
+                <span
+                  key={cast.id}
+                  className="tnum rounded-lg border border-accent/40 bg-tint px-3 py-1.5 font-medium text-accent-hover"
+                >
+                  {popis}
+                </span>
+              ) : (
+                <button key={cast.id} type="button" className="btn tnum" onClick={() => goToDocument(cast.id)}>
+                  {popis}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
       {buyerMismatch && (
@@ -1356,6 +1375,7 @@ export function DocumentDetailPage() {
             }}
             suggestion={suggestion}
             autoFilled={autoFilled}
+            radOdstup={radOdstup}
             src={srcMap}
             srcEdited={srcEdited}
             srcOn={srcOn}

@@ -12,6 +12,25 @@ import { fmtMoney } from './ItemsSection';
 
 const TYPY: DocumentType[] = ['OZ', 'MZDY', 'FP', 'FV', 'PD'];
 
+/**
+ * Všetky doklady, ktoré vznikli z jedného prijatého súboru — pôvodný aj jeho
+ * časti — v ustálenom poradí (pôvodný prvý, časti podľa vzniku). Väzba je plochá,
+ * takže koreň sa nájde jedným krokom. Pri bežnom doklade vráti prázdno, nech
+ * detail nemá čo zobraziť.
+ */
+export function splitGroup(doklad: DocumentItem, vsetky: DocumentItem[]): DocumentItem[] {
+  const korenId = doklad.splitFromDocumentId ?? doklad.id;
+  const casti = vsetky.filter((item) => item.id === korenId || item.splitFromDocumentId === korenId);
+  if (casti.length < 2) return [];
+  // Id ako posledné kritérium: časti ručného rozdelenia môžu mať rovnaký čas
+  // vzniku a poradie „1/3" nesmie skákať podľa toho, ktorú časť účtovník otvoril.
+  return casti.sort((a, b) => (
+    Number(Boolean(a.splitFromDocumentId)) - Number(Boolean(b.splitFromDocumentId))
+    || a.prijateDna.localeCompare(b.prijateDna)
+    || a.id.localeCompare(b.id)
+  ));
+}
+
 export function SplitDocumentModal({
   doklad,
   onClose,

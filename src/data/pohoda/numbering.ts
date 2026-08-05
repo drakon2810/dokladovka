@@ -13,7 +13,7 @@
  * Príklady: `"0007" → "0008"`, `"2026FP0042" → "2026FP0043"`,
  * `"FA-00099" → "FA-00100"` (šírka sa rozšíri až pri pretečení).
  */
-export function nextNumberInSeries(last: string | undefined | null): string | undefined {
+export function nextNumberInSeries(last: string | undefined | null, odstup = 0): string | undefined {
   const value = last?.trim();
   if (!value) return undefined;
   // Posledná súvislá číslicová skupina v reťazci je poradové číslo. Text pred
@@ -21,7 +21,9 @@ export function nextNumberInSeries(last: string | undefined | null): string | un
   const match = value.match(/^(.*?)(\d+)(\D*)$/s);
   if (!match) return undefined;
   const [, prefix, digits, suffix] = match;
-  const next = String(Number(digits) + 1);
+  // `odstup` = koľko dokladov pôjde do toho istého radu pred týmto. Bez neho by
+  // všetky časti jedného rozdeleného súboru sľubovali to isté číslo.
+  const next = String(Number(digits) + 1 + odstup);
   const padded = next.padStart(digits.length, '0');
   return `${prefix}${padded}${suffix}`;
 }

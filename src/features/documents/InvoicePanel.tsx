@@ -50,6 +50,9 @@ interface InvoicePanelProps {
   exportDisabledReason?: string;
   /** „Rozdeliť doklad“ v ponuke položiek — dialóg otvára detail dokladu. */
   onSplit?: () => void;
+  /** Koľko častí toho istého rozdeleného súboru ide do rovnakého radu pred týmto
+   *  dokladom. Bez toho by všetky sľubovali to isté číslo z POHODY. */
+  radOdstup?: number;
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
@@ -155,7 +158,7 @@ const LOW_CONFIDENCE = 0.5;
 
 export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
-  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit,
+  src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, radOdstup = 0,
   setTyp, updateUcto, updateExtracted, updateSupplier,
 }: InvoicePanelProps) {
   const ex = draft.extracted;
@@ -424,7 +427,7 @@ export function InvoicePanel({
     ? ponukaRadov
     : [...ponukaRadov, ...codeLists.ciselneRady.filter((item) => item.id === ucto.ciselnyRadId)];
   const vybranyRad = codeLists.ciselneRady.find((item) => item.id === ucto.ciselnyRadId);
-  const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo);
+  const dalsieCislo = nextNumberInSeries(vybranyRad?.posledneCislo, radOdstup);
 
   const kvOpts: DcOption[] = CLENENIE_KV_KODY.map((kod) => ({ value: kod, label: KV_LABEL[kod] ?? kod, title: KV_LABEL[kod] ?? kod }));
   const menaOpts: DcOption[] = [
