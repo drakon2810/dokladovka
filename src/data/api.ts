@@ -2617,7 +2617,7 @@ export async function archivePartner(partnerId: string): Promise<void> {
 /** Predvolený číselný rad na typ dokladu; null vráti automatický výber. */
 export async function saveSeriesDefaults(
   organizationId: string,
-  defaults: Array<{ documentType: DocumentType; ciselnyRadId: string | null }>,
+  defaults: Array<{ documentType: DocumentType; ciselnyRadId: string | null; pokladnaKod?: string | null }>,
 ): Promise<void> {
   if (!REST_DATA_MODE) throw new Error('Predvolené číselné rady vyžadujú spustený backend');
   await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/series-defaults`, {

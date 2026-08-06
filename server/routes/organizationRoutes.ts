@@ -294,6 +294,8 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
       defaults: z.array(z.object({
         documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD']),
         ciselnyRadId: z.string().min(1).nullable(),
+        /** Kód pokladne POHODY (HP1…) — dáva zmysel len pri type PD. */
+        pokladnaKod: z.string().trim().max(20).nullable().optional(),
       }).strict()).max(12),
     }).strict().parse(request.body);
     await database.transaction(async (tx) => {
@@ -314,11 +316,15 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
         );
         if (rad.rowCount === 0) throw new HttpError(400, 'invalid_series', 'Číselný rad neexistuje alebo nie je aktívny');
         await tx.query(
-          `INSERT INTO organization_series_defaults (organization_id, tenant_id, document_type, ciselny_rad_id)
-           VALUES ($1,$2,$3,$4)
+          `INSERT INTO organization_series_defaults (organization_id, tenant_id, document_type, ciselny_rad_id, pokladna_kod)
+           VALUES ($1,$2,$3,$4,$5)
            ON CONFLICT (organization_id, document_type)
-           DO UPDATE SET ciselny_rad_id=excluded.ciselny_rad_id, updated_at=now()`,
-          [organizationId, auth.tenantId, item.documentType, item.ciselnyRadId],
+           DO UPDATE SET ciselny_rad_id=excluded.ciselny_rad_id,
+                         pokladna_kod=excluded.pokladna_kod, updated_at=now()`,
+          // Pokladňa patrí len k pokladničnému dokladu — pri ostatných typoch sa
+          // zahodí, aby v profile nezostala hodnota, ktorú editor nikdy nepoužije.
+          [organizationId, auth.tenantId, item.documentType, item.ciselnyRadId,
+            item.documentType === 'PD' ? item.pokladnaKod?.trim() || null : null],
         );
       }
     });

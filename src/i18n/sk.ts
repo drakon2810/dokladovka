@@ -872,6 +872,9 @@ export const sk = {
   'nast.cis.predvoleneRady': 'Predvolené číselné rady',
   'nast.cis.predvoleneRadyPopis': 'Rad, ktorý sa doplní do nového dokladu. Pri voľbe „Automaticky\" vyberie systém ten rad, ktorý firma v POHODE reálne používa.',
   'nast.cis.radAutomaticky': 'Automaticky (podľa POHODY)',
+  'nast.cis.pokladna': 'Pokladňa',
+  'nast.cis.pokladnaPlaceholder': 'HP1',
+  'nast.cis.pokladnaPopis': 'Kód pokladne z POHODY (pole „Pokl." na doklade). Doplní sa do nového pokladničného dokladu.',
   'nast.cis.banner':
     'Číselníky môžete spravovať ručne alebo ich importovať z POHODY pomocou XML súboru.',
   'nast.cis.syncMostikom': 'Synchronizovať mostíkom',

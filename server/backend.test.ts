@@ -330,4 +330,44 @@ describe('backend foundation', () => {
     expect((await database.query<{ status: string } & Record<string, unknown>>('SELECT status FROM processing_jobs')).rows[0].status).toBe('failed');
     await app.close();
   }, 90_000);
+
+  it('predvoľba pokladne sa uloží k pokladničnému dokladu a inde sa zahodí', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+    const rad = async (kod: string, agenda: string) => {
+      const id = `rad-${kod}`;
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,agenda,source,active)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$4,$5,'manual',true)`,
+        [id, seeded.tenantId, seeded.organizationId, kod, agenda],
+      );
+      return id;
+    };
+    const radPD = await rad('26HP', 'pokladna');
+    const radFP = await rad('26FP', 'prijate_faktury');
+    const uloz = (payload: unknown) => app.inject({
+      method: 'PUT', url: `/api/organizations/${seeded.organizationId}/series-defaults`, headers, payload,
+    });
+
+    const ok = await uloz({ defaults: [
+      { documentType: 'PD', ciselnyRadId: radPD, pokladnaKod: ' HP1 ' },
+      // Pokladňa pri faktúre nedáva zmysel — server ju musí zahodiť, inak by
+      // editor ponúkal pokladňu na doklade, ktorý ju nemá kam zapísať.
+      { documentType: 'FP', ciselnyRadId: radFP, pokladnaKod: 'HP9' },
+    ] });
+    expect(ok.statusCode, ok.body).toBeLessThan(300);
+
+    const ulozene = await database.query<{ document_type: string; pokladna_kod: string | null } & Record<string, unknown>>(
+      'SELECT document_type, pokladna_kod FROM organization_series_defaults ORDER BY document_type',
+    );
+    expect(ulozene.rows).toEqual([
+      { document_type: 'FP', pokladna_kod: null },
+      { document_type: 'PD', pokladna_kod: 'HP1' },
+    ]);
+    await app.close();
+  }, 90_000);
 });

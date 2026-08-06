@@ -177,6 +177,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       })),
       seriesDefaults: seriesDefaults.rows.map((row) => ({
         organizationId: row.organization_id, documentType: row.document_type, ciselnyRadId: row.ciselny_rad_id,
+        pokladnaKod: row.pokladna_kod ?? undefined,
       })),
       dphProfiles: dphProfiles.rows.map(mapDphProfilRow),
       accountingProfiles: accountingProfiles.rows.map(mapUctovnyProfilRow),

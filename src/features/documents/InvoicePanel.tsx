@@ -54,6 +54,8 @@ interface InvoicePanelProps {
   /** Koľko ďalších dokladov ešte čaká na číslo z toho istého radu. Kým čaká
    *  aspoň jeden, konkrétne číslo sa sľúbiť nedá — rozhodne poradie prenosu. */
   cakajuceVRade?: number;
+  /** Kód pokladne z predvolieb firmy — doplní sa pri prepnutí na pokladničný doklad. */
+  predvolenaPokladna?: string;
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
@@ -161,6 +163,7 @@ const LOW_CONFIDENCE = 0.5;
 export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
   src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, cakajuceVRade = 0,
+  predvolenaPokladna,
   setTyp, updateUcto, updateExtracted, updateSupplier, updateSupplierAddress,
 }: InvoicePanelProps) {
   const ex = draft.extracted;
@@ -504,7 +507,14 @@ export function InvoicePanel({
     if (option.typ !== draft.typ) setTyp(option.typ);
     // Smer pokladne je vlastnosť dokladu, nie číselníka — pri inej agende ho
     // necháme tak, POHODA ho pre faktúry ignoruje.
-    if (option.pokladnaTyp && option.pokladnaTyp !== ucto.pokladnaTyp) updateUcto({ pokladnaTyp: option.pokladnaTyp });
+    const patch: Partial<DocumentUcto> = {};
+    if (option.pokladnaTyp && option.pokladnaTyp !== ucto.pokladnaTyp) patch.pokladnaTyp = option.pokladnaTyp;
+    // Pokladňa z predvoľby firmy — POHODA bez nej doklad neprijme a účtovník ju
+    // inak píše ručne na každom doklade. Už vyplnenú hodnotu neprepisujeme.
+    if (option.typ === 'PD' && !ucto.pokladnaKod?.trim() && predvolenaPokladna) {
+      patch.pokladnaKod = predvolenaPokladna;
+    }
+    if (Object.keys(patch).length > 0) updateUcto(patch);
   };
   const jePokladna = draft.typ === 'PD';
   const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);

@@ -1455,6 +1455,9 @@ export function DocumentDetailPage() {
             updateExtracted={updateExtracted}
             updateSupplier={updateSupplier}
             updateSupplierAddress={updateSupplierAddress}
+            predvolenaPokladna={(data.seriesDefaults ?? []).find(
+              (item) => item.organizationId === draft.orgId && item.documentType === 'PD',
+            )?.pokladnaKod}
           />
 
           <Section title={t('detail.zdroj')}>

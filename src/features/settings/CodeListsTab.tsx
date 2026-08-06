@@ -86,14 +86,22 @@ function SeriesDefaultsCard({ organizationId }: { organizationId: string }) {
   const { data } = useDataQuery();
   const [busy, setBusy] = useState(false);
   const rady = (data?.codeLists.ciselneRady ?? []).filter((item) => item.orgId === organizationId && item.active);
-  const ulozene = new Map((data?.seriesDefaults ?? [])
-    .filter((item) => item.organizationId === organizationId)
-    .map((item) => [item.documentType, item.ciselnyRadId]));
+  const predvolby = (data?.seriesDefaults ?? []).filter((item) => item.organizationId === organizationId);
+  const ulozene = new Map(predvolby.map((item) => [item.documentType, item.ciselnyRadId]));
+  const ulozenaPokladna = predvolby.find((item) => item.documentType === 'PD')?.pokladnaKod ?? '';
+  // Pokladňa sa v POHODE zapisuje ku KAŽDÉMU pokladničnému dokladu (pole „Pokl.").
+  // Držíme ju v lokálnom stave, aby sa neukladalo pri každom stlačení klávesy.
+  const [pokladna, setPokladna] = useState(ulozenaPokladna);
+  useEffect(() => setPokladna(ulozenaPokladna), [ulozenaPokladna]);
 
-  async function uloz(documentType: DocumentType, ciselnyRadId: string): Promise<void> {
+  async function uloz(documentType: DocumentType, ciselnyRadId: string, pokladnaKod?: string): Promise<void> {
     setBusy(true);
     try {
-      await saveSeriesDefaults(organizationId, [{ documentType, ciselnyRadId: ciselnyRadId || null }]);
+      await saveSeriesDefaults(organizationId, [{
+        documentType,
+        ciselnyRadId: ciselnyRadId || null,
+        ...(documentType === 'PD' ? { pokladnaKod: pokladnaKod ?? null } : {}),
+      }]);
       showToast(t('toast.ulozene'));
     } catch (cause) {
       showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
@@ -116,13 +124,32 @@ function SeriesDefaultsCard({ organizationId }: { organizationId: string }) {
                 className="input min-w-0 flex-1"
                 value={ulozene.get(typ) ?? ''}
                 disabled={busy || ponuka.length === 0}
-                onChange={(event) => void uloz(typ, event.target.value)}
+                onChange={(event) => void uloz(typ, event.target.value, typ === 'PD' ? pokladna : undefined)}
               >
                 <option value="">{t('nast.cis.radAutomaticky')}</option>
                 {ponuka.map((item) => (
                   <option key={item.id} value={item.id}>{item.kod} · {item.nazov}</option>
                 ))}
               </select>
+              {/* POHODA má pri pokladničnom doklade okrem radu aj pole „Pokl." —
+                  bez neho doklad neprijme. Zapisuje sa ako kód (HP1), lebo
+                  číselník pokladní zatiaľ z POHODY nesťahujeme. */}
+              {typ === 'PD' && (
+                <input
+                  className="input w-24 shrink-0"
+                  value={pokladna}
+                  maxLength={20}
+                  disabled={busy}
+                  placeholder={t('nast.cis.pokladnaPlaceholder')}
+                  aria-label={t('nast.cis.pokladna')}
+                  title={t('nast.cis.pokladnaPopis')}
+                  onChange={(event) => setPokladna(event.target.value)}
+                  onBlur={() => {
+                    if (pokladna.trim() === ulozenaPokladna) return;
+                    void uloz('PD', ulozene.get('PD') ?? '', pokladna.trim());
+                  }}
+                />
+              )}
             </label>
           );
         })}

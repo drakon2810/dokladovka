@@ -56,6 +56,8 @@ export interface SeriesDefault {
   organizationId: string;
   documentType: DocumentType;
   ciselnyRadId: string;
+  /** Kód pokladne POHODY (HP1…). Len pri type PD — inde pokladňa neexistuje. */
+  pokladnaKod?: string;
 }
 
 /** Preddefinovaná poznámka pre pole „poznámka“ na doklade. */
