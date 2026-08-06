@@ -191,6 +191,12 @@ export function agendaZTypuDokladu(documentType: unknown, pokladnaTyp: unknown):
  * vychádzať ešte pred prvým plným exportom z POHODY. Agenda sa berie z dokladu,
  * ku ktorému rozhodnutie patrí — kým sa písalo natvrdo 'FP', celý korpus vyzeral
  * ako samé prijaté faktúry a rozdelenie profilu podľa agend nemalo čo ukázať.
+ * Opakované preklopenie agendu opraví aj riadkom, ktoré tu už sú.
+ *
+ * POZOR na očakávania: pamäť rozhodnutí pozná len prijaté faktúry (import .mdb
+ * do pamäte berie RelTpFak 11/12/15) a doklady schválené v Dokladovke. Pokladňu,
+ * vydané faktúry ani ostatné záväzky odtiaľto NEČAKAJ — tie prináša až import
+ * .mdb do korpusu (extractPohodaHistory).
  */
 export async function backfillHistoryFromDecisions(
   database: Database,
@@ -244,7 +250,13 @@ export async function backfillHistoryFromDecisions(
          predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,
          stredisko_kod,stredisko_id,source,riadok_hash)
        VALUES ($1,$2,$3,$15,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'decisions',$14)
-       ON CONFLICT (organization_id, riadok_hash) DO NOTHING`,
+       -- Agenda sa pri opakovanom preklopení DOPLNÍ. S DO NOTHING ostali riadky
+       -- preklopené starším kódom navždy pri 'FP' a oprava agendy sa k nim
+       -- nikdy nedostala — tlačidlo len hlásilo „(0)". Podmienka drží rowCount
+       -- pravdivý: keď sa nič nemení, riadok sa nepočíta ako preklopený.
+       ON CONFLICT (organization_id, riadok_hash) DO UPDATE
+         SET agenda=EXCLUDED.agenda
+         WHERE ucto_historia.agenda IS DISTINCT FROM EXCLUDED.agenda`,
       [randomUUID(), tenantId, organizationId, resolved.lineText, resolved.supplierIco,
         resolved.supplierName, resolved.predkontaciaKod, resolved.predkontaciaId,
         resolved.clenenieDphKod, resolved.clenenieDphId, resolved.clenenieKvKod,

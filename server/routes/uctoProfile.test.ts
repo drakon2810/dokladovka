@@ -99,6 +99,45 @@ describe('účtovný profil firmy', () => {
     expect(agregat[0].kombinacie).toHaveLength(2);
   }, 90_000);
 
+  it('backfill berie agendu z dokladu a opakovaním opraví aj riadky preklopené postaru', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const ids = await seedCodeLists(database, seeded, [['predkontacie', '521/331'], ['cleneniaDph', 'UN']]);
+    const dokladId = randomUUID();
+    const rozhodnutieId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,source,
+         extracted,accounting,confidence,total_amount,currency,version)
+       VALUES ($1,$2,$3,'PD','schvaleny','ready_for_review','{}'::jsonb,'{}'::jsonb,
+         '{"pokladnaTyp":"expense"}'::jsonb,1,10,'EUR',1)`,
+      [dokladId, seeded.tenantId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO ucto_decisions (id,tenant_id,organization_id,document_id,supplier_name_normalized,
+         line_text_normalized,predkontacia_id,clenenie_dph_id,source)
+       VALUES ($1,$2,$3,$4,'dodavatel','nakup phm',$5,$6,'approved')`,
+      [rozhodnutieId, seeded.tenantId, seeded.organizationId, dokladId,
+        ids.get('predkontacie:521/331'), ids.get('cleneniaDph:UN')],
+    );
+
+    // Výdajový pokladničný doklad — smer je v zaúčtovaní, nie v type dokladu.
+    expect((await backfillHistoryFromDecisions(database, seeded.tenantId, seeded.organizationId)).imported).toBe(1);
+    const agendaVKorpuse = async () => (await database.query<{ agenda: string } & Record<string, unknown>>(
+      'SELECT agenda FROM ucto_historia WHERE organization_id=$1', [seeded.organizationId],
+    )).rows[0].agenda;
+    expect(await agendaVKorpuse()).toBe('VPD');
+
+    // Riadok preklopený starším kódom (natvrdo 'FP') sa musí dať opraviť
+    // opakovaným preklopením — s DO NOTHING v ňom ostala zlá agenda navždy.
+    await database.query('UPDATE ucto_historia SET agenda=$1 WHERE organization_id=$2',
+      ['FP', seeded.organizationId]);
+    expect((await backfillHistoryFromDecisions(database, seeded.tenantId, seeded.organizationId)).imported).toBe(1);
+    expect(await agendaVKorpuse()).toBe('VPD');
+    // Keď už agenda sedí, riadok sa ako preklopený nepočíta.
+    expect((await backfillHistoryFromDecisions(database, seeded.tenantId, seeded.organizationId)).imported).toBe(0);
+  }, 90_000);
+
   it('analýza uloží kategórie a zahodí účet, ktorý model vymyslel', async () => {
     const database = await createTestDatabase();
     databases.push(database);
