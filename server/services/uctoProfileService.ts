@@ -167,9 +167,15 @@ export async function analyzujUctovnyProfil(
     // Koľko riadkov histórie kategória naozaj pokrýva, sa NEODHADUJE: spočíta
     // sa deterministicky cez jej vlastný slovník. Toto číslo rozhoduje, či sa
     // návrh z kategórie smie predvyplniť, takže odhad by bol nebezpečný.
-    const pokrytie = (kategoria: z.infer<typeof kategoriaSchema>) => davka
-      .filter((item) => pocetZhodSlov(kategoria.slovnik, item.text) > 0)
-      .reduce((sum, item) => sum + item.pocet, 0);
+    const pokryteTexty = (kategoria: z.infer<typeof kategoriaSchema>) => davka
+      .filter((item) => pocetZhodSlov(kategoria.slovnik, item.text) > 0);
+    const pokrytie = (kategoria: z.infer<typeof kategoriaSchema>) =>
+      pokryteTexty(kategoria).reduce((sum, item) => sum + item.pocet, 0);
+    // Agendy kategórie sú agendy textov, ktoré NAOZAJ pokrýva — nie všetko, čo
+    // sa náhodou ocitlo v tej istej dávke. Inak by každá kategória tvrdila, že
+    // patrí do všetkých agend, a rozdelenie profilu podľa agend by nič nefiltrovalo.
+    const agendyKategorie = (kategoria: z.infer<typeof kategoriaSchema>) =>
+      [...new Set(pokryteTexty(kategoria).flatMap((item) => item.agendy))];
     for (const kategoria of parsed.kategorie) {
       const cistyUcet = kategoria.predkontaciaKod && povoleneUcty.has(kategoria.predkontaciaKod)
         ? kategoria.predkontaciaKod : null;
@@ -179,9 +185,10 @@ export async function analyzujUctovnyProfil(
       if (!nazov) continue;
       const existujuca = kategorie.get(nazov.toLocaleLowerCase('sk'));
       if (existujuca) {
-        // Rovnaká kategória z ďalšej dávky len dopĺňa slovník a počty.
+        // Rovnaká kategória z ďalšej dávky len dopĺňa slovník, počty a agendy.
         existujuca.slovnik = [...new Set([...existujuca.slovnik, ...kategoria.slovnik])].slice(0, 30);
         existujuca.pocet += pokrytie(kategoria);
+        existujuca.agendy = [...new Set([...existujuca.agendy, ...agendyKategorie(kategoria)])];
         existujuca.konflikt ??= kategoria.konflikt;
         continue;
       }
@@ -194,7 +201,7 @@ export async function analyzujUctovnyProfil(
         vynimky: kategoria.vynimky.filter((vynimka) =>
           vynimka.predkontaciaKod === null || povoleneUcty.has(vynimka.predkontaciaKod)),
         pocet: pokrytie(kategoria),
-        agendy: [...new Set(davka.flatMap((item) => item.agendy))],
+        agendy: agendyKategorie(kategoria),
       });
     }
   }

@@ -242,7 +242,9 @@ export function ItemsSection({
   );
 
   return (
-    <div className="dk-card">
+    // dk-card-grow: voľnú výšku editora dostane práve táto karta — jediná, čo
+    // rastie s obsahom. Ostatné karty by z nej mali len prázdne pixely.
+    <div className="dk-card dk-card-grow">
       <div
         className={`dk-items-head${srcSection ? ` dv-src-sec dv-src-${srcSection}` : ''}`}
         onMouseEnter={srcSection ? () => onHoverSrc?.(`sec:${srcSection}`) : undefined}

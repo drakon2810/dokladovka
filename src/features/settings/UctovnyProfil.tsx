@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  UCTO_AGENDA_NAZOV, UCTO_AGENDY,
   analyzeUctoProfil, backfillUctoHistory, deleteUctoKategoria, getUctoHistoryStats,
   listUctoKategorie, updateUctoKategoria,
   type UctoHistoryStats, type UctoKategoria,
@@ -32,6 +33,8 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
   const [kategorie, setKategorie] = useState<UctoKategoria[]>([]);
   const [busy, setBusy] = useState<'backfill' | 'analyza' | 'kategoria'>();
   const [uprava, setUprava] = useState<KategoriaUprava>();
+  /** Vybraná agenda, alebo undefined pre všetky — pokladňa sa účtuje inak než faktúry. */
+  const [agenda, setAgenda] = useState<string>();
 
   async function obnov() {
     const [nasledujuce, zoznam] = await Promise.all([
@@ -47,6 +50,7 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
     setStats(undefined);
     setKategorie([]);
     setUprava(undefined);
+    setAgenda(undefined);
     void Promise.all([
       getUctoHistoryStats(orgId).catch(() => undefined),
       listUctoKategorie(orgId).catch(() => []),
@@ -144,6 +148,14 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
 
   // Kódy číselníkov firmy pre našepkávanie pri úprave (natívny datalist).
   // „BEZ…" predkontácie sa nenašepkávajú — server ich pri úprave odmieta.
+  // Rozdelenie podľa agendy. Kategória bez agend (staršia analýza) sa skryť
+  // nesmie — inak by po filtri vyzeral profil prázdny a účtovník by nevedel prečo.
+  const vAgende = (kategoria: UctoKategoria) =>
+    !agenda || kategoria.agendy.length === 0 || kategoria.agendy.includes(agenda);
+  const vidielne = kategorie.filter(vAgende);
+  const pocetVAgende = (kod: string) =>
+    kategorie.filter((kategoria) => kategoria.agendy.includes(kod)).length;
+
   const kodyPre = (kind: 'predkontacie' | 'cleneniaDph'): string[] =>
     (data?.codeLists[kind] ?? [])
       .filter((item) => item.orgId === orgId && item.active)
@@ -167,9 +179,13 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
         <span>
           {t('uctoProfil.roznychTextov')}: <b className="tnum">{stats?.roznychTextov ?? 0}</b>
         </span>
-        {stats?.podlaAgendy.map((agenda) => (
-          <span key={agenda.agenda} className="rounded-md border border-line px-1.5 py-0.5 text-[11.5px] text-ink-soft">
-            {agenda.agenda} <b className="tnum">{agenda.pocet}</b>
+        {stats?.podlaAgendy.map((riadok) => (
+          <span
+            key={riadok.agenda}
+            title={UCTO_AGENDA_NAZOV[riadok.agenda] ?? riadok.agenda}
+            className="rounded-md border border-line px-1.5 py-0.5 text-[11.5px] text-ink-soft"
+          >
+            {riadok.agenda} <b className="tnum">{riadok.pocet}</b>
           </span>
         ))}
       </div>
@@ -188,6 +204,29 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
         <p className="text-[13px] text-ink-soft">{t('uctoProfil.ziadneKategorie')}</p>
       ) : (
         <div className="overflow-x-auto">
+          {/* Rozdelenie podľa agendy — pokladničný výdaj a prijatá faktúra sa
+              účtujú inak, tak nech si ich účtovník vie pozrieť oddelene. */}
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className={`btn px-2.5 py-1 text-xs${agenda === undefined ? ' btn-primary' : ''}`}
+              onClick={() => { setAgenda(undefined); setUprava(undefined); }}
+            >
+              {t('uctoProfil.agendaVsetky')} <span className="tnum">{kategorie.length}</span>
+            </button>
+            {UCTO_AGENDY.map((kod) => (
+              <button
+                key={kod}
+                type="button"
+                title={UCTO_AGENDA_NAZOV[kod]}
+                disabled={pocetVAgende(kod) === 0}
+                className={`btn px-2.5 py-1 text-xs${agenda === kod ? ' btn-primary' : ''}`}
+                onClick={() => { setAgenda(kod); setUprava(undefined); }}
+              >
+                {kod} <span className="tnum">{pocetVAgende(kod)}</span>
+              </button>
+            ))}
+          </div>
           <datalist id="ucto-profil-predkontacie">
             {kodyPre('predkontacie').map((kod) => <option key={kod} value={kod} />)}
           </datalist>
@@ -206,7 +245,12 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
               </tr>
             </thead>
             <tbody>
-              {kategorie.map((kategoria) => (
+              {vidielne.length === 0 && (
+                <tr><td colSpan={6} className="px-2 py-3 text-[13px] text-ink-soft">
+                  {t('uctoProfil.ziadneVAgende')}
+                </td></tr>
+              )}
+              {vidielne.map((kategoria) => (
                 uprava?.id === kategoria.id ? (
                   <tr key={kategoria.id} className="border-b border-line-soft align-top last:border-0">
                     <td className="px-2 py-2">
@@ -282,6 +326,15 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
                   <tr key={kategoria.id} className="border-b border-line-soft align-top last:border-0">
                     <td className="px-2 py-2">
                       <span className="font-medium text-ink">{kategoria.nazov}</span>
+                      {/* V pohľade „všetky" nie je inak vidieť, do ktorých agend kategória patrí. */}
+                      {agenda === undefined && kategoria.agendy.length > 0 && (
+                        <span
+                          className="ml-1.5 text-[11px] text-ink-faint"
+                          title={kategoria.agendy.map((kod) => UCTO_AGENDA_NAZOV[kod] ?? kod).join(', ')}
+                        >
+                          {kategoria.agendy.join(' · ')}
+                        </span>
+                      )}
                       {kategoria.popis && <span className="block text-[12px] text-ink-faint">{kategoria.popis}</span>}
                       {kategoria.konflikt && (
                         <span className="mt-1 block rounded-md bg-amber-50 px-1.5 py-0.5 text-[11.5px] text-amber-800">

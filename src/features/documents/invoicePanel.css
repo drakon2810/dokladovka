@@ -31,9 +31,12 @@
 }
 .dk-doc *, .dk-doc *::before, .dk-doc *::after { box-sizing: border-box; }
 
-/* Karty majú výšku svojho obsahu. Roztiahnutie na výšku okna tu kedysi bolo,
-   aby sekcia Zdroj začínala pod ohybom — po zhustení editora už netreba a
-   robilo pod poslednými riadkami každej karty desiatky prázdnych pixelov. */
+/* Karty majú výšku svojho obsahu — roztiahnuť VŠETKY na výšku okna tu kedysi
+   bolo a robilo pod poslednými riadkami každej karty desiatky prázdnych pixelov.
+   Voľnú výšku preto dostane jediná karta, ktorej to dáva zmysel: položky
+   dokladu. Vďaka tomu sekcia Zdroj začína pod ohybom (editor siaha po spodok
+   náhľadu vedľa seba) bez toho, aby ostatné karty zredli. */
+.dk-card-grow { flex: 1 1 auto; }
 
 @keyframes dkPop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 

@@ -2942,9 +2942,30 @@ export interface UctoKategoria {
   konflikt?: string;
 }
 
+/**
+ * Účtovné agendy profilu v poradí, v akom ich účtovník vidí v type dokladu.
+ * Musí sedieť s AGENDY_ZOBRAZENE v server/services/uctoHistoryService.ts.
+ */
+export const UCTO_AGENDY = ['VPD', 'PPD', 'FP', 'FV', 'OZ', 'INT'] as const;
+
+/** Popisky agend pre používateľa — kód sám o sebe („VPD") nie je čitateľný. */
+export const UCTO_AGENDA_NAZOV: Record<string, string> = {
+  VPD: 'Výdajový pokladničný doklad',
+  PPD: 'Príjmový pokladničný doklad',
+  FP: 'Faktúra prijatá',
+  FV: 'Faktúra vydaná',
+  OZ: 'Ostatný záväzok',
+  INT: 'Interný doklad (INT)',
+  BV: 'Bankový výpis',
+  // Staré importy spred rozdelenia agend — v dátach ešte žijú.
+  PD: 'Pokladňa (bez smeru)',
+  MZDY: 'Interný doklad (INT)',
+  INE: 'Ostatné',
+};
+
 /** Riadok histórie zaúčtovaní — musí sedieť s historyRowSchema na serveri. */
 export interface UctoHistoryRow {
-  agenda: 'FP' | 'FV' | 'PD' | 'BV' | 'MZDY' | 'OZ' | 'INE';
+  agenda: 'FP' | 'FV' | 'PPD' | 'VPD' | 'OZ' | 'INT' | 'BV' | 'PD' | 'MZDY' | 'INE';
   dokladCislo?: string;
   riadokIndex?: number;
   datum?: string;

@@ -166,6 +166,18 @@
     .detail-split {
       grid-template-columns: minmax(0, var(--detail-left, 50%)) 6px minmax(0, 1fr);
     }
+
+    /* Editor si vezme celú výšku, ktorú vedľa neho zaberá náhľad dokladu, takže
+       sekcia Zdroj sa odsunie pod ohyb a voľné miesto po nej pripadne kartám
+       nad ňou (rastú položky dokladu — .dk-card-grow). Len na širokom rozložení:
+       pod 1280 px je náhľad NAD editorom a naťahovať by nebolo čo. */
+    .detail-stack {
+      display: flex;
+      flex-direction: column;
+    }
+    .detail-stack > .dk-doc {
+      flex: 1 1 auto;
+    }
   }
 }
 

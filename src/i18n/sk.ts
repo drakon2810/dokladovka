@@ -1294,6 +1294,8 @@ export const sk = {
   'uctoProfil.analyzujem': 'Analyzujem…',
   'uctoProfil.analyzaHotova': 'Analýza dokončená.',
   'uctoProfil.ziadneKategorie': 'Zatiaľ žiadne kategórie — najprv naimportujte históriu a spustite analýzu.',
+  'uctoProfil.agendaVsetky': 'Všetky agendy',
+  'uctoProfil.ziadneVAgende': 'V tejto agende zatiaľ nie je žiadna kategória.',
   'uctoProfil.st.kategoria': 'Kategória',
   'uctoProfil.st.slovnik': 'Slovník',
   'uctoProfil.st.ucet': 'Predkontácia',

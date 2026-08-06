@@ -7,7 +7,19 @@ import { jeBezPredkontacia, normalizeName, platnyKvKod } from './accountingSugge
 // všetky agendy. Zdroj pravdy pre jednorazovú analýzu kategórií plnení.
 // Zámerne NIE je v ceste návrhu na doklade — tá beží nad ucto_decisions.
 
-export const AGENDY = ['FP', 'FV', 'PD', 'BV', 'MZDY', 'OZ', 'INE'] as const;
+/**
+ * Účtovné agendy korpusu — jedna za každú agendu POHODY, ktorú účtovník vidí
+ * v type dokladu. Pokladňa je rozdelená na príjem a výdaj, lebo tie isté slová
+ * („PHM", „poštovné") sa v nich účtujú opačne a v jednej hromade by si kategórie
+ * protirečili.
+ *
+ * `PD`, `MZDY` a `INE` sú staré hodnoty z importov spred rozdelenia; nové riadky
+ * ich už nepoužívajú, ale v databáze zostávajú, tak musia prejsť validáciou.
+ */
+export const AGENDY = ['FP', 'FV', 'PPD', 'VPD', 'OZ', 'INT', 'BV', 'PD', 'MZDY', 'INE'] as const;
+
+/** Agendy, ktoré sa účtovníkovi ponúkajú ako filter — v poradí ako v type dokladu. */
+export const AGENDY_ZOBRAZENE = ['VPD', 'PPD', 'FP', 'FV', 'OZ', 'INT'] as const;
 
 /** Riadok histórie tak, ako ho posiela prehliadač (.mdb) aj agent (POHODA XML). */
 export const historyRowSchema = z.object({
@@ -157,9 +169,28 @@ export async function importUctoHistory(
 }
 
 /**
+ * Agenda korpusu podľa typu dokladu, z ktorého rozhodnutie vzniklo. Pokladňa
+ * nesie smer v zaúčtovaní dokladu, nie v type — bez neho by príjem a výdaj
+ * skončili v jednej hromade.
+ */
+export function agendaZTypuDokladu(documentType: unknown, pokladnaTyp: unknown): string {
+  switch (String(documentType ?? '')) {
+    case 'FP': return 'FP';
+    case 'FV': return 'FV';
+    case 'OZ': return 'OZ';
+    case 'MZDY': return 'INT';
+    case 'BV': return 'BV';
+    case 'PD': return String(pokladnaTyp ?? '') === 'receipt' ? 'PPD' : 'VPD';
+    // Rozhodnutia bez dokladu pochádzajú z importu .mdb prijatých faktúr.
+    default: return 'FP';
+  }
+}
+
+/**
  * Preklopí už existujúcu pamäť rozhodnutí do korpusu, aby analýza mala z čoho
- * vychádzať ešte pred prvým plným exportom z POHODY. Agenda sa z pamäte nedá
- * zistiť (pamäť pozná len prijaté faktúry), preto 'FP'.
+ * vychádzať ešte pred prvým plným exportom z POHODY. Agenda sa berie z dokladu,
+ * ku ktorému rozhodnutie patrí — kým sa písalo natvrdo 'FP', celý korpus vyzeral
+ * ako samé prijaté faktúry a rozdelenie profilu podľa agend nemalo čo ukázať.
  */
 export async function backfillHistoryFromDecisions(
   database: Database,
@@ -171,11 +202,13 @@ export async function backfillHistoryFromDecisions(
             d.clenenie_kv_kod,
             p.code AS predkontacia_kod, d.predkontacia_id,
             c.code AS clenenie_dph_kod, d.clenenie_dph_id,
-            s.code AS stredisko_kod, d.stredisko_id
+            s.code AS stredisko_kod, d.stredisko_id,
+            dok.document_type, dok.accounting->>'pokladnaTyp' AS pokladna_typ
        FROM ucto_decisions d
        LEFT JOIN code_list_items p ON p.id=d.predkontacia_id
        LEFT JOIN code_list_items c ON c.id=d.clenenie_dph_id
        LEFT JOIN code_list_items s ON s.id=d.stredisko_id
+       LEFT JOIN documents dok ON dok.id=d.document_id
       WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.excluded=false
         AND coalesce(d.line_text_normalized,'') <> ''`,
     [tenantId, organizationId],
@@ -183,7 +216,7 @@ export async function backfillHistoryFromDecisions(
   let imported = 0;
   for (const row of rows.rows) {
     const resolved: ResolvedRow = {
-      agenda: 'FP',
+      agenda: agendaZTypuDokladu(row.document_type, row.pokladna_typ),
       dokladCislo: null,
       datum: null,
       supplierIco: row.supplier_ico ?? null,
@@ -210,12 +243,12 @@ export async function backfillHistoryFromDecisions(
         (id,tenant_id,organization_id,agenda,line_text_normalized,supplier_ico,supplier_name_normalized,
          predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,
          stredisko_kod,stredisko_id,source,riadok_hash)
-       VALUES ($1,$2,$3,'FP',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'decisions',$14)
+       VALUES ($1,$2,$3,$15,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'decisions',$14)
        ON CONFLICT (organization_id, riadok_hash) DO NOTHING`,
       [randomUUID(), tenantId, organizationId, resolved.lineText, resolved.supplierIco,
         resolved.supplierName, resolved.predkontaciaKod, resolved.predkontaciaId,
         resolved.clenenieDphKod, resolved.clenenieDphId, resolved.clenenieKvKod,
-        resolved.strediskoKod, resolved.strediskoId, resolved.hash],
+        resolved.strediskoKod, resolved.strediskoId, resolved.hash, resolved.agenda],
     );
     if (result.rowCount > 0) imported += 1;
   }

@@ -65,7 +65,7 @@ describe('extractPohodaDecisions', () => {
 
     // Banka (BV) sa neučí; FA riadok bez predkontácie aj členenia sa vynechá.
     expect(summary).toMatchObject({ spolu: 6, bezZauctovania: 1 });
-    expect(summary.poAgende).toEqual({ FP: 1, FV: 1, INE: 2, PD: 1 });
+    expect(summary.poAgende).toEqual({ FP: 1, FV: 1, OZ: 1, INT: 1, PD: 1 });
     expect(rows).toHaveLength(5);
     expect(rows[0]).toEqual({
       agenda: 'FP', riadokIndex: 0, dokladCislo: 'FP2500001', datum: '2025-03-05',
@@ -74,10 +74,27 @@ describe('extractPohodaDecisions', () => {
     });
     // Vydaná faktúra do histórie patrí (na rozdiel od pamäte dodávateľov).
     expect(rows[1]).toMatchObject({ agenda: 'FV', lineText: 'predaj tovaru', clenenieDphKod: 'UD' });
-    // Neznámy typ FA (ostatné pohľadávky/záväzky) neprepadne — skončí ako INE.
-    expect(rows[2]).toMatchObject({ agenda: 'INE', dokladCislo: 'OZ2500001', datum: undefined });
+    // Zvyšok agendy FA sú ostatné záväzky — vlastná agenda, nie spoločné „INE".
+    expect(rows[2]).toMatchObject({ agenda: 'OZ', dokladCislo: 'OZ2500001', datum: undefined });
+    // Pokladňa bez stĺpca so smerom aj bez sumy ostáva pri hrubom 'PD'.
     expect(rows[3]).toMatchObject({ agenda: 'PD', lineText: 'PHM', dokladCislo: 'PD2500001' });
-    expect(rows[4]).toMatchObject({ agenda: 'INE', lineText: 'mzdy 01/2025', supplierName: undefined });
+    expect(rows[4]).toMatchObject({ agenda: 'INT', lineText: 'mzdy 01/2025', supplierName: undefined });
+  });
+
+  it('pokladňa sa rozdelí na príjem a výdaj podľa typu dokladu aj podľa znamienka sumy', () => {
+    const pokladna = (doklad: Record<string, unknown>) => extractPohodaHistory(fakeReader([], {
+      HO: [{ Cislo: 'PD1', SText: 'PHM', RelPk: 200, RelTpDPH: 10, Firma: '', ICO: null, ...doklad }],
+    })).rows[0]?.agenda;
+
+    expect(pokladna({ RelTpPok: 1 })).toBe('PPD');
+    expect(pokladna({ RelTpPok: 2 })).toBe('VPD');
+    // Iná verzia POHODY, iný stĺpec — kandidáti sa skúšajú po poradí.
+    expect(pokladna({ Prijem: false })).toBe('VPD');
+    // Bez stĺpca so smerom rozhodne znamienko sumy.
+    expect(pokladna({ Kc: -42 })).toBe('VPD');
+    expect(pokladna({ Kc: 42 })).toBe('PPD');
+    // Nula nie je smer — radšej hrubá agenda než vymyslený smer.
+    expect(pokladna({ Kc: 0 })).toBe('PD');
   });
 
   it('história prežije databázu bez pokladne a interných dokladov', () => {

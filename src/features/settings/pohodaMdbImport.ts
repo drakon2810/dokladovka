@@ -115,13 +115,25 @@ export interface PohodaHistoryResult {
 // ponytail: hlavičky dokladov (SText); položkové tabuľky (FApol, HOpol,
 // pINTpol) doplniť, až keď bude k dispozícii reálna .mdb na overenie stĺpcov.
 const HISTORICKE_TABULKY: Array<{ table: string; agenda?: UctoHistoryRow['agenda'] }> = [
-  { table: 'FA' }, // agenda podľa RelTpFak
-  { table: 'HO', agenda: 'PD' }, // pokladňa
-  { table: 'pINT', agenda: 'INE' }, // interné doklady
+  { table: 'FA' }, // FP / FV / OZ podľa RelTpFak
+  { table: 'HO' }, // pokladňa — PPD / VPD podľa smeru dokladu
+  { table: 'pINT', agenda: 'INT' }, // interné doklady
 ];
 
+/**
+ * Smer pokladničného dokladu sa v POHODE medzi verziami nesie v rôznych
+ * stĺpcoch, preto sa skúša viacero kandidátov a až potom znamienko sumy.
+ * ponytail: kandidáti podľa dokumentácie Stormware; overiť na reálnej .mdb —
+ * keď nesedí ani jeden, doklady ostanú pri hrubom 'PD' a v profile to bude vidieť.
+ */
+const SMER_POKLADNE_STLPCE = ['RelTpPok', 'RelTpPr', 'TypDokl', 'Prijem'] as const;
+const SUMA_POKLADNE_STLPCE = ['Kc', 'KcCelkem', 'Celkem'] as const;
+
 /** Stĺpce spoločné pre dokladové tabuľky POHODY; chýbajúce sa preskočia. */
-const HISTORICKE_STLPCE = ['RelTpFak', 'Cislo', 'Datum', 'Firma', 'ICO', 'SText', 'RelPk', 'RelTpDPH', 'RelTpKVDPH'];
+const HISTORICKE_STLPCE = [
+  'RelTpFak', 'Cislo', 'Datum', 'Firma', 'ICO', 'SText', 'RelPk', 'RelTpDPH', 'RelTpKVDPH',
+  ...SMER_POKLADNE_STLPCE, ...SUMA_POKLADNE_STLPCE,
+];
 
 /** mdb-reader vracia dátumy ako Date; história ich chce ako yyyy-mm-dd. */
 function isoDatum(value: unknown): string | undefined {
@@ -140,7 +152,26 @@ function agendaFaktury(relTpFak: unknown): UctoHistoryRow['agenda'] {
   const typ = Number(relTpFak);
   if (PRIJATE_TYPY.has(typ)) return 'FP';
   if (VYDANE_TYPY.has(typ)) return 'FV';
-  return 'INE'; // ostatné pohľadávky/záväzky a neznáme typy — text a kódy majú váhu aj tak
+  // Zvyšok agendy FA sú ostatné pohľadávky/záväzky (RelTpFak 16 a spol.) —
+  // v POHODE je to agenda „Ostatné záväzky", tak ju tak aj pomenujme.
+  return 'OZ';
+}
+
+export function smerPokladne(doklad: Record<string, unknown>): 'PPD' | 'VPD' | undefined {
+  for (const stlpec of SMER_POKLADNE_STLPCE) {
+    const hodnota = doklad[stlpec];
+    if (hodnota === undefined || hodnota === null || hodnota === '') continue;
+    if (typeof hodnota === 'boolean') return hodnota ? 'PPD' : 'VPD';
+    const cislo = Number(hodnota);
+    // POHODA číseluje typy pokladničného dokladu 1 = príjem, 2 = výdaj.
+    if (cislo === 1) return 'PPD';
+    if (cislo === 2) return 'VPD';
+  }
+  for (const stlpec of SUMA_POKLADNE_STLPCE) {
+    const suma = Number(doklad[stlpec]);
+    if (Number.isFinite(suma) && suma !== 0) return suma > 0 ? 'PPD' : 'VPD';
+  }
+  return undefined;
 }
 
 /**
@@ -175,7 +206,8 @@ export function extractPohodaHistory(reader: MdbLike): PohodaHistoryResult {
         bezZauctovania += 1;
         continue;
       }
-      const riadokAgenda = agenda ?? agendaFaktury(doklad.RelTpFak);
+      const riadokAgenda = agenda
+        ?? (table === 'HO' ? smerPokladne(doklad) ?? 'PD' : agendaFaktury(doklad.RelTpFak));
       rows.push({
         agenda: riadokAgenda,
         // Jedna hlavička = jeden riadok; pevná nula drží serverový odtlačok
