@@ -17,7 +17,13 @@ public sealed class AutoUpdater(BackendClient backend, AgentSettings settings, I
             return;
         }
         if (!release.Available) return;
-        if (!release.Signed || string.IsNullOrWhiteSpace(release.Version) || string.IsNullOrWhiteSpace(release.DownloadUrl)
+        // Self-signed vydanie je legitímne, kým firma nemá kúpený certifikát —
+        // dovtedy sa agent preinštalovával ručne, hoci autoaktualizácia existuje.
+        // Dôvera nestojí na Windows Trusted Root, ale na odtlačku vydavateľa
+        // z nastavení agenta: ten sa porovnáva s manifestom AJ s podpisom súboru,
+        // takže cudzí inštalátor neprejde ani s platným certifikátom.
+        var selfSigned = string.Equals(release.SignatureTrust, "self-signed", StringComparison.OrdinalIgnoreCase);
+        if ((!release.Signed && !selfSigned) || string.IsNullOrWhiteSpace(release.Version) || string.IsNullOrWhiteSpace(release.DownloadUrl)
             || string.IsNullOrWhiteSpace(release.Sha256) || string.IsNullOrWhiteSpace(release.PublisherThumbprint))
             throw new InvalidOperationException("Release manifest aktualizácie nie je úplný alebo podpísaný.");
         if (!IsNewer(release.Version, AgentVersion.Current)) return;
@@ -59,7 +65,7 @@ public sealed class AutoUpdater(BackendClient backend, AgentSettings settings, I
         var manifestPublisher = release.PublisherThumbprint.Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
         if (!manifestPublisher.Equals(expectedPublisher, StringComparison.Ordinal))
             throw new InvalidOperationException("Vydavateľ release manifestu sa nezhoduje s povoleným certifikátom.");
-        if (!await HasValidSignatureAsync(target, settings.AllowedPublisherThumbprint, cancellationToken))
+        if (!await HasValidSignatureAsync(target, settings.AllowedPublisherThumbprint, selfSigned, cancellationToken))
             throw new InvalidOperationException("Digitálny podpis aktualizácie nie je platný alebo vydavateľ nesúhlasí.");
 
         var installer = new ProcessStartInfo(target) { UseShellExecute = false, CreateNoWindow = true };
@@ -78,7 +84,13 @@ public sealed class AutoUpdater(BackendClient backend, AgentSettings settings, I
 
     private static string SafeVersion(string value) => string.Concat(value.Where(character => char.IsLetterOrDigit(character) || character is '.' or '-' or '_'));
 
-    private static async Task<bool> HasValidSignatureAsync(string path, string expectedThumbprint, CancellationToken cancellationToken)
+    /// <summary>
+    /// Podpis inštalátora musí patriť povolenému vydavateľovi. Pri self-signed
+    /// certifikáte Windows hlási „UnknownError" (koreň nie je v Trusted Root),
+    /// čo ešte neznamená cudzí súbor — rozhoduje odtlačok podpisovateľa.
+    /// Nepodpísaný súbor neprejde nikdy: bez odtlačku sa niet s čím porovnať.
+    /// </summary>
+    private static async Task<bool> HasValidSignatureAsync(string path, string expectedThumbprint, bool allowSelfSigned, CancellationToken cancellationToken)
     {
         var start = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
         start.ArgumentList.Add("-NoProfile");
@@ -90,6 +102,13 @@ public sealed class AutoUpdater(BackendClient backend, AgentSettings settings, I
         var result = (await process.StandardOutput.ReadToEndAsync(cancellationToken)).Trim();
         await process.WaitForExitAsync(cancellationToken);
         var expected = expectedThumbprint.Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
-        return process.ExitCode == 0 && result.Equals($"Valid|{expected}", StringComparison.OrdinalIgnoreCase);
+        if (process.ExitCode != 0) return false;
+        if (result.Equals($"Valid|{expected}", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!allowSelfSigned) return false;
+        // Formát je "Status|Thumbprint"; prázdny odtlačok = súbor nie je podpísaný.
+        var parts = result.Split('|', 2);
+        return parts.Length == 2
+            && !string.Equals(parts[0], "NotSigned", StringComparison.OrdinalIgnoreCase)
+            && parts[1].Trim().Equals(expected, StringComparison.OrdinalIgnoreCase);
     }
 }

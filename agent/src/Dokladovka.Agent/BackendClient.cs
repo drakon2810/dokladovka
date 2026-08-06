@@ -44,6 +44,8 @@ public sealed record AgentRelease(
     string? PublisherThumbprint = null,
     string? MinimumWindowsVersion = null,
     bool Signed = false,
+    /// <summary>"public" = dôveryhodná certifikačná autorita, "self-signed" = vlastný certifikát.</summary>
+    string? SignatureTrust = null,
     string? Reason = null);
 public sealed record AgentSyncResult(string OrganizationId, string Kind, string State, int ItemCount, int DurationMs, string? ErrorCode = null);
 // Riadok histórie zaúčtovania pre Tréning AI — kódy číselníkov prekladá server.

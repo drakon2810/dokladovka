@@ -660,10 +660,18 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
               publisher_thumbprint, minimum_windows_version, signed, signature_trust,
               certificate_url, release_channel
          FROM agent_releases
-        WHERE active=true AND signed=true AND file_size IS NOT NULL AND published_at IS NOT NULL
+        -- Dokým firma nemá kúpený podpisový certifikát, sú všetky vydania
+        -- self-signed (signed=false) a podmienka signed=true ich nikdy nevydala
+        -- — autoaktualizácia tak bola mŕtva a agent sa preinštalovával ručne.
+        -- Self-signed vydanie sa ponúkne len keď to prevádzka výslovne povolí;
+        -- bezpečnosť potom stojí na odtlačku vydavateľa, ktorý si agent porovná
+        -- so svojím nastavením, a na SHA-256 z tohto manifestu.
+        WHERE active=true AND file_size IS NOT NULL AND published_at IS NOT NULL
           AND publisher IS NOT NULL AND publisher_thumbprint IS NOT NULL
           AND minimum_windows_version IS NOT NULL
+          AND (signed=true OR (signature_trust='self-signed' AND $1::boolean))
         ORDER BY published_at DESC LIMIT 1`,
+      [config.allowSelfSignedAgentReleases],
     );
     const row = result.rows[0];
     if (!row) {

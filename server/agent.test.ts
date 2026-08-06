@@ -415,6 +415,20 @@ describe('agent backend contour', () => {
       channel: 'temporary',
     });
 
+    // Reálne self-signed vydania majú signed=false (tak ich zapísal starší
+    // publikačný skript). Podmienka signed=true ich nikdy nevydala, takže
+    // autoaktualizácia mlčala a agent sa preinštalovával ručne.
+    await database.query(
+      `INSERT INTO agent_releases
+        (version, download_url, sha256, file_size, published_at, publisher, publisher_thumbprint,
+         minimum_windows_version, signed, signature_trust, certificate_url, release_channel, active)
+       VALUES ('1.0.2',$1,$2,123456,now(),'Dokladovka – DOČASNÝ SELF-SIGNED',$3,'10',
+               false,'self-signed','/downloads/cert.cer','temporary',true)`,
+      ['/downloads/Dokladovka-Agent-Setup-1.0.2-SELF-SIGNED-TEMP.exe', 'c'.repeat(64), 'B'.repeat(40)],
+    );
+    const nepodpisane = await app.inject({ method: 'GET', url: '/api/agent/latest' });
+    expect(nepodpisane.json()).toMatchObject({ available: true, version: '1.0.2', signed: false });
+
     await app.close();
   }, 90_000);
 
