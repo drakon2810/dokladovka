@@ -428,6 +428,9 @@ describe('agent backend contour', () => {
     );
     const nepodpisane = await app.inject({ method: 'GET', url: '/api/agent/latest' });
     expect(nepodpisane.json()).toMatchObject({ available: true, version: '1.0.2', signed: false });
+    // Agent relatívnu cestu odmietne („nemá HTTPS URL"), preto ju server dopĺňa
+    // o verejnú adresu aplikácie. Absolútnu adresu nechá tak.
+    expect(nepodpisane.json().downloadUrl).toMatch(/^https?:\/\/.+\/downloads\/Dokladovka-Agent-Setup-1\.0\.2-SELF-SIGNED-TEMP\.exe$/);
 
     await app.close();
   }, 90_000);

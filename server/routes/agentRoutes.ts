@@ -684,7 +684,12 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     return {
       available: true,
       version: row.version,
-      downloadUrl: row.download_url,
+      // Agent vyžaduje absolútnu HTTPS adresu (relatívnu by odmietol a
+      // aktualizácia by spadla na „nemá HTTPS URL"), no self-signed vydania sa
+      // publikujú ako lokálna cesta /downloads/… — dopĺňame ju o verejnú adresu.
+      downloadUrl: row.download_url.startsWith('/')
+        ? new URL(row.download_url, config.appBaseUrl).toString()
+        : row.download_url,
       sha256: row.sha256,
       fileSize: Number(row.file_size),
       publishedAt: new Date(row.published_at).toISOString(),
