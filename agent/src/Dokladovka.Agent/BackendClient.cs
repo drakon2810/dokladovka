@@ -56,6 +56,9 @@ public sealed record TrainingDecision(
     string? ClenenieKvKod);
 public sealed record TrainingImportResult(int Imported, int Duplicates, int Rejected);
 
+/// <summary>bezKodu = doklady bez predkontácie aj členenia; korpus ich nezoberie.</summary>
+public sealed record HistoryImportResult(int Imported, int Duplicates, int BezKodu);
+
 public sealed class BackendApiException(HttpStatusCode statusCode, string message, bool transient = false) : Exception(message)
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
@@ -108,6 +111,10 @@ public sealed class BackendClient
 
     public Task SendSyncResultAsync(AgentSyncResult result, CancellationToken cancellationToken) =>
         SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Post, "api/agent/sync-results", result), cancellationToken);
+
+    /// <summary>Korpus histórie pre účtovný profil — všetky dokladové agendy.</summary>
+    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, CancellationToken cancellationToken) =>
+        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows }), cancellationToken);
 
     // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
     public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, CancellationToken cancellationToken) =>

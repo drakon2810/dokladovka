@@ -14,6 +14,7 @@ import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from 
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
+import { historyImportSchema, importUctoHistory } from '../services/uctoHistoryService.js';
 
 interface AgentAuth extends Record<string, unknown> {
   id: string;
@@ -406,6 +407,27 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     }
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
     return { imported: result.imported, duplicates: result.duplicates, rejected: result.rejected.length };
+  });
+
+  // Korpus histórie pre účtovný profil — na rozdiel od training-decisions tu ide
+  // o VŠETKY dokladové agendy (pokladňa, interné doklady, ostatné záväzky…), nie
+  // len prijaté faktúry. Bez toho musel účtovník nosiť .mdb ručne, hoci agent
+  // databázu firmy vidí. Zdroj 'mdb' drží odtlačok riadkov zhodný s ručným
+  // importom, takže obe cesty sa navzájom nezduplikujú.
+  app.put('/api/agent/organizations/:id/ucto-history', async (request) => {
+    const agent = await requireAgent(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = historyImportSchema.parse(request.body);
+    const organization = await database.query(
+      'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
+    if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const result = body.rows.length > 0
+      ? await importUctoHistory(database, {
+          tenantId: agent.tenant_id, organizationId: id, rows: body.rows, source: 'mdb',
+        })
+      : { imported: 0, duplicates: 0, bezKodu: 0 };
+    await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
+    return result;
   });
 
   // Originálny sken dokladu pre agenta — po úspešnom prenose ho uloží do

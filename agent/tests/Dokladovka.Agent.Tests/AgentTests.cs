@@ -131,6 +131,105 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void HistoriaBerieVsetkyAgendyAjSoSmeromPokladne()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>issuedInvoice</inv:invoiceType>
+                      <inv:number><typ:numberRequested>26FV001</typ:numberRequested></inv:number>
+                      <inv:date>2026-03-05</inv:date>
+                      <inv:text>Predaj tovaru</inv:text>
+                      <inv:partnerIdentity><typ:address><typ:company>Odberateľ a.s.</typ:company><typ:ico>99998888</typ:ico></typ:address></inv:partnerIdentity>
+                      <inv:accounting><typ:ids>311/604</typ:ids></inv:accounting>
+                      <inv:classificationVAT><typ:ids>UD</typ:ids></inv:classificationVAT>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedOtherLiability</inv:invoiceType>
+                      <inv:text>Poistné</inv:text>
+                      <inv:accounting><typ:ids>548/379</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+              <rsp:responsePackItem id="h07" state="ok">
+                <lst:listVoucher xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:voucher xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <vch:voucherHeader>
+                      <vch:voucherType>expense</vch:voucherType>
+                      <vch:text>Váženie vozidla</vch:text>
+                      <vch:accounting><typ:ids>518900 ost.sl.</typ:ids></vch:accounting>
+                    </vch:voucherHeader>
+                  </lst:voucher>
+                  <lst:voucher xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <vch:voucherHeader>
+                      <vch:voucherType>receipt</vch:voucherType>
+                      <vch:text>Tržba v hotovosti</vch:text>
+                      <vch:accounting><typ:ids>211/604</typ:ids></vch:accounting>
+                    </vch:voucherHeader>
+                  </lst:voucher>
+                </lst:listVoucher>
+              </rsp:responsePackItem>
+              <rsp:responsePackItem id="h08" state="ok">
+                <lst:listIntDoc xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:intDoc xmlns:int="http://www.stormware.cz/schema/version_2/intDoc.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <int:intDocHeader>
+                      <int:text>Mzdy 03/2026</int:text>
+                      <int:accounting><typ:ids>521/331</typ:ids></int:accounting>
+                      <int:classificationVAT><typ:ids>UN</typ:ids></int:classificationVAT>
+                    </int:intDocHeader>
+                  </lst:intDoc>
+                </lst:listIntDoc>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var parsed = PohodaXml.ParseHistoryRows(response);
+        Assert.Equal(5, parsed.Rows.Count);
+        // Vydaná faktúra patrí do korpusu (na rozdiel od pamäte dodávateľov).
+        Assert.Equal(new PohodaXml.HistoryRow("FV", "26FV001", "2026-03-05", "99998888", "Odberateľ a.s.", "Predaj tovaru", "311/604", "UD", null), parsed.Rows[0]);
+        // Zvyšok agendy FA = ostatné záväzky, nie spoločné „INE".
+        Assert.Equal("OZ", parsed.Rows[1].Agenda);
+        // Smer pokladne rozdeľuje výdaj a príjem — tie isté slová sa v nich účtujú opačne.
+        Assert.Equal("VPD", parsed.Rows[2].Agenda);
+        Assert.Equal("PPD", parsed.Rows[3].Agenda);
+        Assert.Equal("INT", parsed.Rows[4].Agenda);
+        Assert.Empty(parsed.Warnings);
+    }
+
+    [Fact]
+    public void HistoriaPreskociDokladBezTextuAleboBezZauctovania()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:text>Bez zaúčtovania</inv:text>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        Assert.Empty(PohodaXml.ParseHistoryRows(response).Rows);
+    }
+
+    [Fact]
     public void PohodaErrorMessageComesFromNoteAttributesNotForeignElements()
     {
         // POHODA posiela popis chyby ako ATRIBÚT note (element „note" v response.xsd

@@ -83,6 +83,128 @@ public static class PohodaXml
         return new ParsedTrainingDecisions(rows, warnings);
     }
 
+    // Agendy korpusu histórie. Typ faktúry určuje agendu priamo; pokladňu delí
+    // smer dokladu a interné doklady sú vlastná agenda. Banka sa neučí.
+    private static readonly (string Type, string Agenda)[] HistoryInvoiceTypes =
+    [
+        ("receivedInvoice", "FP"), ("receivedCreditNotice", "FP"), ("receivedAdvanceInvoice", "FP"),
+        ("issuedInvoice", "FV"), ("issuedCreditNotice", "FV"), ("issuedAdvanceInvoice", "FV"),
+    ];
+
+    /// <summary>
+    /// Účtovný profil: export VŠETKÝCH dokladových agend (faktúry prijaté aj
+    /// vydané, ostatné záväzky, pokladňa, interné doklady) — banka zatiaľ nie.
+    /// Číta históriu, v POHODE nič nemení. Na rozdiel od BuildInvoiceListRequest,
+    /// ktorý plní pamäť dodávateľov a preto berie len prijaté faktúry.
+    /// </summary>
+    public static string BuildHistoryListRequest(string ico, string requestId)
+    {
+        var items = new List<string>();
+        foreach (var (type, _) in HistoryInvoiceTypes)
+        {
+            items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listInvoiceRequest version="2.0" invoiceType="{type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest></dat:dataPackItem>""");
+        }
+        items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listVoucherRequest version="2.0" voucherVersion="2.0"><lst:requestVoucher/></lst:listVoucherRequest></dat:dataPackItem>""");
+        items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listIntDocRequest version="2.0" intDocVersion="2.0"><lst:requestIntDoc/></lst:listIntDocRequest></dat:dataPackItem>""");
+        return $"""
+<?xml version="1.0" encoding="Windows-1250"?>
+<dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export historie pre uctovny profil"
+  xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd">
+{string.Join("\n", items)}
+</dat:dataPack>
+""";
+    }
+
+    /// <summary>Riadok korpusu histórie — musí sedieť s historyRowSchema na serveri.</summary>
+    public sealed record HistoryRow(
+        string Agenda,
+        string? DokladCislo,
+        string? Datum,
+        string? SupplierIco,
+        string? SupplierName,
+        string LineText,
+        string? PredkontaciaKod,
+        string? ClenenieDphKod,
+        string? ClenenieKvKod);
+
+    public sealed record ParsedHistory(IReadOnlyList<HistoryRow> Rows, IReadOnlyList<string> Warnings);
+
+    /// <summary>
+    /// Rozloží odpoveď na BuildHistoryListRequest na riadky korpusu. Doklad bez
+    /// textu alebo bez predkontácie aj členenia sa preskočí — pre analýzu nenesie
+    /// signál. Duplicity sa NEZLUČUJÚ: početnosť je pre analýzu hlavný signál
+    /// a odtlačok riadka na serveri ich rozlíši podľa čísla dokladu.
+    /// </summary>
+    public static ParsedHistory ParseHistoryRows(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
+        var rows = new List<HistoryRow>();
+
+        foreach (var (element, headerName, agenda) in HistoryDocuments(document))
+        {
+            var header = element.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == headerName);
+            if (header is null) continue;
+            var lineText = Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value);
+            var predkontacia = HeaderRefIds(header, "accounting");
+            var clenenieDph = HeaderRefIds(header, "classificationVAT");
+            if (lineText is null || (predkontacia is null && clenenieDph is null)) continue;
+            var partner = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "partnerIdentity");
+            rows.Add(new HistoryRow(
+                agenda(header),
+                Trimmed(FindText(header, "numberRequested") ?? FindText(header, "number")),
+                IsoDate(FindText(header, "date")),
+                Trimmed(partner is null ? null : FindText(partner, "ico")),
+                Trimmed(partner is null ? null : FindText(partner, "company")),
+                lineText,
+                predkontacia,
+                clenenieDph,
+                ZakladnaKvSekcia(HeaderRefIds(header, "classificationKVDPH"))));
+        }
+
+        var warnings = document.Descendants()
+            .Where(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value != "ok")
+            .Select(item => FindText(item, "note") ?? item.Attribute("note")?.Value ?? "POHODA nevrátila časť dokladov.")
+            .ToArray();
+        return new ParsedHistory(rows, warnings);
+    }
+
+    /// <summary>Doklady všetkých agend so spôsobom, ako z hlavičky určiť agendu.</summary>
+    private static IEnumerable<(XElement Element, string HeaderName, Func<XElement, string> Agenda)> HistoryDocuments(XDocument document)
+    {
+        foreach (var element in document.Descendants().Where(item => IsStormware(item)))
+        {
+            switch (element.Name.LocalName)
+            {
+                case "invoice":
+                    yield return (element, "invoiceHeader", header =>
+                        HistoryInvoiceTypes.FirstOrDefault(item => item.Type == FindText(header, "invoiceType")).Agenda
+                        // Zvyšok agendy FA sú ostatné záväzky/pohľadávky.
+                        ?? "OZ");
+                    break;
+                case "voucher":
+                    // Smer pokladne nesie voucherType: receipt = príjem, expense = výdaj.
+                    yield return (element, "voucherHeader", header =>
+                        FindText(header, "voucherType") == "receipt" ? "PPD" : "VPD");
+                    break;
+                case "intDoc":
+                    yield return (element, "intDocHeader", _ => "INT");
+                    break;
+            }
+        }
+    }
+
+    /// <summary>POHODA vracia dátum ako yyyy-MM-dd; čokoľvek iné korpus nezaujíma.</summary>
+    private static string? IsoDate(string? value)
+    {
+        var trimmed = value?.Trim();
+        return trimmed is not null && trimmed.Length >= 10 && DateOnly.TryParse(trimmed[..10], out var date)
+            ? date.ToString("yyyy-MM-dd")
+            : null;
+    }
+
     /// <summary>Priečinok dokumentov jedného dokladu (záložka „Dokumenty").</summary>
     public sealed record DocumentFolder(string Cislo, string? CompanyFolder, string? SubFolder);
 

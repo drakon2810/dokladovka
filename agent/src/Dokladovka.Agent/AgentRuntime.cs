@@ -316,6 +316,13 @@ public sealed class AgentCycleRunner
                 duplicates += result.Duplicates;
                 rejected += result.Rejected;
             }
+            // Korpus histórie pre účtovný profil ide tou istou žiadosťou o sync —
+            // účtovník tak nemusí nosiť .mdb ručne, hoci agent databázu firmy vidí.
+            // Zlyhanie tu nesmie zhodiť tréning vyššie: pamäť dodávateľov je
+            // dôležitejšia a už je nahratá.
+            try { await SyncUctoHistoryAsync(organization, target, cancellationToken); }
+            catch (Exception error) { _log.Error("ucto_history_sync_failed", error, new { organization.OrganizationId }); }
+
             _trainingSyncAttempts.Remove(organization.OrganizationId);
             // Nič neprešlo a všetko odmietnuté = pravdepodobne chýbajú číselníky —
             // do telemetrie ide error, nech to nevyzerá ako úspešná synchronizácia.
@@ -331,6 +338,50 @@ public sealed class AgentCycleRunner
             _log.Error("training_sync_failed", error, new { organization.OrganizationId, target.Endpoint.Id, durationMs = stopwatch.ElapsedMilliseconds });
             await HandleTrainingSyncFailureAsync(organization.OrganizationId, error.GetType().Name, (int)stopwatch.ElapsedMilliseconds, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Korpus histórie pre účtovný profil: všetky dokladové agendy (prijaté aj
+    /// vydané faktúry, ostatné záväzky, pokladňa so smerom, interné doklady),
+    /// banka zatiaľ nie. Beží spolu s tréningom, lebo obe vychádzajú z tej istej
+    /// žiadosti účtovníka a z tej istej databázy firmy.
+    /// </summary>
+    private async Task SyncUctoHistoryAsync(
+        AgentOrganization organization,
+        (MServerEndpointSettings Endpoint, MServerCompany Company) target,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var requestXml = PohodaXml.BuildHistoryListRequest(
+            organization.Ico, $"historia-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+        var errors = _validator.ValidateDataPack(requestXml);
+        if (errors.Count > 0) throw new InvalidOperationException("XSD validácia požiadavky histórie zlyhala: " + string.Join("; ", errors.Take(5)));
+        var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
+            requestXml, $"historia-{organization.OrganizationId}", false, cancellationToken);
+        var parsed = PohodaXml.ParseHistoryRows(response);
+        if (parsed.Rows.Count == 0)
+        {
+            _log.Info("ucto_history_empty", new { organization.OrganizationId, warnings = parsed.Warnings.Count });
+            return;
+        }
+        var imported = 0;
+        var duplicates = 0;
+        // Dávky po 2 000 riadkov — server berie najviac 20 000 na požiadavku
+        // a bodyLimit je 30 MB; história býva rádovo väčšia než pamäť.
+        foreach (var batch in parsed.Rows.Chunk(2000))
+        {
+            var result = await _backend.UploadUctoHistoryAsync(organization.OrganizationId, batch, cancellationToken);
+            imported += result.Imported;
+            duplicates += result.Duplicates;
+        }
+        await TrySendSyncResultAsync(new AgentSyncResult(
+            organization.OrganizationId, "uctovnyProfil", "ok",
+            parsed.Rows.Count, (int)stopwatch.ElapsedMilliseconds, null), cancellationToken);
+        _log.Info("ucto_history_synced", new
+        {
+            organization.OrganizationId, rows = parsed.Rows.Count, imported, duplicates,
+            durationMs = stopwatch.ElapsedMilliseconds, warnings = parsed.Warnings.Count,
+        });
     }
 
     // Zlyhanie tréningovej synchronizácie: telemetria + počítadlo pokusov. Po
