@@ -137,8 +137,11 @@ export function validateDocument(
   }
   // Prázdny rozpis pri mzdách nie je nesúlad, ale „bez DPH" — porovnávať nulu
   // s celkovou sumou znamenalo, že mzdový doklad bez rozpisu sa nedal schváliť,
-  // hoci mu rozpis nikdy nechýbal.
-  if ((extracted.rozpisDph.length > 0 || !smieBytBezRozpisu)
+  // hoci mu rozpis nikdy nechýbal. Pri bankovom výpise je „celková suma"
+  // konečný ZOSTATOK — rozpis DPH sa naň nikdy rovnať nemá (a editor výpisu
+  // rozpis ani nezobrazuje, takže nesúlad by sa nedal nijako opraviť).
+  if (doc.typ !== 'BV'
+    && (extracted.rozpisDph.length > 0 || !smieBytBezRozpisu)
     && !isTotalConsistent(extracted.rozpisDph, extracted.sumaSpolu)) {
     issues.push({ code: 'total_mismatch', field: 'sumaSpolu' });
   }

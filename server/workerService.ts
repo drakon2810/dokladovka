@@ -23,6 +23,7 @@ import {
   rebuildAccountingSuggestion,
   type AiSuggestionDocumentContext,
 } from './services/accountingSuggestionService.js';
+import { suggestBankMovementAccounting } from './services/bankSuggestionService.js';
 import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.js';
 import { matchStatementPayments } from './services/paymentService.js';
 import { upsertPartnerZDokladu } from './services/partnerService.js';
@@ -215,6 +216,37 @@ async function findDuplicate(
   })?.id;
 }
 
+/**
+ * Účet POHODY pre bankový výpis: IBAN výpisu sa spáruje s číselníkom bankových
+ * účtov (kind=bankoveUcty). Bez zhody a pri jedinom aktívnom účte firmy sa
+ * použije ten — samostatný účet je zďaleka najčastejší prípad. Inak rozhodne
+ * účtovník ručne v editore.
+ */
+async function najdiBankovyUcet(
+  database: Database,
+  tenantId: string,
+  organizationId: string,
+  iban: string | undefined,
+): Promise<string | undefined> {
+  const ucty = await database.query<{ code: string; iban: string | null } & Record<string, unknown>>(
+    `SELECT code, iban FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND kind='bankoveUcty' AND active=true`,
+    [tenantId, organizationId],
+  );
+  const hladany = iban?.replace(/\s/g, '').toUpperCase();
+  if (hladany) {
+    const zhoda = ucty.rows.find((row) => row.iban?.replace(/\s/g, '').toUpperCase() === hladany);
+    if (zhoda) return zhoda.code;
+    // IBAN výpisu poznáme a jediný účet firmy má INÝ IBAN — nepredvyplňovať:
+    // výpis patrí účtu, ktorý v číselníku ešte nie je, a tichá zámena by
+    // zaúčtovala pohyby na cudzí účet. Bez IBAN-u na strane číselníka sa
+    // jediný účet použije (nie je ho čím vyvrátiť).
+    if (ucty.rows.length === 1 && !ucty.rows[0].iban) return ucty.rows[0].code;
+    return undefined;
+  }
+  return ucty.rows.length === 1 ? ucty.rows[0].code : undefined;
+}
+
 /** Formát zdroja pre UI — odvodený z MIME a klasifikovaného typu dokladu. */
 function sourceFormat(mimeType: string, documentType: string): string {
   if (mimeType === 'application/xml') return documentType === 'BV' ? 'sepa_xml' : 'peppol_xml';
@@ -360,6 +392,12 @@ async function completeRun(
     };
   });
 
+  // Bankový výpis: účet POHODY sa určí deterministicky podľa IBAN-u výpisu
+  // proti číselníku bankových účtov; pri jedinom aktívnom účte firmy sa použije ten.
+  const bankUcetKod = !prepared.isReprocess && normalized.documentType === 'BV'
+    ? await najdiBankovyUcet(database, job.tenant_id, job.organization_id, result.supplier.iban)
+    : undefined;
+
   await database.transaction(async (tx) => {
     await tx.query(
       `UPDATE extraction_runs SET status='succeeded', result=$1::jsonb, model=$2, latency_ms=$3,
@@ -394,7 +432,10 @@ async function completeRun(
           buyerMismatch ? 'buyer_ico_mismatch' : null, duplicateId ?? null, prepared.runId,
           sourceFormat(context.detected_mime_type, normalized.documentType),
           prepared.documentId, job.tenant_id, job.organization_id,
-          JSON.stringify(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, result) : {})],
+          JSON.stringify({
+            ...(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, result) : {}),
+            ...(bankUcetKod ? { bankUcetKod } : {}),
+          })],
       );
       // Partner sa založí/doplní z dodávateľa ešte pred návrhom zaúčtovania,
       // aby predvoľby partnera platili už pre tento doklad.
@@ -671,6 +712,19 @@ export async function processNextJob(
         }, summary);
       } catch {
         // Návrh je voliteľný — chyba AI sa ignoruje, doklad je už uložený.
+      }
+    }
+    // Bankový výpis má vlastný návrh po pohyboch — beží AŽ PO párovaní úhrad,
+    // aby model videl, ktorý pohyb preukázateľne platí ktorý doklad.
+    if (summary && summary.status !== 'karantena' && summary.documentType === 'BV') {
+      try {
+        await suggestBankMovementAccounting(database, config, {
+          tenantId: job.tenant_id,
+          organizationId: job.organization_id,
+          documentId: prepared.documentId,
+        });
+      } catch {
+        // Návrh je voliteľný — chyba AI sa ignoruje, výpis je už uložený.
       }
     }
     return true;

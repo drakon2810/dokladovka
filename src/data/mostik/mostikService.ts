@@ -444,6 +444,7 @@ const SYNC_ITEMS: Record<CodeListKind, Array<Pick<CodeListItem, 'kod' | 'nazov'>
   zakazky: [],
   cinnosti: [],
   projekty: [],
+  bankoveUcty: [{ kod: 'PB', nazov: 'Prima banka Slovensko, a.s.' }],
 };
 
 export async function simulateMostikCodeListSync(organizationId?: string): Promise<void> {

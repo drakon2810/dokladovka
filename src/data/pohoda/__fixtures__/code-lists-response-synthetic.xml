@@ -5,7 +5,9 @@
   xmlns:lCen="http://www.stormware.cz/schema/version_2/list_centre.xsd"
   xmlns:cen="http://www.stormware.cz/schema/version_2/centre.xsd"
   xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd"
-  xmlns:vat="http://www.stormware.cz/schema/version_2/classificationVAT.xsd">
+  xmlns:vat="http://www.stormware.cz/schema/version_2/classificationVAT.xsd"
+  xmlns:bka="http://www.stormware.cz/schema/version_2/bankAccount.xsd"
+  xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
   <rsp:responsePackItem id="c01" state="ok">
     <lst:listAccountingDoubleEntry version="1.1" state="ok">
       <lst:itemAccounting id="101" code="022200" accounting="Zaradenie HIM do užívania" agenda="internalDocument" debit="022200" credit="042200"/>
@@ -48,6 +50,43 @@
         </cen:centreHeader>
       </lCen:centre>
     </lCen:listCentre>
+  </rsp:responsePackItem>
+  <rsp:responsePackItem id="c05" state="ok">
+    <lst:listBankAccount version="2.0" state="ok">
+      <lst:bankAccount version="2.0">
+        <bka:bankAccountHeader>
+          <bka:id>505</bka:id>
+          <bka:ids>PB</bka:ids>
+          <bka:numberAccount>4040272818</bka:numberAccount>
+          <bka:codeBank>5600</bka:codeBank>
+          <bka:nameBank>Prima banka Slovensko, a.s.</bka:nameBank>
+          <bka:IBAN>SK31 3100 0000 0040 4027 2818</bka:IBAN>
+          <bka:SWIFT>LUBASKBX</bka:SWIFT>
+          <bka:analyticAccount><typ:ids>221100</typ:ids></bka:analyticAccount>
+        </bka:bankAccountHeader>
+      </lst:bankAccount>
+      <lst:bankAccount version="2.0">
+        <bka:bankAccountHeader>
+          <bka:id>506</bka:id>
+          <bka:ids>SBUS</bka:ids>
+          <bka:numberAccount>1040457800</bka:numberAccount>
+          <bka:codeBank>3100</bka:codeBank>
+          <bka:nameBank>Sberbank Slovensko, a. s.</bka:nameBank>
+          <bka:IBAN>SK8531000000001040457800</bka:IBAN>
+          <bka:currencyBankAccount>
+            <bka:currency><typ:ids>USD</typ:ids></bka:currency>
+          </bka:currencyBankAccount>
+        </bka:bankAccountHeader>
+      </lst:bankAccount>
+      <lst:bankAccount version="2.0">
+        <bka:bankAccountHeader>
+          <bka:id>507</bka:id>
+          <bka:ids>STARY</bka:ids>
+          <bka:nameBank>Zrušený účet</bka:nameBank>
+          <bka:cancelled>2024-01-01</bka:cancelled>
+        </bka:bankAccountHeader>
+      </lst:bankAccount>
+    </lst:listBankAccount>
   </rsp:responsePackItem>
   <rsp:responsePackItem id="ignored" state="ok">
     <lst:listPayment version="2.0" state="ok"/>

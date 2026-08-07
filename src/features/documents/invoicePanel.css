@@ -254,6 +254,15 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 }
 .dk-sub-del:hover { border-color: rgba(192, 57, 43, .45); color: var(--dk-err); background: #FBEBEA; }
 
+/* ---- pohyby bankového výpisu (BankPanel) ---- */
+.dk-bank-row {
+  display: grid;
+  min-width: 560px;
+  grid-template-columns: 20px 88px minmax(120px, 1.7fr) minmax(96px, 1.2fr)
+    minmax(64px, .9fr) minmax(84px, 1fr) minmax(96px, 1.2fr) 22px;
+  gap: 6px; align-items: center;
+}
+
 /* ---- rozpis DPH ---- */
 .dk-vat { display: grid; grid-template-columns: 82px 1fr 1fr 1fr 22px; gap: 8px; align-items: center; }
 .dk-vat-head { font-size: 11.5px; color: var(--dk-soft); padding-bottom: 5px; border-bottom: 1px solid var(--dk-line); }

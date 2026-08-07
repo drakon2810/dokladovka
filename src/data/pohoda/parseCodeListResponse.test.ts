@@ -13,6 +13,7 @@ const emptyLists = (): Record<CodeListKind, CodeListItem[]> => ({
   zakazky: [],
   cinnosti: [],
   projekty: [],
+  bankoveUcty: [],
 });
 
 describe('parseCodeListResponse', () => {
@@ -47,6 +48,23 @@ describe('parseCodeListResponse', () => {
       nazov: 's',
       externalId: '404',
     });
+    // Bankové účty: IBAN bez medzier, mena len pri devízovom účte,
+    // zrušený účet sa neimportuje.
+    expect(preview.perKind.bankoveUcty.nove).toEqual([
+      {
+        kod: 'PB',
+        nazov: 'Prima banka Slovensko, a.s.',
+        externalId: '505',
+        iban: 'SK3131000000004040272818',
+      },
+      {
+        kod: 'SBUS',
+        nazov: 'Sberbank Slovensko, a. s.',
+        externalId: '506',
+        iban: 'SK8531000000001040457800',
+        mena: 'USD',
+      },
+    ]);
     expect(preview.warnings).toHaveLength(1);
     expect(preview.warnings[0]).toContain('Duplicitný kód');
   });
@@ -221,8 +239,10 @@ describe('parseCodeListResponse', () => {
       Array<{ kod: string; nazov: string; rok?: string }>
     >;
     (Object.keys(preview.perKind) as CodeListKind[]).forEach((kind) => {
-      // Fixture pokrýva len číselníky importované z POHODY; nové druhy
-      // (zákazky, činnosti, projekty) sa zatiaľ spravujú ručne.
+      // Fixture pokrýva len číselníky importované z reálnej MDB; bankové účty
+      // v nej nie sú (MDB skript ich neexportuje) a nové druhy (zákazky,
+      // činnosti, projekty) sa zatiaľ spravujú ručne.
+      if (kind === 'bankoveUcty') return;
       const knownCodes = new Set((fixtureByKind[kind] ?? []).map((item) => item.kod));
       preview.perKind[kind].nove.forEach((item) => {
         expect(knownCodes.has(item.kod), `${kind}:${item.kod}`).toBe(true);

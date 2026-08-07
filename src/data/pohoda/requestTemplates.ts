@@ -14,8 +14,9 @@ function compactDate(value: Date): string {
 }
 
 /**
- * Jeden request pre štyri číselníky organizácie. Názvy elementov a verzie sú
- * prevzaté z aktuálnych oficiálnych príkladov a XSD STORMWARE (2026-06-04).
+ * Jeden request pre číselníky organizácie (predkontácie, členenia DPH, číselné
+ * rady, strediská, bankové účty). Názvy elementov a verzie sú prevzaté
+ * z aktuálnych oficiálnych príkladov a XSD STORMWARE (2026-06-04).
  */
 export function buildCodeListRequestXml(
   organization: Organization,
@@ -48,6 +49,11 @@ export function buildCodeListRequestXml(
     '    <lCen:listCentreRequest version="2.0" centreVersion="2.0">',
     '      <lCen:requestCentre/>',
     '    </lCen:listCentreRequest>',
+    '  </dat:dataPackItem>',
+    '  <dat:dataPackItem id="c05" version="2.0">',
+    '    <lst:listBankAccountRequest version="2.0" bankAccountVersion="2.0">',
+    '      <lst:requestBankAccount/>',
+    '    </lst:listBankAccountRequest>',
     '  </dat:dataPackItem>',
     '</dat:dataPack>',
   ];

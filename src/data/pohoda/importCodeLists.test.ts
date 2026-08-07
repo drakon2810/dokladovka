@@ -24,6 +24,7 @@ function emptyPreview(orgId = 'org-alfa'): CodeListImportPreview {
       zakazky: emptyKind(),
       cinnosti: emptyKind(),
       projekty: emptyKind(),
+      bankoveUcty: emptyKind(),
     },
     warnings: [],
   };

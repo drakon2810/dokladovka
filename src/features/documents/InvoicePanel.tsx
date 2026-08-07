@@ -64,7 +64,7 @@ interface InvoicePanelProps {
 }
 
 /** Typ dokladu vrátane smeru pokladne — POHODA ich rozlišuje ako samostatné agendy. */
-const TYP_OPTIONS: Array<{ value: string; label: string; typ: DocumentType; pokladnaTyp?: 'receipt' | 'expense' }> = [
+export const TYP_OPTIONS: Array<{ value: string; label: string; typ: DocumentType; pokladnaTyp?: 'receipt' | 'expense' }> = [
   { value: 'PD:expense', label: 'Výdajový pokladničný doklad', typ: 'PD', pokladnaTyp: 'expense' },
   { value: 'PD:receipt', label: 'Príjmový pokladničný doklad', typ: 'PD', pokladnaTyp: 'receipt' },
   { value: 'FP', label: 'Faktúra prijatá', typ: 'FP' },

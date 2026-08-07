@@ -114,6 +114,10 @@ export function normalizeExtractionResult(
       dodavatel: { ...withoutForeignDicCopy(result.supplier), nazov: result.supplier.nazov ?? '' },
       odberatel: withoutForeignDicCopy({ ...result.buyer }),
       cisloFaktury: result.invoiceNumber ?? '',
+      cisloVypisu: result.statementNumber,
+      // Počiatočný zostatok výpisu (BV nesie v totalWithoutVat) sa uloží,
+      // aby ho videl editor a rovnica výpisu prežila aj neskoršie úpravy.
+      pociatocnyZostatok: result.documentType === 'BV' ? parseDecimal(result.totalWithoutVat) : undefined,
       cisloObjednavky: result.orderNumber,
       cisloDodaciehoListu: result.deliveryNoteNumber,
       variabilnySymbol: result.variableSymbol,
@@ -154,6 +158,13 @@ export function normalizeExtractionResult(
           sumaBezDph: parseDecimal(item.amountWithoutVat),
           sumaDph: parseDecimal(item.vatAmount),
           sumaSpolu: parseDecimal(item.amountTotal),
+          // Bankový pohyb (BV): dátum platby, protistrana a symboly.
+          datumPlatby: item.paymentDate,
+          protistrana: item.counterpartyName,
+          protiucetIban: item.counterpartyIban,
+          vs: item.variableSymbol,
+          ks: item.constantSymbol,
+          ss: item.specificSymbol,
         };
       }),
     },
@@ -343,7 +354,8 @@ export function validateNormalizedExtraction(
   if (normalizedIdentifier(supplier.ico) === orgIco && buyerIco && buyerIco !== orgIco) {
     issues.push({ code: 'supplier_buyer_may_be_inverted', severity: 'warning', message: 'Dodávateľ a odberateľ môžu byť zamenení' });
   }
-  if (!Number.isFinite(normalized.totalAmount) || normalized.totalAmount < 0) issues.push({ code: 'invalid_total', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nie je platná' });
+  // BV: „celková suma" je konečný zostatok výpisu — záporný zostatok je legálny.
+  if (!Number.isFinite(normalized.totalAmount) || (normalized.totalAmount < 0 && normalized.documentType !== 'BV')) issues.push({ code: 'invalid_total', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nie je platná' });
   const rows = extracted.rozpisDph as Array<{ sadzba: number; zaklad: number; dph: number }>;
   for (const [index, row] of rows.entries()) {
     if (!isValidVatRate(row.sadzba) || Math.abs(round2(row.zaklad * row.sadzba / 100) - row.dph) > 0.02) {
@@ -353,7 +365,9 @@ export function validateNormalizedExtraction(
       issues.push({ code: 'historical_or_unknown_vat_rate', field: `rozpisDph.${index}.sadzba`, severity: 'warning', message: 'Sadzba DPH nie je v aktuálnom zozname; skontrolujte historickú sadzbu' });
     }
   }
-  if (rows.length > 0) {
+  // BV: „celková suma" je konečný zostatok — prípadné zvyšné riadky rozpisu
+  // DPH sa naň nemajú čo rovnať (editor výpisu rozpis nezobrazuje).
+  if (rows.length > 0 && normalized.documentType !== 'BV') {
     const rowsTotal = round2(rows.reduce((sum, row) => sum + row.zaklad + row.dph, 0));
     if (Math.abs(rowsTotal - normalized.totalAmount) > 0.02) issues.push({ code: 'total_mismatch', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nesedí s rozpisom DPH' });
   }
@@ -370,8 +384,10 @@ export function validateNormalizedExtraction(
   }
   // Súčet položiek pracuje s efektívnymi sumami — prázdna DPH pri vyplnenej
   // sadzbe sa dopočíta, aby faktúry s riadkami bez DPH neblokovali schválenie.
+  // BV sa nekontroluje: položky sú pohyby výpisu a „celková suma" je konečný
+  // zostatok — súčet pohybov sa mu rovnať nemá.
   const effectiveItems = items.map(lineItemEffective);
-  if (effectiveItems.length > 0 && effectiveItems.every((item) => item.spolu !== undefined)) {
+  if (normalized.documentType !== 'BV' && effectiveItems.length > 0 && effectiveItems.every((item) => item.spolu !== undefined)) {
     const itemTotal = round2(effectiveItems.reduce((sum, item) => sum + (item.spolu ?? 0), 0));
     if (Math.abs(itemTotal - normalized.totalAmount) > 0.02) issues.push({ code: 'line_items_total_mismatch', field: 'polozky', severity: 'error', message: 'Súčet položiek nesedí s celkovou sumou' });
   }
@@ -394,6 +410,23 @@ export function validateExtractionResult(
   const totalWithoutVat = parseDecimal(result.totalWithoutVat);
   const totalVat = parseDecimal(result.totalVat);
   const totalAmount = parseDecimal(result.totalAmount);
+  // BV: totalWithoutVat nesie POČIATOČNÝ zostatok výpisu (nie základ DPH).
+  // Kontrola účtovnej rovnice výpisu: počiatočný + súčet pohybov = konečný.
+  // Nesúlad je varovanie — AI mohla na fotke prehliadnuť riadok, rozhodne človek.
+  if (normalized.documentType === 'BV') {
+    const pohyby = ((normalized.extracted as any).polozky ?? []) as Array<{ sumaSpolu?: number }>;
+    if (totalWithoutVat !== undefined && totalAmount !== undefined && pohyby.length > 0
+      && pohyby.every((pohyb) => pohyb.sumaSpolu !== undefined)) {
+      const sucetPohybov = round2(pohyby.reduce((sum, pohyb) => sum + (pohyb.sumaSpolu ?? 0), 0));
+      if (Math.abs(round2(totalWithoutVat + sucetPohybov) - totalAmount) > 0.02) {
+        issues.push({
+          code: 'bank_balance_mismatch', field: 'polozky', severity: 'warning',
+          message: `Počiatočný zostatok + pohyby (${round2(totalWithoutVat + sucetPohybov).toFixed(2)}) nesedí s konečným zostatkom (${totalAmount.toFixed(2)}) — skontrolujte, či sa načítali všetky pohyby`,
+        });
+      }
+    }
+    return issues;
+  }
   if (totalWithoutVat !== undefined && totalVat !== undefined && totalAmount !== undefined
     && Math.abs(round2(totalWithoutVat + totalVat) - totalAmount) > 0.02) {
     issues.push({ code: 'declared_totals_mismatch', field: 'sumaSpolu', severity: 'error', message: 'Deklarovaný základ a DPH nesedia s celkovou sumou' });

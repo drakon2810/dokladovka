@@ -231,6 +231,9 @@ function codeListsFor(orgId: string): Record<CodeListKind, CodeListItem[]> {
     zakazky: [mk('za', 'Z2026-01', 'Zákazka 2026/01')],
     cinnosti: [mk('ci', 'VYROBA', 'Výroba'), mk('ci', 'SPRAVA', 'Správa')],
     projekty: [mk('pr', 'P-WEB', 'Projekt web')],
+    bankoveUcty: [
+      { ...mk('bu', 'PB', 'Prima banka Slovensko, a.s.'), iban: 'SK3131000000004040272818' },
+    ],
   };
 }
 
@@ -243,6 +246,7 @@ export function buildSeedCodeLists(): Record<CodeListKind, CodeListItem[]> {
     zakazky: [],
     cinnosti: [],
     projekty: [],
+    bankoveUcty: [],
   };
   for (const org of seedOrganizations) {
     const lists = codeListsFor(org.id);

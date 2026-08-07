@@ -85,6 +85,10 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
     const ownerName = text(asArray(account.Ownr)[0]?.Nm);
     const bankName = text(asArray(account.Svcr)[0]?.FinInstnId?.Nm) ?? 'Banka';
     const statementId = text(statement.Id) ?? text(statement.ElctrncSeqNb) ?? 'vypis';
+    // POHODA číslo výpisu má max 10 znakov — poradové číslo výpisu je presne to,
+    // čo účtovník vidí v banke (Id je dlhý technický identifikátor).
+    const statementNumber = (text(statement.ElctrncSeqNb) ?? text(statement.LglSeqNb)
+      ?? (statementId.replace(/\D/g, '').slice(-10) || statementId)).slice(0, 10);
     const createdAt = isoDate(statement.CreDtTm);
     const fromDate = isoDate(statement.FrToDt?.FrDtTm);
     const toDate = isoDate(statement.FrToDt?.ToDtTm) ?? createdAt;
@@ -101,18 +105,25 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
       const amount = signedAmount(entry.Amt, entry.CdtDbtInd);
       if (amount && amount.numeric >= 0) credits += 1;
       if (amount && amount.numeric < 0) debits += 1;
-      const bookingDate = isoDate(asArray(entry.BookgDt)[0]?.Dt);
+      const bookingDate = isoDate(asArray(entry.BookgDt)[0]?.Dt) ?? isoDate(asArray(entry.ValDt)[0]?.Dt);
       const details = asArray(asArray(entry.NtryDtls)[0]?.TxDtls)[0] ?? {};
       const parties = asArray(details.RltdPties)[0] ?? {};
-      const counterparty = amount && amount.numeric < 0
+      // Kreditný pohyb prišiel OD dlžníka (Dbtr), debetný išiel veriteľovi (Cdtr).
+      const debit = Boolean(amount && amount.numeric < 0);
+      const counterparty = debit
         ? text(asArray(parties.Cdtr)[0]?.Nm) ?? text(asArray(parties.Cdtr)[0]?.Pty?.Nm)
         : text(asArray(parties.Dbtr)[0]?.Nm) ?? text(asArray(parties.Dbtr)[0]?.Pty?.Nm);
+      const counterpartyIban = (debit
+        ? text(asArray(parties.CdtrAcct)[0]?.Id?.IBAN)
+        : text(asArray(parties.DbtrAcct)[0]?.Id?.IBAN))?.replace(/\s/g, '');
       const remittance = asArray(asArray(details.RmtInf)[0]?.Ustrd).map((item) => text(item)).filter(Boolean).join(' ')
         || text(entry.AddtlNtryInf);
-      const description = [skDate(bookingDate), counterparty, remittance].filter(Boolean).join(' — ')
-        || 'Transakcia';
+      // Symboly platby: EndToEndId nesie "/VS…/SS…/KS…"; niektoré banky ich
+      // píšu aj do poznámky (remittance) — berie sa prvý nájdený výskyt.
+      const references = [text(asArray(details.Refs)[0]?.EndToEndId), remittance].filter(Boolean).join(' ');
+      const symbol = (prefix: string) => references.match(new RegExp(`[/\\s]${prefix}(\\d{1,10})`, 'i'))?.[1];
       return {
-        description,
+        description: remittance || counterparty || 'Transakcia',
         quantity: undefined,
         unit: undefined,
         unitPriceWithoutVat: undefined,
@@ -120,6 +131,12 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
         amountWithoutVat: undefined,
         vatAmount: undefined,
         amountTotal: amount?.value,
+        paymentDate: bookingDate,
+        counterpartyName: counterparty,
+        counterpartyIban,
+        variableSymbol: symbol('VS'),
+        constantSymbol: symbol('KS'),
+        specificSymbol: symbol('SS'),
       };
     });
 
@@ -129,14 +146,17 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
       supplier: { nazov: bankName, iban },
       buyer: { nazov: ownerName },
       invoiceNumber: statementId,
+      statementNumber,
       issueDate: toDate ?? createdAt,
       taxDate: toDate,
       currency,
       lineItems,
       vatBreakdown: [],
-      // Konečný zostatok; záporný zostatok je legálny — deterministická validácia
-      // ho označí warningom, doklad ostáva na kontrole.
+      // Konečný zostatok; záporný zostatok je legálny. Počiatočný zostatok ide
+      // do totalWithoutVat — validácia z neho počíta rovnicu výpisu
+      // (počiatočný + pohyby = konečný), rovnaká konvencia ako pri AI extrakcii.
       totalAmount: closing.amount?.value,
+      totalWithoutVat: opening.amount?.value,
       fieldConfidence: Object.fromEntries(
         Object.entries({
           'supplier.nazov': bankName,

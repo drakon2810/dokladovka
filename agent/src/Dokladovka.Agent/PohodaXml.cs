@@ -25,6 +25,7 @@ public static class PohodaXml
   <dat:dataPackItem id="c02" version="2.0"><lst:listClassificationVATRequest version="2.0" classificationVATVersion="2.0"><lst:requestClassificationVAT/></lst:listClassificationVATRequest></dat:dataPackItem>
   <dat:dataPackItem id="c03" version="2.0"><lst:listNumericalSeriesRequest version="2.0" numericalSeriesVersion="2.0"><lst:requestNumericalSeries/></lst:listNumericalSeriesRequest></dat:dataPackItem>
   <dat:dataPackItem id="c04" version="2.0"><lCen:listCentreRequest version="2.0" centreVersion="2.0"><lCen:requestCentre/></lCen:listCentreRequest></dat:dataPackItem>
+  <dat:dataPackItem id="c05" version="2.0"><lst:listBankAccountRequest version="2.0" bankAccountVersion="2.0"><lst:requestBankAccount/></lst:listBankAccountRequest></dat:dataPackItem>
 </dat:dataPack>
 """;
 
@@ -361,6 +362,7 @@ public static class PohodaXml
             ["cleneniaDph"] = ParseContainer(document, "listClassificationVAT", "classificationVAT"),
             ["ciselneRady"] = ParseContainer(document, "listNumericalSeries", "numericalSeries", prefixCode: true),
             ["strediska"] = ParseContainer(document, "listCentre", "centre"),
+            ["bankoveUcty"] = ParseBankAccounts(document),
         };
         var warnings = document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value != "ok")
             .Select(item => FindText(item, "note") ?? item.Attribute("note")?.Value ?? "POHODA nevrátila časť číselníkov.").ToArray();
@@ -435,6 +437,36 @@ public static class PohodaXml
                 attributes ? Trimmed(item.Attribute("debit")?.Value) : null,
                 attributes ? Trimmed(item.Attribute("credit")?.Value) : null,
                 prefixCode ? Trimmed(FindText(item, "topNumber") ?? FindText(item, "number")) : null));
+        }
+        return values.Values.OrderBy(item => item.Kod, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>
+    /// Bankové účty (listBankAccount): kód = skratka (ids), názov = banka.
+    /// Hlavička má vlastnú štruktúru — ids/analyticAccount/currency sú refType,
+    /// preto sa kód číta len z PRIAMEHO dieťaťa hlavičky, nie z potomkov.
+    /// Zrušené účty (cancelled) sa preskakujú.
+    /// </summary>
+    private static IReadOnlyList<CodeListValue> ParseBankAccounts(XDocument document)
+    {
+        var container = document.Descendants().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "listBankAccount");
+        if (container is null) return Array.Empty<CodeListValue>();
+        var values = new Dictionary<string, CodeListValue>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in container.Descendants().Where(value => IsStormware(value) && value.Name.LocalName == "bankAccountHeader"))
+        {
+            string? Direct(string localName) =>
+                Trimmed(header.Elements().FirstOrDefault(child => child.Name.LocalName == localName)?.Value);
+            if (Direct("cancelled") is not null) continue;
+            var code = Direct("ids");
+            if (string.IsNullOrWhiteSpace(code) || values.ContainsKey(code)) continue;
+            var cisloUctu = Direct("numberAccount");
+            var kodBanky = Direct("codeBank");
+            var name = Direct("nameBank")
+                ?? (cisloUctu is not null ? kodBanky is not null ? $"{cisloUctu}/{kodBanky}" : cisloUctu : code);
+            var iban = Direct("IBAN")?.Replace(" ", "", StringComparison.Ordinal);
+            var mena = Trimmed(header.Elements().FirstOrDefault(child => child.Name.LocalName == "currencyBankAccount")
+                ?.Descendants().FirstOrDefault(child => child.Name.LocalName == "ids")?.Value);
+            values.Add(code, new CodeListValue(code, name, Direct("id"), null, null, null, null, null, iban, mena));
         }
         return values.Values.OrderBy(item => item.Kod, StringComparer.OrdinalIgnoreCase).ToArray();
     }

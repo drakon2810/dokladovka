@@ -16,6 +16,10 @@ export interface ParsedItem {
   ucetMd?: string;
   /** Predkontácie: účet DAL (atribút credit). */
   ucetDal?: string;
+  /** Bankové účty: IBAN účtu. */
+  iban?: string;
+  /** Bankové účty: mena devízového účtu; prázdna = domáca mena. */
+  mena?: string;
 }
 
 export interface CodeListImportPreview {
@@ -39,6 +43,7 @@ const KINDS: CodeListKind[] = [
   'cleneniaDph',
   'ciselneRady',
   'strediska',
+  'bankoveUcty',
 ];
 
 function stormwareElement(element: Element): boolean {
@@ -101,6 +106,7 @@ function emptyPreview(orgId: string): CodeListImportPreview {
       zakazky: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
       cinnosti: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
       projekty: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
+      bankoveUcty: { nove: [], aktualizovane: [], bezZmeny: 0, vyradene: [] },
     },
     warnings: [],
   };
@@ -121,7 +127,9 @@ function sameImportedData(current: CodeListItem, parsed: ParsedItem): boolean {
     sameOptional(current.posledneCislo, parsed.posledneCislo) &&
     sameOptional(current.kvSekcia, parsed.kvSekcia) &&
     sameOptional(current.ucetMd, parsed.ucetMd) &&
-    sameOptional(current.ucetDal, parsed.ucetDal)
+    sameOptional(current.ucetDal, parsed.ucetDal) &&
+    sameOptional(current.iban, parsed.iban) &&
+    sameOptional(current.mena, parsed.mena)
   );
 }
 
@@ -185,6 +193,7 @@ export function parseCodeListResponse(
     zakazky: [],
     cinnosti: [],
     projekty: [],
+    bankoveUcty: [],
   };
 
   for (const item of Array.from(document.getElementsByTagName('*')).filter(
@@ -267,6 +276,42 @@ export function parseCodeListResponse(
         .map(itemFromAttributes)
         .filter((item): item is ParsedItem => Boolean(item));
       parsedByKind.strediska.push(...modern, ...legacy);
+    } else if (container.localName === 'listBankAccount') {
+      foundKinds.add('bankoveUcty');
+      parsedByKind.bankoveUcty.push(
+        ...descendants(container, 'bankAccountHeader')
+          .map((item) => {
+            // Zrušený účet sa neimportuje — v POHODE už nie je použiteľný,
+            // a jeho absencia v ďalšom importe by ho aj tak vyradila.
+            if (firstText(item, 'cancelled')) return undefined;
+            // `ids` musí byť priame dieťa hlavičky — analytický účet aj mena
+            // sú refType a nesú vlastné `ids` hlbšie v strome.
+            const kod = Array.from(item.children)
+              .find((child) => child.localName === 'ids' && stormwareElement(child))
+              ?.textContent?.trim();
+            if (!kod) return undefined;
+            const cisloUctu = firstText(item, 'numberAccount');
+            const kodBanky = firstText(item, 'codeBank');
+            const nazov = firstText(item, 'nameBank')
+              ?? (cisloUctu ? `${cisloUctu}${kodBanky ? `/${kodBanky}` : ''}` : kod);
+            const iban = firstText(item, 'IBAN')?.replace(/\s+/g, '');
+            // Mena je vyplnená len pri devízovom účte; domáci účet ju nemá.
+            const mena = descendants(item, 'currencyBankAccount')
+              .flatMap((currency) => descendants(currency, 'ids'))
+              .map((ids) => ids.textContent?.trim())
+              .find(Boolean);
+            const externalId = firstText(item, 'id');
+            const parsed: ParsedItem = {
+              kod,
+              nazov,
+              ...(externalId ? { externalId } : {}),
+              ...(iban ? { iban } : {}),
+              ...(mena ? { mena } : {}),
+            };
+            return parsed;
+          })
+          .filter((item): item is ParsedItem => Boolean(item)),
+      );
     }
   }
 

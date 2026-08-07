@@ -153,6 +153,7 @@ describe('tenant isolation at the service boundary', () => {
         zakazky: [...state.codeLists.zakazky, foreign(state.codeLists.zakazky[0])],
         cinnosti: [...state.codeLists.cinnosti, foreign(state.codeLists.cinnosti[0])],
         projekty: [...state.codeLists.projekty, foreign(state.codeLists.projekty[0])],
+        bankoveUcty: [...state.codeLists.bankoveUcty, foreign(state.codeLists.bankoveUcty[0])],
       },
       users: [...state.users, foreign(state.users[0])],
       exportBatches: [...state.exportBatches, foreign(state.exportBatches[0])],

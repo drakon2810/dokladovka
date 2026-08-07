@@ -481,3 +481,102 @@ describe('buildServerDataPack — poradie elementov podľa XSD', () => {
     assertOrder(emittedChildren(intXml, 'int', 'intDocItem'), xsdSequence('intDoc.xsd', 'intDocItemType'));
   });
 });
+
+describe('buildServerDataPack — bankový výpis (bnk:bank)', () => {
+  const bankCodeLists: PohodaCodeLookup = {
+    ...codeLists,
+    predkontacie: new Map([['p1', '518/321'], ['p2', 'Uhrada FP-tuz.']]),
+  };
+
+  function bankDocument(extra: Record<string, unknown> = {}, ucto: Record<string, string | undefined> = {}) {
+    return {
+      id: 'doc-bv',
+      snapshot: {
+        version: 2,
+        typ: 'BV',
+        extracted: {
+          dodavatel: { nazov: 'UniCredit Bank', iban: 'SK0911110000001522620009' },
+          cisloFaktury: 'SK09...-101-260528',
+          cisloVypisu: '101',
+          datumVystavenia: '2026-05-28',
+          mena: 'EUR',
+          rozpisDph: [],
+          sumaSpolu: 22486.43,
+          polozky: [
+            {
+              id: 'm1', popis: 'Dan z financnych transakcii', sumaSpolu: -0.2,
+              datumPlatby: '2026-05-26', ucto: { predkontaciaId: 'p1' },
+            },
+            {
+              id: 'm2', popis: 'Uhrada FV c. 260504300086, stahovanie', sumaSpolu: 9177.5,
+              datumPlatby: '2026-05-26', vs: '260504300086', ks: '0308',
+              protistrana: 'SAMSUNG Electronics Slovakia s.r.o.',
+              protiucetIban: 'SK0581300000002004860007',
+              ucto: { predkontaciaId: 'p2' },
+            },
+          ],
+          ...extra,
+        },
+        ucto: { bankUcetKod: 'PB', ...ucto },
+      },
+    };
+  }
+
+  it('jeden pohyb = jeden bnk:bank so smerom podľa znamienka a poradie sedí s bank.xsd', () => {
+    const xml = buildServerDataPack({ id: 'pack-bv', ico: '35761571', documents: [bankDocument()], codeLists: bankCodeLists });
+    expect(xml.match(/<bnk:bank version="2.0">/g)).toHaveLength(2);
+    expect(xml).toContain('<dat:dataPackItem id="doc-bv-p1" version="2.0">');
+    expect(xml).toContain('<dat:dataPackItem id="doc-bv-p2" version="2.0">');
+    // Výdaj zo záporného pohybu, príjem z kladného; suma vždy kladná.
+    expect(xml).toContain('<bnk:bankType>expense</bnk:bankType>');
+    expect(xml).toContain('<bnk:bankType>receipt</bnk:bankType>');
+    expect(xml).toContain('<typ:priceNone>0.20</typ:priceNone>');
+    expect(xml).toContain('<typ:priceNone>9177.50</typ:priceNone>');
+    expect(xml).toContain('<bnk:account><typ:ids>PB</typ:ids></bnk:account>');
+    expect(xml).toContain('<bnk:statementNumber><bnk:statementNumber>101</bnk:statementNumber><bnk:numberMovement>2</bnk:numberMovement></bnk:statementNumber>');
+    expect(xml).toContain('<bnk:symVar>260504300086</bnk:symVar>');
+    expect(xml).toContain('<bnk:symConst>0308</bnk:symConst>');
+    expect(xml).toContain('<bnk:accounting><typ:ids>Uhrada FP-tuz.</typ:ids></bnk:accounting>');
+    expect(xml).toContain('<bnk:paymentAccount><typ:accountNo>2004860007</typ:accountNo><typ:bankCode>8130</typ:bankCode></bnk:paymentAccount>');
+    expect(xml).toContain('xmlns:bnk="http://www.stormware.cz/schema/version_2/bank.xsd"');
+    // emittedChildren vidí aj vnorené bnk:* elementy zloženého statementNumber —
+    // vnútorné (numberMovement + duplicitný statementNumber) sa z poradia vynechajú.
+    const emitted = [...new Set(emittedChildren(xml, 'bnk', 'bankHeader').filter((name) => name !== 'numberMovement'))];
+    assertOrder(emitted, xsdSequence('bank.xsd', 'bankHeaderType'));
+  });
+
+  it('pohyb bez vlastnej predkontácie dedí hlavičkovú; bez akejkoľvek export padá', () => {
+    const zdedene = bankDocument({
+      polozky: [{ id: 'm1', popis: 'Poplatok', sumaSpolu: -1 }],
+    }, { predkontaciaId: 'p1' });
+    const xml = buildServerDataPack({ id: 'pack-bv-2', ico: '35761571', documents: [zdedene], codeLists: bankCodeLists });
+    expect(xml).toContain('<bnk:accounting><typ:ids>518/321</typ:ids></bnk:accounting>');
+
+    const bezPredkontacie = bankDocument({ polozky: [{ id: 'm1', popis: 'Poplatok', sumaSpolu: -1 }] });
+    expect(() => buildServerDataPack({ id: 'pack-bv-3', ico: '35761571', documents: [bezPredkontacie], codeLists: bankCodeLists }))
+      .toThrow(/nemá predkontáciu/);
+  });
+
+  it('bez účtu POHODY alebo pri devízovej mene export padá s jasnou chybou', () => {
+    expect(() => buildServerDataPack({ id: 'pack-bv-4', ico: '35761571', documents: [bankDocument({}, { bankUcetKod: undefined })], codeLists: bankCodeLists }))
+      .toThrow(/nemá nastavený účet POHODY/);
+    expect(() => buildServerDataPack({ id: 'pack-bv-5', ico: '35761571', documents: [bankDocument({ mena: 'USD' })], codeLists: bankCodeLists }))
+      .toThrow(/devízových výpisov/);
+  });
+
+  it('pohyb bez sumy alebo s nerozpoznanou predkontáciou export zastaví', () => {
+    // Pohyb bez sumy nesmie prekĺznuť ako príjem 0,00.
+    const bezSumy = bankDocument({
+      polozky: [{ id: 'm1', popis: 'Bez sumy', ucto: { predkontaciaId: 'p1' } }],
+    });
+    expect(() => buildServerDataPack({ id: 'pack-bv-6', ico: '35761571', documents: [bezSumy], codeLists: bankCodeLists }))
+      .toThrow(/nemá platnú sumu/);
+    // Predkontácia pohybu mimo aktívneho číselníka nesmie potichu spadnúť
+    // na hlavičkovú — zaúčtovalo by sa inam, než účtovník schválil.
+    const nerozpoznana = bankDocument({
+      polozky: [{ id: 'm1', popis: 'Poplatok', sumaSpolu: -1, ucto: { predkontaciaId: 'zmazana-predkontacia' } }],
+    }, { predkontaciaId: 'p1' });
+    expect(() => buildServerDataPack({ id: 'pack-bv-7', ico: '35761571', documents: [nerozpoznana], codeLists: bankCodeLists }))
+      .toThrow(/mimo aktívneho číselníka/);
+  });
+});

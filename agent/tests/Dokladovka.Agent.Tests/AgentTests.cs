@@ -584,6 +584,14 @@ public sealed class AgentTests
         // topNumber z POHODY = posledné použité číslo radu (predikcia interného čísla).
         Assert.Equal("20250042", rad.PosledneCislo);
         Assert.Equal("1", Assert.Single(parsed.Items["strediska"]).Kod);
+        // Bankové účty: IBAN bez medzier, mena len pri devízovom účte, zrušený sa preskočí.
+        var ucty = parsed.Items["bankoveUcty"];
+        Assert.Equal(2, ucty.Count);
+        Assert.Equal("PB", ucty[0].Kod);
+        Assert.Equal("SK3131000000004040272818", ucty[0].Iban);
+        Assert.Null(ucty[0].Mena);
+        Assert.Equal("SBUS", ucty[1].Kod);
+        Assert.Equal("USD", ucty[1].Mena);
     }
 
     private static async Task<HttpRequestMessage> CopyAsync(HttpRequestMessage source)

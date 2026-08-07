@@ -38,16 +38,16 @@ function downloadXml(xml: string, fileName: string): void {
   URL.revokeObjectURL(url);
 }
 
-type ExportUnavailableReason = 'bankovy-vypis' | 'mzdy' | 'ciselny-rad' | 'ucto-nekompletne';
+type ExportUnavailableReason = 'bankovy-ucet' | 'bankovy-vypis-demo' | 'mzdy' | 'ciselny-rad' | 'ucto-nekompletne';
 
 function exportUnavailableReason(
   document: DocumentItem,
-  codeLists: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[]; ciselneRady: CodeListItem[] },
+  codeLists: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[]; ciselneRady: CodeListItem[]; bankoveUcty?: CodeListItem[] },
 ): ExportUnavailableReason | undefined {
-  if (document.typ === 'BV') return 'bankovy-vypis';
   if (document.typ === 'MZDY') return 'mzdy';
   // Export používa schválený snapshot; ak ešte neexistuje, aktuálne účtovanie.
-  const ucto = document.approvedSnapshot ? document.approvedSnapshot.ucto : document.ucto;
+  const snapshot = document.approvedSnapshot;
+  const ucto = snapshot ? snapshot.ucto : document.ucto;
   const hasActiveCode = (list: CodeListItem[], id: string | undefined): boolean =>
     Boolean(
       id &&
@@ -59,6 +59,21 @@ function exportUnavailableReason(
             item.active,
         ),
     );
+  // Bankový výpis: namiesto radu a členenia stačí účet POHODY a predkontácia
+  // každého pohybu (vlastná alebo hlavičková) — zrkadlí server/pohodaXml.ts.
+  if (document.typ === 'BV') {
+    // Bankové pohyby generuje server (bank.xsd); demo režim bez servera
+    // ich nevyskladá — mock generátor pozná len faktúry a pokladňu.
+    if (import.meta.env.VITE_DATA_MODE !== 'rest') return 'bankovy-vypis-demo';
+    const maUcet = (codeLists.bankoveUcty ?? []).some(
+      (item) => item.orgId === document.orgId && item.active && item.kod.trim() === ucto.bankUcetKod?.trim(),
+    );
+    if (!maUcet) return 'bankovy-ucet';
+    const pohyby = (snapshot ? snapshot.extracted : document.extracted).polozky ?? [];
+    const pokryte = pohyby.every((pohyb) =>
+      hasActiveCode(codeLists.predkontacie, pohyb.ucto?.predkontaciaId ?? ucto.predkontaciaId));
+    return pohyby.length > 0 && pokryte ? undefined : 'ucto-nekompletne';
+  }
   // Server vyžaduje všetky tri aktívne číselníky (server/pohodaXml.ts), preto ich
   // musíme skontrolovať aj v UI — inak doklad vyzerá exportovateľný a padne na 500.
   if (!hasActiveCode(codeLists.ciselneRady, ucto.ciselnyRadId)) return 'ciselny-rad';
@@ -279,8 +294,10 @@ export function ExportPage() {
                     const reason = unavailableReasons.get(document.id);
                     const supported = !reason;
                     const tooltip =
-                      reason === 'bankovy-vypis'
-                        ? t('export.bvTooltip')
+                      reason === 'bankovy-ucet'
+                        ? t('export.bvUcetTooltip')
+                        : reason === 'bankovy-vypis-demo'
+                          ? t('export.bvDemoTooltip')
                         : reason === 'mzdy'
                           ? t('export.mzdyTooltip')
                           : reason === 'ciselny-rad'

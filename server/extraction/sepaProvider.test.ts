@@ -9,6 +9,7 @@ const CAMT053 = `<?xml version="1.0" encoding="UTF-8"?>
   <GrpHdr><MsgId>MSG-1</MsgId><CreDtTm>2026-07-01T04:00:00</CreDtTm></GrpHdr>
   <Stmt>
    <Id>VYPIS-2026-06</Id>
+   <ElctrncSeqNb>101</ElctrncSeqNb>
    <CreDtTm>2026-07-01T04:00:00</CreDtTm>
    <FrToDt><FrDtTm>2026-06-01T00:00:00</FrDtTm><ToDtTm>2026-06-30T23:59:59</ToDtTm></FrToDt>
    <Acct>
@@ -23,7 +24,8 @@ const CAMT053 = `<?xml version="1.0" encoding="UTF-8"?>
     <Amt Ccy="EUR">1230.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts>
     <BookgDt><Dt>2026-06-15</Dt></BookgDt>
     <NtryDtls><TxDtls>
-     <RltdPties><Dbtr><Nm>Odberateľ Alfa, s.r.o.</Nm></Dbtr></RltdPties>
+     <Refs><EndToEndId>/VS2026001/SS55/KS0308</EndToEndId></Refs>
+     <RltdPties><Dbtr><Nm>Odberateľ Alfa, s.r.o.</Nm></Dbtr><DbtrAcct><Id><IBAN>SK08 0900 0000 0001 2345 6789</IBAN></Id></DbtrAcct></RltdPties>
      <RmtInf><Ustrd>Uhrada faktury 2026-001</Ustrd></RmtInf>
     </TxDtls></NtryDtls>
    </Ntry>
@@ -31,7 +33,7 @@ const CAMT053 = `<?xml version="1.0" encoding="UTF-8"?>
     <Amt Ccy="EUR">615.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts>
     <BookgDt><Dt>2026-06-20</Dt></BookgDt>
     <NtryDtls><TxDtls>
-     <RltdPties><Cdtr><Nm>Elektro Svetlo s.r.o.</Nm></Cdtr></RltdPties>
+     <RltdPties><Cdtr><Nm>Elektro Svetlo s.r.o.</Nm></Cdtr><CdtrAcct><Id><IBAN>SK7511000000002612345678</IBAN></Id></CdtrAcct></RltdPties>
      <RmtInf><Ustrd>EF-2026-0777</Ustrd></RmtInf>
     </TxDtls></NtryDtls>
    </Ntry>
@@ -62,24 +64,50 @@ describe('SepaStatementExtractionProvider', () => {
     expect(result.issueDate).toBe('2026-06-30');
     expect(result.currency).toBe('EUR');
     expect(result.totalAmount).toBe('2115.00');
+    expect(result.statementNumber).toBe('101');
     expect(result.lineItems).toHaveLength(2);
-    expect(result.lineItems[0].description).toContain('Odberateľ Alfa');
-    expect(result.lineItems[0].amountTotal).toBe('1230.00');
-    expect(result.lineItems[1].description).toContain('Elektro Svetlo');
-    expect(result.lineItems[1].amountTotal).toBe('-615.00');
+    // Pohyb nesie štruktúrované polia — protistranu, IBAN, dátum a symboly.
+    expect(result.lineItems[0]).toMatchObject({
+      description: 'Uhrada faktury 2026-001',
+      amountTotal: '1230.00',
+      paymentDate: '2026-06-15',
+      counterpartyName: 'Odberateľ Alfa, s.r.o.',
+      counterpartyIban: 'SK0809000000000123456789',
+      variableSymbol: '2026001',
+      constantSymbol: '0308',
+      specificSymbol: '55',
+    });
+    expect(result.lineItems[1]).toMatchObject({
+      amountTotal: '-615.00',
+      counterpartyName: 'Elektro Svetlo s.r.o.',
+      counterpartyIban: 'SK7511000000002612345678',
+      paymentDate: '2026-06-20',
+    });
+    expect(result.lineItems[1].variableSymbol).toBeUndefined();
     expect(result.warnings[0].code).toBe('sepa_statement_summary');
     expect(result.warnings[0].message).toContain('2 transakcií');
   });
 
-  it('normalizácia zachová podpísané sumy transakcií', async () => {
+  it('normalizácia zachová podpísané sumy a polia pohybov', async () => {
     const provider = new SepaStatementExtractionProvider();
     const outcome = await provider.extract(input(Buffer.from(CAMT053)));
     const normalized = normalizeExtractionResult(outcome.result, 'doc-bv', '2026-06-30');
     const items = (normalized.extracted as any).polozky;
     expect(items[0].sumaSpolu).toBe(1230);
+    expect(items[0]).toMatchObject({
+      datumPlatby: '2026-06-15', protistrana: 'Odberateľ Alfa, s.r.o.', vs: '2026001', ks: '0308', ss: '55',
+    });
     expect(items[1].sumaSpolu).toBe(-615);
+    expect((normalized.extracted as any).cisloVypisu).toBe('101');
     expect(normalized.totalAmount).toBe(2115);
     expect(normalized.documentType).toBe('BV');
+    // Záporný zostatok ani rozdiel pohybov voči zostatku nie sú pri BV chyba.
+    const zaporny = normalizeExtractionResult(
+      { ...outcome.result, totalAmount: '-100.00' }, 'doc-bv', '2026-06-30',
+    );
+    const { validateNormalizedExtraction } = await import('./normalize.js');
+    const issues = validateNormalizedExtraction(zaporny, { ico: '36528221' });
+    expect(issues.filter((issue) => ['invalid_total', 'line_items_total_mismatch'].includes(issue.code))).toHaveLength(0);
   });
 
   it('ne-camt XML odmietne', async () => {

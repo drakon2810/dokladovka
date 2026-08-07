@@ -25,7 +25,7 @@ async function insertInvoice(
 async function insertStatement(
   database: Awaited<ReturnType<typeof createTestDatabase>>,
   seeded: { tenantId: string; organizationId: string },
-  transactions: Array<{ popis: string; sumaSpolu: number }>,
+  transactions: Array<{ popis: string; sumaSpolu: number; vs?: string }>,
 ): Promise<string> {
   const id = randomUUID();
   await database.query(
@@ -86,5 +86,32 @@ describe('payment service', () => {
     });
     expect(result.matched).toHaveLength(1);
     expect(await paidTotalFor(database, seeded.tenantId, invoice)).toBe(1000);
+  }, 90_000);
+
+  it('prichádzajúca platba sa páruje na vydanú faktúru a nulové vedúce nuly VS nevadia', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    // Vydaná faktúra (pohľadávka) s VS bez vedúcich núl.
+    const fvId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','schvaleny','ready_for_review',$4::jsonb,'{}'::jsonb,615,'EUR')`,
+      [fvId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Naša firma' }, cisloFaktury: '777123', variabilnySymbol: '777123', sumaSpolu: 615 })],
+    );
+    // Prijatá faktúra s rovnakým VS — kredit ju uhradiť NESMIE (smer nesedí).
+    const fpId = await insertInvoice(database, seeded, { vs: '777123', total: 615 });
+
+    const statementId = await insertStatement(database, seeded, [
+      // Banka poslala VS doplnený nulami — normalizácia ich musí zhodiť.
+      { popis: 'Prijatá úhrada', sumaSpolu: 615, vs: '0000777123' },
+    ]);
+    const result = await matchStatementPayments(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, statementDocumentId: statementId,
+    });
+    expect(result.matched).toEqual([{ documentId: fvId, amount: 615, variableSymbol: '777123' }]);
+    expect(await paidTotalFor(database, seeded.tenantId, fvId)).toBe(615);
+    expect(await paidTotalFor(database, seeded.tenantId, fpId)).toBe(0);
   }, 90_000);
 });

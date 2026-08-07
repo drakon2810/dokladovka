@@ -7,6 +7,7 @@ export const CODE_LIST_KINDS: CodeListKind[] = [
   'cleneniaDph',
   'ciselneRady',
   'strediska',
+  'bankoveUcty',
 ];
 
 export interface CodeListImportKindResult {
@@ -56,6 +57,8 @@ function normalizedItem(item: ParsedItem): ParsedItem {
     kvSekcia: optional(item.kvSekcia),
     ucetMd: optional(item.ucetMd),
     ucetDal: optional(item.ucetDal),
+    iban: optional(item.iban),
+    mena: optional(item.mena),
   };
 }
 
@@ -70,7 +73,9 @@ function equalsImportedValues(current: CodeListItem, imported: ParsedItem): bool
     current.posledneCislo === imported.posledneCislo &&
     current.kvSekcia === imported.kvSekcia &&
     current.ucetMd === imported.ucetMd &&
-    current.ucetDal === imported.ucetDal
+    current.ucetDal === imported.ucetDal &&
+    current.iban === imported.iban &&
+    current.mena === imported.mena
   );
 }
 
@@ -87,6 +92,8 @@ function importedItem(
     kvSekcia: _kvSekcia,
     ucetMd: _ucetMd,
     ucetDal: _ucetDal,
+    iban: _iban,
+    mena: _mena,
     syncedAt: _syncedAt,
     ...preserved
   } = current ?? {
@@ -113,6 +120,8 @@ function importedItem(
     ...(parsed.kvSekcia ? { kvSekcia: parsed.kvSekcia } : {}),
     ...(parsed.ucetMd ? { ucetMd: parsed.ucetMd } : {}),
     ...(parsed.ucetDal ? { ucetDal: parsed.ucetDal } : {}),
+    ...(parsed.iban ? { iban: parsed.iban } : {}),
+    ...(parsed.mena ? { mena: parsed.mena } : {}),
     syncedAt: options.syncedAt,
   };
 }
@@ -139,6 +148,7 @@ export function applyPohodaCodeListImport(
     zakazky: [...(currentCodeLists.zakazky ?? [])],
     cinnosti: [...(currentCodeLists.cinnosti ?? [])],
     projekty: [...(currentCodeLists.projekty ?? [])],
+    bankoveUcty: [...(currentCodeLists.bankoveUcty ?? [])],
   };
   const perKind = Object.fromEntries(
     CODE_LIST_KINDS.map((kind) => [kind, emptyKindResult(preview.perKind[kind].bezZmeny)]),

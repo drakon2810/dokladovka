@@ -1,5 +1,6 @@
 import type { DocumentItem } from '../../data/types';
 import { t } from '../../i18n/sk';
+import { formatDateSk } from './DcInline';
 
 // Vizuálny náhľad bankového výpisu (SEPA camt.053) — transakcie sú položky dokladu.
 
@@ -41,17 +42,24 @@ export function BankStatementPreview({ doklad, zoom }: { doklad: DocumentItem; z
       <table className="mt-5 w-full text-sm">
         <thead>
           <tr className="border-b border-line text-left text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+            <th className="py-1.5 pr-2">{t('vypis.datum')}</th>
             <th className="py-1.5 pr-2">{t('vypis.transakcia')}</th>
+            <th className="tnum py-1.5 pr-2">VS</th>
             <th className="tnum py-1.5 text-right">{t('vypis.suma')}</th>
           </tr>
         </thead>
         <tbody>
           {transakcie.length === 0 && (
-            <tr><td colSpan={2} className="py-3 text-center text-ink-soft">{t('vypis.ziadne')}</td></tr>
+            <tr><td colSpan={4} className="py-3 text-center text-ink-soft">{t('vypis.ziadne')}</td></tr>
           )}
           {transakcie.map((item) => (
             <tr key={item.id} className="border-b border-line/60 align-top">
-              <td className="py-1.5 pr-2">{item.popis || '—'}</td>
+              <td className="tnum whitespace-nowrap py-1.5 pr-2 text-ink-soft">{formatDateSk(item.datumPlatby) || '—'}</td>
+              <td className="py-1.5 pr-2">
+                {item.popis || '—'}
+                {item.protistrana && <span className="block text-[11.5px] text-ink-faint">{item.protistrana}</span>}
+              </td>
+              <td className="tnum py-1.5 pr-2 text-ink-soft">{item.vs ?? '—'}</td>
               <td className={`tnum py-1.5 text-right font-medium ${
                 (item.sumaSpolu ?? 0) < 0 ? 'text-red-700' : 'text-accent-hover'
               }`}>

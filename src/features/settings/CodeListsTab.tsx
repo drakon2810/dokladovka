@@ -55,6 +55,7 @@ const KINDS: Array<{ kind: CodeListKind; label: string }> = [
   { kind: 'cleneniaDph', label: t('nast.cis.cleneniaDph') },
   { kind: 'ciselneRady', label: t('nast.cis.ciselneRady') },
   { kind: 'strediska', label: t('nast.cis.strediska') },
+  { kind: 'bankoveUcty', label: t('nast.cis.bankoveUcty') },
   { kind: 'zakazky', label: t('nast.cis.zakazky') },
   { kind: 'cinnosti', label: t('nast.cis.cinnosti') },
   { kind: 'projekty', label: t('nast.cis.projekty') },
@@ -169,6 +170,7 @@ export function CodeListsTab() {
     zakazky: [],
     cinnosti: [],
     projekty: [],
+    bankoveUcty: [],
   };
   const { orgId } = useOrgSelection();
   const [preview, setPreview] = useState<CodeListImportPreview>();
@@ -522,6 +524,7 @@ function CodeListTable({
   onDeactivate: (item: CodeListItem) => Promise<void>;
 }) {
   const showSeries = kind === 'ciselneRady';
+  const showBank = kind === 'bankoveUcty';
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -536,13 +539,19 @@ function CodeListTable({
                 <th className="py-1 pr-2 text-right font-medium">{t('nast.cis.dalsieCislo')}</th>
               </>
             )}
+            {showBank && (
+              <>
+                <th className="py-1 pr-2 font-medium">IBAN</th>
+                <th className="py-1 pr-2 font-medium">{t('nast.cis.mena')}</th>
+              </>
+            )}
             <th className="w-24" />
           </tr>
         </thead>
         <tbody>
           {items.length === 0 && (
             <tr>
-              <td colSpan={showSeries ? 6 : 3} className="py-2 text-xs text-ink-soft">
+              <td colSpan={showSeries ? 6 : showBank ? 5 : 3} className="py-2 text-xs text-ink-soft">
                 {t('stav.ziadneData')}
               </td>
             </tr>
@@ -599,6 +608,13 @@ function CodeListTable({
                     <td className="tnum py-1 pr-2 text-right text-xs font-medium align-middle">
                       {nextNumberInSeries(item.posledneCislo) ?? '—'}
                     </td>
+                  </>
+                )}
+                {showBank && (
+                  <>
+                    <td className="tnum py-1 pr-2 text-xs align-middle">{item.iban ?? '—'}</td>
+                    {/* Prázdna mena = domáci účet (EUR). */}
+                    <td className="py-1 pr-2 text-xs text-ink-soft align-middle">{item.mena ?? 'EUR'}</td>
                   </>
                 )}
                 <td className="py-1 text-right align-top">

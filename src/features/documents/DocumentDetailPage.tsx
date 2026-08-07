@@ -68,6 +68,7 @@ import { getLocalDocumentFile } from '../../data/files/localDocumentFileStore';
 import { EInvoicePreview } from './EInvoicePreview';
 import { BankStatementPreview } from './BankStatementPreview';
 import { InvoicePanel } from './InvoicePanel';
+import { BankPanel } from './BankPanel';
 import { ExportPohodaModal } from './ExportPohodaModal';
 import { SplitDocumentModal, splitGroup } from './SplitDocumentModal';
 import {
@@ -815,6 +816,9 @@ export function DocumentDetailPage() {
     projekty: (data.codeLists.projekty ?? []).filter(
       (item) => item.orgId === draft.orgId && item.active,
     ),
+    bankoveUcty: (data.codeLists.bankoveUcty ?? []).filter(
+      (item) => item.orgId === draft.orgId && item.active,
+    ),
   };
   const orgNoteTemplates = (data.noteTemplates ?? []).filter(
     (template) => template.organizationId === draft.orgId,
@@ -1419,6 +1423,33 @@ export function DocumentDetailPage() {
               Úhrady sa spravujú v sekcii Úhrady a v hromadných akciách zoznamu.
               Bez <fieldset disabled>: editor si stráži readOnly sám a tlačidlo
               „Export do POHODA" musí fungovať aj pri exportovanom doklade. */}
+          {draft.typ === 'BV' ? (
+            <BankPanel
+              key={draft.id}
+              draft={draft}
+              readOnly={readOnly}
+              codeLists={{
+                predkontacie: codeLists.predkontacie,
+                bankoveUcty: codeLists.bankoveUcty,
+              }}
+              onExport={() => setExportModalOpen(true)}
+              exportDisabledReason={
+                draft.status !== 'schvaleny'
+                  ? 'Exportovať sa dá až schválený doklad'
+                  : dirty
+                    ? t('mostik.neulozeneZmeny')
+                    : !mostikStatus?.available
+                      ? t('mostik.nepripojenyTooltip')
+                      : undefined
+              }
+              setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
+              updateUcto={updateUcto}
+              updateExtracted={updateExtracted}
+              predvolenaPokladna={(data.seriesDefaults ?? []).find(
+                (item) => item.organizationId === draft.orgId && item.documentType === 'PD',
+              )?.pokladnaKod}
+            />
+          ) : (
           <InvoicePanel
             key={draft.id}
             draft={draft}
@@ -1459,6 +1490,7 @@ export function DocumentDetailPage() {
               (item) => item.organizationId === draft.orgId && item.documentType === 'PD',
             )?.pokladnaKod}
           />
+          )}
 
           <Section title={t('detail.zdroj')}>
             <dl>

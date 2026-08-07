@@ -156,6 +156,16 @@ export interface DocumentLineItem {
   sumaBezDph?: number;
   sumaDph?: number;
   sumaSpolu?: number;
+  /** Bankový pohyb (len BV doklad): dátum platby. Smer pohybu (príjem/výdaj)
+   *  určuje znamienko sumaSpolu — samostatné pole neexistuje zámerne. */
+  datumPlatby?: string;
+  /** Bankový pohyb: protistrana (firma) a jej IBAN (protiúčet). */
+  protistrana?: string;
+  protiucetIban?: string;
+  /** Bankový pohyb: variabilný / konštantný / špecifický symbol. */
+  vs?: string;
+  ks?: string;
+  ss?: string;
   /** Pozičné zaúčtovanie: odlišná predkontácia/členenie/stredisko pre položku.
    *  Prázdne pole znamená „ako v hlavičke dokladu" — nie „bez hodnoty". */
   ucto?: {
@@ -350,6 +360,10 @@ export interface DocumentExtractedData {
   cisloFaktury: string; // dodávateľské číslo
   /** Vlastné interné číslo účtovníka (nie je z dokladu). */
   interneCislo?: string;
+  /** Bankový výpis: krátke číslo výpisu (POHODA statementNumber, max 10 znakov). */
+  cisloVypisu?: string;
+  /** Bankový výpis: počiatočný zostatok — kontrola počiatočný + pohyby = konečný. */
+  pociatocnyZostatok?: number;
   cisloObjednavky?: string;
   cisloDodaciehoListu?: string;
   variabilnySymbol?: string;
@@ -379,6 +393,8 @@ export interface DocumentUcto {
   pokladnaKod?: string;
   /** Smer pokladničného dokladu podľa voucher.xsd. */
   pokladnaTyp?: 'receipt' | 'expense';
+  /** Skratka bankového účtu POHODY (PB…); povinná pri bankovom výpise. */
+  bankUcetKod?: string;
   poznamka?: string;
   /** Sekcia kontrolného výkazu DPH (štatutárny číselník A1…D2, KN). */
   clenenieKvKod?: string;
@@ -475,7 +491,8 @@ export type CodeListKind =
   | 'strediska'
   | 'zakazky'
   | 'cinnosti'
-  | 'projekty';
+  | 'projekty'
+  | 'bankoveUcty';
 
 export type CodeListSource = 'manual' | 'pohoda';
 
@@ -503,6 +520,10 @@ export interface CodeListItem {
   /** Predkontácie: účet MD (debit) a DAL (credit) z exportu POHODY — základ typu položky. */
   ucetMd?: string;
   ucetDal?: string;
+  /** Bankové účty: IBAN — páruje výpis na účet POHODY bez zásahu účtovníka. */
+  iban?: string;
+  /** Bankové účty: mena účtu (EUR, USD…); prázdna = domáca mena. */
+  mena?: string;
   syncedAt?: string;
 }
 

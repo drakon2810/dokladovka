@@ -21,6 +21,12 @@ const PRAZDNA_STRANA = {
   nazov: null, ico: null, dic: null, icDph: null, adresa: null, iban: null, bic: null,
 };
 
+// Polia bankového pohybu — pri faktúrach a mzdách ich model vracia ako null.
+const PRAZDNY_POHYB = {
+  paymentDate: null, counterpartyName: null, counterpartyIban: null,
+  variableSymbol: null, constantSymbol: null, specificSymbol: null,
+};
+
 /** Presne to, čo by model vrátil pre rozbor miezd podľa pravidla firmy. */
 function rekapitulaciaWire() {
   return {
@@ -31,14 +37,15 @@ function rekapitulaciaWire() {
     invoiceNumber: 'MZDY-04/2026', orderNumber: null, deliveryNoteNumber: null,
     variableSymbol: '202612', constantSymbol: null, specificSymbol: null,
     issueDate: '2026-04-30', taxDate: '2026-04-30', dueDate: null, currency: 'EUR',
+    statementNumber: null,
     documentSummary: 'mzdy za 2026/04',
     // Mzdy idú do POHODY ako „UN" + sekcia KV „KN" — obidve naraz, každá vo svojom poli.
     accountCode: null, vatClassificationCode: 'UN', vatControlStatementCode: 'KN', numberSeriesCode: '26MZD',
     lineItems: [
       // Kód opísaný z pravidla presne; server ho spáruje s číselníkom firmy.
-      { description: 'hrubá mzda', accountCode: '521100/331100 HM', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '9201.19', vatAmount: '0', amountTotal: '9201.19' },
+      { description: 'hrubá mzda', accountCode: '521100/331100 HM', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '9201.19', vatAmount: '0', amountTotal: '9201.19', ...PRAZDNY_POHYB },
       // Kód bez chvosta — musí sa nájsť cez jednoznačný prefix.
-      { description: 'náhrada za PN', accountCode: '524100/331100', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '225.71', vatAmount: '0', amountTotal: '225.71' },
+      { description: 'náhrada za PN', accountCode: '524100/331100', vatClassificationCode: null, quantity: '1', unit: null, unitPriceWithoutVat: null, vatRate: '0', amountWithoutVat: '225.71', vatAmount: '0', amountTotal: '225.71', ...PRAZDNY_POHYB },
     ],
     vatBreakdown: [{ vatRate: '0', base: '9426.90', vat: '0', total: '9426.90' }],
     additionalDocuments: [

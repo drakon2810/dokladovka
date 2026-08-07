@@ -1342,8 +1342,18 @@ export function checkApprovable(
         c.orgId === doc.orgId &&
         c.active,
     );
-  const missingUcto =
-    !inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId) ||
+  // BV nemá číselný rad ani členenie DPH — POHODA čísluje pohyby výpisom.
+  // Povinný je bankový účet a predkontácia každého pohybu (vlastná alebo
+  // zdedená z hlavičky), presne ako pri exporte a serverovom schválení.
+  const missingUcto = doc.typ === 'BV'
+    ? !(codeLists.bankoveUcty ?? []).some((ucet) =>
+        ucet.orgId === doc.orgId && ucet.active && ucet.kod.trim() === doc.ucto.bankUcetKod?.trim())
+      || doc.extracted.mena !== 'EUR'
+      || (doc.extracted.polozky ?? []).length === 0
+      || (doc.extracted.polozky ?? []).some((pohyb) =>
+        !Number.isFinite(pohyb.sumaSpolu)
+        || !inOrg(codeLists.predkontacie, pohyb.ucto?.predkontaciaId ?? doc.ucto.predkontaciaId))
+    : !inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId) ||
     !inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId) ||
     !inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId) ||
     (!!doc.ucto.strediskoId && !inOrg(codeLists.strediska, doc.ucto.strediskoId)) ||
@@ -2534,6 +2544,7 @@ export async function getDataSnapshot(): Promise<AppDataState> {
       zakazky: (s.codeLists.zakazky ?? []).filter(belongsToTenant),
       cinnosti: (s.codeLists.cinnosti ?? []).filter(belongsToTenant),
       projekty: (s.codeLists.projekty ?? []).filter(belongsToTenant),
+      bankoveUcty: (s.codeLists.bankoveUcty ?? []).filter(belongsToTenant),
     },
     users: s.users.filter(belongsToTenant),
     exportBatches: s.exportBatches.filter(belongsToTenant),

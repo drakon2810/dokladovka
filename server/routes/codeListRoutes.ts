@@ -6,7 +6,7 @@ import { writeAudit } from '../audit.js';
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import type { Database } from '../db/database.js';
 
-const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'zakazky', 'cinnosti', 'projekty'] as const;
+const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'zakazky', 'cinnosti', 'projekty', 'bankoveUcty'] as const;
 const itemSchema = z.object({
   kod: z.string().trim().min(1).max(100),
   nazov: z.string().trim().min(1).max(300),
@@ -17,6 +17,8 @@ const itemSchema = z.object({
   kvSekcia: z.string().trim().max(20).optional(),
   ucetMd: z.string().trim().max(20).optional(),
   ucetDal: z.string().trim().max(20).optional(),
+  iban: z.string().trim().max(40).optional(),
+  mena: z.string().trim().max(10).optional(),
 }).strict();
 const removedSchema = z.object({ id: z.string().min(1), kod: z.string().min(1) }).passthrough();
 const kindSchema = z.object({
@@ -63,9 +65,9 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           const existing = await tx.query<{
             id: string; name: string; source: string; active: boolean; external_id?: string;
             agenda?: string; accounting_year?: string; last_number?: string; kv_section?: string;
-            ucet_md?: string; ucet_dal?: string;
+            ucet_md?: string; ucet_dal?: string; iban?: string; mena?: string;
           } & Record<string, unknown>>(
-            `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal FROM code_list_items
+            `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena FROM code_list_items
               WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND code=$4`,
             [auth.tenantId, id, kind, item.kod],
           );
@@ -77,23 +79,26 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
             && (row.last_number ?? undefined) === item.posledneCislo
             && (row.kv_section ?? undefined) === item.kvSekcia
             && (row.ucet_md ?? undefined) === item.ucetMd
-            && (row.ucet_dal ?? undefined) === item.ucetDal;
+            && (row.ucet_dal ?? undefined) === item.ucetDal
+            && (row.iban ?? undefined) === item.iban
+            && (row.mena ?? undefined) === item.mena;
           if (unchanged) {
             perKind[kind].bezZmeny += 1;
             continue;
           }
           await tx.query(
             `INSERT INTO code_list_items
-              (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,synced_at)
-             VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14)
+              (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena,synced_at)
+             VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
              ON CONFLICT (tenant_id,organization_id,kind,code) DO UPDATE SET
                name=EXCLUDED.name,source='pohoda',active=true,external_id=EXCLUDED.external_id,
                agenda=EXCLUDED.agenda,accounting_year=EXCLUDED.accounting_year,last_number=EXCLUDED.last_number,
                kv_section=EXCLUDED.kv_section,ucet_md=EXCLUDED.ucet_md,ucet_dal=EXCLUDED.ucet_dal,
+               iban=EXCLUDED.iban,mena=EXCLUDED.mena,
                synced_at=EXCLUDED.synced_at,updated_at=now()`,
             [randomUUID(), auth.tenantId, id, kind, item.kod, item.nazov, item.externalId ?? null,
               item.agenda ?? null, item.uctovnyRok ?? null, item.posledneCislo ?? null, item.kvSekcia ?? null,
-              item.ucetMd ?? null, item.ucetDal ?? null, syncedAt],
+              item.ucetMd ?? null, item.ucetDal ?? null, item.iban ?? null, item.mena ?? null, syncedAt],
           );
           if (row) perKind[kind].aktualizovane += 1;
           else perKind[kind].nove += 1;

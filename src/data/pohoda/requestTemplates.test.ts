@@ -16,11 +16,11 @@ const ORGANIZATION: Organization = {
 };
 
 describe('buildCodeListRequestXml', () => {
-  it('vytvorí jeden ASCII dataPack so štyrmi oficiálnymi list requestami', () => {
+  it('vytvorí jeden ASCII dataPack s piatimi oficiálnymi list requestami', () => {
     const xml = buildCodeListRequestXml(ORGANIZATION, new Date(2026, 6, 13));
     expect(xml).toContain('id="ExpCis-uctovna-kancelaria-20260713"');
     expect(xml).toContain('ico="35761571"');
-    expect(xml.match(/<dat:dataPackItem /g)).toHaveLength(4);
+    expect(xml.match(/<dat:dataPackItem /g)).toHaveLength(5);
     expect(xml).toContain('<lst:listAccountingDoubleEntryRequest version="1.1"/>');
     expect(xml).toContain(
       '<lst:listClassificationVATRequest version="2.0" classificationVATVersion="2.0">',
@@ -30,6 +30,9 @@ describe('buildCodeListRequestXml', () => {
     );
     expect(xml).toContain(
       '<lCen:listCentreRequest version="2.0" centreVersion="2.0">',
+    );
+    expect(xml).toContain(
+      '<lst:listBankAccountRequest version="2.0" bankAccountVersion="2.0">',
     );
     expect(/^[\x00-\x7f]*$/.test(xml)).toBe(true);
   });

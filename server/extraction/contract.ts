@@ -32,6 +32,8 @@ const buyerWireSchema = partyWireSchema.omit({ iban: true, bic: true }).strict()
 // accountCode/vatClassificationCode: kód z číselníka firmy, ktorý model OPÍŠE
 // z bloku ÚČTOVNÉ PRAVIDLÁ. Na id ho preloží až server podľa číselníka —
 // model číselník nevidí a nesmie si kódy vymýšľať.
+// paymentDate/counterparty*/…Symbol: len bankový výpis (BV) — jeden riadok
+// = jeden bankový pohyb; pri faktúrach ostávajú null.
 const lineItemWireSchema = z.object({
   description: nullableText,
   accountCode: nullableShortText,
@@ -43,6 +45,12 @@ const lineItemWireSchema = z.object({
   amountWithoutVat: nullableDecimal,
   vatAmount: nullableDecimal,
   amountTotal: nullableDecimal,
+  paymentDate: nullableIsoDate,
+  counterpartyName: nullableShortText,
+  counterpartyIban: nullableShortText,
+  variableSymbol: nullableShortText,
+  constantSymbol: nullableShortText,
+  specificSymbol: nullableShortText,
 }).strict();
 
 const vatRowWireSchema = z.object({
@@ -107,6 +115,8 @@ export const extractionWireSchema = z.object({
   taxDate: nullableIsoDate,
   dueDate: nullableIsoDate,
   currency: nullableShortText,
+  // Bankový výpis: krátke číslo výpisu (POHODA dovolí max 10 znakov).
+  statementNumber: nullableShortText,
   documentSummary: nullableShortText,
   accountCode: nullableShortText,
   vatClassificationCode: nullableShortText,
@@ -144,6 +154,8 @@ export interface ExtractionResult {
   taxDate?: string;
   dueDate?: string;
   currency?: string;
+  /** Bankový výpis: krátke číslo výpisu (POHODA statementNumber, max 10 znakov). */
+  statementNumber?: string;
   /** Krátky popis plnenia — ide do POHODY ako text účtovného zápisu. */
   documentSummary?: string;
   /** Kódy z číselníka firmy, ktoré model opísal z pravidla; server ich preloží na id. */
@@ -164,6 +176,13 @@ export interface ExtractionResult {
     amountWithoutVat?: string;
     vatAmount?: string;
     amountTotal?: string;
+    /** Bankový pohyb (len BV): dátum platby, protistrana a symboly. */
+    paymentDate?: string;
+    counterpartyName?: string;
+    counterpartyIban?: string;
+    variableSymbol?: string;
+    constantSymbol?: string;
+    specificSymbol?: string;
   }>;
   vatBreakdown: Array<{ vatRate: string; base: string; vat: string; total?: string }>;
   /** Ďalšie doklady z toho istého súboru. Chýba pri bežnom doklade aj v behoch
@@ -228,6 +247,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
       taxDate: parsed.taxDate,
       dueDate: parsed.dueDate,
       currency: parsed.currency,
+      statementNumber: parsed.statementNumber,
       documentSummary: parsed.documentSummary,
       accountCode: parsed.accountCode,
       vatClassificationCode: parsed.vatClassificationCode,
@@ -283,7 +303,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),
   constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
   issueDate: z.string().optional(), taxDate: z.string().optional(), dueDate: z.string().optional(),
-  currency: z.string().optional(), documentSummary: z.string().optional(),
+  currency: z.string().optional(), statementNumber: z.string().optional(), documentSummary: z.string().optional(),
   accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
   vatControlStatementCode: z.string().optional(),
   numberSeriesCode: z.string().optional(),
@@ -292,6 +312,9 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
     accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
     unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
     amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
+    paymentDate: z.string().optional(), counterpartyName: z.string().optional(),
+    counterpartyIban: z.string().optional(), variableSymbol: z.string().optional(),
+    constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
   })),
   vatBreakdown: z.array(z.object({ vatRate: z.string(), base: z.string(), vat: z.string(), total: z.string().optional() })),
   // Staršie uložené behy extrakcie toto pole nemajú — default drží spätnú kompatibilitu.
@@ -307,6 +330,9 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
       accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
       unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
       amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
+      paymentDate: z.string().optional(), counterpartyName: z.string().optional(),
+      counterpartyIban: z.string().optional(), variableSymbol: z.string().optional(),
+      constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
     })),
     vatBreakdown: z.array(z.object({ vatRate: z.string(), base: z.string(), vat: z.string(), total: z.string().optional() })),
   })).optional(),

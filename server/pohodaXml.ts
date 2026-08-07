@@ -242,6 +242,81 @@ function partnerAddressXml(supplier: Record<string, any>): string {
         </typ:address>`;
 }
 
+/**
+ * Bankový výpis → jeden <bnk:bank> na KAŽDÝ pohyb. POHODA vedie agendu Banka
+ * po pohyboch, nie po výpisoch; smer (príjem/výdaj) určuje znamienko sumy.
+ * Poradie elementov drží poradie v bank.xsd (bankHeader je xsd:all, ale test
+ * poradia aj čitateľnosť profitujú z poradia podľa schémy).
+ */
+function bankDataPackItems(
+  id: string,
+  snapshot: Snapshot,
+  codeLists: PohodaCodeLookup,
+): string {
+  const extracted = snapshot.extracted;
+  const ucet = String(snapshot.ucto.bankUcetKod ?? '').trim();
+  if (!ucet) throw new Error(`Bankový výpis ${id} nemá nastavený účet POHODY`);
+  // ponytail: len domáca mena — devízový účet potrebuje foreignCurrency + kurz,
+  // doplniť pri prvom reálnom USD/CZK výpise.
+  if ((extracted.mena ?? 'EUR') !== 'EUR') {
+    throw new Error(`Bankový výpis ${id} je v mene ${extracted.mena} — export devízových výpisov zatiaľ nie je podporovaný`);
+  }
+  const polozky = Array.isArray(extracted.polozky) ? extracted.polozky : [];
+  if (polozky.length === 0) throw new Error(`Bankový výpis ${id} nemá žiadne pohyby`);
+  const dateStatement = isoDate(extracted.datumVystavenia);
+  if (!dateStatement) throw new Error(`Bankový výpis ${id} nemá platný dátum výpisu (očakáva sa RRRR-MM-DD)`);
+  const cisloVypisu = clamp(extracted.cisloVypisu, 10);
+  const headerAccounting = codeLists.predkontacie.get(snapshot.ucto.predkontaciaId ?? '');
+  const centre = codeLists.strediska.get(snapshot.ucto.strediskoId ?? '');
+
+  return polozky.map((pohyb: any, index: number) => {
+    // Bez `?? 0`: pohyb bez sumy by sa v POHODE objavil ako príjem 0,00 —
+    // chýbajúca suma musí export zastaviť, nie prekĺznuť.
+    const suma = Number(pohyb.sumaSpolu);
+    if (!Number.isFinite(suma)) throw new Error(`Pohyb ${index + 1} výpisu ${id} nemá platnú sumu`);
+    // Nastavená, ale nerozpoznaná predkontácia pohybu je chyba — tichý pád na
+    // hlavičkovú by zaúčtoval pohyb inam, než účtovník schválil (napr. po
+    // resynchronizácii číselníka, ktorá predkontáciu deaktivovala).
+    const vlastnaId = pohyb.ucto?.predkontaciaId;
+    const vlastna = vlastnaId ? codeLists.predkontacie.get(vlastnaId) : undefined;
+    if (vlastnaId && !vlastna) throw new Error(`Pohyb ${index + 1} výpisu ${id} má predkontáciu mimo aktívneho číselníka organizácie`);
+    const accounting = vlastna ?? headerAccounting;
+    if (!accounting) throw new Error(`Pohyb ${index + 1} výpisu ${id} nemá predkontáciu`);
+    const itemCentre = codeLists.strediska.get(pohyb.ucto?.strediskoId ?? '') ?? centre;
+    const datePayment = isoDate(pohyb.datumPlatby) ?? dateStatement;
+    const paymentAccount = skIbanAccount(pohyb.protiucetIban);
+    const text = clamp(pohyb.popis || pohyb.protistrana || 'Bankový pohyb', 96);
+    const vs = clamp(pohyb.vs, 20).replace(/\D/g, '');
+    const lines = [
+      `        <bnk:bankType>${suma < 0 ? 'expense' : 'receipt'}</bnk:bankType>`,
+      `        <bnk:account><typ:ids>${escapeXml(ucet)}</typ:ids></bnk:account>`,
+      // Číslo výpisu + poradie pohybu — POHODA z nich skladá evidenčné číslo.
+      ...(cisloVypisu ? [`        <bnk:statementNumber><bnk:statementNumber>${escapeXml(cisloVypisu)}</bnk:statementNumber><bnk:numberMovement>${index + 1}</bnk:numberMovement></bnk:statementNumber>`] : []),
+      ...(vs ? [`        <bnk:symVar>${escapeXml(vs)}</bnk:symVar>`] : []),
+      `        <bnk:dateStatement>${dateStatement}</bnk:dateStatement>`,
+      `        <bnk:datePayment>${datePayment}</bnk:datePayment>`,
+      `        <bnk:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></bnk:accounting>`,
+      `        <bnk:text>${escapeXml(text)}</bnk:text>`,
+      ...(pohyb.protistrana ? [`        <bnk:partnerIdentity><typ:address><typ:company>${escapeXml(clamp(pohyb.protistrana, 255))}</typ:company></typ:address></bnk:partnerIdentity>`] : []),
+      ...(paymentAccount ? [`        <bnk:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></bnk:paymentAccount>`] : []),
+      ...(pohyb.ks ? [`        <bnk:symConst>${escapeXml(clamp(pohyb.ks, 4))}</bnk:symConst>`] : []),
+      ...(pohyb.ss ? [`        <bnk:symSpec>${escapeXml(clamp(pohyb.ss, 16))}</bnk:symSpec>`] : []),
+      ...(itemCentre ? [`        <bnk:centre><typ:ids>${escapeXml(itemCentre)}</typ:ids></bnk:centre>`] : []),
+      ...(snapshot.ucto.poznamka ? [`        <bnk:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</bnk:note>`] : []),
+    ];
+    return `  <dat:dataPackItem id="${escapeXml(`${id}-p${index + 1}`)}" version="2.0">
+    <bnk:bank version="2.0">
+      <bnk:bankHeader>
+${lines.join('\n')}
+      </bnk:bankHeader>
+      <bnk:bankSummary><bnk:homeCurrency>
+        <typ:priceNone>${amount(Math.abs(suma))}</typ:priceNone>
+      </bnk:homeCurrency></bnk:bankSummary>
+    </bnk:bank>
+  </dat:dataPackItem>`;
+  }).join('\n');
+}
+
 export function buildServerDataPack(input: {
   id: string;
   ico: string;
@@ -250,6 +325,9 @@ export function buildServerDataPack(input: {
 }): string {
   if (!/^\d{8}$/.test(input.ico)) throw new Error('IČO účtovnej jednotky je neplatné');
   const items = input.documents.map(({ id, snapshot }) => {
+    // Bankový výpis nemá číselný rad ani členenie DPH — vetví sa pred spoločnou
+    // kontrolou číselníkov nižšie.
+    if (snapshot.typ === 'BV') return bankDataPackItems(id, snapshot, input.codeLists);
     const extracted = snapshot.extracted;
     const supplier = extracted.dodavatel ?? {};
     const accounting = input.codeLists.predkontacie.get(snapshot.ucto.predkontaciaId ?? '');
@@ -402,6 +480,7 @@ export function buildServerDataPack(input: {
   xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd"
   xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd"
   xmlns:int="http://www.stormware.cz/schema/version_2/intDoc.xsd"
+  xmlns:bnk="http://www.stormware.cz/schema/version_2/bank.xsd"
   xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
 ${items}
 </dat:dataPack>`;

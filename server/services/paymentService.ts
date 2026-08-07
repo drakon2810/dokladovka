@@ -52,16 +52,24 @@ interface OpenInvoiceRow extends Record<string, unknown> {
 interface StatementTransaction {
   popis?: string;
   sumaSpolu?: number;
+  /** Variabilný symbol pohybu (štruktúrovaný z camt/AI extrakcie). */
+  vs?: string;
 }
 
 export interface StatementMatchResult {
   matched: Array<{ documentId: string; amount: number; variableSymbol: string }>;
 }
 
+/** VS bez nečíslic a vedúcich núl — banky symboly dopĺňajú na pevnú šírku. */
+function normalizovanyVs(value: unknown): string {
+  return String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
+}
+
 /**
- * Automatické párovanie: odchádzajúce transakcie výpisu (záporná suma) sa párujú
- * na otvorené FP/OZ doklady rovnakej organizácie cez variabilný symbol v popise
- * transakcie + zhodu sumy (do 2 centov voči zvyšku k úhrade alebo celkovej sume).
+ * Automatické párovanie transakcií výpisu cez variabilný symbol + zhodu sumy
+ * (do 2 centov voči zvyšku k úhrade alebo celkovej sume). Smer rozhoduje o
+ * strane: odchádzajúce (záporné) sa párujú na FP/OZ, prichádzajúce (kladné)
+ * na vydané faktúry (FV) — presne ako „Úhrada FP/FV" v POHODE.
  * Konzervatívne: bez VS zhody sa nič nepáruje; jeden doklad max. raz na výpis.
  */
 export async function matchStatementPayments(
@@ -75,25 +83,29 @@ export async function matchStatementPayments(
   const extracted = statement.rows[0]?.extracted;
   if (!extracted) return { matched: [] };
   const transactions: StatementTransaction[] = Array.isArray(extracted.polozky) ? extracted.polozky : [];
-  const outgoing = transactions.filter((item) => Number(item.sumaSpolu) < 0);
-  if (outgoing.length === 0) return { matched: [] };
+  const relevant = transactions.filter((item) => Number(item.sumaSpolu) !== 0 && Number.isFinite(Number(item.sumaSpolu)));
+  if (relevant.length === 0) return { matched: [] };
 
-  const candidates = await database.query<OpenInvoiceRow>(
-    `SELECT d.id, d.total_amount, d.currency, d.extracted,
+  const candidates = await database.query<OpenInvoiceRow & { document_type: string }>(
+    `SELECT d.id, d.document_type, d.total_amount, d.currency, d.extracted,
             COALESCE((SELECT SUM(p.amount) FROM document_payments p
               WHERE p.tenant_id=d.tenant_id AND p.document_id=d.id), 0) AS paid
        FROM documents d
       WHERE d.tenant_id=$1 AND d.organization_id=$2
-        AND d.document_type IN ('FP','OZ')
+        AND d.document_type IN ('FP','OZ','FV')
         AND d.status IN ('extrahovany','na_kontrole','schvaleny','exportovany')
       ORDER BY d.created_at DESC LIMIT 500`,
     [input.tenantId, input.organizationId],
   );
 
-  const byVs = new Map<string, OpenInvoiceRow>();
+  // Dve mapy podľa smeru — kredit nesmie „uhradiť" prijatú faktúru a naopak.
+  const zavazkyPodlaVs = new Map<string, OpenInvoiceRow>();
+  const pohladavkyPodlaVs = new Map<string, OpenInvoiceRow>();
   for (const row of candidates.rows) {
-    const vs = String(row.extracted?.variabilnySymbol ?? '').replace(/\D/g, '');
-    if (vs && !byVs.has(vs)) byVs.set(vs, row);
+    const vs = normalizovanyVs(row.extracted?.variabilnySymbol);
+    if (!vs) continue;
+    const mapa = row.document_type === 'FV' ? pohladavkyPodlaVs : zavazkyPodlaVs;
+    if (!mapa.has(vs)) mapa.set(vs, row);
   }
 
   const statementDate = typeof extracted.datumVystavenia === 'string'
@@ -102,11 +114,17 @@ export async function matchStatementPayments(
   const matched: StatementMatchResult['matched'] = [];
   const usedDocuments = new Set<string>();
 
-  for (const transaction of outgoing) {
+  for (const transaction of relevant) {
     const description = String(transaction.popis ?? '');
     const amount = round2(Math.abs(Number(transaction.sumaSpolu)));
-    // Kandidátne VS: číselné sekvencie 4–10 číslic v popise transakcie.
-    const tokens = [...new Set(description.match(/\d{4,10}/g) ?? [])];
+    const byVs = Number(transaction.sumaSpolu) < 0 ? zavazkyPodlaVs : pohladavkyPodlaVs;
+    // Prednosť má štruktúrovaný VS pohybu (z camt/AI extrakcie); popis je
+    // fallback pre staršie výpisy — číselné sekvencie 4–10 číslic.
+    const vlastnyVs = normalizovanyVs(transaction.vs);
+    const tokens = [...new Set([
+      ...(vlastnyVs ? [vlastnyVs] : []),
+      ...(description.match(/\d{4,10}/g) ?? []).map(normalizovanyVs).filter(Boolean),
+    ])];
     for (const token of tokens) {
       const document = byVs.get(token);
       if (!document || usedDocuments.has(document.id)) continue;

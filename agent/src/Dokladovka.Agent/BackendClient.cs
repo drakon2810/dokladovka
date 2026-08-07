@@ -28,7 +28,8 @@ public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyR
 // UcetMd/UcetDal: účty predkontácie z atribútov debit/credit (len kind=predkontacie).
 // PosledneCislo: najvyššie použité číslo číselného radu (topNumber z exportu POHODY) —
 // web z neho predikuje interné číslo ďalšieho dokladu.
-public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null, string? PosledneCislo = null);
+// Iban/Mena: bankové účty (kind=bankoveUcty) — IBAN páruje výpis na účet POHODY.
+public sealed record CodeListValue(string Kod, string Nazov, string? ExternalId = null, string? Agenda = null, string? UctovnyRok = null, string? UcetMd = null, string? UcetDal = null, string? PosledneCislo = null, string? Iban = null, string? Mena = null);
 // CheckDuplicity=false: voľba „Nekontrolovať duplicity" v exportnom dialógu —
 // POHODA doklad naimportuje aj vtedy, keď tam s rovnakým číslom už je.
 public sealed record AgentExportJob(string ExportJobId, string DataPackXml, string IdempotencyKey, bool CheckDuplicity = true);

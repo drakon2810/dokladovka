@@ -233,17 +233,56 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         { issues: validationErrors },
       );
     }
-    const requiredIds = [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
-    if (requiredIds.some((value) => !value)) throw new HttpError(409, 'accounting_incomplete', 'Zaúčtovanie nie je kompletné');
+    // BV nemá číselný rad ani členenie DPH (POHODA čísluje pohyby výpisom);
+    // povinný je bankový účet a zaúčtovanie každého pohybu — pohyb bez vlastnej
+    // predkontácie dedí hlavičkovú, presne ako pri exporte.
+    const requiredIds = document.document_type === 'BV'
+      ? [document.accounting.predkontaciaId].filter(Boolean)
+      : [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
+    if (document.document_type !== 'BV' && requiredIds.some((value) => !value)) {
+      throw new HttpError(409, 'accounting_incomplete', 'Zaúčtovanie nie je kompletné');
+    }
     if (document.document_type === 'PD' && (!document.accounting.pokladnaKod || !['receipt', 'expense'].includes(document.accounting.pokladnaTyp ?? ''))) {
       throw new HttpError(409, 'cash_account_required', 'Pre pokladničný doklad je povinný kód pokladne a typ príjem/výdaj');
     }
-    const valid = await database.query(
-      `SELECT id FROM code_list_items
-        WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])`,
-      [auth.tenantId, document.organization_id, requiredIds],
-    );
-    if (valid.rowCount !== new Set(requiredIds).size) throw new HttpError(409, 'code_list_invalid', 'Číselník nepatrí organizácii alebo nie je aktívny');
+    if (document.document_type === 'BV') {
+      if (!String(document.accounting.bankUcetKod ?? '').trim()) {
+        throw new HttpError(409, 'bank_account_required', 'Pre bankový výpis je povinný účet POHODY (skratka z číselníka bankových účtov)');
+      }
+      // Export podporuje zatiaľ len domácu menu — schválený devízový výpis by
+      // zhodil celú exportnú dávku, tak sa zastaví už tu s jasným dôvodom.
+      if ((extracted.mena ?? 'EUR') !== 'EUR') {
+        throw new HttpError(409, 'bank_currency_unsupported', `Výpis v mene ${extracted.mena} sa zatiaľ nedá exportovať — podporovaná je len mena EUR`);
+      }
+      const pohyby = Array.isArray(extracted.polozky) ? extracted.polozky : [];
+      if (pohyby.length === 0) throw new HttpError(409, 'bank_movements_required', 'Bankový výpis nemá žiadne pohyby');
+      const bezSumy = pohyby.filter((pohyb: any) => !Number.isFinite(Number(pohyb?.sumaSpolu)));
+      if (bezSumy.length > 0) {
+        throw new HttpError(409, 'movement_amount_required', `${bezSumy.length} pohybov výpisu nemá sumu — AI ju z podkladu neprečítala, doplňte ju ručne`);
+      }
+      const bezPredkontacie = pohyby.filter((pohyb: any) => !pohyb?.ucto?.predkontaciaId && !document.accounting.predkontaciaId);
+      if (bezPredkontacie.length > 0) {
+        throw new HttpError(409, 'movement_accounting_incomplete', `${bezPredkontacie.length} pohybov výpisu nemá predkontáciu`);
+      }
+      // Predkontácie pohybov musia patriť organizácii a byť aktívne.
+      requiredIds.push(...new Set<string>(pohyby.map((pohyb: any) => pohyb?.ucto?.predkontaciaId).filter(Boolean)));
+    }
+    if (requiredIds.length > 0) {
+      const valid = await database.query(
+        `SELECT id FROM code_list_items
+          WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])`,
+        [auth.tenantId, document.organization_id, requiredIds],
+      );
+      if (valid.rowCount !== new Set(requiredIds).size) throw new HttpError(409, 'code_list_invalid', 'Číselník nepatrí organizácii alebo nie je aktívny');
+    }
+    if (document.document_type === 'BV') {
+      const ucet = await database.query(
+        `SELECT 1 FROM code_list_items
+          WHERE tenant_id=$1 AND organization_id=$2 AND kind='bankoveUcty' AND active=true AND trim(code)=trim($3)`,
+        [auth.tenantId, document.organization_id, String(document.accounting.bankUcetKod)],
+      );
+      if (ucet.rowCount === 0) throw new HttpError(409, 'bank_account_invalid', 'Bankový účet nie je v číselníku organizácie');
+    }
     // DPH profil klienta: deterministické blokácie (napr. neplatiteľ so
     // zvoleným odpočtom) sa nedajú obísť klientom — kontrola beží na serveri.
     const dphProfil = await loadDphProfil(database, auth.tenantId, document.organization_id);

@@ -85,15 +85,17 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
 
     const codeLists = {
       predkontacie: [], cleneniaDph: [], ciselneRady: [], strediska: [],
-      zakazky: [], cinnosti: [], projekty: [],
+      zakazky: [], cinnosti: [], projekty: [], bankoveUcty: [],
     } as Record<string, any[]>;
     for (const row of codeListRows.rows) {
-      codeLists[row.kind].push({
+      // Neznámy druh (napr. historický 'clenenieKv') nesmie zhodiť celý snapshot.
+      codeLists[row.kind]?.push({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, kod: row.code, nazov: row.name,
         source: row.source, active: row.active, externalId: row.external_id ?? undefined,
         agenda: row.agenda ?? undefined, uctovnyRok: row.accounting_year ?? undefined,
         posledneCislo: row.last_number ?? undefined, kvSekcia: row.kv_section ?? undefined,
         ucetMd: row.ucet_md ?? undefined, ucetDal: row.ucet_dal ?? undefined,
+        iban: row.iban ?? undefined, mena: row.mena ?? undefined,
         syncedAt: iso(row.synced_at),
       });
     }

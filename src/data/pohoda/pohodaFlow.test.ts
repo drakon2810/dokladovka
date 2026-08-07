@@ -25,13 +25,15 @@ describe('POHODA výmena XML bez agenta', () => {
     const before = await getDataSnapshot();
     const organization = before.organizations.find((item) => item.id === 'org-alfa')!;
     const request = buildCodeListRequestXml(organization, new Date(2026, 6, 13));
-    expect(request.match(/<dat:dataPackItem /g)).toHaveLength(4);
+    expect(request.match(/<dat:dataPackItem /g)).toHaveLength(5);
 
     const responseBuffer = new TextEncoder().encode(responseFixture).buffer;
     const response = decodePohodaXml(responseBuffer);
     const preview = parseCodeListResponse(response, organization.id, before.codeLists);
     const imported = await importPohodaCodeLists(organization.id, preview);
-    expect(imported).toMatchObject({ nove: 4, aktualizovane: 0, vyradene: 0 });
+    // 4 pôvodné číselníky + nový bankový účet SBUS; seedovaný ručný účet PB
+    // sa importom adoptuje pod POHODU (aktualizovane).
+    expect(imported).toMatchObject({ nove: 5, aktualizovane: 1, vyradene: 0 });
 
     const afterImport = await getDataSnapshot();
     const predkontacia = afterImport.codeLists.predkontacie.find(

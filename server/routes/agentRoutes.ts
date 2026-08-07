@@ -40,7 +40,7 @@ interface ExportJobRow extends Record<string, unknown> {
   created_by: string;
 }
 
-const codeListKind = z.enum(['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska']);
+const codeListKind = z.enum(['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'bankoveUcty']);
 // Telemetria (agent_sync_runs) pozná okrem číselníkov aj tréningovú synchronizáciu.
 const syncRunKind = z.enum([...codeListKind.options, 'treningAi']);
 const codeListItem = z.object({
@@ -54,6 +54,9 @@ const codeListItem = z.object({
   ucetDal: z.string().max(20).optional(),
   // Číselné rady: najvyššie použité číslo (topNumber) — predikcia interného čísla.
   posledneCislo: z.string().max(50).optional(),
+  // Bankové účty: IBAN (párovanie výpisu na účet) a mena devízového účtu.
+  iban: z.string().max(40).optional(),
+  mena: z.string().max(10).optional(),
 }).strict();
 
 const releaseSchema = z.object({
@@ -343,15 +346,16 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       for (const item of normalized.values()) {
         await tx.query(
           `INSERT INTO code_list_items
-            (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, last_number, synced_at)
-           VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,now())
+            (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, last_number, iban, mena, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,now())
            ON CONFLICT (tenant_id, organization_id, kind, code)
            DO UPDATE SET name=excluded.name, source='pohoda', active=true, external_id=excluded.external_id,
                          agenda=excluded.agenda, accounting_year=excluded.accounting_year,
                          ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal, last_number=excluded.last_number,
+                         iban=excluded.iban, mena=excluded.mena,
                          synced_at=now(), updated_at=now()`,
           [randomUUID(), agent.tenant_id, id, body.kind, item.kod, item.nazov, item.externalId ?? null, item.agenda ?? null, item.uctovnyRok ?? null,
-            item.ucetMd ?? null, item.ucetDal ?? null, item.posledneCislo ?? null],
+            item.ucetMd ?? null, item.ucetDal ?? null, item.posledneCislo ?? null, item.iban ?? null, item.mena ?? null],
         );
         insertedOrUpdated += 1;
       }
