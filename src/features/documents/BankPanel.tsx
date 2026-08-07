@@ -8,6 +8,7 @@ import type {
   CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentType, DocumentUcto,
 } from '../../data/types';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
+import { bankovePredkontacie } from '../../data/pohoda/agendas';
 import { showToast } from '../../components/toast';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { fmtMoney } from './ItemsSection';
@@ -80,13 +81,21 @@ export function BankPanel({
     title: item.iban ? `IBAN ${item.iban}` : item.nazov,
   })), [codeLists.bankoveUcty]);
 
-  const predkOpts: DcOption[] = useMemo(() => [
-    // Prázdna voľba = predkontácia hlavičky výpisu, nie „bez predkontácie".
-    { value: '', label: '— ako výpis' },
-    ...codeLists.predkontacie.map((item) => ({ value: item.id, label: `${item.kod} · ${item.nazov}`, title: item.nazov })),
-  ], [codeLists.predkontacie]);
+  // POHODA má pre banku VLASTNÉ predkontácie a smer je súčasťou agendy:
+  // bankReceived = príjem, bankIssued = výdaj. Ponuka na pohyb sa preto
+  // filtruje podľa znamienka sumy — rovnako ako výber priamo v POHODE.
+  const toOpts = (items: typeof codeLists.predkontacie): DcOption[] =>
+    items.map((item) => ({ value: item.id, label: `${item.kod} · ${item.nazov}`, title: item.nazov }));
+  const prijemOpts: DcOption[] = useMemo(
+    () => [{ value: '', label: '— ako výpis' }, ...toOpts(bankovePredkontacie(codeLists.predkontacie, 'prijem'))],
+    [codeLists.predkontacie],
+  );
+  const vydajOpts: DcOption[] = useMemo(
+    () => [{ value: '', label: '— ako výpis' }, ...toOpts(bankovePredkontacie(codeLists.predkontacie, 'vydaj'))],
+    [codeLists.predkontacie],
+  );
   const headerPredkOpts: DcOption[] = useMemo(
-    () => codeLists.predkontacie.map((item) => ({ value: item.id, label: `${item.kod} · ${item.nazov}`, title: item.nazov })),
+    () => toOpts(bankovePredkontacie(codeLists.predkontacie)),
     [codeLists.predkontacie],
   );
   const predkKod = (id?: string) => codeLists.predkontacie.find((item) => item.id === id)?.kod;
@@ -231,7 +240,9 @@ export function BankPanel({
                       />
                     </div>
                     <DcPick
-                      value={pohyb.ucto?.predkontaciaId ?? ''} options={predkOpts} disabled={readOnly}
+                      value={pohyb.ucto?.predkontaciaId ?? ''}
+                      options={(pohyb.sumaSpolu ?? 0) < 0 ? vydajOpts : prijemOpts}
+                      disabled={readOnly}
                       placeholder={predkKod(ucto.predkontaciaId) ?? '—'}
                       title={chybaPredkontacia ? 'Pohyb nemá predkontáciu' : undefined}
                       srcClass={chybaPredkontacia ? ' dk-cell-err' : ''}

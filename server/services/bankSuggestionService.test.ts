@@ -11,12 +11,13 @@ async function seedPredkontacia(
   database: Awaited<ReturnType<typeof createTestDatabase>>,
   seeded: { tenantId: string; organizationId: string },
   code: string,
+  agenda?: string,
 ): Promise<string> {
   const id = randomUUID();
   await database.query(
-    `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
-     VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
-    [id, seeded.tenantId, seeded.organizationId, code],
+    `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda)
+     VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5)`,
+    [id, seeded.tenantId, seeded.organizationId, code, agenda ?? null],
   );
   return id;
 }
@@ -26,9 +27,11 @@ describe('autozaúčtovanie pohybov výpisu', () => {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
-    const uhradaFv = await seedPredkontacia(database, seeded, 'Úhrada FV-tuz.');
-    const dane = await seedPredkontacia(database, seeded, '538200');
+    const uhradaFv = await seedPredkontacia(database, seeded, 'Úhrada FV-tuz.', 'bankReceived');
+    const dane = await seedPredkontacia(database, seeded, '538200', 'bankIssued');
     const rucne = await seedPredkontacia(database, seeded, '518/321');
+    // Fakturová predkontácia sa do bankovej ponuky nesmie dostať vôbec.
+    const fakturova = await seedPredkontacia(database, seeded, '518/321 FAKT', 'receivedInvoice');
 
     // Vydaná faktúra, ktorú pohyb č. 2 preukázateľne platí (VS + suma).
     const fvId = randomUUID();
@@ -82,6 +85,9 @@ describe('autozaúčtovanie pohybov výpisu', () => {
     expect(payload.pohyby.map((pohyb: any) => pohyb.index)).toEqual([0, 1]);
     expect(payload.pohyby[1].sparovanyDoklad).toMatchObject({ typ: 'FV', cislo: '260504300086' });
     expect(payload.ciselnik.some((item: any) => item.id === uhradaFv)).toBe(true);
+    // Ponuka nesie agendu a fakturové predkontácie v nej nie sú.
+    expect(payload.ciselnik.find((item: any) => item.id === dane)?.agenda).toBe('bankIssued');
+    expect(payload.ciselnik.some((item: any) => item.id === fakturova)).toBe(false);
 
     const ulozene = await database.query<Record<string, any>>(
       'SELECT extracted, history FROM documents WHERE id=$1', [statementId],

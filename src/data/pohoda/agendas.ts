@@ -25,3 +25,28 @@ export function radyPreTyp<T extends { agenda?: string }>(rady: T[], typ: Docume
   const vhodne = rady.filter((item) => item.agenda === agenda);
   return vhodne.length > 0 ? vhodne : rady;
 }
+
+/**
+ * Agendy predkontácií POHODY (atribút „agenda" v listAccountingDoubleEntry) pre
+ * banku — POZOR, iný slovník než agendy číselných radov: predkontácie nesú aj
+ * SMER, bankReceived = príjem, bankIssued = výdaj.
+ * Server drží zhodné konštanty v bankSuggestionService.
+ */
+export const BANK_PREDKONTACIA_AGENDY = ['bankReceived', 'bankIssued'] as const;
+
+/**
+ * Predkontácie použiteľné pre bankový pohyb daného smeru. Položky bez agendy
+ * (ručne založené) ostávajú v ponuke; pri prázdnom výsledku sa vráti všetko,
+ * inak by sa pohyb nedal zaúčtovať vôbec — rovnaká zhovievavosť ako radyPreTyp.
+ */
+export function bankovePredkontacie<T extends { agenda?: string }>(
+  items: T[],
+  smer?: 'prijem' | 'vydaj',
+): T[] {
+  const chcena = smer === 'prijem' ? 'bankReceived' : smer === 'vydaj' ? 'bankIssued' : undefined;
+  const vhodne = items.filter((item) => !item.agenda
+    || (chcena
+      ? item.agenda === chcena
+      : (BANK_PREDKONTACIA_AGENDY as readonly string[]).includes(item.agenda)));
+  return vhodne.length > 0 ? vhodne : items;
+}

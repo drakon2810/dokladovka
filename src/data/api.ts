@@ -1345,6 +1345,14 @@ export function checkApprovable(
   // BV nemá číselný rad ani členenie DPH — POHODA čísluje pohyby výpisom.
   // Povinný je bankový účet a predkontácia každého pohybu (vlastná alebo
   // zdedená z hlavičky), presne ako pri exporte a serverovom schválení.
+  // Smer bankovej predkontácie nesie agenda (bankReceived/bankIssued) — známa
+  // cudzia či opačná agenda blokuje rovnako ako server; bez agendy prechádza.
+  const zlaBankovaAgenda = (pohyb: { sumaSpolu?: number; ucto?: { predkontaciaId?: string } }): boolean => {
+    const predkontacia = codeLists.predkontacie.find(
+      (item) => item.id === (pohyb.ucto?.predkontaciaId ?? doc.ucto.predkontaciaId));
+    if (!predkontacia?.agenda) return false;
+    return predkontacia.agenda !== ((pohyb.sumaSpolu ?? 0) < 0 ? 'bankIssued' : 'bankReceived');
+  };
   const missingUcto = doc.typ === 'BV'
     ? !(codeLists.bankoveUcty ?? []).some((ucet) =>
         ucet.orgId === doc.orgId && ucet.active && ucet.kod.trim() === doc.ucto.bankUcetKod?.trim())
@@ -1352,7 +1360,8 @@ export function checkApprovable(
       || (doc.extracted.polozky ?? []).length === 0
       || (doc.extracted.polozky ?? []).some((pohyb) =>
         !Number.isFinite(pohyb.sumaSpolu)
-        || !inOrg(codeLists.predkontacie, pohyb.ucto?.predkontaciaId ?? doc.ucto.predkontaciaId))
+        || !inOrg(codeLists.predkontacie, pohyb.ucto?.predkontaciaId ?? doc.ucto.predkontaciaId)
+        || zlaBankovaAgenda(pohyb))
     : !inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId) ||
     !inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId) ||
     !inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId) ||

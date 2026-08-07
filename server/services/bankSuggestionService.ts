@@ -25,6 +25,7 @@ const INSTRUCTIONS = `You assign Slovak accounting pre-postings (predkontácie) 
 Each movement carries: index, text, counterparty, variable symbol, signed amount (negative = outgoing) and optionally "sparovanyDoklad" — the document this movement demonstrably pays (matched by variable symbol).
 Rules:
 - "predkontaciaId" MUST be an id from "ciselnik". Use null when no offered predkontácia fits — never guess.
+- Respect the predkontácia's "agenda": bankReceived entries are for INCOMING movements (positive amount), bankIssued for OUTGOING (negative amount). Entries without agenda may be used for either direction.
 - A movement with "sparovanyDoklad" is a payment of that document: pick the bank-payment predkontácia for that document type (typically kod starting "Úhrada FP" for received invoices/commitments, "Úhrada FV" for issued invoices; foreign counterparty variants like "-zahr." when applicable).
 - "pravidla" are the accountant's own instructions and take precedence over your judgement.
 - Bank fees, taxes and interest belong to their dedicated predkontácie when offered.
@@ -68,15 +69,21 @@ export async function suggestBankMovementAccounting(
     .filter(({ pohyb }) => !pohyb?.ucto?.predkontaciaId);
   if (chybajuce.length === 0) return 0;
 
-  const ciselnik = await database.query<{ id: string; code: string; name: string } & Record<string, unknown>>(
-    `SELECT id, code, name FROM code_list_items
+  // POHODA má pre banku vlastné predkontácie (agenda bankReceived = príjem,
+  // bankIssued = výdaj) — model nesmie dostať fakturové. Položky bez agendy
+  // (ručne založené) ostávajú; keby banková ponuka bola prázdna, ponúkne sa
+  // všetko — zhodná zhovievavosť ako bankovePredkontacie na klientovi.
+  const vsetky = await database.query<{ id: string; code: string; name: string; agenda: string | null } & Record<string, unknown>>(
+    `SELECT id, code, name, agenda FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind='predkontacie'
         AND ${BEZ_PREDKONTACIA_SQL}
       ORDER BY code LIMIT 2000`,
     [input.tenantId, input.organizationId],
   );
-  if (ciselnik.rows.length === 0) return 0;
-  const povoleneIds = new Set(ciselnik.rows.map((row) => row.id));
+  const bankove = vsetky.rows.filter((row) => !row.agenda || row.agenda === 'bankReceived' || row.agenda === 'bankIssued');
+  const ciselnik = bankove.length > 0 ? bankove : vsetky.rows;
+  if (ciselnik.length === 0) return 0;
+  const povoleneIds = new Set(ciselnik.map((row) => row.id));
 
   // Spárované úhrady z deterministického párovania (VS + suma). Kľúčom je VS
   // uhradeného dokladu — pohyb sa naň napojí cez vlastný VS alebo číslice textu.
@@ -156,7 +163,7 @@ export async function suggestBankMovementAccounting(
                 suma: pohyb.sumaSpolu,
                 sparovanyDoklad: sparovany(pohyb),
               })),
-              ciselnik: ciselnik.rows.map((row) => ({ id: row.id, kod: row.code, nazov: row.name })),
+              ciselnik: ciselnik.map((row) => ({ id: row.id, kod: row.code, nazov: row.name, agenda: row.agenda ?? undefined })),
             }),
           }],
         }],

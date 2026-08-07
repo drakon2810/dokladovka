@@ -264,6 +264,30 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       if (bezPredkontacie.length > 0) {
         throw new HttpError(409, 'movement_accounting_incomplete', `${bezPredkontacie.length} pohybov výpisu nemá predkontáciu`);
       }
+      // POHODA má pre banku vlastné predkontácie a smer nesie agenda:
+      // bankReceived = príjem, bankIssued = výdaj. Predkontácia so ZNÁMOU inou
+      // agendou (fakturová, pokladničná či opačný smer) by import zaúčtovala
+      // zle — blokuje sa tu; položky bez agendy (ručné) prechádzajú.
+      const pouziteIds = [...new Set<string>([
+        ...pohyby.map((pohyb: any) => pohyb?.ucto?.predkontaciaId).filter(Boolean),
+        ...(document.accounting.predkontaciaId ? [document.accounting.predkontaciaId] : []),
+      ])];
+      if (pouziteIds.length > 0) {
+        const agendy = new Map((await database.query<{ id: string; agenda: string | null } & Record<string, unknown>>(
+          `SELECT id, agenda FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2 AND id=ANY($3::text[])`,
+          [auth.tenantId, document.organization_id, pouziteIds],
+        )).rows.map((row) => [row.id, row.agenda]));
+        pohyby.forEach((pohyb: any, index: number) => {
+          const agenda = agendy.get(pohyb?.ucto?.predkontaciaId ?? document.accounting.predkontaciaId ?? '');
+          if (!agenda) return; // bez agendy = ručná položka, nechá sa prejsť
+          const suma = Number(pohyb?.sumaSpolu);
+          const chcena = suma < 0 ? 'bankIssued' : 'bankReceived';
+          if (agenda !== chcena) {
+            throw new HttpError(409, 'movement_accounting_wrong_agenda',
+              `Pohyb ${index + 1} má predkontáciu agendy „${agenda}" — ${suma < 0 ? 'výdaj' : 'príjem'} banky potrebuje predkontáciu ${chcena === 'bankIssued' ? 'Banka výdaj' : 'Banka príjem'}`);
+          }
+        });
+      }
       // Predkontácie pohybov musia patriť organizácii a byť aktívne.
       requiredIds.push(...new Set<string>(pohyby.map((pohyb: any) => pohyb?.ucto?.predkontaciaId).filter(Boolean)));
     }
