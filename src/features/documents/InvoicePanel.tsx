@@ -701,14 +701,14 @@ export function InvoicePanel({
               srcClass={srcCls(pole('nazov'))} onCommit={(raw) => updateStranu('nazov', raw)}
             />
             {srcLabel(pole('adresa'), 'Ulica')}
-            <DcCell value={adr.ulica ?? ''} disabled={readOnly} srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ ulica: raw })} />
+            <DcCell value={adr.ulica ?? ''} placeholder="Ulica a číslo" disabled={readOnly} srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ ulica: raw })} />
             {/* PSČ, obec a krajina na jednom riadku ako v POHODE — karta by inak
                 prerástla susednú „Základné informácie" o tri riadky. */}
-            {srcLabel(pole('adresa'), 'PSČ, Obec')}
+            {srcLabel(pole('adresa'), 'PSČ, Obec, krajina')}
             <div className="dk-addrline">
-              <DcCell value={adr.psc ?? ''} disabled={readOnly} title="PSČ" srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ psc: raw })} />
-              <DcCell value={adr.obec ?? ''} disabled={readOnly} title="Obec" srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ obec: raw })} />
-              <DcCell value={adr.krajina ?? ''} disabled={readOnly} title="Kód krajiny pre číselník POHODY (SK, CZ, DE…)" onCommit={(raw) => updateStranuAdresu({ krajina: raw })} />
+              <DcCell value={adr.psc ?? ''} placeholder="PSČ" disabled={readOnly} title="PSČ" srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ psc: raw })} />
+              <DcCell value={adr.obec ?? ''} placeholder="Obec" disabled={readOnly} title="Obec" srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ obec: raw })} />
+              <DcCell value={adr.krajina ?? ''} placeholder="SK" disabled={readOnly} title="Kód krajiny pre číselník POHODY (SK, CZ, IE…)" onCommit={(raw) => updateStranuAdresu({ krajina: raw })} />
             </div>
           </div>
           {/* Vystavovateľ vydanej faktúry je vlastná firma — do POHODY ako partner
