@@ -44,9 +44,37 @@ export function bankovePredkontacie<T extends { agenda?: string }>(
   smer?: 'prijem' | 'vydaj',
 ): T[] {
   const chcena = smer === 'prijem' ? 'bankReceived' : smer === 'vydaj' ? 'bankIssued' : undefined;
-  const vhodne = items.filter((item) => !item.agenda
-    || (chcena
-      ? item.agenda === chcena
-      : (BANK_PREDKONTACIA_AGENDY as readonly string[]).includes(item.agenda)));
+  return filtrujPodlaAgendy(items, chcena ? [chcena] : BANK_PREDKONTACIA_AGENDY);
+}
+
+/**
+ * Agendy predkontácií POHODY podľa typu dokladu — pre banku a pokladňu obidva
+ * smery, výber smeru rieši editor pohybu (bankovePredkontacie).
+ */
+const PREDKONTACIA_AGENDA: Partial<Record<DocumentType, readonly string[]>> = {
+  FP: ['receivedInvoice', 'receivedAdvanceInvoice'],
+  FV: ['issuedInvoice', 'issuedAdvanceInvoice'],
+  OZ: ['commitment', 'claim'],
+  MZDY: ['internalDocument'],
+  PD: ['cashPaid', 'cashReceived'],
+  BV: BANK_PREDKONTACIA_AGENDY,
+};
+
+/**
+ * Predkontácie použiteľné pre daný typ dokladu — na vydanú faktúru nepatrí
+ * nákupová predkontácia a naopak.
+ */
+export function predkontaciePreTyp<T extends { agenda?: string }>(items: T[], typ: DocumentType): T[] {
+  const povolene = PREDKONTACIA_AGENDA[typ];
+  return povolene ? filtrujPodlaAgendy(items, povolene) : items;
+}
+
+/**
+ * Položky bez agendy (ručne založené) ostávajú v ponuke a pri prázdnom výsledku
+ * sa vráti všetko — inak by sa doklad nedal zaúčtovať vôbec, rovnaká
+ * zhovievavosť ako pri číselných radoch.
+ */
+function filtrujPodlaAgendy<T extends { agenda?: string }>(items: T[], povolene: readonly string[]): T[] {
+  const vhodne = items.filter((item) => !item.agenda || povolene.includes(item.agenda));
   return vhodne.length > 0 ? vhodne : items;
 }

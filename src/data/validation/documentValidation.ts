@@ -32,6 +32,7 @@ export type DocumentValidationCode =
   | 'line_items_vat_mismatch'
   | 'line_items_total_mismatch'
   | 'buyer_ico_mismatch'
+  | 'buyer_name_required'
   | 'unresolved_duplicate'
   | 'processing_not_ready';
 
@@ -198,21 +199,31 @@ export function validateDocument(
   }
 
   const buyer = extracted.odberatel;
-  if (buyer?.ico && !validateICO(buyer.ico)) {
+  // Zahraničný odberateľ (rakúsky, nemecký zákazník) nemá slovenské IČO/DIČ —
+  // formátové kontroly by mu blokovali schválenie rovnako, ako to už roky
+  // neplatí pre zahraničného dodávateľa.
+  const foreignBuyer = isForeignSupplier({ dic: buyer?.dic, icDph: buyer?.icDph });
+  if (!foreignBuyer && buyer?.ico && !validateICO(buyer.ico)) {
     issues.push({ code: 'invalid_ico', field: 'odberatel.ico' });
   }
-  if (buyer?.dic && !validateDic(buyer.dic)) {
+  if (!foreignBuyer && buyer?.dic && !validateDic(buyer.dic)) {
     issues.push({ code: 'invalid_dic', field: 'odberatel.dic' });
   }
   if (buyer?.icDph && checkVatId(buyer.icDph) === 'invalid') {
     issues.push({ code: 'invalid_ic_dph', field: 'odberatel.icDph' });
   }
+  // Na vydanej faktúre je odberateľom zákazník — iné IČO ako naše je normálne.
   if (
+    doc.typ !== 'FV' &&
     organization &&
     extracted.odberatel?.ico &&
     extracted.odberatel.ico !== organization.ico
   ) {
     issues.push({ code: 'buyer_ico_mismatch', field: 'odberatel.ico' });
+  }
+  // Zákazník je na vydanej faktúre povinný — je to strana, ktorá ide do POHODY.
+  if (doc.typ === 'FV' && !buyer?.nazov?.trim()) {
+    issues.push({ code: 'buyer_name_required', field: 'odberatel.nazov' });
   }
   if (doc.duplicateOfDocumentId && !doc.notDuplicate) {
     issues.push({ code: 'unresolved_duplicate' });

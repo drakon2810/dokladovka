@@ -350,12 +350,23 @@ export interface DocumentExtractedData {
     iban?: string;
     bic?: string;
   };
+  /**
+   * Odberateľ. Na prijatej faktúre je ním naša firma (údaje slúžia len ako
+   * kontrola proti organizácii), na VYDANEJ faktúre je to zákazník — vtedy je
+   * to strana, ktorá ide do POHODY ako partner dokladu, preto má adresu po
+   * častiach rovnako ako dodávateľ.
+   */
   odberatel?: {
     nazov?: string;
     ico?: string;
     dic?: string;
     icDph?: string;
     adresa?: string;
+    ulica?: string;
+    psc?: string;
+    obec?: string;
+    /** ISO kód krajiny (SK, AT, DE) — POHODA ho páruje na číselník krajín. */
+    krajina?: string;
   };
   cisloFaktury: string; // dodávateľské číslo
   /** Vlastné interné číslo účtovníka (nie je z dokladu). */
@@ -393,12 +404,31 @@ export interface DocumentUcto {
   pokladnaKod?: string;
   /** Smer pokladničného dokladu podľa voucher.xsd. */
   pokladnaTyp?: 'receipt' | 'expense';
-  /** Skratka bankového účtu POHODY (PB…); povinná pri bankovom výpise. */
+  /**
+   * Skratka bankového účtu POHODY (PB…). Pri bankovom výpise je to účet výpisu,
+   * pri vydanej faktúre účet, na ktorý má zákazník zaplatiť (pole Účet).
+   */
   bankUcetKod?: string;
+  /** Forma úhrady vydanej faktúry (POHODA paymentType); prázdna = Príkazom. */
+  formaUhrady?: PaymentFormCode;
   poznamka?: string;
   /** Sekcia kontrolného výkazu DPH (štatutárny číselník A1…D2, KN). */
   clenenieKvKod?: string;
 }
+
+/** Formy úhrady POHODY (element paymentType v invoice.xsd). */
+export const FORMY_UHRADY = [
+  { kod: 'draft', nazov: 'Príkazom' },
+  { kod: 'cash', nazov: 'Hotovosť' },
+  { kod: 'creditcard', nazov: 'Platobnou kartou' },
+  { kod: 'encashment', nazov: 'Inkasom' },
+  { kod: 'advance', nazov: 'Zálohou' },
+  { kod: 'compensation', nazov: 'Zápočtom' },
+  { kod: 'postal', nazov: 'Zloženkou' },
+  { kod: 'delivery', nazov: 'Dobierkou' },
+  { kod: 'cheque', nazov: 'Šekom' },
+] as const;
+export type PaymentFormCode = typeof FORMY_UHRADY[number]['kod'];
 
 /** Štatutárne sekcie kontrolného výkazu DPH — pevný zoznam, nie POHODA import. */
 export const CLENENIE_KV_KODY = ['A1', 'A2', 'B1', 'B2', 'B3', 'C1', 'C2', 'D1', 'D2', 'KN'] as const;

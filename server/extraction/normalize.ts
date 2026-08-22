@@ -333,9 +333,15 @@ export function validateNormalizedExtraction(
   if (supplier.iban && !validIban(supplier.iban)) issues.push({ code: 'invalid_iban', field: 'dodavatel.iban', severity: 'error', message: 'IBAN dodávateľa nie je platný' });
   const buyerIco = normalizedIdentifier(buyer.ico);
   const orgIco = normalizedIdentifier(organization.ico);
-  // Nesúlad IČO odberateľa posiela doklad do karantény; samotné schválenie po
-  // ľudskom rozhodnutí neblokuje (varovanie zostáva viditeľné v detaile).
-  if (buyerIco && buyerIco !== orgIco) issues.push({ code: 'buyer_ico_mismatch', field: 'odberatel.ico', severity: 'warning', message: 'IČO odberateľa sa nezhoduje s organizáciou' });
+  // Na VYDANEJ faktúre je odberateľom zákazník — iné IČO je normálny stav, nie
+  // nesúlad. Obrátene platí, že dodávateľom má byť naša firma; keď ňou nie je,
+  // ide pravdepodobne o prijatú faktúru zaradenú do zlej agendy.
+  const vydana = normalized.documentType === 'FV';
+  if (!vydana && buyerIco && buyerIco !== orgIco) issues.push({ code: 'buyer_ico_mismatch', field: 'odberatel.ico', severity: 'warning', message: 'IČO odberateľa sa nezhoduje s organizáciou' });
+  if (vydana && !String(buyer.nazov ?? '').trim()) issues.push({ code: 'buyer_name_required', field: 'odberatel.nazov', severity: 'error', message: 'Chýba názov odberateľa' });
+  if (vydana && normalizedIdentifier(supplier.ico) && normalizedIdentifier(supplier.ico) !== orgIco) {
+    issues.push({ code: 'issued_supplier_not_own_company', field: 'dodavatel.ico', severity: 'warning', message: 'Vydanú faktúru nevystavila vaša firma — skontrolujte, či nejde o prijatú faktúru' });
+  }
   // Na prijatej faktúre (FP) je odberateľom naša organizácia, ktorej reálne
   // identifikátory poznáme — chybne prečítané IČO/DIČ/IČ DPH odberateľa z faktúry
   // je len šum, nemá blokovať schválenie (varovanie). Na vydanej faktúre (FV) je
@@ -351,7 +357,9 @@ export function validateNormalizedExtraction(
       issues.push({ code: 'unverified_buyer_vat_id', field: 'odberatel.icDph', severity: 'warning', message: 'IČ DPH odberateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
     }
   }
-  if (normalizedIdentifier(supplier.ico) === orgIco && buyerIco && buyerIco !== orgIco) {
+  // Len pri prijatých dokladoch: „dodávateľ sme my a odberateľ niekto iný" je
+  // podozrenie na zámenu strán. Na vydanej faktúre je to presne správny stav.
+  if (!vydana && normalizedIdentifier(supplier.ico) === orgIco && buyerIco && buyerIco !== orgIco) {
     issues.push({ code: 'supplier_buyer_may_be_inverted', severity: 'warning', message: 'Dodávateľ a odberateľ môžu byť zamenení' });
   }
   // BV: „celková suma" je konečný zostatok výpisu — záporný zostatok je legálny.

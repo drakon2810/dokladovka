@@ -220,13 +220,47 @@ describe('buildServerDataPack — partner a hlavička pre POHODU', () => {
     expect(xml).toContain('<inv:dateDelivery>2026-06-30</inv:dateDelivery>');
   });
 
-  it('FV pole Doklad nemá; slovenský dodávateľ má krajinu SK z prefixu IČ DPH', () => {
+  it('FP: partnerom je dodávateľ; krajina SK sa odvodí z prefixu IČ DPH', () => {
     const doc = invoiceDocument({ dodavatel: { nazov: 'RAINSIDE s.r.o.', ico: '31386946', dic: '2020309247', icDph: 'SK2020309247' } });
+    const xml = buildServerDataPack({ id: 'pack-5', ico: '35761571', documents: [doc], codeLists });
+    expect(xml).toContain('<typ:icDph>SK2020309247</typ:icDph>');
+    expect(xml).toContain('<typ:country><typ:ids>SK</typ:ids></typ:country>');
+  });
+
+  it('FV: partnerom je ODBERATEĽ, nie vlastná firma; pole Doklad sa neposiela', () => {
+    const doc = invoiceDocument({
+      // Dodávateľom vydanej faktúry je vlastná firma — do POHODY ísť nesmie.
+      dodavatel: { nazov: 'AGS Bratislava s.r.o.', ico: '35761571', icDph: 'SK2020254170', iban: 'SK3131000000004040272818' },
+      odberatel: { nazov: 'International Atomic Energy Agency', icDph: 'ATU37890000', adresa: 'Wagramer Str. 5, 1220 Vienna' },
+    });
     doc.snapshot.typ = 'FV';
     const xml = buildServerDataPack({ id: 'pack-5', ico: '35761571', documents: [doc], codeLists });
     expect(xml).not.toContain('<inv:originalDocument>');
-    expect(xml).toContain('<typ:icDph>SK2020309247</typ:icDph>');
-    expect(xml).toContain('<typ:country><typ:ids>SK</typ:ids></typ:country>');
+    expect(xml).toContain('<typ:company>International Atomic Energy Agency</typ:company>');
+    expect(xml).toContain('<typ:icDph>ATU37890000</typ:icDph>');
+    expect(xml).toContain('<typ:country><typ:ids>AT</typ:ids></typ:country>');
+    // Vlastná firma sa ako partner neobjaví ani cez IČO, ani cez IČ DPH.
+    expect(xml).not.toContain('AGS Bratislava');
+    expect(xml).not.toContain('SK2020254170');
+    // paymentAccount je pole záväzku — pohľadávka ho nemá.
+    expect(xml).not.toContain('<inv:paymentAccount>');
+    // Dátum dodania a špecifický symbol sú polia záväzkov (invoice.xsd).
+    expect(xml).not.toContain('<inv:dateDelivery>');
+    expect(xml).not.toContain('<inv:symSpec>');
+  });
+
+  it('FV: forma úhrady a vlastný účet idú do POHODY ako paymentType a account', () => {
+    const doc = invoiceDocument({
+      dodavatel: { nazov: 'AGS Bratislava s.r.o.', ico: '35761571' },
+      odberatel: { nazov: 'Alfa Trade s.r.o.', ico: '36528221' },
+      specifickySymbol: '55',
+    });
+    doc.snapshot.typ = 'FV';
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, bankUcetKod: 'PB', formaUhrady: 'draft' };
+    const xml = buildServerDataPack({ id: 'pack-5b', ico: '35761571', documents: [doc], codeLists });
+    expect(xml).toContain('<inv:paymentType><typ:paymentType>draft</typ:paymentType></inv:paymentType>');
+    expect(xml).toContain('<inv:account><typ:ids>PB</typ:ids></inv:account>');
+    assertOrder(emittedChildren(xml, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
   });
 });
 

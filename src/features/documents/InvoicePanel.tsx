@@ -6,11 +6,11 @@
 // predkontácie, členenia DPH a kontrolného výkazu.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
-import { CLENENIE_KV_KODY } from '../../data/types';
+import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
-import { radyPreTyp } from '../../data/pohoda/agendas';
+import { predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
 import { lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
@@ -36,7 +36,7 @@ const SOURCE_LABEL: Record<string, string> = {
 interface InvoicePanelProps {
   draft: DocumentItem;
   readOnly: boolean;
-  codeLists: ItemsCodeLists & { ciselneRady: CodeListItem[] };
+  codeLists: ItemsCodeLists & { ciselneRady: CodeListItem[]; bankoveUcty?: CodeListItem[] };
   suggestion?: AccountingSuggestion;
   autoFilled: boolean;
   /** Zvýraznenie zdroja údajov — mapa polí, ktoré vyplnila AI. */
@@ -59,8 +59,9 @@ interface InvoicePanelProps {
   setTyp: (typ: DocumentType) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
-  updateSupplier: (key: keyof DocumentExtractedData['dodavatel'], value: string) => void;
-  updateSupplierAddress: (patch: { ulica?: string; psc?: string; obec?: string; krajina?: string }) => void;
+  /** Editovaná strana dokladu: dodávateľ (prijaté) alebo odberateľ (vydaná faktúra). */
+  updateParty: (strana: 'dodavatel' | 'odberatel', key: string, value: string) => void;
+  updatePartyAddress: (strana: 'dodavatel' | 'odberatel', patch: { ulica?: string; psc?: string; obec?: string; krajina?: string }) => void;
 }
 
 /** Typ dokladu vrátane smeru pokladne — POHODA ich rozlišuje ako samostatné agendy. */
@@ -164,13 +165,22 @@ export function InvoicePanel({
   draft, readOnly, codeLists, suggestion, autoFilled,
   src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, cakajuceVRade = 0,
   predvolenaPokladna,
-  setTyp, updateUcto, updateExtracted, updateSupplier, updateSupplierAddress,
+  setTyp, updateUcto, updateExtracted, updateParty, updatePartyAddress,
 }: InvoicePanelProps) {
   const ex = draft.extracted;
   const dod = ex.dodavatel;
+  // Na vydanej faktúre je dodávateľom vlastná firma a protistranou zákazník —
+  // edituje sa teda odberateľ a práve ten ide do POHODY ako partner dokladu.
+  const vydana = draft.typ === 'FV';
+  const strana: 'dodavatel' | 'odberatel' = vydana ? 'odberatel' : 'dodavatel';
+  const partner: Record<string, string | undefined> = (vydana ? ex.odberatel : ex.dodavatel) ?? {};
+  const pole = (nazov: string) => `${strana}.${nazov}`;
+  const updateStranu = (key: string, value: string) => updateParty(strana, key, value);
+  const updateStranuAdresu = (patch: { ulica?: string; psc?: string; obec?: string; krajina?: string }) =>
+    updatePartyAddress(strana, patch);
   // Ulica/PSČ/obec/krajina ako v POHODE. Kým ich účtovník neupravil, odvodia sa
   // z voľnej adresy z extrakcie — presne tak, ako ich uvidí export do POHODY.
-  const adr = supplierAddressParts(dod);
+  const adr = supplierAddressParts(partner);
   const ucto = draft.ucto;
 
   const [itemsOn, setItemsOn] = useState((ex.polozky ?? []).length > 0);
@@ -431,6 +441,8 @@ export function InvoicePanel({
   // Rad musí sedieť s agendou dokladu — pokladničný doklad nesmie dostať rad
   // prijatých faktúr. Už zvolený rad ostáva v ponuke, nech sa hodnota nestratí.
   const ponukaRadov = radyPreTyp(codeLists.ciselneRady, draft.typ);
+  // POHODA má pre každú agendu vlastné predkontácie — na vydanú faktúru nepatrí nákupová.
+  const predkontacieProDoklad = predkontaciePreTyp(codeLists.predkontacie, draft.typ);
   const radOpts = ponukaRadov.some((item) => item.id === ucto.ciselnyRadId) || !ucto.ciselnyRadId
     ? ponukaRadov
     : [...ponukaRadov, ...codeLists.ciselneRady.filter((item) => item.id === ucto.ciselnyRadId)];
@@ -540,17 +552,17 @@ export function InvoicePanel({
   };
 
   const itemsCodeLists = useMemo<ItemsCodeLists>(() => ({
-    predkontacie: codeLists.predkontacie,
+    predkontacie: predkontacieProDoklad,
     cleneniaDph: codeLists.cleneniaDph,
     strediska: codeLists.strediska,
     cinnosti: codeLists.cinnosti,
     zakazky: codeLists.zakazky,
-  }), [codeLists]);
+  }), [codeLists, predkontacieProDoklad]);
 
   const cisloErr = !String(ex.cisloFaktury || '').trim();
   // Osemmiestne IČO je slovenské pravidlo — zahraničný dodávateľ ho nespĺňa
   // a validácia dokladu ho pri ňom tiež preskakuje.
-  const icoErr = Boolean(dod.ico) && !isForeignSupplier(dod) && !/^\d{8}$/.test(String(dod.ico || '').trim());
+  const icoErr = Boolean(partner.ico) && !isForeignSupplier(partner) && !/^\d{8}$/.test(String(partner.ico || '').trim());
 
   /** Peňažná bunka: edituje sa surové číslo, v pokoji sa ukazuje naformátované. */
   const money = (value: number | undefined, onCommit: (raw: string) => void, path?: string) => (
@@ -653,7 +665,7 @@ export function InvoicePanel({
 
             <span className="dk-lbl">Predkontácia</span>
             {precoWrap('predkontacia',
-              <DcPick value={ucto.predkontaciaId} options={toOpts(codeLists.predkontacie)} disabled={readOnly} onMostikSync={syncMostik}
+              <DcPick value={ucto.predkontaciaId} options={toOpts(predkontacieProDoklad)} disabled={readOnly} onMostikSync={syncMostik}
                 title={predkConfidence != null ? `Návrh AI · istota ${predkConfidence} %` : undefined}
                 onChange={(value) => updateUcto({ predkontaciaId: value })} />)}
 
@@ -671,29 +683,41 @@ export function InvoicePanel({
           </div>
         </div>
 
-        {/* Dodávateľ */}
+        {/* Protistrana dokladu — na vydanej faktúre je ňou odberateľ */}
         <div className="dk-card">
-          <div className="dk-card-title">Dodávateľ {secChip(2)}</div>
+          <div className="dk-card-title">{vydana ? 'Odberateľ' : 'Dodávateľ'} {secChip(2)}</div>
           <div className="dk-grid dk-grid-sup">
-            {srcLabel('dodavatel.ico', 'IČO')}
-            <DcCell value={dod.ico ?? ''} disabled={readOnly} tone={icoErr ? 'warn' : undefined} title={icoErr ? 'IČO má mať 8 číslic' : undefined} srcClass={srcCls('dodavatel.ico')} onCommit={(raw) => updateSupplier('ico', raw)} />
-            {srcLabel('dodavatel.dic', 'DIČ')}
-            <DcCell value={dod.dic ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.dic')} onCommit={(raw) => updateSupplier('dic', raw)} />
-            {srcLabel('dodavatel.icDph', 'IČ DPH')}
-            <DcCell value={dod.icDph ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.icDph')} onCommit={(raw) => updateSupplier('icDph', raw)} />
-            {srcLabel('dodavatel.nazov', 'Firma')}
-            <DcCell value={dod.nazov ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.nazov')} onCommit={(raw) => updateSupplier('nazov', raw)} />
-            {srcLabel('dodavatel.adresa', 'Ulica')}
-            <DcCell value={adr.ulica ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplierAddress({ ulica: raw })} />
+            {srcLabel(pole('ico'), 'IČO')}
+            <DcCell value={partner.ico ?? ''} disabled={readOnly} tone={icoErr ? 'warn' : undefined} title={icoErr ? 'IČO má mať 8 číslic' : undefined} srcClass={srcCls(pole('ico'))} onCommit={(raw) => updateStranu('ico', raw)} />
+            {srcLabel(pole('dic'), 'DIČ')}
+            <DcCell value={partner.dic ?? ''} disabled={readOnly} srcClass={srcCls(pole('dic'))} onCommit={(raw) => updateStranu('dic', raw)} />
+            {srcLabel(pole('icDph'), 'IČ DPH')}
+            <DcCell value={partner.icDph ?? ''} disabled={readOnly} srcClass={srcCls(pole('icDph'))} onCommit={(raw) => updateStranu('icDph', raw)} />
+            {srcLabel(pole('nazov'), 'Firma')}
+            <DcCell
+              value={partner.nazov ?? ''} disabled={readOnly}
+              tone={vydana && !partner.nazov?.trim() ? 'err' : undefined}
+              title={vydana && !partner.nazov?.trim() ? 'Zadajte odberateľa — ide do POHODY ako partner dokladu' : undefined}
+              srcClass={srcCls(pole('nazov'))} onCommit={(raw) => updateStranu('nazov', raw)}
+            />
+            {srcLabel(pole('adresa'), 'Ulica')}
+            <DcCell value={adr.ulica ?? ''} disabled={readOnly} srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ ulica: raw })} />
             {/* PSČ, obec a krajina na jednom riadku ako v POHODE — karta by inak
                 prerástla susednú „Základné informácie" o tri riadky. */}
-            {srcLabel('dodavatel.adresa', 'PSČ, Obec')}
+            {srcLabel(pole('adresa'), 'PSČ, Obec')}
             <div className="dk-addrline">
-              <DcCell value={adr.psc ?? ''} disabled={readOnly} title="PSČ" srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplierAddress({ psc: raw })} />
-              <DcCell value={adr.obec ?? ''} disabled={readOnly} title="Obec" srcClass={srcCls('dodavatel.adresa')} onCommit={(raw) => updateSupplierAddress({ obec: raw })} />
-              <DcCell value={adr.krajina ?? ''} disabled={readOnly} title="Kód krajiny pre číselník POHODY (SK, CZ, DE…)" onCommit={(raw) => updateSupplierAddress({ krajina: raw })} />
+              <DcCell value={adr.psc ?? ''} disabled={readOnly} title="PSČ" srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ psc: raw })} />
+              <DcCell value={adr.obec ?? ''} disabled={readOnly} title="Obec" srcClass={srcCls(pole('adresa'))} onCommit={(raw) => updateStranuAdresu({ obec: raw })} />
+              <DcCell value={adr.krajina ?? ''} disabled={readOnly} title="Kód krajiny pre číselník POHODY (SK, CZ, DE…)" onCommit={(raw) => updateStranuAdresu({ krajina: raw })} />
             </div>
           </div>
+          {/* Vystavovateľ vydanej faktúry je vlastná firma — do POHODY ako partner
+              nejde, ostáva len na kontrolu, či AI prečítala správnu stranu. */}
+          {vydana && (
+            <div className="dk-vystavovatel" title="Vydanú faktúru vystavila vaša firma; partnerom dokladu je odberateľ">
+              Fakturuje <strong>{dod.nazov || '—'}</strong>{dod.ico ? ` · IČO ${dod.ico}` : ''}
+            </div>
+          )}
           <div className="dk-sep" />
           <div className="dk-grid dk-grid-pair">
             {srcLabel('variabilnySymbol', 'Pár. symbol')}
@@ -708,8 +732,34 @@ export function InvoicePanel({
           </div>
           {!jePokladna && (
             <div className="dk-grid dk-grid-sup" style={{ marginTop: 3 }}>
-              {srcLabel('dodavatel.iban', 'IBAN')}
-              <DcCell value={dod.iban ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.iban')} onCommit={(raw) => updateSupplier('iban', raw)} />
+              {/* Vydaná faktúra je pohľadávka: POHODA na nej nemá IBAN dodávateľa,
+                  ale formu úhrady a účet, na ktorý má zaplatiť zákazník. */}
+              {vydana ? (
+                <>
+                  <span className="dk-lbl">Forma úhrady</span>
+                  <DcPick
+                    value={ucto.formaUhrady ?? 'draft'} disabled={readOnly}
+                    options={FORMY_UHRADY.map((forma) => ({ value: forma.kod, label: forma.nazov }))}
+                    onChange={(value) => updateUcto({ formaUhrady: value as DocumentUcto['formaUhrady'] })}
+                  />
+                  <span className="dk-lbl">Účet</span>
+                  <DcPick
+                    value={ucto.bankUcetKod} disabled={readOnly} onMostikSync={syncMostik} placeholder="—"
+                    title="Účet, na ktorý má zákazník zaplatiť (číselník Bankové účty)"
+                    options={(codeLists.bankoveUcty ?? []).map((item) => ({
+                      value: item.kod,
+                      label: `${item.kod} · ${item.nazov}`,
+                      title: item.iban ? `IBAN ${item.iban}` : item.nazov,
+                    }))}
+                    onChange={(value) => updateUcto({ bankUcetKod: value || undefined })}
+                  />
+                </>
+              ) : (
+                <>
+                  {srcLabel('dodavatel.iban', 'IBAN')}
+                  <DcCell value={dod.iban ?? ''} disabled={readOnly} srcClass={srcCls('dodavatel.iban')} onCommit={(raw) => updateParty('dodavatel', 'iban', raw)} />
+                </>
+              )}
               {srcLabel('konstantnySymbol', 'Konšt. symbol')}
               <DcCell value={ex.konstantnySymbol ?? ''} disabled={readOnly} srcClass={srcCls('konstantnySymbol')} onCommit={(raw) => updateExtracted('konstantnySymbol', raw || undefined)} />
             </div>

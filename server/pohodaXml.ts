@@ -356,7 +356,13 @@ export function buildServerDataPack(input: {
         <typ:price3>${amount(base5)}</typ:price3>
         <typ:price3VAT>${amount(vat5)}</typ:price3VAT>
         <typ:priceNone>${amount(base0)}</typ:priceNone>`;
-    const partner = partnerAddressXml(supplier);
+    // POHODA má na doklade JEDNU stranu partnera a je to vždy protistrana:
+    // na prijatých dokladoch dodávateľ, na VYDANEJ faktúre odberateľ (zákazník).
+    // Bez tohto rozlíšenia by vydaná faktúra prišla do POHODY vystavená na
+    // vlastnú firmu — partnerIdentity je v invoice.xsd „adresa zákazníka".
+    const vydana = snapshot.typ === 'FV';
+    const protistrana = vydana ? (extracted.odberatel ?? {}) : supplier;
+    const partner = partnerAddressXml(protistrana);
     // Dátum vystavenia je povinný — bez neho sa doklad odmietne hneď pri vytvorení
     // prenosu s jasnou hláškou, nie až XSD chybou agenta o hodinu neskôr.
     const issueDate = isoDate(extracted.datumVystavenia);
@@ -437,7 +443,12 @@ export function buildServerDataPack(input: {
     </int:intDoc>
   </dat:dataPackItem>`;
     }
-    const paymentAccount = skIbanAccount(supplier.iban);
+    // Záväzok (FP/OZ) nesie <inv:paymentAccount> = účet, na ktorý zaplatíme
+    // dodávateľovi. Pohľadávka (FV) má vlastné pole <inv:account> = účet, na
+    // ktorý má zaplatiť zákazník — berie sa zo skratky číselníka bankových účtov.
+    const paymentAccount = vydana ? undefined : skIbanAccount(supplier.iban);
+    const vlastnyUcet = vydana ? clamp(snapshot.ucto.bankUcetKod, 19) : '';
+    const formaUhrady = vydana ? clamp(snapshot.ucto.formaUhrady, 20) : '';
     // Text dokladu = názov vybranej predkontácie (účtovník ho vidí v POHODE
     // namiesto predvoleného „Import FA z XML"); fallback na číslo faktúry.
     const headerText = documentText
@@ -454,15 +465,17 @@ export function buildServerDataPack(input: {
         <inv:date>${issueDate}</inv:date>
         <inv:dateTax>${taxDate}</inv:dateTax>
         <inv:dateDue>${dueDate}</inv:dateDue>
-        ${deliveryDate ? `<inv:dateDelivery>${deliveryDate}</inv:dateDelivery>` : ''}
+        ${deliveryDate && !vydana ? `<inv:dateDelivery>${deliveryDate}</inv:dateDelivery>` : ''}
         <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>
         <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
         ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
         ${headerText ? `<inv:text>${escapeXml(clamp(headerText, 240))}</inv:text>` : ''}
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
         ${extracted.cisloObjednavky ? `<inv:numberOrder>${escapeXml(clamp(extracted.cisloObjednavky, 32))}</inv:numberOrder>` : ''}
+        ${formaUhrady ? `<inv:paymentType><typ:paymentType>${escapeXml(formaUhrady)}</typ:paymentType></inv:paymentType>` : ''}
+        ${vlastnyUcet ? `<inv:account><typ:ids>${escapeXml(vlastnyUcet)}</typ:ids></inv:account>` : ''}
         ${extracted.konstantnySymbol ? `<inv:symConst>${escapeXml(clamp(extracted.konstantnySymbol, 4))}</inv:symConst>` : ''}
-        ${extracted.specifickySymbol ? `<inv:symSpec>${escapeXml(clamp(extracted.specifickySymbol, 16))}</inv:symSpec>` : ''}
+        ${extracted.specifickySymbol && !vydana ? `<inv:symSpec>${escapeXml(clamp(extracted.specifickySymbol, 16))}</inv:symSpec>` : ''}
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${dimensionsXml('inv')}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</inv:note>` : ''}

@@ -434,3 +434,11 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
   transition: border-color .16s ease;
 }
 .dv-preco-cancel:hover { border-color: #C9D0CB; }
+
+/* ---- vystavovateľ vydanej faktúry (vlastná firma, len na kontrolu) ---- */
+.dk-vystavovatel {
+  margin-top: 6px; padding: 6px 9px; border-radius: 8px;
+  background: var(--dk-panel); border: 1px solid var(--dk-line);
+  font-size: 12px; color: var(--dk-soft);
+}
+.dk-vystavovatel strong { font-weight: 600; color: var(--dk-ink); }

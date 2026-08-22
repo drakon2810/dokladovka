@@ -413,9 +413,10 @@ export async function simulateInboundEmail(
         attachment.status = 'quarantine';
         attachment.quarantineReason = 'queue_type_mismatch';
         attachment.documentId = doc.id;
-      } else if (buyerIco && buyerIco !== org.ico) {
+      } else if (doc.typ !== 'FV' && buyerIco && buyerIco !== org.ico) {
         // Alias ukazuje na org A, IČO odberateľa na inú — karanténa, nikdy
-        // automatický presun (§11.7 bod 6).
+        // automatický presun (§11.7 bod 6). Vydaná faktúra je výnimka: tam je
+        // odberateľom zákazník, takže iné IČO je normálny stav.
         doc.status = 'karantena';
         doc.quarantineReason = 'buyer_ico_mismatch';
         doc.history.push({

@@ -345,12 +345,17 @@ export function buildDataPack(
         );
       }
       lines.push(`        <inv:text>${escapeXml(predkontaciaNazov ?? d.textPolozky ?? `Faktúra ${d.cisloFaktury}`)}</inv:text>`);
+      // Partner dokladu je vždy PROTISTRANA: na prijatých dokladoch dodávateľ,
+      // na vydanej faktúre odberateľ. Zhoda so server/pohodaXml.ts.
+      const vydana = doc.typ === 'FV';
       lines.push('        <inv:partnerIdentity>');
       lines.push('          <typ:address>');
-      lines.push(...partnerAddressLines(d.dodavatel, '            '));
+      lines.push(...partnerAddressLines(vydana ? { ...d.odberatel, nazov: d.odberatel?.nazov ?? '' } : d.dodavatel, '            '));
       lines.push('          </typ:address>');
       lines.push('        </inv:partnerIdentity>');
-      if (d.dodavatel.iban) {
+      // paymentAccount je pole záväzku (kam zaplatíme dodávateľovi) — na
+      // pohľadávke sa neposiela; tam ide účet zo skratky číselníka.
+      if (!vydana && d.dodavatel.iban) {
         const account = skIbanAccount(d.dodavatel.iban);
         if (account) lines.push(`        <inv:paymentAccount><typ:accountNo>${escapeXml(account.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(account.bankCode)}</typ:bankCode></inv:paymentAccount>`);
       }

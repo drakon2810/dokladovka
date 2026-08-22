@@ -821,15 +821,20 @@ export function DocumentDetailPage() {
     setDirty(true);
   };
 
-  const updateSupplier = (
-    key: keyof DocumentExtractedData['dodavatel'],
+  /**
+   * Strana dokladu, ktorú účtovník edituje: na prijatých dokladoch dodávateľ,
+   * na vydanej faktúre odberateľ (zákazník) — tam je dodávateľom vlastná firma.
+   */
+  const updateParty = (
+    strana: 'dodavatel' | 'odberatel',
+    key: string,
     value: string,
   ) => {
     markDirty((current) => ({
       ...current,
       extracted: {
         ...current.extracted,
-        dodavatel: { ...current.extracted.dodavatel, [key]: value || undefined },
+        [strana]: { ...(current.extracted[strana] ?? {}), [key]: value || undefined },
       },
     }));
   };
@@ -841,11 +846,11 @@ export function DocumentDetailPage() {
    * ulica by sa vrátila. `adresa` sa drží v súlade — číta ju párovanie partnera
    * aj kontext pre AI.
    */
-  const updateSupplierAddress = (patch: {
+  const updatePartyAddress = (strana: 'dodavatel' | 'odberatel', patch: {
     ulica?: string; psc?: string; obec?: string; krajina?: string;
   }) => {
     markDirty((current) => {
-      const dodavatel = current.extracted.dodavatel;
+      const dodavatel = current.extracted[strana] ?? {};
       const parts = { ...supplierAddressParts(dodavatel), ...patch };
       const ulica = parts.ulica ?? '';
       const psc = parts.psc ?? '';
@@ -854,7 +859,7 @@ export function DocumentDetailPage() {
         ...current,
         extracted: {
           ...current.extracted,
-          dodavatel: {
+          [strana]: {
             ...dodavatel,
             ulica,
             psc,
@@ -1453,6 +1458,7 @@ export function DocumentDetailPage() {
               strediska: codeLists.strediska,
               cinnosti: codeLists.cinnosti,
               zakazky: codeLists.zakazky,
+              bankoveUcty: codeLists.bankoveUcty,
             }}
             suggestion={suggestion}
             autoFilled={autoFilled}
@@ -1476,8 +1482,8 @@ export function DocumentDetailPage() {
             setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
             updateUcto={updateUcto}
             updateExtracted={updateExtracted}
-            updateSupplier={updateSupplier}
-            updateSupplierAddress={updateSupplierAddress}
+            updateParty={updateParty}
+            updatePartyAddress={updatePartyAddress}
             predvolenaPokladna={(data.seriesDefaults ?? []).find(
               (item) => item.organizationId === draft.orgId && item.documentType === 'PD',
             )?.pokladnaKod}

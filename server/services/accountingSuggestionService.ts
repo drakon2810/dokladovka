@@ -209,7 +209,29 @@ function fromAccounting(accounting: Record<string, string | undefined>): Suggest
   };
 }
 
+/**
+ * Zúži ponuku predkontácií na agendu dokladu. Predkontácie bez agendy (ručne
+ * založené) ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model
+ * nemal z čoho vyberať. Samotnú agendu do promptu neposielame, model rozhoduje
+ * podľa kódu a názvu.
+ */
+function agendovaPonuka<T extends { agenda?: string }>(items: T[], povolene?: readonly string[]): Array<Omit<T, 'agenda'>> {
+  const vhodne = povolene ? items.filter((item) => !item.agenda || povolene.includes(item.agenda)) : items;
+  return (vhodne.length > 0 ? vhodne : items).map(({ agenda: _agenda, ...zvysok }) => zvysok);
+}
+
 // Typ dokladu → agenda číselného radu v POHODE (element „agenda" v exporte).
+// Agendy PREDKONTÁCIÍ (iný slovník než agendy radov) — na vydanú faktúru nepatrí
+// nákupová predkontácia a naopak. Zhodné so src/data/pohoda/agendas.ts.
+const PREDKONTACIA_AGENDA: Record<string, readonly string[]> = {
+  FP: ['receivedInvoice', 'receivedAdvanceInvoice'],
+  FV: ['issuedInvoice', 'issuedAdvanceInvoice'],
+  OZ: ['commitment', 'claim'],
+  MZDY: ['internalDocument'],
+  PD: ['cashPaid', 'cashReceived'],
+  BV: ['bankReceived', 'bankIssued'],
+};
+
 const AGENDA_PRE_TYP: Record<string, string> = {
   FP: 'prijate_faktury',
   FV: 'vydane_faktury',
@@ -735,7 +757,7 @@ export async function maybeAiAccountingSuggestion(
   // Bez LIMITu naprieč kinds — predkontácie sa zúžia textovou podobnosťou nižšie,
   // členenia a rady sú krátke číselníky. 5000 je len poistka proti degenerovaným dátam.
   const codeLists = await database.query<{ id: string; kind: string; code: string; name: string } & Record<string, unknown>>(
-    `SELECT id, kind, code, name FROM code_list_items
+    `SELECT id, kind, code, name, agenda FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
         AND kind IN ('predkontacie','cleneniaDph','ciselneRady')
         AND ${BEZ_PREDKONTACIA_SQL}
@@ -744,12 +766,15 @@ export async function maybeAiAccountingSuggestion(
   );
   const byKind = (kind: string) => codeLists.rows
     .filter((row) => row.kind === kind)
-    .map((row) => ({ id: row.id, kod: row.code, nazov: row.name }));
+    .map((row) => ({ id: row.id, kod: row.code, nazov: row.name, agenda: (row.agenda as string | null) ?? undefined }));
   // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
   // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
   // určí rovnako ako inde (nastavenie účtovníka, inak reálne používaný rad).
   const radPreTyp = await resolveSeriesDefault(database, input, documentContext.documentType);
-  const vsetkyPredkontacie = byKind('predkontacie');
+  // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
+  // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
+  const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];
+  const vsetkyPredkontacie = agendovaPonuka(byKind('predkontacie'), povoleneAgendy);
   if (vsetkyPredkontacie.length === 0) return false;
 
   // Retrieval beží nad PLNÝM zoznamom predkontácií (nie nad zúženou ponukou),
