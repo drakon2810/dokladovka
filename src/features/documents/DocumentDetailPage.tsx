@@ -1,11 +1,9 @@
 import {
   useCallback,
   useEffect,
-  lazy,
   useMemo,
   useRef,
   useState,
-  Suspense,
   type CSSProperties,
   type ReactNode,
 } from 'react';
@@ -28,7 +26,6 @@ import {
   rejectDocument,
   reprocessDocument,
   saveDocument,
-  updatePaymentStatus,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import type {
@@ -85,10 +82,6 @@ import {
   getOrganizationMostikStatus,
   type OrganizationMostikStatus,
 } from '../../data/mostik/mostikService';
-
-const PaymentQrModal = lazy(() =>
-  import('../payments/PaymentQrModal').then((module) => ({ default: module.PaymentQrModal })),
-);
 
 // ===== Komunikácia: @-spomenutia v komentároch =====
 
@@ -346,7 +339,6 @@ export function DocumentDetailPage() {
   // Náhľad 52 % / editor 46 % — doklad otvorený na predvolených 155 % je
   // ~845 px široký a pri užšom náhľade ho editor vizuálne prekrýval.
   const [splitPercent, setSplitPercent] = useState(52);
-  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [splitModalOpen, setSplitModalOpen] = useState(false);
@@ -1700,33 +1692,6 @@ export function DocumentDetailPage() {
             {t('mostik.odoslat')}
           </button>
         )}
-        {role !== 'schvalovatel' && (
-          <>
-            {!draft.payment || draft.payment.status === 'unpaid' ? (
-              <button
-                type="button"
-                className="btn"
-                disabled={busy}
-                onClick={() =>
-                  void runDocumentAction(
-                    () => updatePaymentStatus(draft.id, 'to_pay'),
-                    'toast.platbaNaUhradu',
-                  )
-                }
-              >
-                {t('platba.oznacitNaUhradu')}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() => setPaymentModalOpen(true)}
-            >
-              {t('platba.titulok')}
-            </button>
-          </>
-        )}
         {!readOnly && (
           <button
             type="button"
@@ -1794,18 +1759,6 @@ export function DocumentDetailPage() {
         </button>
       </div>
 
-      {paymentModalOpen && (
-        <Suspense fallback={<p className="text-sm text-ink-soft">{t('stav.nacitavam')}</p>}>
-          <PaymentQrModal
-            documents={[draft]}
-            organizations={data.organizations}
-            bankAccounts={data.bankAccounts}
-            initialDocumentId={draft.id}
-            onClose={() => setPaymentModalOpen(false)}
-            onUpdated={(updated) => setDraft(cloneDocument(updated))}
-          />
-        </Suspense>
-      )}
 
 
       {splitModalOpen && (
