@@ -411,6 +411,12 @@ export interface DocumentUcto {
   bankUcetKod?: string;
   /** Forma úhrady vydanej faktúry (POHODA paymentType); prázdna = Príkazom. */
   formaUhrady?: PaymentFormCode;
+  /**
+   * Číslo, s ktorým sa doklad založí v POHODE (element numberRequested).
+   * Prázdne = číslo pridelí POHODA z číselného radu. Účtovník ho môže prepísať
+   * — vydaná faktúra si napr. nesie vlastné číslo z fakturačného systému.
+   */
+  cisloVPohode?: string;
   poznamka?: string;
   /** Sekcia kontrolného výkazu DPH (štatutárny číselník A1…D2, KN). */
   clenenieKvKod?: string;

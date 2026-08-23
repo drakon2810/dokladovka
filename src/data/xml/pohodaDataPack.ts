@@ -84,11 +84,30 @@ const KRAJINA_PODLA_MENA = new Map<string, string>([
 
 const PSC_SAMOTNE = /^(\d{3}\s?\d{2}|\d{4,6})$/;
 const PSC_S_MESTOM = /^(\d{3}\s?\d{2}|\d{4,6})\s+(\D.*)$/;
+/** Kraj/okres/región — ani mesto, ani ulica; do POHODY nepatrí. */
+const OBLAST = /(^|\s)(kraj|okres|region|county|province|oblast)(\s|$)/;
 
+function bezDiakritikyMalymi(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function jeOblast(cast: string): boolean {
+  return OBLAST.test(bezDiakritikyMalymi(cast).replace(/[.,]/g, ' '));
+}
+
+/**
+ * ISO kód krajiny z jej názvu v adrese. Skúša aj tvar so zátvorkou — extrakcia
+ * píše raz „Slovakia", inokedy „Slovakia (Slovak Republic)"; oba znamenajú SK.
+ */
 function krajinaZMena(cast: string | undefined): string | undefined {
-  const kluc = (cast ?? '').normalize('NFD').replace(/[\u0300-\u036f.]/g, '')
-    .toLowerCase().replace(/\s+/g, ' ').trim();
-  return KRAJINA_PODLA_MENA.get(kluc);
+  const zaklad = bezDiakritikyMalymi(cast ?? '');
+  const vZatvorke = /\(([^)]*)\)/.exec(zaklad)?.[1] ?? '';
+  for (const kandidat of [zaklad.replace(/\([^)]*\)/g, ' '), vZatvorke, zaklad]) {
+    const kluc = kandidat.replace(/[.,()]/g, ' ').replace(/\s+/g, ' ').trim();
+    const kod = kluc ? KRAJINA_PODLA_MENA.get(kluc) : undefined;
+    if (kod) return kod;
+  }
+  return undefined;
 }
 
 export function splitPostalAddress(value: string | undefined): { street?: string; city?: string; zip?: string; country?: string } {
@@ -100,12 +119,13 @@ export function splitPostalAddress(value: string | undefined): { street?: string
   // Krajina stojí na konci adresy; keď ju poznáme, z ďalšieho rozkladu vypadne.
   const country = krajinaZMena(parts[parts.length - 1]);
   if (country) parts.pop();
+  const zvysne = parts.filter((part) => !jeOblast(part));
 
   let city: string | undefined;
   let zip: string | undefined;
   const rest: string[] = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
+  for (let index = 0; index < zvysne.length; index += 1) {
+    const part = zvysne[index];
     const sMestom = !city ? PSC_S_MESTOM.exec(part) : null;
     if (sMestom) {
       zip = sMestom[1];
@@ -117,7 +137,7 @@ export function splitPostalAddress(value: string | undefined): { street?: string
     if (!zip && PSC_SAMOTNE.test(part)) {
       zip = part;
       if (!city) {
-        const zaNim = parts[index + 1];
+        const zaNim = zvysne[index + 1];
         const predNim = rest[rest.length - 1];
         if (zaNim && !/\d/.test(zaNim)) {
           city = zaNim;
@@ -131,6 +151,9 @@ export function splitPostalAddress(value: string | undefined): { street?: string
     }
     rest.push(part);
   }
+  // Mesto zopakované v adrese („…, Bratislava, Bratislava, 811 07") netreba mať
+  // ešte raz v ulici.
+  while (rest.length > 1 && city && rest[rest.length - 1].toLowerCase() === city.toLowerCase()) rest.pop();
   if (!city && rest.length === 1) return { street: rest[0], country };
   // Ulica = všetko od prvej časti s číslom domu ďalej („46A, Mýtna"); názov
   // firmy, ak ho extrakcia vložila pred ulicu, tak do ulice nespadne.
@@ -333,8 +356,9 @@ export function buildDataPack(
           `Doklad ${doc.id} nemá vybraný aktívny číselný rad pre export do POHODY`,
         );
       }
-      // Mock číslovanie v rade — POHODA pri importe pridelí reálne číslo z radu
-      const numberRequested = `${rad}${String(index + 1).padStart(4, '0')}`;
+      // Číslo, s ktorým doklad vznikne v POHODE: čo prepísal účtovník, inak mock
+      // číslovanie v rade (v ostrom exporte prideľuje číslo POHODA z radu).
+      const numberRequested = doc.ucto.cisloVPohode?.trim() || `${rad}${String(index + 1).padStart(4, '0')}`;
       const d = doc.extracted;
       const currencyLines = [
         `          <typ:priceHigh>${formatXmlAmount(vat.zaklad23)}</typ:priceHigh>`,

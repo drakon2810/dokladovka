@@ -604,14 +604,21 @@ export function InvoicePanel({
         {chybaPokladna
           ? <span>Pokladničný doklad potrebuje <strong>číslo pokladne</strong> a smer dokladu — bez nich ho POHODA neprijme.</span>
           : (
-            <span>
+            <span className="dk-mode-text">
               Doklad bude zaúčtovaný do POHODY v režime <strong>{rezim}</strong>
-              {/* Skutočné číslo prideľuje POHODA až pri prenose; toto je odhad
-                  z posledného čísla radu, ktoré priniesol Mostík. */}
-              {dalsieCislo && (cisloJeIste
-                ? <> a dostane číslo <strong className="tnum" title={cisloTitle}>{dalsieCislo}</strong></>
-                : <> a dostane ďalšie voľné číslo radu — od <strong className="tnum" title={cisloTitle}>{dalsieCislo}</strong></>
-              )}.
+              {/* Číslo sa dá prepísať: prázdne pole nechá číslovanie na POHODE
+                  (ukáže sa odhad z posledného čísla radu), vyplnené sa pošle ako
+                  numberRequested a doklad vznikne presne s ním. */}
+              {' '}a dostane číslo{' '}
+              <DcCell
+                value={ucto.cisloVPohode ?? ''}
+                placeholder={dalsieCislo ?? 'pridelí POHODA'}
+                disabled={readOnly}
+                title={ucto.cisloVPohode
+                  ? 'Doklad vznikne v POHODE presne s týmto číslom. Prázdne pole = číslo pridelí POHODA z radu.'
+                  : cisloTitle}
+                onCommit={(raw) => updateUcto({ cisloVPohode: raw.trim() || undefined })}
+              />
             </span>
           )}
       </div>

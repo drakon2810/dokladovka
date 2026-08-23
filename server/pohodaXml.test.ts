@@ -262,6 +262,23 @@ describe('buildServerDataPack — partner a hlavička pre POHODU', () => {
     expect(xml).toContain('<inv:account><typ:ids>PB</typ:ids></inv:account>');
     assertOrder(emittedChildren(xml, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
   });
+
+  it('číslo dokladu: prázdne nechá číslovanie POHODE, vyplnené sa pošle ako numberRequested', () => {
+    const doc = invoiceDocument({ dodavatel: { nazov: 'Dodávateľ', ico: '11112222' } });
+    // Bez prepísania ide do POHODY len prefix radu — číslo pridelí ona.
+    const bezCisla = buildServerDataPack({ id: 'pack-6a', ico: '35761571', documents: [doc], codeLists });
+    expect(bezCisla).toContain('<inv:number><typ:ids>26FP</typ:ids></inv:number>');
+    expect(bezCisla).not.toContain('numberRequested');
+
+    // Účtovníkom prepísané číslo doklad v POHODE dostane presne. checkDuplicity
+    // false: obsadené číslo POHODA upraví a varuje, prenos nespadne.
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, cisloVPohode: '260704300120' };
+    const sCislom = buildServerDataPack({ id: 'pack-6b', ico: '35761571', documents: [doc], codeLists });
+    expect(sCislom).toContain(
+      '<inv:number><typ:ids>26FP</typ:ids><typ:numberRequested checkDuplicity="false">260704300120</typ:numberRequested></inv:number>',
+    );
+    assertOrder(emittedChildren(sCislom, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
+  });
 });
 
 describe('buildServerDataPack — rozpis na položky (invoiceDetail)', () => {
@@ -384,6 +401,17 @@ describe('splitPostalAddress a vatCountryIds', () => {
       .toEqual({ street: '46A, MÝTNA', city: 'BRATISLAVA', zip: '811 07', country: 'SK' });
     expect(splitPostalAddress('Ballindamm 25, 20095 Hamburg, Germany'))
       .toEqual({ street: 'Ballindamm 25', city: 'Hamburg', zip: '20095', country: 'DE' });
+    // Tá istá adresa, tri behy extrakcie — názov krajiny so zátvorkou, kraj
+    // navyše aj zopakované mesto. Zo všetkých musí vyjsť to isté.
+    for (const adresa of [
+      '46A, MÝTNA, BRATISLAVA, 811 07, Slovakia (Slovak Republic)',
+      '46A, MÝTNA, BRATISLAVA, BRATISLAVA, 811 07, SLOVAKIA (SLOVAK REPUBLIC)',
+      '46A, MÝTNA, BRATISLAVA, BRATISLAVSKÝ KRAJ, 811 07, SLOVAKIA (SLOVAK REPUBLIC)',
+    ]) {
+      expect(splitPostalAddress(adresa)).toMatchObject({ zip: '811 07', country: 'SK' });
+      expect(splitPostalAddress(adresa).city?.toUpperCase()).toBe('BRATISLAVA');
+      expect(splitPostalAddress(adresa).street?.toUpperCase()).toBe('46A, MÝTNA');
+    }
     // Bez IČ DPH je názov krajiny v adrese jediný zdroj krajiny partnera.
     expect(supplierAddressParts({ adresa: '46A, MÝTNA, BRATISLAVA, 811 07, Slovakia' }))
       .toEqual({ ulica: '46A, MÝTNA', psc: '811 07', obec: 'BRATISLAVA', krajina: 'SK' });

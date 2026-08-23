@@ -207,11 +207,30 @@ const KRAJINA_PODLA_MENA = new Map<string, string>([
 
 const PSC_SAMOTNE = /^(\d{3}\s?\d{2}|\d{4,6})$/;
 const PSC_S_MESTOM = /^(\d{3}\s?\d{2}|\d{4,6})\s+(\D.*)$/;
+/** Kraj/okres/región — ani mesto, ani ulica; do POHODY nepatrí. */
+const OBLAST = /(^|\s)(kraj|okres|region|county|province|oblast)(\s|$)/;
 
+function bezDiakritikyMalymi(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function jeOblast(cast: string): boolean {
+  return OBLAST.test(bezDiakritikyMalymi(cast).replace(/[.,]/g, ' '));
+}
+
+/**
+ * ISO kód krajiny z jej názvu v adrese. Skúša aj tvar so zátvorkou — extrakcia
+ * píše raz „Slovakia", inokedy „Slovakia (Slovak Republic)"; oba znamenajú SK.
+ */
 function krajinaZMena(cast: string | undefined): string | undefined {
-  const kluc = (cast ?? '').normalize('NFD').replace(/[\u0300-\u036f.]/g, '')
-    .toLowerCase().replace(/\s+/g, ' ').trim();
-  return KRAJINA_PODLA_MENA.get(kluc);
+  const zaklad = bezDiakritikyMalymi(cast ?? '');
+  const vZatvorke = /\(([^)]*)\)/.exec(zaklad)?.[1] ?? '';
+  for (const kandidat of [zaklad.replace(/\([^)]*\)/g, ' '), vZatvorke, zaklad]) {
+    const kluc = kandidat.replace(/[.,()]/g, ' ').replace(/\s+/g, ' ').trim();
+    const kod = kluc ? KRAJINA_PODLA_MENA.get(kluc) : undefined;
+    if (kod) return kod;
+  }
+  return undefined;
 }
 
 export function splitPostalAddress(value: unknown): { street?: string; city?: string; zip?: string; country?: string } {
@@ -223,12 +242,13 @@ export function splitPostalAddress(value: unknown): { street?: string; city?: st
   // Krajina stojí na konci adresy; keď ju poznáme, z ďalšieho rozkladu vypadne.
   const country = krajinaZMena(parts[parts.length - 1]);
   if (country) parts.pop();
+  const zvysne = parts.filter((part) => !jeOblast(part));
 
   let city: string | undefined;
   let zip: string | undefined;
   const rest: string[] = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
+  for (let index = 0; index < zvysne.length; index += 1) {
+    const part = zvysne[index];
     const sMestom = !city ? PSC_S_MESTOM.exec(part) : null;
     if (sMestom) {
       zip = sMestom[1];
@@ -240,7 +260,7 @@ export function splitPostalAddress(value: unknown): { street?: string; city?: st
     if (!zip && PSC_SAMOTNE.test(part)) {
       zip = part;
       if (!city) {
-        const zaNim = parts[index + 1];
+        const zaNim = zvysne[index + 1];
         const predNim = rest[rest.length - 1];
         if (zaNim && !/\d/.test(zaNim)) {
           city = zaNim;
@@ -254,6 +274,9 @@ export function splitPostalAddress(value: unknown): { street?: string; city?: st
     }
     rest.push(part);
   }
+  // Mesto zopakované v adrese („…, Bratislava, Bratislava, 811 07") netreba mať
+  // ešte raz v ulici.
+  while (rest.length > 1 && city && rest[rest.length - 1].toLowerCase() === city.toLowerCase()) rest.pop();
   if (!city && rest.length === 1) return { street: rest[0], country };
   // Ulica = všetko od prvej časti s číslom domu ďalej („46A, Mýtna"); názov
   // firmy, ak ho extrakcia vložila pred ulicu, tak do ulice nespadne.
@@ -399,6 +422,14 @@ export function buildServerDataPack(input: {
     // takže druhý a každý ďalší export skončil hláškou „Doklad so zadaným číslom
     // už existuje" a doklad sa v POHODE vôbec nezaložil.
     const numberSeries = input.codeLists.ciselneRady.get(snapshot.ucto.ciselnyRadId ?? '');
+    // Účtovník smie číslo dokladu prepísať (pole v páse „Doklad bude zaúčtovaný…").
+    // Prázdne = číslo pridelí POHODA z radu. checkDuplicity="false": keď je číslo
+    // obsadené, POHODA doklad založí s upraveným číslom a vráti varovanie —
+    // radšej než aby celý prenos spadol.
+    const cisloVPohode = clamp(snapshot.ucto.cisloVPohode, 32);
+    const numberXml = `<typ:ids>${escapeXml(numberSeries ?? '')}</typ:ids>${cisloVPohode
+      ? `<typ:numberRequested checkDuplicity="false">${escapeXml(cisloVPohode)}</typ:numberRequested>`
+      : ''}`;
     if (!accounting || !classificationVat || !numberSeries) {
       throw new Error(`Doklad ${id} nemá platné aktívne číselníky organizácie`);
     }
@@ -455,7 +486,7 @@ export function buildServerDataPack(input: {
       <vch:voucherHeader>
         <vch:voucherType>${escapeXml(voucherType)}</vch:voucherType>
         <vch:cashAccount><typ:ids>${escapeXml(cashAccount)}</typ:ids></vch:cashAccount>
-        <vch:number><typ:ids>${escapeXml(numberSeries)}</typ:ids></vch:number>
+        <vch:number>${numberXml}</vch:number>
         <vch:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</vch:originalDocument>
         <vch:date>${issueDate}</vch:date>
         <vch:dateTax>${taxDate}</vch:dateTax>
@@ -488,7 +519,7 @@ export function buildServerDataPack(input: {
       return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <int:intDoc version="2.0">
       <int:intDocHeader>
-        <int:number><typ:ids>${escapeXml(numberSeries)}</typ:ids></int:number>
+        <int:number>${numberXml}</int:number>
         <int:date>${issueDate}</int:date>
         <int:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></int:accounting>
         <int:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></int:classificationVAT>
@@ -520,7 +551,7 @@ export function buildServerDataPack(input: {
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
         <inv:invoiceType>${invoiceType(snapshot.typ)}</inv:invoiceType>
-        <inv:number><typ:ids>${escapeXml(numberSeries)}</typ:ids></inv:number>
+        <inv:number>${numberXml}</inv:number>
         <inv:symVar>${escapeXml(clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20))}</inv:symVar>
         ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</inv:originalDocument>` : ''}
         <inv:date>${issueDate}</inv:date>
