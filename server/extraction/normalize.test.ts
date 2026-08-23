@@ -457,6 +457,33 @@ describe('IČ DPH zahraničnej strany neblokuje', () => {
     expect(issues).toContainEqual(expect.objectContaining({ code: 'unverified_buyer_vat_id', severity: 'warning' }));
   });
 
+  it('slovenské VAT bez predpony sa doplní na SK… a naplní DIČ', () => {
+    const odberatel = (doklad({ icDph: '2020270780', krajina: 'SK' }).extracted as { odberatel: Record<string, string> }).odberatel;
+    expect(odberatel).toMatchObject({ icDph: 'SK2020270780', dic: '2020270780' });
+    expect(validateNormalizedExtraction(doklad({ icDph: '2020270780', krajina: 'SK' }), { ico: '35761571' })
+      .filter((issue) => issue.severity === 'error')).toEqual([]);
+  });
+
+  it('zahraničné číslo bez predpony sa nedopĺňa', () => {
+    expect((doklad({ icDph: '0105541035341', krajina: 'TH' }).extracted as { odberatel: Record<string, string> }).odberatel)
+      .toMatchObject({ icDph: '0105541035341' });
+    expect((doklad({ icDph: '511149775', krajina: 'IL' }).extracted as { odberatel: Record<string, string> }).odberatel)
+      .toMatchObject({ icDph: '511149775' });
+  });
+
+  // Poľské NIP má tiež 10 číslic. Keby stačilo „nie je zahraničná", strane bez
+  // rozpoznanej krajiny by sme vyrobili slovenské IČ DPH, ktoré prejde všetkými
+  // kontrolami a v kontrolnom výkaze skončí ako tuzemské plnenie.
+  it('bez preukázanej krajiny sa 10 číslic neprepisuje na SK', () => {
+    for (const buyer of [{ icDph: '5252248481' }, { icDph: '5252248481', adresa: 'ul. Prosta 51, 00-838 Warszawa, Polska' }]) {
+      const doc = doklad(buyer);
+      expect((doc.extracted as { odberatel: Record<string, string> }).odberatel).toMatchObject({ icDph: '5252248481' });
+      expect((doc.extracted as { odberatel: Record<string, string> }).odberatel.dic).toBeUndefined();
+      expect(validateNormalizedExtraction(doc, { ico: '35761571' }))
+        .toContainEqual(expect.objectContaining({ code: 'invalid_buyer_vat_id', severity: 'error' }));
+    }
+  });
+
   it('slovenskej strane pokazené IČ DPH schválenie naďalej blokuje', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP',

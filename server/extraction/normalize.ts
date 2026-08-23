@@ -121,6 +121,17 @@ function opravIdentifikatory<T extends {
     icDph = dic.toUpperCase();
     dic = undefined;
   }
+  // Anglická faktúra píše slovenskej strane daňové číslo bez predpony („VAT:
+  // 2020270780"). Samotných 10 číslic je DIČ; IČ DPH je to isté číslo s kódom
+  // krajiny. Bez doplnenia formát blokuje schválenie a do POHODY by odišlo
+  // neplatné IČ DPH. Podmienkou je PREUKÁZANÁ slovenská krajina, nie „nie je
+  // zahraničná": 10 číslic bez kódu krajiny má aj poľské NIP či turecké VKN a
+  // strane, ktorej krajinu nepoznáme, by sme vyrobili neexistujúce SK číslo —
+  // to by prešlo kontrolou aj do kontrolného výkazu ako tuzemské plnenie.
+  if (krajina === 'SK' && icDph && /^\d{10}$/.test(icDph)) {
+    dic ??= icDph;
+    icDph = `SK${icDph}`;
+  }
   // Časti adresy od modelu majú prednosť pred rozkladom voľného textu; keď
   // niektorú nevráti, doplní ju rozklad (a účtovník ju vie prepísať).
   const zRozkladu = splitPostalAddress(entity.adresa);
