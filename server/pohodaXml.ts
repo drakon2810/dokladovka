@@ -548,6 +548,18 @@ export function buildServerDataPack(input: {
     // ktorý má zaplatiť zákazník — berie sa zo skratky číselníka bankových účtov.
     const paymentAccount = vydana ? undefined : skIbanAccount(supplier.iban);
     const vlastnyUcet = vydana ? clamp(snapshot.ucto.bankUcetKod, 19) : '';
+    // Záložka „Dokumenty": kým doklad nemá určenú podzložku, POHODA píše
+    // „Priečinok nie je definovaný" a Mostík nemá kam sken uložiť — tak ostali
+    // prijaté aj vydané faktúry bez priloženého PDF. Cestu preto určíme sami a
+    // rovnakú, akú ponúka sama POHODA: <Dokumenty firmy>Fakturácia<agenda>    // <rada><číslo>. Zložiť ju vieme len s vlastným číslom dokladu; inak číslo
+    // pridelí POHODA až pri importe a podzložka by nebola jedinečná.
+    const podzlozka = cisloVPohode && numberSeries
+      ? `Fakturácia\\${vydana ? 'Vydané faktúry' : 'Prijaté faktúry'}\\${numberSeries}\\${cisloVPohode}`
+      : '';
+    const dokumentyXml = podzlozka
+      ? `
+      <inv:attachments><typ:files><typ:subFolder>${escapeXml(clamp(podzlozka, 255))}</typ:subFolder></typ:files></inv:attachments>`
+      : '';
     const formaUhrady = vydana ? clamp(snapshot.ucto.formaUhrady, 20) : '';
     // Text dokladu = názov vybranej predkontácie (účtovník ho vidí v POHODE
     // namiesto predvoleného „Import FA z XML"); fallback na číslo faktúry.
@@ -582,7 +594,7 @@ export function buildServerDataPack(input: {
       </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.invoice)}
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}
-      </inv:homeCurrency></inv:invoiceSummary>
+      </inv:homeCurrency></inv:invoiceSummary>${dokumentyXml}
     </inv:invoice>
   </dat:dataPackItem>`;
   }).join('\n');

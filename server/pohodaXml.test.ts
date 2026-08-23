@@ -278,6 +278,15 @@ describe('buildServerDataPack — partner a hlavička pre POHODU', () => {
       '<inv:number><typ:numberRequested>260704300120</typ:numberRequested></inv:number>',
     );
     expect(sCislom).not.toContain('<typ:ids>26FP</typ:ids>');
+    // S vlastným číslom vieme dokladu určiť aj podzložku pre záložku Dokumenty —
+    // bez nej POHODA hlási „Priečinok nie je definovaný" a sken nemá kam ísť.
+    expect(sCislom).toContain(
+      // Diakritika ide do XML ako číselné entity (Windows-1250), preto sa
+      // porovnáva escapovaný tvar cesty.
+      '<inv:attachments><typ:files><typ:subFolder>Faktur&#225;cia\\Prijat&#233; fakt&#250;ry\\26FP\\260704300120</typ:subFolder></typ:files></inv:attachments>',
+    );
+    // Bez vlastného čísla podzložku zložiť nevieme (číslo pridelí POHODA až pri importe).
+    expect(bezCisla).not.toContain('attachments');
     assertOrder(emittedChildren(sCislom, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
   });
 });
