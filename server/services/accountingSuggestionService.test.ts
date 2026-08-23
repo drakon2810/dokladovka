@@ -554,6 +554,9 @@ describe('accounting suggestions', () => {
     const payload = JSON.parse(body.input[0].content[0].text);
     expect(payload.dokument.odberatel).toMatchObject({ nazov: 'Kaczynska Sarah' });
     expect(payload.dokument.polozky[0]).toMatchObject({ sadzbaDph: 23 });
+    // Sadzba DPH samostatne: rozhoduje medzi tuzemským a zahraničným členením,
+    // ktoré má firma v denníku obidve pre tú istú službu.
+    expect(payload.dokument.sadzbyDphNaDoklade).toEqual([23]);
     // Denník nesie len FV riadky, zoskupené s počtom výskytov.
     expect(payload.dennik).toHaveLength(1);
     expect(payload.dennik[0]).toMatchObject({ predkontaciaKod: '602100 sťahov.-tuz.', clenenieKvKod: 'D2', pocet: 3 });
