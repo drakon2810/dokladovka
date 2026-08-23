@@ -13,7 +13,7 @@ import {
   historyStats,
   importUctoHistory,
 } from '../services/uctoHistoryService.js';
-import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -209,19 +209,18 @@ describe('účtovný profil firmy', () => {
     );
 
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+          clenenieKvKod: null,
           predkontaciaId: ids.get('predkontacie:518/321'), clenenieDphId: ids.get('cleneniaDph:PD'),
           ciselnyRadId: null, confidence: 0.95, reason: 'Ide o prepravu tovaru',
-        },
-      }),
+        })),
     };
     // Dodávateľ, ktorého firma nikdy nemala — pamäť ani história nepomôžu.
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Nová špedícia s.r.o.' };
     const context = { documentType: 'FP', supplierName: 'Nová špedícia s.r.o.', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Freight Shanghai - Koper', 'THC'] };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
 
-    const payload = JSON.parse((parser.parse.mock.calls[0][0] as any).input[0].content[0].text);
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
     expect(payload.kategorie).toHaveLength(1);
     expect(payload.kategorie[0]).toMatchObject({ nazov: 'Preprava a špedícia', pouziteKrat: 120 });
 
@@ -320,12 +319,11 @@ describe('účtovný profil firmy', () => {
       [documentId, seeded.tenantId, seeded.organizationId],
     );
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+          clenenieKvKod: null,
           predkontaciaId: ids.get('predkontacie:BEZ321100'), clenenieDphId: null,
           ciselnyRadId: null, confidence: 0.9, reason: 'Uzávierka',
-        },
-      }),
+        })),
     };
     const context = { documentType: 'FP', supplierName: 'Dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Údajová uzávierka'] };
     expect(await maybeAiAccountingSuggestion(
@@ -333,7 +331,7 @@ describe('účtovný profil firmy', () => {
       { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Dodávateľ' },
       context, parser,
     )).toBe(false);
-    const ponuka = JSON.parse((parser.parse.mock.calls[0][0] as any).input[0].content[0].text);
+    const ponuka = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
     expect(ponuka.ciselniky.predkontacie.map((item: any) => item.kod)).toEqual(['518/321']);
   }, 90_000);
 });

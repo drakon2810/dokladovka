@@ -334,7 +334,11 @@ async function completeRun(
   prepared: PreparedRun,
   outcome: Awaited<ReturnType<ServerDocumentExtractionProvider['extract']>>,
   startedAt: number,
-): Promise<(AiSuggestionDocumentContext & { status: string }) | undefined> {
+): Promise<(AiSuggestionDocumentContext & {
+  status: string;
+  /** Doklady, ktoré vznikli rozdelením súboru — AI ich analyzuje rovnako. */
+  dalsie: Array<AiSuggestionDocumentContext & { documentId: string }>;
+}) | undefined> {
   if (outcome.result.schemaVersion !== EXTRACTION_SCHEMA_VERSION) {
     throw new ExtractionProviderError('schema_version_mismatch', 'AI služba vrátila nepodporovanú verziu schémy', false);
   }
@@ -525,16 +529,51 @@ async function completeRun(
     });
   });
   if (prepared.isReprocess) return undefined;
-  return {
-    status,
-    documentType: normalized.documentType,
+  // Strany dokladu sú spoločné pre celý súbor aj pre doklady, ktoré z neho
+  // vznikli rozdelením — líšia sa len typom, sumou a položkami.
+  const strany = {
     supplierName: result.supplier.nazov,
     supplierIco: result.supplier.ico,
+    supplierIcDph: result.supplier.icDph,
+    // Odberateľ rozhoduje o DPH a sekcii KV vydanej faktúry (súkromná osoba
+    // bez identifikátorov vs. podnikateľ) — model ho musí vidieť.
+    odberatel: {
+      nazov: result.buyer.nazov ?? undefined,
+      ico: result.buyer.ico ?? undefined,
+      dic: result.buyer.dic ?? undefined,
+      icDph: result.buyer.icDph ?? undefined,
+    },
+  };
+  // Sadzba DPH na položkách je pre model dôkaz o daňovom režime dokladu.
+  const polozkyPreModel = (items: typeof result.lineItems) => items.slice(0, 15).map((item) => ({
+    popis: item.description ?? undefined,
+    sadzbaDph: item.vatRate == null ? undefined : Number(item.vatRate),
+    suma: item.amountTotal == null ? undefined : Number(item.amountTotal),
+  }));
+  const popisy = (items: typeof result.lineItems) => items.map((item) => item.description ?? '').filter(Boolean);
+  return {
+    status,
+    ...strany,
+    documentType: normalized.documentType,
     totalAmount: normalized.totalAmount,
     currency: normalized.currency,
-    lineDescriptions: result.lineItems
-      .map((item) => item.description ?? '')
-      .filter(Boolean),
+    lineDescriptions: popisy(result.lineItems),
+    polozky: polozkyPreModel(result.lineItems),
+    dalsie: dalsieDoklady.map((dalsi) => ({
+      documentId: dalsi.id,
+      ...strany,
+      documentType: dalsi.normalized.documentType,
+      totalAmount: dalsi.normalized.totalAmount,
+      currency: dalsi.normalized.currency,
+      // Doklad z rozdelenia býva jediná suma bez položiek (tvorba sociálneho
+      // fondu, zúčtovanie zálohy) — jediný text, ktorý ho odlíši, je jeho
+      // popis. Bez neho by model rozhodoval len podľa typu a sumy a nenašiel
+      // by ani kategóriu, ani riadok denníka.
+      lineDescriptions: [dalsi.zdroj.documentSummary, ...popisy(dalsi.zdroj.lineItems)]
+        .filter((text): text is string => Boolean(text)),
+      // Prázdne pole by v prompte zatienilo fallback na popisy — radšej nič.
+      polozky: dalsi.zdroj.lineItems.length > 0 ? polozkyPreModel(dalsi.zdroj.lineItems) : undefined,
+    })),
   };
 }
 
@@ -699,19 +738,31 @@ export async function processNextJob(
         // Párovanie je best-effort; výpis je už uložený.
       }
     }
-    // AI návrh zaúčtovania z POHODA číselníkov — len keď deterministické zdroje
-    // nič nenašli; zlyhanie návrhu nesmie zhodiť spracovanie dokladu.
-    if (summary && summary.status !== 'karantena' && summary.documentType !== 'BV') {
-      try {
-        await maybeAiAccountingSuggestion(database, config, {
-          tenantId: job.tenant_id,
-          organizationId: job.organization_id,
-          documentId: prepared.documentId,
-          supplierIco: summary.supplierIco,
-          supplierName: summary.supplierName,
-        }, summary);
-      } catch {
-        // Návrh je voliteľný — chyba AI sa ignoruje, doklad je už uložený.
+    // AI analýza zaúčtovania beží na každom doklade okrem bankového výpisu;
+    // deterministický návrh vyššie je len okamžitý prvý odhad. Zlyhanie
+    // analýzy nesmie zhodiť spracovanie dokladu — návrh ostane deterministický.
+    if (summary && summary.status !== 'karantena') {
+      // Doklady z rozdeleného súboru (mzdová rekapitulácia → mzdy, sociálny
+      // fond, zúčtovanie zálohy) potrebujú vlastnú analýzu rovnako ako hlavný.
+      const doklady = [{ documentId: prepared.documentId, kontext: summary as AiSuggestionDocumentContext }]
+        .concat(summary.dalsie.map((dalsi) => ({ documentId: dalsi.documentId, kontext: dalsi })))
+        // Bankový výpis má vlastnú analýzu po pohyboch (nižšie).
+        .filter((doklad) => doklad.kontext.documentType !== 'BV');
+      for (const doklad of doklady) {
+        try {
+          await maybeAiAccountingSuggestion(database, config, {
+            tenantId: job.tenant_id,
+            organizationId: job.organization_id,
+            documentId: doklad.documentId,
+            supplierIco: summary.supplierIco,
+            supplierName: summary.supplierName,
+          }, doklad.kontext);
+        } catch (cause) {
+          // Návrh je voliteľný — chyba AI nezhodí doklad, ktorý je už uložený,
+          // a nesmie pripraviť o analýzu ani ostatné doklady zo súboru. Ticho
+          // ju však neprehĺtame: inak by nikto nevedel, prečo doklad návrh nemá.
+          console.warn(`[ai-navrh] doklad ${doklad.documentId} zlyhal:`, cause instanceof Error ? cause.message : cause);
+        }
       }
     }
     // Bankový výpis má vlastný návrh po pohyboch — beží AŽ PO párovaní úhrad,

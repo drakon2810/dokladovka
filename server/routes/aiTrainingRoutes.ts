@@ -228,8 +228,8 @@ export async function importTrainingRows(
         const result = await tx.query(
           `INSERT INTO ucto_decisions
             (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
-             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source)
-           SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import'
+             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type)
+           SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import','FP'
             WHERE NOT EXISTS (
               SELECT 1 FROM ucto_decisions
                WHERE tenant_id=$2 AND organization_id=$3 AND source='import'

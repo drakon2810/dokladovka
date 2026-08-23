@@ -103,3 +103,18 @@ export async function seedTestUser(database: Database, options?: { role?: 'admin
   });
   return { tenantId, userId, organizationId, aliasId, email, password };
 }
+
+/**
+ * Odpoveď Responses API tak, ako ju vracia model: pole output správ. Návrh
+ * zaúčtovania číta finálnu správu, preto testy nesmú posielať iba holý objekt
+ * — inak by prehliadli, že medzi správami môže byť preambula či tool call.
+ */
+export function aiOdpoved(payload: unknown, preambula?: string) {
+  const output: unknown[] = [];
+  if (preambula) {
+    output.push({ type: 'message', content: [{ type: 'output_text', text: preambula }] });
+    output.push({ type: 'web_search_call', id: 'ws_test' });
+  }
+  output.push({ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(payload) }] });
+  return { output };
+}

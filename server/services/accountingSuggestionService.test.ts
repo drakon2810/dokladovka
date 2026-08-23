@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { forgetUctoDecision, maybeAiAccountingSuggestion, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
@@ -320,7 +320,7 @@ describe('accounting suggestions', () => {
     )).rows[0].corrections_count)).toBe(1);
   }, 90_000);
 
-  it('AI fallback vyberá len z aktívnych číselníkov a nikdy neprepíše deterministický návrh', async () => {
+  it('AI analýza vyberá len z aktívnych číselníkov; prepíše slabé zdroje, úplné pravidlo nie', async () => {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
@@ -344,9 +344,7 @@ describe('accounting suggestions', () => {
 
     // Model vráti platnú predkontáciu + vymyslené (neaktívne) clenenie — prejde len platné ID.
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: { predkontaciaId: pred, clenenieDphId: 'vymyslene-id', ciselnyRadId: null, confidence: 0.9, reason: 'Služby podľa položiek' },
-      }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({ clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: 'vymyslene-id', ciselnyRadId: null, confidence: 0.9, reason: 'Služby podľa položiek' })),
     };
     const context = { documentType: 'FP', supplierName: 'Nový dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Konzultácie'] };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
@@ -356,10 +354,17 @@ describe('accounting suggestions', () => {
     expect(suggestion.clenenie_dph_id).toBeNull();
     expect(Number(suggestion.confidence)).toBeLessThanOrEqual(0.8);
 
-    // Deterministický návrh (source != none) sa AI fallbackom nikdy neprepíše.
+    // Slabé deterministické zdroje (pamäť/história) AI analýza nahradí…
     await database.query(`UPDATE accounting_suggestions SET source='supplier_history' WHERE document_id=$1`, [documentId]);
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+    expect(parser.create).toHaveBeenCalledTimes(2);
+    // …ale pravidlo účtovníka, ktoré určilo účet, DPH aj KV, je záväzné celé.
+    await database.query(
+      `UPDATE accounting_suggestions SET source='manual_rule', clenenie_dph_id=$2, clenenie_kv_kod='B2' WHERE document_id=$1`,
+      [documentId, dph],
+    );
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(false);
-    expect(parser.parse).toHaveBeenCalledTimes(1);
+    expect(parser.create).toHaveBeenCalledTimes(2);
   }, 90_000);
 
   it('AI fallback dostane podobné príklady z pamäte (retrieval), beží na routovanom modeli a rešpektuje excluded', async () => {
@@ -405,15 +410,13 @@ describe('accounting suggestions', () => {
 
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '11112222', supplierName: 'Nový dodávateľ' };
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: { predkontaciaId: pred, clenenieDphId: dph, ciselnyRadId: null, confidence: 0.7, reason: 'Podľa príkladu' },
-      }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({ clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: dph, ciselnyRadId: null, confidence: 0.7, reason: 'Podľa príkladu' })),
     };
     const context = { documentType: 'FP', supplierName: 'Nový dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Konzultácie'] };
 
     await rebuildAccountingSuggestion(database, input);
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
-    const firstCall = parser.parse.mock.calls[0][0] as any;
+    const firstCall = parser.create.mock.calls[0][0] as any;
     expect(firstCall.model).toBe('gpt-5.6-terra'); // routovaný fallback model
     const payload = JSON.parse(firstCall.input[0].content[0].text);
     expect(payload.priklady).toHaveLength(1);
@@ -427,8 +430,290 @@ describe('accounting suggestions', () => {
     await database.query('DELETE FROM accounting_suggestions WHERE document_id=$1', [documentId]);
     await rebuildAccountingSuggestion(database, input);
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
-    const secondPayload = JSON.parse((parser.parse.mock.calls[1][0] as any).input[0].content[0].text);
+    const secondPayload = JSON.parse((parser.create.mock.calls[1][0] as any).input[0].content[0].text);
     expect(secondPayload.priklady).toHaveLength(0);
+  }, 90_000);
+
+  it('FV: pamäť ide podľa odberateľa a nikdy nesiaha do prijatých faktúr', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const pred = randomUUID();
+    const dph = randomUUID();
+    for (const [id, kind, code] of [[pred, 'predkontacie', '602/311'], [dph, 'cleneniaDph', 'UD']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // Pamäť PRIJATÝCH faktúr sesterskej firmy rovnakého mena — reálny prípad,
+    // v ktorom FV preberala nákupnú DPH schému.
+    await database.query(
+      `INSERT INTO ucto_decisions
+        (id,tenant_id,organization_id,supplier_name_normalized,line_text_normalized,predkontacia_id,clenenie_dph_id,clenenie_kv_kod,source)
+       VALUES ($1,$2,$3,'ags bratislava','stahovanie',$4,$5,'KN','import')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, pred, dph],
+    );
+    const extracted = {
+      dodavatel: { nazov: 'AGS Bratislava', ico: '35761571' },
+      odberatel: { nazov: 'Kaczynska Sarah' },
+      polozky: [{ popis: 'stahovanie' }],
+    };
+    const mkFv = async (id: string) => database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+      [id, seeded.tenantId, seeded.organizationId, JSON.stringify(extracted)],
+    );
+    const fv1 = randomUUID();
+    await mkFv(fv1);
+    // Extrakcia posiela ako „dodávateľa" vlastnú firmu — kľúčom FV je odberateľ,
+    // takže FP pamäť mena „ags bratislava" sa NESMIE použiť.
+    const input1 = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: fv1, supplierIco: '35761571', supplierName: 'AGS Bratislava' };
+    await rebuildAccountingSuggestion(database, input1);
+    expect((await database.query<Record<string, any>>(
+      'SELECT source FROM accounting_suggestions WHERE document_id=$1', [fv1],
+    )).rows[0].source).toBe('none');
+
+    // Schválená FV sa uloží pod odberateľom a druhá FV toho istého zákazníka ju nájde.
+    await recordUctoDecision(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: fv1,
+      documentType: 'FV', extracted,
+      accounting: { predkontaciaId: pred, clenenieDphId: dph, clenenieKvKod: 'D2' },
+    });
+    const ulozene = (await database.query<Record<string, any>>(
+      'SELECT supplier_name_normalized, document_type FROM ucto_decisions WHERE document_id=$1', [fv1],
+    )).rows[0];
+    expect(ulozene).toMatchObject({ supplier_name_normalized: 'kaczynska sarah', document_type: 'FV' });
+
+    const fv2 = randomUUID();
+    await mkFv(fv2);
+    await rebuildAccountingSuggestion(database, { ...input1, documentId: fv2 });
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT source, predkontacia_id, clenenie_kv_kod FROM accounting_suggestions WHERE document_id=$1', [fv2],
+    )).rows[0];
+    expect(navrh).toMatchObject({ source: 'decision_memory', predkontacia_id: pred, clenenie_kv_kod: 'D2' });
+  }, 90_000);
+
+  it('AI analýza: denník agendy a odberateľ v prompte, KV od modelu, pravidlo prepíše model', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const predPravidlo = randomUUID();
+    const dph = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,2299.49,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'AGS Bratislava' }, odberatel: { nazov: 'Kaczynska Sarah' }, polozky: [{ popis: 'Door to door removal service' }] })],
+    );
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '602100 sťahov.-tuz.'], [predPravidlo, 'predkontacie', '602200'], [dph, 'cleneniaDph', 'UD'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // Denník: 3 riadky FV histórie s rovnakým zaúčtovaním (prax firmy) + FP šum,
+    // ktorý sa do FV denníka nesmie dostať.
+    for (let index = 0; index < 3; index += 1) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,source,riadok_hash)
+         VALUES ($1,$2,$3,'FV','door to door removal service','602100 sťahov.-tuz.',$4,'UD',$5,'D2','mdb',$6)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, pred, dph, randomUUID()],
+      );
+    }
+    await database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,source,riadok_hash)
+       VALUES ($1,$2,$3,'FP','nakup kancelarskych potrieb','501300','mdb',$4)`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, randomUUID()],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({ predkontaciaId: pred, clenenieDphId: dph, clenenieKvKod: 'D2', ciselnyRadId: null, confidence: 0.9, reason: 'Podľa denníka' })),
+    };
+    const context = {
+      documentType: 'FV', supplierName: 'AGS Bratislava', supplierIco: '35761571',
+      odberatel: { nazov: 'Kaczynska Sarah' },
+      totalAmount: 2299.49, currency: 'EUR',
+      lineDescriptions: ['Door to door removal service'],
+      polozky: [{ popis: 'Door to door removal service', sadzbaDph: 23, suma: 2275.5 }],
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AGS Bratislava' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const body = parser.create.mock.calls[0][0] as any;
+    // Web search je zapnutý — model si smie overiť výklad zákona.
+    expect(body.tools).toEqual([{ type: 'web_search' }]);
+    const payload = JSON.parse(body.input[0].content[0].text);
+    expect(payload.dokument.odberatel).toMatchObject({ nazov: 'Kaczynska Sarah' });
+    expect(payload.dokument.polozky[0]).toMatchObject({ sadzbaDph: 23 });
+    // Denník nesie len FV riadky, zoskupené s počtom výskytov.
+    expect(payload.dennik).toHaveLength(1);
+    expect(payload.dennik[0]).toMatchObject({ predkontaciaKod: '602100 sťahov.-tuz.', clenenieKvKod: 'D2', pocet: 3 });
+
+    let suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
+    // KV od modelu sa uloží; zhoda s denníkom (3×, podobný text) pustí istotu nad 0.8.
+    expect(suggestion).toMatchObject({ source: 'ai', predkontacia_id: pred, clenenie_dph_id: dph, clenenie_kv_kod: 'D2' });
+    expect(Number(suggestion.confidence)).toBeCloseTo(0.9);
+    expect(String(suggestion.reason)).toContain('denníka');
+
+    // Pravidlo účtovníka pre odberateľa je záväzné — prepíše predkontáciu aj KV modelu.
+    await database.query(
+      `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_name_normalized,predkontacia_id,clenenie_kv_kod,origin)
+       VALUES ($1,$2,$3,'Kaczynska Sarah',$4,'A1','manual')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, predPravidlo],
+    );
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+    suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
+    expect(suggestion).toMatchObject({ predkontacia_id: predPravidlo, clenenie_dph_id: dph, clenenie_kv_kod: 'A1' });
+    expect(String(suggestion.reason)).toContain('Pravidlo');
+  }, 90_000);
+
+  it('web search: preambula pred tool callom nezhodí návrh a prázdna odpoveď nezmaže deterministický', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const stredisko = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Nový dodávateľ', ico: '11112222' }, polozky: [{ popis: 'Služba' }] })],
+    );
+    for (const [id, kind, code] of [[pred, 'predkontacie', '518/321'], [stredisko, 'strediska', 'SPRAVA']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '11112222', supplierName: 'Nový dodávateľ' };
+    const context = { documentType: 'FP', supplierName: 'Nový dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Služba'] };
+
+    // Model pred web searchom vypíše preambulu — SDK by na nej pri responses.parse()
+    // spadlo (JSON.parse celého textu), návrh musí prejsť z FINÁLNEJ správy.
+    const sPreambulou = {
+      create: vi.fn().mockResolvedValue(aiOdpoved(
+        { clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: null, confidence: 0.7, reason: 'Overené na webe' },
+        'Najprv si overím, ktorá sekcia KV pre toto plnenie platí.',
+      )),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, sPreambulou)).toBe(true);
+    expect((await database.query<Record<string, any>>(
+      'SELECT source, predkontacia_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0]).toMatchObject({ source: 'ai', predkontacia_id: pred });
+
+    // Deterministický návrh so strediskom + model, ktorý nič nespozná (samé null):
+    // prenesené stredisko nesmie stačiť na prepis dobrého návrhu.
+    await database.query(
+      `UPDATE accounting_suggestions SET source='partner_default', confidence=0.9, predkontacia_id=$2, stredisko_id=$3
+        WHERE document_id=$1`,
+      [documentId, pred, stredisko],
+    );
+    const prazdny = {
+      create: vi.fn().mockResolvedValue(aiOdpoved(
+        { clenenieKvKod: null, predkontaciaId: null, clenenieDphId: null, ciselnyRadId: null, confidence: 0.2, reason: 'Neviem' },
+      )),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, prazdny)).toBe(false);
+    const zachovany = (await database.query<Record<string, any>>(
+      'SELECT source, predkontacia_id, stredisko_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    expect(zachovany).toMatchObject({ source: 'partner_default', predkontacia_id: pred, stredisko_id: stredisko });
+
+    // Model, ktorý vráti LEN číselný rad, tiež nie je zaúčtovanie — rad dopĺňa
+    // nastavenie firmy, takže by sa ním dobrý návrh prepísať nemal.
+    const radId = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda)
+       VALUES ($1,$2,$3,'ciselneRady','2026','2026','pohoda','prijate_faktury')`,
+      [radId, seeded.tenantId, seeded.organizationId],
+    );
+    const lenRad = {
+      create: vi.fn().mockResolvedValue(aiOdpoved(
+        { clenenieKvKod: null, predkontaciaId: null, clenenieDphId: null, ciselnyRadId: radId, confidence: 0.4, reason: 'Neviem účet' },
+      )),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, lenRad)).toBe(false);
+    expect((await database.query<Record<string, any>>(
+      'SELECT source, predkontacia_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0]).toMatchObject({ source: 'partner_default', predkontacia_id: pred });
+
+    // Model/účet bez podpory web searchu nesmie zhodiť návrh — zopakuje sa bez
+    // nástroja. Iná chyba (timeout, rate limit) sa NEopakuje, aby sa čakanie
+    // na doklad nezdvojnásobilo.
+    const bezWebu = {
+      create: vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error('Tool web_search is not supported with this model'), { status: 400 }))
+        .mockResolvedValue(aiOdpoved(
+          { clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: null, confidence: 0.6, reason: 'Bez webu' },
+        )),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, bezWebu)).toBe(true);
+    expect(bezWebu.create).toHaveBeenCalledTimes(2);
+    expect((bezWebu.create.mock.calls[0][0] as any).tools).toEqual([{ type: 'web_search' }]);
+    expect((bezWebu.create.mock.calls[1][0] as any).tools).toBeUndefined();
+
+    const timeout = { create: vi.fn().mockRejectedValue(Object.assign(new Error('Request timed out'), { status: 408 })) };
+    await expect(maybeAiAccountingSuggestion(database, testConfig(), input, context, timeout)).rejects.toThrow('timed out');
+    expect(timeout.create).toHaveBeenCalledTimes(1);
+  }, 90_000);
+
+  it('predvoľba partnera len so strediskom nezablokuje účet z ďalších zdrojov', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const dph = randomUUID();
+    const stredisko = randomUUID();
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '518/321'], [dph, 'cleneniaDph', 'PD'], [stredisko, 'strediska', 'SPRAVA'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Partner s.r.o.', ico: '11112222' }, polozky: [{ popis: 'Služba' }] })],
+    );
+    // Partner má vyplnené LEN stredisko — účet a DPH musia prísť z predvolieb firmy.
+    await database.query(
+      `INSERT INTO partners (id,tenant_id,organization_id,name,name_normalized,ico,default_stredisko_id)
+       VALUES ($1,$2,$3,'Partner s.r.o.','partner s.r.o.','11112222',$4)`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, stredisko],
+    );
+    await database.query(
+      `INSERT INTO organization_accounting_defaults (organization_id,tenant_id,predkontacia_id,clenenie_dph_id)
+       VALUES ($1,$2,$3,$4)`,
+      [seeded.organizationId, seeded.tenantId, pred, dph],
+    );
+
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+      supplierIco: '11112222', supplierName: 'Partner s.r.o.',
+    });
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT source, predkontacia_id, clenenie_dph_id, stredisko_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    // Účet z predvolieb organizácie a zároveň stredisko od partnera.
+    expect(navrh).toMatchObject({
+      source: 'organization_default', predkontacia_id: pred, clenenie_dph_id: dph, stredisko_id: stredisko,
+    });
   }, 90_000);
 
   it('DPH kontrola po AI zahodí neplatiteľské odpočtové členenie mimo zúženej ponuky', async () => {
@@ -467,9 +752,7 @@ describe('accounting suggestions', () => {
     await rebuildAccountingSuggestion(database, input);
     // Model (nepoctivo) vráti aktívne odpočtové členenie mimo zúženej ponuky.
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: { predkontaciaId: pred, clenenieDphId: odpocet, ciselnyRadId: null, confidence: 0.8, reason: 'Odpočet' },
-      }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({ clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: odpocet, ciselnyRadId: null, confidence: 0.8, reason: 'Odpočet' })),
     };
     const context = { documentType: 'FP', supplierName: 'Dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['Služba'] };
     // DPH poradca odpočet neplatiteľa zablokuje → návrh sa nezapíše.
@@ -624,9 +907,7 @@ describe('AI nevyberá číselný rad', () => {
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'HUKE s. r. o.' };
     // Model si vypýta rad prijatých faktúr — pre pokladničný doklad nesprávne.
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: { predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: radFaktury, confidence: 0.7, reason: 'Nákup' },
-      }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({ clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: radFaktury, confidence: 0.7, reason: 'Nákup' })),
     };
     const context = { documentType: 'PD', supplierName: 'HUKE s. r. o.', totalAmount: 216.1, currency: 'EUR', lineDescriptions: ['Espresso'] };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);

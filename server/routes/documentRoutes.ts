@@ -334,6 +334,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       tenantId: auth.tenantId,
       organizationId: document.organization_id,
       documentId: id,
+      documentType: String(document.document_type ?? '') || undefined,
       extracted: document.extracted,
       accounting: document.accounting,
     });
