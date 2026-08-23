@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
-import { forgetUctoDecision, maybeAiAccountingSuggestion, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
+import { forgetUctoDecision, maybeAiAccountingSuggestion, mesiacZNazvu, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -870,6 +870,64 @@ describe('predvolený číselný rad', () => {
     await database.query(`UPDATE code_list_items SET active=false WHERE agenda='prijate_faktury'`);
     expect(await navrh(database, seeded, documentId)).not.toBe(pokladnicny);
   }, 90_000);
+});
+
+describe('mesačné číselné rady', () => {
+  // Reálny prípad: firma vedie rad na každý mesiac. Júlovej faktúre automatika
+  // pridelila júnový rad (naposledy použitý) a POHODA jej dala číslo z neho.
+  it('doklad dostane rad svojho mesiaca, nie naposledy použitý', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const jun = randomUUID();
+    const jul = randomUUID();
+    for (const [id, code, name, lastNumber] of [
+      [jun, '26060', 'Vydané faktúry jún', '260604300119'],
+      [jul, '26070', 'Vydané faktúry júl', '00001'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,last_number)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$5,'pohoda','vydane_faktury',$6)`,
+        [id, seeded.tenantId, seeded.organizationId, code, name, lastNumber],
+      );
+    }
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,2299.49,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'AGS' }, odberatel: { nazov: 'Kaczynska Sarah' }, datumVystavenia: '2026-07-12', polozky: [{ popis: 'sťahovanie' }] })],
+    );
+
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AGS',
+    });
+    expect((await database.query<Record<string, any>>(
+      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].ciselny_rad_id).toBe(jul);
+
+    // Nastavenie účtovníka ostáva silnejšie než mesiac dokladu.
+    await database.query(
+      `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id)
+       VALUES ($1,$2,'FV',$3)`,
+      [seeded.organizationId, seeded.tenantId, jun],
+    );
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AGS',
+    });
+    expect((await database.query<Record<string, any>>(
+      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].ciselny_rad_id).toBe(jun);
+  }, 90_000);
+
+  it('mesiacZNazvu berie celé slovo, nie podreťazec', () => {
+    expect(mesiacZNazvu('Vydané faktúry jún')).toBe(6);
+    expect(mesiacZNazvu('Vydané faktúry júl')).toBe(7);
+    expect(mesiacZNazvu('Vydané faktúry máj')).toBe(5);
+    expect(mesiacZNazvu('Majetok')).toBeUndefined();
+    expect(mesiacZNazvu('Prijaté faktúry')).toBeUndefined();
+    expect(mesiacZNazvu(undefined)).toBeUndefined();
+  });
 });
 
 describe('AI nevyberá číselný rad', () => {

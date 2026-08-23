@@ -57,27 +57,86 @@ export function vatCountryIds(icDph: string | undefined): string | undefined {
  * Heuristický rozklad voľnej adresy z extrakcie na ulicu / mesto / PSČ.
  * Musí zostať v zhode so serverovým splitPostalAddress v server/pohodaXml.ts.
  */
-export function splitPostalAddress(value: string | undefined): { street?: string; city?: string; zip?: string } {
+/**
+ * Krajiny, ktoré na dokladoch reálne chodia: názov v texte adresy → ISO kód pre
+ * číselník krajín POHODY. Neznámy názov ostáva nerozpoznaný — prázdna krajina
+ * je lepšia než vymyslená.
+ */
+const KRAJINA_PODLA_MENA = new Map<string, string>([
+  ['sk', 'SK'], ['slovakia', 'SK'], ['slovak republic', 'SK'], ['slovensko', 'SK'],
+  ['slovenska republika', 'SK'], ['slowakei', 'SK'], ['slovakei', 'SK'],
+  ['cz', 'CZ'], ['czech republic', 'CZ'], ['czechia', 'CZ'], ['cesko', 'CZ'],
+  ['ceska republika', 'CZ'], ['tschechien', 'CZ'],
+  ['at', 'AT'], ['austria', 'AT'], ['rakusko', 'AT'], ['osterreich', 'AT'],
+  ['de', 'DE'], ['germany', 'DE'], ['nemecko', 'DE'], ['deutschland', 'DE'],
+  ['hu', 'HU'], ['hungary', 'HU'], ['madarsko', 'HU'], ['ungarn', 'HU'],
+  ['pl', 'PL'], ['poland', 'PL'], ['polsko', 'PL'], ['polen', 'PL'],
+  ['ie', 'IE'], ['ireland', 'IE'], ['irsko', 'IE'],
+  ['gb', 'GB'], ['uk', 'GB'], ['united kingdom', 'GB'], ['great britain', 'GB'],
+  ['fr', 'FR'], ['france', 'FR'], ['francuzsko', 'FR'],
+  ['it', 'IT'], ['italy', 'IT'], ['taliansko', 'IT'], ['italia', 'IT'],
+  ['es', 'ES'], ['spain', 'ES'], ['spanielsko', 'ES'], ['espana', 'ES'],
+  ['nl', 'NL'], ['netherlands', 'NL'], ['holandsko', 'NL'], ['nederland', 'NL'],
+  ['be', 'BE'], ['belgium', 'BE'], ['belgicko', 'BE'],
+  ['ch', 'CH'], ['switzerland', 'CH'], ['svajciarsko', 'CH'], ['schweiz', 'CH'],
+  ['us', 'US'], ['usa', 'US'], ['united states', 'US'],
+]);
+
+const PSC_SAMOTNE = /^(\d{3}\s?\d{2}|\d{4,6})$/;
+const PSC_S_MESTOM = /^(\d{3}\s?\d{2}|\d{4,6})\s+(\D.*)$/;
+
+function krajinaZMena(cast: string | undefined): string | undefined {
+  const kluc = (cast ?? '').normalize('NFD').replace(/[\u0300-\u036f.]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+  return KRAJINA_PODLA_MENA.get(kluc);
+}
+
+export function splitPostalAddress(value: string | undefined): { street?: string; city?: string; zip?: string; country?: string } {
   const parts = (value ?? '')
     .split(/\r?\n|\s+[–—-]\s+|,/)
     .map((part) => part.trim())
     .filter(Boolean);
   if (parts.length === 0) return {};
+  // Krajina stojí na konci adresy; keď ju poznáme, z ďalšieho rozkladu vypadne.
+  const country = krajinaZMena(parts[parts.length - 1]);
+  if (country) parts.pop();
+
   let city: string | undefined;
   let zip: string | undefined;
   const rest: string[] = [];
-  for (const part of parts) {
-    const match = !city && part.match(/^(\d{3}\s?\d{2}|\d{4,6})\s+(\D.*)$/);
-    if (match) {
-      zip = match[1];
-      city = match[2].trim();
-    } else {
-      rest.push(part);
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const sMestom = !city ? PSC_S_MESTOM.exec(part) : null;
+    if (sMestom) {
+      zip = sMestom[1];
+      city = sMestom[2].trim();
+      continue;
     }
+    // PSČ ako samostatná časť („…, BRATISLAVA, 811 07") — mesto stojí vedľa
+    // neho, raz pred ním, inokedy zaň. Bez tohto ostalo mesto aj PSČ prázdne.
+    if (!zip && PSC_SAMOTNE.test(part)) {
+      zip = part;
+      if (!city) {
+        const zaNim = parts[index + 1];
+        const predNim = rest[rest.length - 1];
+        if (zaNim && !/\d/.test(zaNim)) {
+          city = zaNim;
+          index += 1;
+        } else if (predNim && !/\d/.test(predNim)) {
+          city = predNim;
+          rest.pop();
+        }
+      }
+      continue;
+    }
+    rest.push(part);
   }
-  if (!city && rest.length === 1) return { street: rest[0] };
-  const street = rest.find((part) => /\d/.test(part)) ?? rest[0];
-  return { street, city, zip };
+  if (!city && rest.length === 1) return { street: rest[0], country };
+  // Ulica = všetko od prvej časti s číslom domu ďalej („46A, Mýtna"); názov
+  // firmy, ak ho extrakcia vložila pred ulicu, tak do ulice nespadne.
+  const odkial = rest.findIndex((part) => /\d/.test(part));
+  const street = odkial >= 0 ? rest.slice(odkial).join(', ') : rest[0];
+  return { street, city, zip, country };
 }
 
 export interface SupplierAddress {
@@ -102,7 +161,9 @@ export function supplierAddressParts(
     ulica: supplier.ulica ?? split.street,
     psc: supplier.psc ?? split.zip,
     obec: supplier.obec ?? split.city,
-    krajina: supplier.krajina ?? vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic),
+    // Krajina: ručné pole > IČ DPH/DIČ (najspoľahlivejšie) > názov krajiny
+    // v texte adresy — pri súkromnej osobe bez IČ DPH je to jediný zdroj.
+    krajina: supplier.krajina ?? vatCountryIds(supplier.icDph) ?? vatCountryIds(supplier.dic) ?? split.country,
   };
 }
 

@@ -281,10 +281,30 @@ const AGENDA_PRE_TYP: Record<string, string> = {
  * používa — najprv podľa počtu použití v pamäti rozhodnutí, potom podľa
  * najvyššieho čísla z POHODY (nepoužitý rad stojí na 1).
  */
+/** Mesiace v názvoch číselných radov, bez diakritiky — poradie = číslo mesiaca. */
+const MESIACE_V_NAZVE = [
+  'januar', 'februar', 'marec', 'april', 'maj', 'jun',
+  'jul', 'august', 'september', 'oktober', 'november', 'december',
+];
+
+/**
+ * Mesiac z názvu číselného radu („Vydané faktúry jún" → 6). Porovnáva sa celé
+ * slovo, nie podreťazec: rad „Majetok" by inak vyzeral ako máj.
+ */
+export function mesiacZNazvu(nazov: string | undefined): number | undefined {
+  const slova = bezDiakritiky(nazov ?? '').split(/[^a-z0-9]+/).filter(Boolean);
+  for (const slovo of slova) {
+    const index = MESIACE_V_NAZVE.indexOf(slovo);
+    if (index >= 0) return index + 1;
+  }
+  return undefined;
+}
+
 async function resolveSeriesDefault(
   tx: Queryable,
   input: SuggestionInput,
   documentType: string | undefined,
+  datumVystavenia?: string,
 ): Promise<string | undefined> {
   const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
     `SELECT d.ciselny_rad_id
@@ -297,6 +317,22 @@ async function resolveSeriesDefault(
 
   const agenda = documentType ? AGENDA_PRE_TYP[documentType] : undefined;
   if (!agenda) return undefined;
+
+  // Mesačné rady („Vydané faktúry jún", „…júl"): doklad patrí do radu SVOJHO
+  // mesiaca. Automatika nižšie vyberá naposledy použitý rad, takže júlovej
+  // faktúre dala júnový rad — a POHODA jej pridelila číslo z nesprávneho radu.
+  const mesiacDokladu = /^\d{4}-(\d{2})-\d{2}$/.exec(datumVystavenia?.trim() ?? '')?.[1];
+  if (mesiacDokladu) {
+    const rady = await tx.query<{ id: string; name?: string } & Record<string, unknown>>(
+      `SELECT id, name FROM code_list_items
+        WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND active=true AND agenda=$3`,
+      [input.tenantId, input.organizationId, agenda],
+    );
+    const podlaMesiaca = rady.rows.filter((rad) => mesiacZNazvu(rad.name) === Number(mesiacDokladu));
+    // Len pri jednoznačnej zhode — dva rady toho istého mesiaca nevieme rozsúdiť.
+    if (podlaMesiaca.length === 1) return podlaMesiaca[0].id;
+  }
+
   const automatic = await tx.query<{ id: string } & Record<string, unknown>>(
     `SELECT c.id
        FROM code_list_items c
@@ -408,6 +444,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   );
   const lineText = normalizeLineText(current.rows[0]?.extracted);
   const documentType = current.rows[0]?.document_type;
+  // Dátum rozhoduje o mesačnom číselnom rade.
+  const datumVystavenia = (current.rows[0]?.extracted as { datumVystavenia?: string } | undefined)?.datumVystavenia;
   // Kľúč pamäte a pravidiel je protistrana: pri FV odberateľ z dokladu, inak
   // dodávateľ z inputu (zhodný s extracted.dodavatel, ale funguje aj v testoch
   // bez plného dokladu).
@@ -576,7 +614,7 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // história dodávateľa ho často nenesú (import histórie bez stĺpca), a vetva
   // predvolieb vyššie sa pýta len keď nenašlo NIČ. Preto sa dopĺňa samostatne:
   // inak ostane pole prázdne aj pri inak trafenom návrhu.
-  candidate.ciselny_rad_id ??= await resolveSeriesDefault(tx, input, documentType);
+  candidate.ciselny_rad_id ??= await resolveSeriesDefault(tx, input, documentType, datumVystavenia);
 
   candidate = await onlyActiveIds(tx, input, candidate);
   if (!hasAccounting(candidate)) {
@@ -888,6 +926,8 @@ export interface AiSuggestionDocumentContext {
   supplierName?: string;
   supplierIco?: string;
   supplierIcDph?: string;
+  /** Dátum vystavenia — určuje mesačný číselný rad firmy. */
+  datumVystavenia?: string;
   /** Odberateľ — partner vydanej faktúry; bez identifikátorov = súkromná osoba. */
   odberatel?: { nazov?: string; ico?: string; dic?: string; icDph?: string };
   totalAmount?: number;
@@ -965,7 +1005,7 @@ export async function maybeAiAccountingSuggestion(
   // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
   // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
   // určí rovnako ako inde (nastavenie účtovníka, inak reálne používaný rad).
-  const radPreTyp = await resolveSeriesDefault(database, input, documentContext.documentType);
+  const radPreTyp = await resolveSeriesDefault(database, input, documentContext.documentType, documentContext.datumVystavenia);
   // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];

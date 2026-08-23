@@ -327,6 +327,12 @@ async function storeAsOrganizationDocument(
   });
 }
 
+/** Dátum vystavenia z normalizovaného dokladu — určuje mesačný číselný rad. */
+function datumZExtrakcie(extracted: unknown): string | undefined {
+  const datum = (extracted as { datumVystavenia?: unknown } | undefined)?.datumVystavenia;
+  return typeof datum === 'string' ? datum : undefined;
+}
+
 async function completeRun(
   database: Database,
   job: JobRow,
@@ -555,6 +561,8 @@ async function completeRun(
     status,
     ...strany,
     documentType: normalized.documentType,
+    // Dátum vystavenia: firma môže mať mesačné číselné rady.
+    datumVystavenia: datumZExtrakcie(normalized.extracted),
     totalAmount: normalized.totalAmount,
     currency: normalized.currency,
     lineDescriptions: popisy(result.lineItems),
@@ -563,6 +571,7 @@ async function completeRun(
       documentId: dalsi.id,
       ...strany,
       documentType: dalsi.normalized.documentType,
+      datumVystavenia: datumZExtrakcie(dalsi.normalized.extracted),
       totalAmount: dalsi.normalized.totalAmount,
       currency: dalsi.normalized.currency,
       // Doklad z rozdelenia býva jediná suma bez položiek (tvorba sociálneho

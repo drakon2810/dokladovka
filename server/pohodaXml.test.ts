@@ -372,9 +372,21 @@ describe('splitPostalAddress a vatCountryIds', () => {
     expect(splitPostalAddress('1020 Wien – Seitenhafenstrasse 15/202'))
       .toEqual({ street: 'Seitenhafenstrasse 15/202', city: 'Wien', zip: '1020' });
     expect(splitPostalAddress('Prístavná 776/10\n821 09 Bratislava\nSlovakei'))
-      .toEqual({ street: 'Prístavná 776/10', city: 'Bratislava', zip: '821 09' });
+      .toEqual({ street: 'Prístavná 776/10', city: 'Bratislava', zip: '821 09', country: 'SK' });
     expect(splitPostalAddress('Hlavná 1')).toEqual({ street: 'Hlavná 1' });
     expect(splitPostalAddress(undefined)).toEqual({});
+  });
+
+  it('PSČ ako samostatná časť adresy dá mesto aj krajinu', () => {
+    // Reálna adresa súkromnej osoby z vydanej faktúry: mesto a PSČ sú vlastné
+    // časti a krajina je na konci — predtým z toho ostala len „46A".
+    expect(splitPostalAddress('46A, MÝTNA, BRATISLAVA, 811 07, Slovakia'))
+      .toEqual({ street: '46A, MÝTNA', city: 'BRATISLAVA', zip: '811 07', country: 'SK' });
+    expect(splitPostalAddress('Ballindamm 25, 20095 Hamburg, Germany'))
+      .toEqual({ street: 'Ballindamm 25', city: 'Hamburg', zip: '20095', country: 'DE' });
+    // Bez IČ DPH je názov krajiny v adrese jediný zdroj krajiny partnera.
+    expect(supplierAddressParts({ adresa: '46A, MÝTNA, BRATISLAVA, 811 07, Slovakia' }))
+      .toEqual({ ulica: '46A, MÝTNA', psc: '811 07', obec: 'BRATISLAVA', krajina: 'SK' });
   });
 
   it('krajina sa mapuje z prefixu IČ DPH vrátane EL a XI', () => {
