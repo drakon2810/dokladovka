@@ -371,3 +371,32 @@ describe('mimoeurópska strana', () => {
       .toContainEqual(expect.objectContaining({ code: 'invalid_buyer_vat_id', severity: 'error' }));
   });
 });
+
+// Krajinu už neurčuje zoznam názvov v kóde, ale model — pozná aj samotné mesto.
+describe('krajina strany od modelu', () => {
+  const strana = (buyer: Record<string, string>) => (normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FV',
+    supplier: { nazov: 'AGS Bratislava', ico: '35761571' },
+    buyer: { nazov: 'GLOBUS INTERNATIONAL', ...buyer }, invoiceNumber: 'F1',
+    issueDate: '2026-07-16', taxDate: '2026-07-16', dueDate: '2026-08-15', currency: 'EUR',
+    lineItems: [], vatBreakdown: [], totalAmount: '100',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-kr', '2026-07-16').extracted as { odberatel: Record<string, string> }).odberatel;
+
+  it('ISO kód z extrakcie sa použije aj pri adrese bez názvu krajiny', () => {
+    expect(strana({ adresa: '7 Ha-Bosem Street, Ashdod', krajina: 'IL' })).toMatchObject({ krajina: 'IL' });
+    expect(strana({ adresa: 'Wagramer Str. 5, 1220 Vienna', krajina: 'at' })).toMatchObject({ krajina: 'AT' });
+  });
+
+  it('nezmyselnú hodnotu zahodí a vráti sa k rozkladu adresy', () => {
+    expect(strana({ adresa: 'Ballindamm 25, 20095 Hamburg, Germany', krajina: 'Israel' }))
+      .toMatchObject({ krajina: 'DE' });
+    expect(strana({ adresa: 'Hlavná 1', krajina: '' }).krajina).toBeUndefined();
+  });
+
+  it('krajina od modelu rozhodne aj o tom, že strana je zahraničná', () => {
+    const izraelsky = strana({ dic: '511149775', adresa: '7 Ha-Bosem Street, Ashdod', krajina: 'IL' });
+    expect(izraelsky).toMatchObject({ icDph: '511149775', krajina: 'IL' });
+    expect(izraelsky.dic).toBeUndefined();
+  });
+});

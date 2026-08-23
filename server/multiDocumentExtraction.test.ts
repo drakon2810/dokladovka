@@ -18,7 +18,7 @@ function sessionHeaders(response: { headers: Record<string, unknown>; json(): an
 }
 
 const PRAZDNA_STRANA = {
-  nazov: null, ico: null, dic: null, icDph: null, adresa: null, iban: null, bic: null,
+  nazov: null, ico: null, dic: null, icDph: null, adresa: null, krajina: null, iban: null, bic: null,
 };
 
 // Polia bankového pohybu — pri faktúrach a mzdách ich model vracia ako null.
@@ -33,7 +33,7 @@ function rekapitulaciaWire() {
     schemaVersion: EXTRACTION_SCHEMA_VERSION,
     documentType: 'MZDY',
     supplier: { ...PRAZDNA_STRANA, nazov: 'AGS Bratislava' },
-    buyer: { nazov: null, ico: null, dic: null, icDph: null, adresa: null },
+    buyer: { nazov: null, ico: null, dic: null, icDph: null, adresa: null, krajina: null },
     invoiceNumber: 'MZDY-04/2026', orderNumber: null, deliveryNoteNumber: null,
     variableSymbol: '202612', constantSymbol: null, specificSymbol: null,
     issueDate: '2026-04-30', taxDate: '2026-04-30', dueDate: null, currency: 'EUR',

@@ -23,6 +23,10 @@ const partyWireSchema = z.object({
   dic: nullableShortText,
   icDph: nullableShortText,
   adresa: nullableText,
+  // ISO kód krajiny adresy. Model ho odvodí aj z mesta — zoznam názvov krajín
+  // v kóde bude vždy neúplný („Ashdod, Israel, South District" mal krajinu
+  // uprostred, „Wien" ju nemá vôbec).
+  krajina: nullableShortText,
   iban: nullableShortText,
   bic: nullableShortText,
 }).strict();
@@ -217,6 +221,8 @@ interface BuyerPartyResult {
   dic?: string;
   icDph?: string;
   adresa?: string;
+  /** ISO kód krajiny adresy — model ho odvodí aj zo samotného mesta. */
+  krajina?: string;
 }
 
 interface SupplierPartyResult extends BuyerPartyResult { iban?: string; bic?: string }
@@ -292,12 +298,12 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY', 'UNKNOWN']),
   supplier: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
-    icDph: z.string().optional(), adresa: z.string().optional(), iban: z.string().optional(),
-    bic: z.string().optional(),
+    icDph: z.string().optional(), adresa: z.string().optional(), krajina: z.string().optional(),
+    iban: z.string().optional(), bic: z.string().optional(),
   }),
   buyer: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
-    icDph: z.string().optional(), adresa: z.string().optional(),
+    icDph: z.string().optional(), adresa: z.string().optional(), krajina: z.string().optional(),
   }),
   invoiceNumber: z.string().optional(), orderNumber: z.string().optional(),
   deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),

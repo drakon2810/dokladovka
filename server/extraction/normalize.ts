@@ -58,6 +58,16 @@ export function canonicalCurrency(raw: string | undefined): string {
   return CURRENCY_ALIASES[key] ?? key;
 }
 
+/**
+ * ISO kód krajiny od modelu. Berieme len dve písmená — čokoľvek iné („Israel",
+ * „SLOVAK REPUBLIC") by v POHODE nesadlo na číselník krajín, tam sa krajina
+ * dohľadá starým rozkladom adresy.
+ */
+function isoKrajina(value: unknown): string | undefined {
+  const kod = String(value ?? '').replace(/[^A-Za-z]/g, '').toUpperCase();
+  return /^[A-Z]{2}$/.test(kod) ? kod : undefined;
+}
+
 function bezMedzier(value?: string): string | undefined {
   const clean = value?.replace(/\s+/g, '').trim();
   return clean ? clean : undefined;
@@ -71,21 +81,22 @@ function bezMedzier(value?: string): string | undefined {
  *   dodávateľa, SK… u odberateľa) — DIČ sa zahodí.
  * - Medzery sa odstraňujú vždy: POHODA ani kontroly formátu ich nečakajú.
  */
-function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: string; adresa?: string }>(entity: T): T {
+function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: string; adresa?: string; krajina?: string }>(entity: T): T {
   const ico = bezMedzier(entity.ico);
   let dic = bezMedzier(entity.dic);
   let icDph = bezMedzier(entity.icDph);
   if (dic && icDph && dic.toUpperCase() === icDph.toUpperCase()) dic = undefined;
   // Zahraničná strana slovenské DIČ nemá — čo z faktúry prišlo ako jej daňové
-  // číslo (izraelské „Client VAT No.: 511149775"), je jej IČ DPH. Krajinu berieme
-  // z adresy; keď ju nepoznáme, rozhodne formát samotného čísla.
-  const krajina = splitPostalAddress(entity.adresa).country;
+  // číslo (izraelské „Client VAT No.: 511149775"), je jej IČ DPH.
+  // Krajinu určuje model z adresy (pozná aj samotné mesto: Ashdod → IL);
+  // rozklad názvov v texte je len záloha pre doklady spracované predtým.
+  const krajina = isoKrajina(entity.krajina) ?? splitPostalAddress(entity.adresa).country;
   const zahranicna = Boolean(krajina && krajina !== 'SK');
   if (!icDph && dic && (checkVatId(dic) === 'valid' || zahranicna)) {
     icDph = dic.toUpperCase();
     dic = undefined;
   }
-  return { ...entity, ico, dic, icDph };
+  return { ...entity, ico, dic, icDph, krajina };
 }
 
 function round2(value: number): number {
