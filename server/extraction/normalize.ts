@@ -71,12 +71,17 @@ function bezMedzier(value?: string): string | undefined {
  *   dodávateľa, SK… u odberateľa) — DIČ sa zahodí.
  * - Medzery sa odstraňujú vždy: POHODA ani kontroly formátu ich nečakajú.
  */
-function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: string }>(entity: T): T {
+function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: string; adresa?: string }>(entity: T): T {
   const ico = bezMedzier(entity.ico);
   let dic = bezMedzier(entity.dic);
   let icDph = bezMedzier(entity.icDph);
   if (dic && icDph && dic.toUpperCase() === icDph.toUpperCase()) dic = undefined;
-  if (!icDph && dic && checkVatId(dic) === 'valid') {
+  // Zahraničná strana slovenské DIČ nemá — čo z faktúry prišlo ako jej daňové
+  // číslo (izraelské „Client VAT No.: 511149775"), je jej IČ DPH. Krajinu berieme
+  // z adresy; keď ju nepoznáme, rozhodne formát samotného čísla.
+  const krajina = splitPostalAddress(entity.adresa).country;
+  const zahranicna = Boolean(krajina && krajina !== 'SK');
+  if (!icDph && dic && (checkVatId(dic) === 'valid' || zahranicna)) {
     icDph = dic.toUpperCase();
     dic = undefined;
   }

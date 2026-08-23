@@ -312,3 +312,28 @@ describe('identifikátory strán', () => {
     expect(doklad({ dic: 'ATU42597604', icDph: 'ATU42597604' }).odberatel.dic).toBeUndefined();
   });
 });
+
+// Izraelský zákazník: „Client VAT No.: 511149775" nemá kód krajiny, takže formát
+// samotného čísla nič nepovie — krajinu prezradí adresa.
+describe('daňové číslo zahraničnej strany bez kódu krajiny', () => {
+  const odberatel = (buyer: Record<string, string>) => (normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FV',
+    supplier: { nazov: 'AGS Bratislava', ico: '35761571' },
+    buyer: { nazov: 'GLOBUS INTERNATIONAL', ...buyer }, invoiceNumber: '260704300126',
+    issueDate: '2026-07-16', taxDate: '2026-07-16', dueDate: '2026-08-15', currency: 'EUR',
+    lineItems: [], vatBreakdown: [], totalAmount: '5466',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-il', '2026-07-16').extracted as { odberatel: Record<string, string> }).odberatel;
+
+  it('podľa krajiny z adresy ide do IČ DPH', () => {
+    const strana = odberatel({ dic: '511149775', adresa: '7 Ha-Bosem Street, Ashdod, South District, Israel' });
+    expect(strana).toMatchObject({ icDph: '511149775' });
+    expect(strana.dic).toBeUndefined();
+  });
+
+  it('slovenskej strane sa DIČ neprepisuje', () => {
+    const strana = odberatel({ dic: '2020254170', adresa: 'Riazanská 62, 811 01 Bratislava, Slovensko' });
+    expect(strana).toMatchObject({ dic: '2020254170' });
+    expect(strana.icDph).toBeUndefined();
+  });
+});
