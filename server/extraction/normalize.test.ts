@@ -278,3 +278,37 @@ describe('rozpis DPH sa dopočíta z položiek', () => {
       .toEqual([{ sadzba: 19, zaklad: 1000, dph: 190 }]);
   });
 });
+
+// Reálny prípad: „Client VAT No.: CH E101237456" z faktúry skončilo v DIČ aj s
+// medzerou — slovenský formát ho hlásil ako chybu a do POHODY neodišlo ako
+// IČ DPH partnera.
+describe('identifikátory strán', () => {
+  const doklad = (buyer: Record<string, string>) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FV',
+    supplier: { nazov: 'AGS Bratislava', ico: '35 761 571', icDph: 'SK 2020254170' },
+    buyer: { nazov: 'GOSSELIN SUISSE SA', ...buyer }, invoiceNumber: '260704300124',
+    issueDate: '2026-07-12', taxDate: '2026-07-12', dueDate: '2026-08-07', currency: 'EUR',
+    lineItems: [], vatBreakdown: [], totalAmount: '940',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-vat', '2026-07-12').extracted as {
+    dodavatel: Record<string, string>; odberatel: Record<string, string>;
+  };
+
+  it('zahraničné IČ DPH z poľa DIČ sa presunie do IČ DPH a stratí medzery', () => {
+    expect(doklad({ dic: 'CH E101237456' }).odberatel)
+      .toMatchObject({ icDph: 'CHE101237456' });
+    expect(doklad({ dic: 'CH E101237456' }).odberatel.dic).toBeUndefined();
+  });
+
+  it('medzery padnú aj z IČO a IČ DPH vlastnej firmy', () => {
+    expect(doklad({}).dodavatel).toMatchObject({ ico: '35761571', icDph: 'SK2020254170' });
+  });
+
+  it('skutočné DIČ ostáva DIČom a duplikát IČ DPH sa zahodí', () => {
+    expect(doklad({ dic: '2020254170' }).odberatel).toMatchObject({ dic: '2020254170' });
+    expect(doklad({ dic: '2020254170' }).odberatel.icDph).toBeUndefined();
+    expect(doklad({ dic: 'ATU42597604', icDph: 'ATU42597604' }).odberatel)
+      .toMatchObject({ icDph: 'ATU42597604' });
+    expect(doklad({ dic: 'ATU42597604', icDph: 'ATU42597604' }).odberatel.dic).toBeUndefined();
+  });
+});

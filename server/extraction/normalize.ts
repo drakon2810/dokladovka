@@ -58,16 +58,29 @@ export function canonicalCurrency(raw: string | undefined): string {
   return CURRENCY_ALIASES[key] ?? key;
 }
 
-// AI občas skopíruje zahraničné IČ DPH aj do poľa DIČ (napr. ATU… u rakúskeho
-// dodávateľa alebo SK… u odberateľa). DIČ je SK/CZ identifikátor; keď sa zhoduje
-// s IČ DPH, je to duplikát — zhodíme ho, inak doklad spadne na invalid_dic pri
-// schvaľovaní. Platí pre dodávateľa aj odberateľa.
-function withoutForeignDicCopy<T extends { dic?: string; icDph?: string }>(entity: T): T {
-  if (entity.dic && entity.icDph
-    && entity.dic.replace(/\s/g, '').toUpperCase() === entity.icDph.replace(/\s/g, '').toUpperCase()) {
-    return { ...entity, dic: undefined };
+function bezMedzier(value?: string): string | undefined {
+  const clean = value?.replace(/\s+/g, '').trim();
+  return clean ? clean : undefined;
+}
+
+/**
+ * Identifikátory strany do správnych polí a bez medzier.
+ * - „Client VAT No.: CH E101237456" extrakcia uloží do DIČ, hoci je to IČ DPH.
+ *   V DIČ ho slovenský formát hlási ako chybu a do POHODY neodíde ako IČ DPH.
+ * - Tá istá hodnota v oboch poliach je duplikát z extrakcie (ATU… u rakúskeho
+ *   dodávateľa, SK… u odberateľa) — DIČ sa zahodí.
+ * - Medzery sa odstraňujú vždy: POHODA ani kontroly formátu ich nečakajú.
+ */
+function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: string }>(entity: T): T {
+  const ico = bezMedzier(entity.ico);
+  let dic = bezMedzier(entity.dic);
+  let icDph = bezMedzier(entity.icDph);
+  if (dic && icDph && dic.toUpperCase() === icDph.toUpperCase()) dic = undefined;
+  if (!icDph && dic && checkVatId(dic) === 'valid') {
+    icDph = dic.toUpperCase();
+    dic = undefined;
   }
-  return entity;
+  return { ...entity, ico, dic, icDph };
 }
 
 function round2(value: number): number {
@@ -173,8 +186,8 @@ export function normalizeExtractionResult(
       ? 'FP'
       : result.documentType,
     extracted: {
-      dodavatel: { ...withoutForeignDicCopy(result.supplier), nazov: result.supplier.nazov ?? '' },
-      odberatel: withoutForeignDicCopy({ ...result.buyer }),
+      dodavatel: { ...opravIdentifikatory(result.supplier), nazov: result.supplier.nazov ?? '' },
+      odberatel: opravIdentifikatory({ ...result.buyer }),
       cisloFaktury: result.invoiceNumber ?? '',
       cisloVypisu: result.statementNumber,
       // Počiatočný zostatok výpisu (BV nesie v totalWithoutVat) sa uloží,
