@@ -89,6 +89,20 @@ export function jeZahranicnaStrana(strana?: {
   return Boolean(krajina && krajina !== 'SK');
 }
 
+/**
+ * Daňové číslo mimo EÚ (izraelské „511149775", americké) nemá dvojpísmenový kód
+ * krajiny, takže formátová kontrola ho vyhlási za nezmysel. Zahraničnej strane
+ * schválenie blokovať nesmie — do kontrolného výkazu ani do VIES nejde. Chybu
+ * naďalej hlási číslo so ZNÁMYM kódom krajiny a zlým formátom („SK123", „ATU1").
+ */
+function chybneIcDph(strana: { icDph?: string; dic?: string; adresa?: string } | undefined): boolean {
+  const icDph = strana?.icDph;
+  if (!icDph) return false;
+  if (checkVatId(icDph) !== 'invalid') return false;
+  const maKodKrajiny = /^[A-Za-z]{2}/.test(icDph.replace(/[^A-Za-z0-9]/g, ''));
+  return maKodKrajiny || !jeZahranicnaStrana(strana);
+}
+
 export function validateDocument(
   doc: DocumentItem,
   organization?: Organization,
@@ -115,7 +129,7 @@ export function validateDocument(
   }
   // Neznámy kód krajiny schválenie neblokuje (server ho hlási len ako
   // warning) — issue vzniká iba pre hodnotu s preukázateľne zlým formátom.
-  if (supplier.icDph && checkVatId(supplier.icDph) === 'invalid') {
+  if (chybneIcDph(supplier)) {
     issues.push({ code: 'invalid_ic_dph', field: 'dodavatel.icDph' });
   }
   // Vydaná faktúra: IBAN patrí vlastnej firme, do POHODY nejde a editor ho ani
@@ -229,7 +243,7 @@ export function validateDocument(
   if (!foreignBuyer && buyer?.dic && !validateDic(buyer.dic)) {
     issues.push({ code: 'invalid_dic', field: 'odberatel.dic' });
   }
-  if (buyer?.icDph && checkVatId(buyer.icDph) === 'invalid') {
+  if (chybneIcDph(buyer)) {
     issues.push({ code: 'invalid_ic_dph', field: 'odberatel.icDph' });
   }
   // Na vydanej faktúre je odberateľom zákazník — iné IČO ako naše je normálne.

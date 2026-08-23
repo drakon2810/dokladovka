@@ -329,6 +329,17 @@ function checkVatId(value: unknown): VatIdCheck {
   return /^[A-Z]{2}[A-Z0-9]{2,13}$/.test(normalized) ? 'unknown_country' : 'invalid';
 }
 
+/**
+ * Daňové číslo mimo EÚ (izraelské „511149775") nemá dvojpísmenový kód krajiny,
+ * takže formátová kontrola ho vyhlási za nezmysel. Zahraničnej strane preto
+ * blokovať netreba — do kontrolného výkazu ani do VIES nejde. Chybou ostáva
+ * číslo so ZNÁMYM kódom krajiny a zlým formátom („SK123", „ATU1").
+ */
+function chybneIcDph(icDph: unknown, zahranicna: boolean): boolean {
+  if (checkVatId(icDph) !== 'invalid') return false;
+  return /^[A-Z]{2}/.test(normalizedIdentifier(icDph)) || !zahranicna;
+}
+
 function validIban(value: string): boolean {
   const iban = value.replace(/\s/g, '').toUpperCase();
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
@@ -366,7 +377,7 @@ export function validateNormalizedExtraction(
   }
   if (supplier.icDph) {
     const supplierVat = checkVatId(supplier.icDph);
-    if (supplierVat === 'invalid') {
+    if (chybneIcDph(supplier.icDph, (splitPostalAddress(supplier.adresa).country ?? 'SK') !== 'SK')) {
       issues.push({ code: 'invalid_supplier_vat_id', field: 'dodavatel.icDph', severity: 'error', message: 'IČ DPH dodávateľa nemá platný formát' });
     } else if (supplierVat === 'unknown_country') {
       issues.push({ code: 'unverified_supplier_vat_id', field: 'dodavatel.icDph', severity: 'warning', message: 'IČ DPH dodávateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
@@ -417,7 +428,7 @@ export function validateNormalizedExtraction(
   if (buyer.dic && !validDic(buyer.dic)) issues.push({ code: 'invalid_buyer_dic', field: 'odberatel.dic', severity: buyerSkSeverity, message: 'DIČ odberateľa nemá platný formát' });
   if (buyer.icDph) {
     const buyerVat = checkVatId(buyer.icDph);
-    if (buyerVat === 'invalid') {
+    if (chybneIcDph(buyer.icDph, buyerForeign)) {
       issues.push({ code: 'invalid_buyer_vat_id', field: 'odberatel.icDph', severity: buyerSeverity, message: 'IČ DPH odberateľa nemá platný formát' });
     } else if (buyerVat === 'unknown_country') {
       issues.push({ code: 'unverified_buyer_vat_id', field: 'odberatel.icDph', severity: 'warning', message: 'IČ DPH odberateľa má neznámy kód krajiny — skontrolujte podľa originálu' });

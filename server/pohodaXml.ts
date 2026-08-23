@@ -270,9 +270,18 @@ export function splitPostalAddress(value: unknown): { street?: string; city?: st
     .map((part) => part.trim())
     .filter(Boolean);
   if (parts.length === 0) return {};
-  // Krajina stojí na konci adresy; keď ju poznáme, z ďalšieho rozkladu vypadne.
-  const country = krajinaZMena(parts[parts.length - 1]);
-  if (country) parts.pop();
+  // Krajina býva na konci adresy, ale nie vždy („…, Ashdod, Israel, South
+  // District"), preto sa hľadá od konca cez všetky časti. Rozpoznaná časť
+  // z ďalšieho rozkladu vypadne, nech neskončí ako mesto alebo ulica.
+  let country: string | undefined;
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const kod = krajinaZMena(parts[index]);
+    if (kod) {
+      country = kod;
+      parts.splice(index, 1);
+      break;
+    }
+  }
   const zvysne = parts.filter((part) => !jeOblast(part));
 
   let city: string | undefined;

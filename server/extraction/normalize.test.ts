@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeExtractionResult, validateNormalizedExtraction } from './normalize.js';
+import { splitPostalAddress } from '../pohodaXml.js';
 
 describe('normalizácia SK/CZ faktúr', () => {
   it('spracuje slovenské sadzby 23 %, 19 % a 5 % aj bez variabilného symbolu', () => {
@@ -335,5 +336,38 @@ describe('daňové číslo zahraničnej strany bez kódu krajiny', () => {
     const strana = odberatel({ dic: '2020254170', adresa: 'Riazanská 62, 811 01 Bratislava, Slovensko' });
     expect(strana).toMatchObject({ dic: '2020254170' });
     expect(strana.icDph).toBeUndefined();
+  });
+});
+
+// Izraelský zákazník: krajina stojí v adrese uprostred a jeho VAT number nemá
+// kód krajiny — ani jedno nesmie blokovať schválenie.
+describe('mimoeurópska strana', () => {
+  const odberatel = (buyer: Record<string, string>) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FV',
+    supplier: { nazov: 'AGS Bratislava', ico: '35761571' },
+    buyer: { nazov: 'GLOBUS INTERNATIONAL', ...buyer }, invoiceNumber: '260704300126',
+    issueDate: '2026-07-16', taxDate: '2026-07-16', dueDate: '2026-08-15', currency: 'EUR',
+    lineItems: [], vatBreakdown: [], totalAmount: '5466',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-il2', '2026-07-16');
+
+  const adresa = '7 Ha-Bosem Street, Ashdod, Israel, South District';
+
+  it('krajina sa nájde aj uprostred adresy', () => {
+    expect(splitPostalAddress(adresa)).toMatchObject({ country: 'IL' });
+  });
+
+  it('izraelské VAT number neblokuje schválenie', () => {
+    const normalized = odberatel({ dic: '511149775', adresa });
+    expect((normalized.extracted as { odberatel: Record<string, string> }).odberatel)
+      .toMatchObject({ icDph: '511149775' });
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' })
+      .filter((issue) => issue.severity === 'error')).toEqual([]);
+  });
+
+  it('pokazené IČ DPH so ZNÁMYM kódom krajiny ostáva chybou aj cudzincovi', () => {
+    const normalized = odberatel({ icDph: 'ATU1', adresa: 'Wagramer Str. 5, 1220 Vienna, Austria' });
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' }))
+      .toContainEqual(expect.objectContaining({ code: 'invalid_buyer_vat_id', severity: 'error' }));
   });
 });
