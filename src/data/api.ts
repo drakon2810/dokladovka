@@ -1325,7 +1325,13 @@ export interface ApprovalCheck {
   vatInconsistent: boolean;
   totalMismatch: boolean;
   issues: DocumentValidationIssue[];
+  /** Chýbajúce polia zaúčtovania po jednom — editor z nich píše, čo ešte treba. */
+  chybajuceUcto: ChybajucePole[];
 }
+
+export type ChybajucePole =
+  | 'predkontacia' | 'clenenieDph' | 'ciselnyRad' | 'stredisko'
+  | 'pokladna' | 'bankUcet' | 'bankPohyby' | 'bankMena';
 
 /** Podmienky schválenia (SPEC §6.4, §11.14) — kontroluje aj UI pre disabled stav. */
 export function checkApprovable(
@@ -1353,20 +1359,24 @@ export function checkApprovable(
     if (!predkontacia?.agenda) return false;
     return predkontacia.agenda !== ((pohyb.sumaSpolu ?? 0) < 0 ? 'bankIssued' : 'bankReceived');
   };
-  const missingUcto = doc.typ === 'BV'
-    ? !(codeLists.bankoveUcty ?? []).some((ucet) =>
-        ucet.orgId === doc.orgId && ucet.active && ucet.kod.trim() === doc.ucto.bankUcetKod?.trim())
-      || doc.extracted.mena !== 'EUR'
-      || (doc.extracted.polozky ?? []).length === 0
+  const chybajuceUcto: ChybajucePole[] = [];
+  if (doc.typ === 'BV') {
+    if (!(codeLists.bankoveUcty ?? []).some((ucet) =>
+      ucet.orgId === doc.orgId && ucet.active && ucet.kod.trim() === doc.ucto.bankUcetKod?.trim())) chybajuceUcto.push('bankUcet');
+    if (doc.extracted.mena !== 'EUR') chybajuceUcto.push('bankMena');
+    if ((doc.extracted.polozky ?? []).length === 0
       || (doc.extracted.polozky ?? []).some((pohyb) =>
         !Number.isFinite(pohyb.sumaSpolu)
         || !inOrg(codeLists.predkontacie, pohyb.ucto?.predkontaciaId ?? doc.ucto.predkontaciaId)
-        || zlaBankovaAgenda(pohyb))
-    : !inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId) ||
-    !inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId) ||
-    !inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId) ||
-    (!!doc.ucto.strediskoId && !inOrg(codeLists.strediska, doc.ucto.strediskoId)) ||
-    (doc.typ === 'PD' && (!doc.ucto.pokladnaKod?.trim() || !doc.ucto.pokladnaTyp));
+        || zlaBankovaAgenda(pohyb))) chybajuceUcto.push('bankPohyby');
+  } else {
+    if (!inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId)) chybajuceUcto.push('predkontacia');
+    if (!inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId)) chybajuceUcto.push('clenenieDph');
+    if (!inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId)) chybajuceUcto.push('ciselnyRad');
+    if (!!doc.ucto.strediskoId && !inOrg(codeLists.strediska, doc.ucto.strediskoId)) chybajuceUcto.push('stredisko');
+    if (doc.typ === 'PD' && (!doc.ucto.pokladnaKod?.trim() || !doc.ucto.pokladnaTyp)) chybajuceUcto.push('pokladna');
+  }
+  const missingUcto = chybajuceUcto.length > 0;
   const vatInconsistent = doc.extracted.rozpisDph.some((r) => !isVatRowConsistent(r));
   const totalMismatch = !isTotalConsistent(doc.extracted.rozpisDph, doc.extracted.sumaSpolu);
   const organization = organizations.find(
@@ -1379,6 +1389,7 @@ export function checkApprovable(
     vatInconsistent,
     totalMismatch,
     issues,
+    chybajuceUcto,
   };
 }
 

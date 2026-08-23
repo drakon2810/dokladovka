@@ -123,3 +123,23 @@ describe('validateDocument — mzdy bez rozpisu DPH', () => {
     expect(issues).toContainEqual({ code: 'total_mismatch', field: 'sumaSpolu' });
   });
 });
+
+// Reálny prípad: AI prečítala IBAN vlastnej firmy o dve nuly dlhší. Na VYDANEJ
+// faktúre je to slepá ulička — IBAN dodávateľa sa do POHODY neposiela a editor
+// vydanej faktúry pole ani nezobrazuje, takže sa nedalo opraviť ani schváliť.
+describe('validateDocument — pokazený IBAN vlastnej firmy na vydanej faktúre', () => {
+  const zlyIban = 'SK313100000000004040272818';
+
+  it('vydanú faktúru neblokuje', () => {
+    const doklad = { ...prijataFaktura({ dodavatel: { nazov: 'AGS Bratislava', ico: '35761571', iban: zlyIban } }), typ: 'FV' } as DocumentItem;
+    doklad.extracted.odberatel = { nazov: 'KACZYNSKA Sarah' };
+    expect(validateDocument(doklad, organization)).toEqual([]);
+  });
+
+  it('na prijatej faktúre ostáva chybou — tam sa z IBAN-u platí', () => {
+    expect(validateDocument(
+      prijataFaktura({ dodavatel: { nazov: 'Dodávateľ', iban: zlyIban } }),
+      organization,
+    )).toContainEqual({ code: 'invalid_iban', field: 'dodavatel.iban' });
+  });
+});

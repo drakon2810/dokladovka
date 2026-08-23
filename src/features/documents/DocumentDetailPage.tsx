@@ -643,6 +643,18 @@ export function DocumentDetailPage() {
     [data, draft],
   );
 
+  // Konkrétne dôvody, prečo sa doklad ešte nedá schváliť — v poradí, v akom ich
+  // účtovník vie opraviť: najprv zaúčtovanie, potom údaje z dokladu. Duplicitné
+  // kódy (tá istá chyba na viacerých poliach) sa nezopakujú.
+  const dovodyBlokovania = useMemo(() => {
+    if (!approval || approval.ok) return [];
+    const dovody = [
+      ...approval.chybajuceUcto.map((pole) => t(`schvalenie.chyba.${pole}`)),
+      ...approval.issues.map((issue) => t(`schvalenie.chyba.${issue.code}`)),
+    ];
+    return [...new Set(dovody.filter(Boolean))];
+  }, [approval, t]);
+
   // ---- Zvýraznenie zdroja údajov -------------------------------------------
   // Mapa závisí len na behoch extrakcie, preto sa pri písaní do formulára
   // neprepočítava — textová vrstva PDF sa prekresľuje len keď sa naozaj zmení,
@@ -1676,14 +1688,24 @@ export function DocumentDetailPage() {
       )}
 
       <div className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-line/80 bg-surface/75 px-4 py-2 shadow-[0_-8px_24px_-16px_rgba(27,31,29,0.12)] backdrop-blur-md">
-        <div className="mr-auto flex shrink-0 items-center gap-3">
-          <Link className="btn" to={`/doklady${location.search}`}>
+        <div className="mr-auto flex min-w-0 shrink items-center gap-3">
+          <Link className="btn shrink-0" to={`/doklady${location.search}`}>
             ← {t('detail.spat')}
           </Link>
           {dirty && (
-            <span className="anim-in inline-flex items-center gap-1.5 text-xs text-amber-800">
+            <span className="anim-in inline-flex shrink-0 items-center gap-1.5 text-xs text-amber-800">
               <span className="h-[7px] w-[7px] rounded-full bg-amber-600" aria-hidden />
               {t('detail.neulozeneZmeny')}
+            </span>
+          )}
+          {/* Prečo je „Schváliť" neaktívne. Predtým to vedel len tooltip, a to
+              všeobecne — účtovník potom hľadal chybu po celom editore. */}
+          {canApproveStatus && dovodyBlokovania.length > 0 && (
+            <span className="anim-in inline-flex min-w-0 items-center gap-1.5 text-xs text-rose-800">
+              <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-rose-600" aria-hidden />
+              <span className="truncate" title={`${t('schvalenie.blokuje')} ${dovodyBlokovania.join(', ')}`}>
+                <strong className="font-semibold">{t('schvalenie.blokuje')}</strong> {dovodyBlokovania.join(', ')}
+              </span>
             </span>
           )}
         </div>
@@ -1758,7 +1780,11 @@ export function DocumentDetailPage() {
           type="button"
           className="btn btn-primary"
           disabled={busy || !canApproveStatus || !approval?.ok}
-          title={!approval?.ok ? t('detail.schvalitTooltip') : undefined}
+          title={approval?.ok
+            ? undefined
+            : dovodyBlokovania.length > 0
+              ? `${t('schvalenie.blokuje')} ${dovodyBlokovania.join(', ')}`
+              : t('detail.schvalitTooltip')}
           onClick={() => void handleApprove()}
         >
           {t('detail.schvalit')}

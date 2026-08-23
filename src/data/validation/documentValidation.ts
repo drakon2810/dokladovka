@@ -100,7 +100,9 @@ export function validateDocument(
   if (supplier.icDph && checkVatId(supplier.icDph) === 'invalid') {
     issues.push({ code: 'invalid_ic_dph', field: 'dodavatel.icDph' });
   }
-  if (supplier.iban && !validateIBAN(supplier.iban)) {
+  // Vydaná faktúra: IBAN patrí vlastnej firme, do POHODY nejde a editor ho ani
+  // nezobrazuje — blokovať schválenie na ňom by bola slepá ulička.
+  if (doc.typ !== 'FV' && supplier.iban && !validateIBAN(supplier.iban)) {
     issues.push({ code: 'invalid_iban', field: 'dodavatel.iban' });
   }
   if (!isValidIsoDate(extracted.datumVystavenia)) {

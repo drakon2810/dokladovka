@@ -177,6 +177,17 @@ describe('role a deterministic boundaries', () => {
       item.id === document.ucto.strediskoId ? { ...item, active: false } : item,
     );
     expect(checkApprovable(document, invalidCentreLists, snapshot.organizations).ok).toBe(false);
+    // Editor z toho píše, čo účtovníkovi ešte chýba — nestačí booleovské „nedá sa".
+    expect(checkApprovable(document, invalidCentreLists, snapshot.organizations).chybajuceUcto)
+      .toEqual(['stredisko']);
+    expect(checkApprovable(
+      { ...document, ucto: {} },
+      snapshot.codeLists,
+      snapshot.organizations,
+    ).chybajuceUcto).toEqual(['predkontacia', 'clenenieDph', 'ciselnyRad']);
+    // Doklad bez chyby žiadny dôvod nehlási.
+    expect(checkApprovable(document, snapshot.codeLists, snapshot.organizations))
+      .toMatchObject({ ok: true, chybajuceUcto: [] });
   });
 
   it('nová extrakcia neprepíše dáta bez explicitného použitia', async () => {
