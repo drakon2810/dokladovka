@@ -535,6 +535,20 @@ export function InvoicePanel({
   const predkConfidence = suggestion && suggestion.source !== 'none' && suggestion.predkontaciaId && suggestion.predkontaciaId === ucto.predkontaciaId
     ? Math.round(suggestion.confidence * 100) : undefined;
   const canAi = !readOnly && suggestion != null && suggestion.source !== 'none' && Boolean(suggestion.predkontaciaId);
+  /**
+   * Návrh, ktorý ešte nikto nepoužil, sa ukáže v prázdnom poli ako bledá
+   * predloha. Sám sa doklad predvyplní až od istoty 90 % — dovtedy účtovník
+   * videl len „—" a nevedel, že návrh vôbec existuje.
+   */
+  const navrhDo = (pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod'): string | undefined => {
+    if (!suggestion || suggestion.source === 'none' || ucto[pole]) return undefined;
+    const hodnota = suggestion[pole];
+    if (!hodnota) return undefined;
+    if (pole === 'clenenieKvKod') return `${hodnota} · návrh`;
+    const zoznam = pole === 'predkontaciaId' ? codeLists.predkontacie : codeLists.cleneniaDph;
+    const kod = zoznam.find((item) => item.id === hodnota)?.kod;
+    return kod ? `${kod} · návrh` : undefined;
+  };
   const applyAi = () => {
     if (!suggestion) return;
     // KV chýbajúce v návrhu sa odvodí zo sekcie KV zvoleného členenia DPH —
@@ -673,12 +687,15 @@ export function InvoicePanel({
             <span className="dk-lbl">Predkontácia</span>
             {precoWrap('predkontacia',
               <DcPick value={ucto.predkontaciaId} options={toOpts(predkontacieProDoklad)} disabled={readOnly} onMostikSync={syncMostik}
-                title={predkConfidence != null ? `Návrh AI · istota ${predkConfidence} %` : undefined}
+                placeholder={navrhDo('predkontaciaId')}
+                title={predkConfidence != null ? `Návrh AI · istota ${predkConfidence} %`
+                  : navrhDo('predkontaciaId') ? 'Návrh AI — prevezmete ho tlačidlom Automatické účtovanie' : undefined}
                 onChange={(value) => updateUcto({ predkontaciaId: value })} />)}
 
             <span className="dk-lbl">Členenie DPH</span>
             {precoWrap('dph',
               <DcPick value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly} onMostikSync={syncMostik}
+                placeholder={navrhDo('clenenieDphId')}
                 onChange={(value) => {
                   const picked = codeLists.cleneniaDph.find((item) => item.id === value);
                   updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
@@ -686,7 +703,8 @@ export function InvoicePanel({
 
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',
-              <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => updateUcto({ clenenieKvKod: value })} />)}
+              <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} placeholder={navrhDo('clenenieKvKod')}
+                onChange={(value) => updateUcto({ clenenieKvKod: value })} />)}
           </div>
         </div>
 

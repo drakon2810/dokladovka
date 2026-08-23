@@ -3,6 +3,7 @@ import {
   extractionResultSchema,
   type ExtractionResult,
 } from './contract.js';
+import { splitPostalAddress } from '../pohodaXml.js';
 
 export type DocumentType = 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD';
 
@@ -384,9 +385,18 @@ export function validateNormalizedExtraction(
   // identifikátory poznáme — chybne prečítané IČO/DIČ/IČ DPH odberateľa z faktúry
   // je len šum, nemá blokovať schválenie (varovanie). Na vydanej faktúre (FV) je
   // odberateľ zákazník a jeho identifikátory sú podstatné → blokujúca chyba.
+  // Zahraničný zákazník (americký, ázijský) nemá slovenské IČO/DIČ — krajinu
+  // poznáme z adresy, takže formátové kontroly naň neuplatňujeme rovnako, ako
+  // to už platí pre zahraničného dodávateľa.
+  const buyerForeign = foreignVatLike(buyer.icDph) || foreignVatLike(buyer.dic)
+    || (splitPostalAddress(buyer.adresa).country ?? 'SK') !== 'SK';
   const buyerSeverity: 'warning' | 'error' = normalized.documentType === 'FV' ? 'error' : 'warning';
-  if (buyerIco && !/^\d{8}$/.test(buyerIco)) issues.push({ code: 'invalid_buyer_ico', field: 'odberatel.ico', severity: buyerSeverity, message: 'IČO odberateľa nemá 8 číslic' });
-  if (buyer.dic && !validDic(buyer.dic)) issues.push({ code: 'invalid_buyer_dic', field: 'odberatel.dic', severity: buyerSeverity, message: 'DIČ odberateľa nemá platný formát' });
+  // Slovenské formáty IČO/DIČ na zahraničného zákazníka neplatia. IČ DPH sa
+  // kontroluje formátom jeho vlastnej krajiny (checkVatId), takže tam blokujúca
+  // chyba ostáva aj zahraničnému odberateľovi.
+  const buyerSkSeverity: 'warning' | 'error' = buyerForeign ? 'warning' : buyerSeverity;
+  if (buyerIco && !/^\d{8}$/.test(buyerIco)) issues.push({ code: 'invalid_buyer_ico', field: 'odberatel.ico', severity: buyerSkSeverity, message: 'IČO odberateľa nemá 8 číslic' });
+  if (buyer.dic && !validDic(buyer.dic)) issues.push({ code: 'invalid_buyer_dic', field: 'odberatel.dic', severity: buyerSkSeverity, message: 'DIČ odberateľa nemá platný formát' });
   if (buyer.icDph) {
     const buyerVat = checkVatId(buyer.icDph);
     if (buyerVat === 'invalid') {

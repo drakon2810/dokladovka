@@ -9,6 +9,7 @@ import {
   validateIBAN,
   validateICO,
 } from '../../lib/validate';
+import { splitPostalAddress } from '../xml/pohodaDataPack';
 
 export type DocumentValidationCode =
   | 'supplier_name_required'
@@ -71,6 +72,23 @@ export function parseDecimalString(value: string | undefined): number | undefine
 }
 
 /** Deterministická kontrola má vždy prioritu pred AI confidence. */
+/**
+ * Zahraničná strana dokladu. Okrem daňového identifikátora s kódom krajiny
+ * (ATU…, DE…) sa berie aj krajina z adresy: americký zákazník má „Client VAT
+ * No." bez prefixu (2973456) a slovenský formát DIČ mu blokoval schválenie,
+ * hoci sa naň nikdy vzťahovať nemal.
+ */
+export function jeZahranicnaStrana(strana?: {
+  ico?: string; dic?: string; icDph?: string; adresa?: string; krajina?: string;
+}): boolean {
+  if (!strana) return false;
+  if (isForeignSupplier({ ico: strana.ico, dic: strana.dic, icDph: strana.icDph })) return true;
+  // Krajina LEN z adresy: odvodenie z prefixu daňového čísla by z pokazeného
+  // DIČ „xx" spravilo krajinu „XX" a chyba by prešla ako zahraničná strana.
+  const krajina = strana.krajina ?? splitPostalAddress(strana.adresa).country;
+  return Boolean(krajina && krajina !== 'SK');
+}
+
 export function validateDocument(
   doc: DocumentItem,
   organization?: Organization,
@@ -88,7 +106,7 @@ export function validateDocument(
   }
   // Zahraničný dodávateľ nemá slovenské IČO/DIČ — formátové kontroly by falošne
   // blokovali schválenie; IČ DPH sa aj tak overuje cez checkVatId nižšie.
-  const foreignSupplier = isForeignSupplier(supplier);
+  const foreignSupplier = jeZahranicnaStrana(supplier);
   if (!foreignSupplier && supplier.ico && !validateICO(supplier.ico)) {
     issues.push({ code: 'invalid_ico', field: 'dodavatel.ico' });
   }
@@ -204,7 +222,7 @@ export function validateDocument(
   // Zahraničný odberateľ (rakúsky, nemecký zákazník) nemá slovenské IČO/DIČ —
   // formátové kontroly by mu blokovali schválenie rovnako, ako to už roky
   // neplatí pre zahraničného dodávateľa.
-  const foreignBuyer = isForeignSupplier({ dic: buyer?.dic, icDph: buyer?.icDph });
+  const foreignBuyer = jeZahranicnaStrana(buyer);
   if (!foreignBuyer && buyer?.ico && !validateICO(buyer.ico)) {
     issues.push({ code: 'invalid_ico', field: 'odberatel.ico' });
   }

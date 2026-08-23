@@ -477,6 +477,8 @@ export const sk = {
   // Prečo sa doklad nedá schváliť — konkrétne, nie všeobecne. Bez toho účtovník
   // hľadal chybu po celom editore (typicky IBAN, ktorý AI prečítala o číslicu dlhší).
   'schvalenie.blokuje': 'Na schválenie ešte treba:',
+  'schvalenie.strana.dodavatel': ' dodávateľa',
+  'schvalenie.strana.odberatel': ' odberateľa',
   'schvalenie.chyba.predkontacia': 'vybrať predkontáciu',
   'schvalenie.chyba.clenenieDph': 'vybrať členenie DPH',
   'schvalenie.chyba.ciselnyRad': 'vybrať číselný rad',
@@ -488,10 +490,10 @@ export const sk = {
   'schvalenie.chyba.supplier_name_required': 'doplniť názov dodávateľa',
   'schvalenie.chyba.buyer_name_required': 'doplniť názov odberateľa',
   'schvalenie.chyba.invoice_number_required': 'doplniť číslo dokladu',
-  'schvalenie.chyba.invalid_ico': 'opraviť IČO dodávateľa',
-  'schvalenie.chyba.invalid_dic': 'opraviť DIČ dodávateľa',
-  'schvalenie.chyba.invalid_ic_dph': 'opraviť IČ DPH dodávateľa',
-  'schvalenie.chyba.invalid_iban': 'opraviť IBAN dodávateľa',
+  'schvalenie.chyba.invalid_ico': 'opraviť IČO',
+  'schvalenie.chyba.invalid_dic': 'opraviť DIČ',
+  'schvalenie.chyba.invalid_ic_dph': 'opraviť IČ DPH',
+  'schvalenie.chyba.invalid_iban': 'opraviť IBAN',
   'schvalenie.chyba.invalid_issue_date': 'opraviť dátum vystavenia',
   'schvalenie.chyba.invalid_tax_date': 'opraviť dátum daňovej povinnosti',
   'schvalenie.chyba.invalid_due_date': 'opraviť dátum splatnosti',

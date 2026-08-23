@@ -650,7 +650,15 @@ export function DocumentDetailPage() {
     if (!approval || approval.ok) return [];
     const dovody = [
       ...approval.chybajuceUcto.map((pole) => t(`schvalenie.chyba.${pole}`)),
-      ...approval.issues.map((issue) => t(`schvalenie.chyba.${issue.code}`)),
+      // IČO/DIČ/IČ DPH má doklad na oboch stranách — bez mena strany účtovník
+      // hľadal chybu u dodávateľa, hoci bola u odberateľa.
+      ...approval.issues.map((issue) => {
+        const dovod = t(`schvalenie.chyba.${issue.code}`);
+        const strana = issue.field?.startsWith('odberatel.')
+          ? t('schvalenie.strana.odberatel')
+          : issue.field?.startsWith('dodavatel.') ? t('schvalenie.strana.dodavatel') : '';
+        return `${dovod}${strana}`;
+      }),
     ];
     return [...new Set(dovody.filter(Boolean))];
   }, [approval, t]);

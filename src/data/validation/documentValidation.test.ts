@@ -143,3 +143,30 @@ describe('validateDocument — pokazený IBAN vlastnej firmy na vydanej faktúre
     )).toContainEqual({ code: 'invalid_iban', field: 'dodavatel.iban' });
   });
 });
+
+// Reálny prípad: americký zákazník na vydanej faktúre má „Client VAT No."
+// 2973456 — bez kódu krajiny, takže slovenský formát DIČ ho vyhlásil za chybu
+// a faktúra sa nedala schváliť. Krajinu pritom poznáme z adresy.
+describe('validateDocument — zahraničný zákazník bez slovenského DIČ', () => {
+  const zahranicny = (extra: Record<string, unknown>) => ({
+    ...prijataFaktura({
+      dodavatel: { nazov: 'AGS Bratislava', ico: '35761571' },
+      odberatel: { nazov: 'RAINIER', dic: '2973456', ...extra },
+    }),
+    typ: 'FV',
+  } as DocumentItem);
+
+  it('krajina z adresy zbaví zákazníka slovenských formátových kontrol', () => {
+    expect(validateDocument(
+      zahranicny({ adresa: '9425, 35th Avenue Northeast, Seattle, 98115, Washington, United States' }),
+      organization,
+    )).toEqual([]);
+  });
+
+  it('slovenský zákazník s pokazeným DIČ ostáva chybou', () => {
+    expect(validateDocument(
+      zahranicny({ adresa: 'Hlavná 1, 811 07 Bratislava, Slovakia' }),
+      organization,
+    )).toContainEqual({ code: 'invalid_dic', field: 'odberatel.dic' });
+  });
+});
