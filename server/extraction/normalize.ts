@@ -87,6 +87,32 @@ function confidence(fieldConfidence: Record<string, number>): number {
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10_000) / 10_000;
 }
 
+/**
+ * Rozpis DPH dopočítaný z položiek: sadzby sa zoskupia a sumy sčítajú. Základ a
+ * daň sa berú z položky, a keď chýbajú, dopočítajú sa zo sumy s DPH a sadzby —
+ * rovnako ako to robí editor pri prepnutí „počíta sa z položiek".
+ */
+function rozpisZPoloziek(
+  polozky: Array<{ sadzbaDph?: number; sumaBezDph?: number; sumaDph?: number; sumaSpolu?: number }>,
+): Array<{ sadzba: number; zaklad: number; dph: number }> {
+  const podlaSadzby = new Map<number, { sadzba: number; zaklad: number; dph: number }>();
+  for (const polozka of polozky) {
+    const sadzba = polozka.sadzbaDph;
+    if (sadzba === undefined || !isValidVatRate(sadzba)) continue;
+    const spolu = polozka.sumaSpolu;
+    const zaklad = polozka.sumaBezDph
+      ?? (spolu === undefined ? undefined : round2(spolu / (1 + sadzba / 100)));
+    if (zaklad === undefined) continue;
+    const dph = polozka.sumaDph
+      ?? (spolu === undefined ? round2(zaklad * sadzba / 100) : round2(spolu - zaklad));
+    const riadok = podlaSadzby.get(sadzba) ?? { sadzba, zaklad: 0, dph: 0 };
+    riadok.zaklad = round2(riadok.zaklad + zaklad);
+    riadok.dph = round2(riadok.dph + dph);
+    podlaSadzby.set(sadzba, riadok);
+  }
+  return [...podlaSadzby.values()].sort((left, right) => right.sadzba - left.sadzba);
+}
+
 export function normalizeExtractionResult(
   raw: unknown,
   documentId: string,
@@ -103,6 +129,41 @@ export function normalizeExtractionResult(
       .replace(/^lineItems/, 'polozky'),
     value,
   ]));
+
+  const polozky = result.lineItems.map((item, index) => {
+    const rate = Number(item.vatRate?.replace(',', '.'));
+    return {
+      id: `${documentId}-li-${index}`,
+      popis: item.description ?? '',
+      mnozstvo: parseDecimal(item.quantity),
+      jednotka: item.unit,
+      jednotkovaCenaBezDph: parseDecimal(item.unitPriceWithoutVat),
+      sadzbaDph: isValidVatRate(rate) ? rate : undefined,
+      sumaBezDph: parseDecimal(item.amountWithoutVat),
+      sumaDph: parseDecimal(item.vatAmount),
+      sumaSpolu: parseDecimal(item.amountTotal),
+      // Bankový pohyb (BV): dátum platby, protistrana a symboly.
+      datumPlatby: item.paymentDate,
+      protistrana: item.counterpartyName,
+      protiucetIban: item.counterpartyIban,
+      vs: item.variableSymbol,
+      ks: item.constantSymbol,
+      ss: item.specificSymbol,
+    };
+  });
+
+  const rozpisZOdpovede = result.vatBreakdown.flatMap((row) => {
+    const sadzba = Number(row.vatRate.replace(',', '.'));
+    const zaklad = parseDecimal(row.base);
+    const dph = parseDecimal(row.vat);
+    return isValidVatRate(sadzba) && zaklad !== undefined && dph !== undefined
+      ? [{ sadzba, zaklad: round2(zaklad), dph: round2(dph) }]
+      : [];
+  });
+  // Model občas rozpis DPH vôbec nevráti, hoci položky sadzbu aj daň nesú.
+  // Prázdny rozpis blokuje schválenie a do POHODY by odišli nulové základy —
+  // preto sa dopočíta z položiek. Vlastný rozpis z dokladu má vždy prednosť.
+  const rozpisDph = rozpisZOdpovede.length > 0 ? rozpisZOdpovede : rozpisZPoloziek(polozky);
 
   return {
     // INY sem dorazí len pri opakovanej extrakcii už existujúceho dokladu —
@@ -137,36 +198,9 @@ export function normalizeExtractionResult(
       // AI zhrnutie plnenia — predvyplní „Text dokladu", ktorý ide do POHODY
       // ako text účtovného zápisu; účtovník ho môže prepísať.
       textPolozky: result.documentSummary,
-      rozpisDph: result.vatBreakdown.flatMap((row) => {
-        const sadzba = Number(row.vatRate.replace(',', '.'));
-        const zaklad = parseDecimal(row.base);
-        const dph = parseDecimal(row.vat);
-        return isValidVatRate(sadzba) && zaklad !== undefined && dph !== undefined
-          ? [{ sadzba, zaklad: round2(zaklad), dph: round2(dph) }]
-          : [];
-      }),
+      rozpisDph,
       sumaSpolu: totalAmount,
-      polozky: result.lineItems.map((item, index) => {
-        const rate = Number(item.vatRate?.replace(',', '.'));
-        return {
-          id: `${documentId}-li-${index}`,
-          popis: item.description ?? '',
-          mnozstvo: parseDecimal(item.quantity),
-          jednotka: item.unit,
-          jednotkovaCenaBezDph: parseDecimal(item.unitPriceWithoutVat),
-          sadzbaDph: isValidVatRate(rate) ? rate : undefined,
-          sumaBezDph: parseDecimal(item.amountWithoutVat),
-          sumaDph: parseDecimal(item.vatAmount),
-          sumaSpolu: parseDecimal(item.amountTotal),
-          // Bankový pohyb (BV): dátum platby, protistrana a symboly.
-          datumPlatby: item.paymentDate,
-          protistrana: item.counterpartyName,
-          protiucetIban: item.counterpartyIban,
-          vs: item.variableSymbol,
-          ks: item.constantSymbol,
-          ss: item.specificSymbol,
-        };
-      }),
+      polozky,
     },
     fieldConfidence: mappedConfidence,
     confidence: confidence(result.fieldConfidence),

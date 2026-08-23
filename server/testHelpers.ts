@@ -43,6 +43,7 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     extractionMaxFileBytes: 20 * 1024 * 1024,
     extractionMaxPdfPages: 50,
     workerPollIntervalMs: 10,
+    workerConcurrency: 1,
     objectStorage: {
       mode: 'memory',
       region: 'eu-central-1',

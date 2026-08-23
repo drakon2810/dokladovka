@@ -61,6 +61,8 @@ export interface ServerConfig {
   extractionMaxFileBytes: number;
   extractionMaxPdfPages: number;
   workerPollIntervalMs: number;
+  /** Koľko dokladov spracúva worker naraz. Fronta to znesie (SKIP LOCKED). */
+  workerConcurrency: number;
   objectStorage: {
     mode: 'memory' | 'filesystem' | 's3';
     endpoint?: string;
@@ -201,6 +203,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     extractionMaxFileBytes: positiveInteger(env.EXTRACTION_MAX_FILE_BYTES, 20 * 1024 * 1024),
     extractionMaxPdfPages: positiveInteger(env.EXTRACTION_MAX_PDF_PAGES, 50),
     workerPollIntervalMs: positiveInteger(env.WORKER_POLL_INTERVAL_MS, 1500),
+    // Extrakcia jedného dokladu trvá desiatky sekúnd a je to čakanie na OpenAI,
+    // nie práca procesora — desať naraz nahratých faktúr by sériovo trvalo
+    // takmer desať minút. Strop 16 chráni pred preklepom v premennej.
+    workerConcurrency: Math.min(positiveInteger(env.WORKER_CONCURRENCY, 1), 16),
     objectStorage: {
       mode: storageMode,
       endpoint: env.OBJECT_STORAGE_ENDPOINT?.trim() || undefined,

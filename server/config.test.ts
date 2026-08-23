@@ -29,3 +29,25 @@ describe('openai.reasoningEffort', () => {
     expect(effortOf('turbo')).toBe('low');
   });
 });
+
+// Súbežnosť workera: nesprávna hodnota v premennej nesmie zhodiť štart ani
+// pustiť stovky súbežných extrakcií.
+describe('workerConcurrency', () => {
+  const pocet = (value?: string) =>
+    loadConfig({ ...base, ...(value === undefined ? {} : { WORKER_CONCURRENCY: value }) }).workerConcurrency;
+
+  it('predvolene beží po jednom — súbežnosť sa zapína vedome', () => {
+    expect(pocet()).toBe(1);
+  });
+
+  it('rešpektuje nastavenú hodnotu', () => {
+    expect(pocet('4')).toBe(4);
+  });
+
+  it('nezmysel aj preklep stiahne na bezpečnú hodnotu', () => {
+    expect(pocet('0')).toBe(1);
+    expect(pocet('-3')).toBe(1);
+    expect(pocet('veľa')).toBe(1);
+    expect(pocet('400')).toBe(16);
+  });
+});

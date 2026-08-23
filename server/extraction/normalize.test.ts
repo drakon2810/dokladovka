@@ -246,3 +246,35 @@ describe('normalizácia SK/CZ faktúr', () => {
       .toContain('historical_or_unknown_vat_rate');
   });
 });
+
+// Reálny prípad z vydanej faktúry: model vrátil položky so sadzbou aj daňou,
+// ale rozpis DPH nechal prázdny. Doklad sa potom nedal schváliť a do POHODY by
+// odišiel s nulovým základom — rozpis sa preto dopočíta z položiek.
+describe('rozpis DPH sa dopočíta z položiek', () => {
+  const doklad = (vatBreakdown: Array<{ vatRate: string; base: string; vat: string }>) =>
+    normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FV',
+      supplier: { nazov: 'AGS Bratislava', ico: '35761571' },
+      buyer: { nazov: 'KACZYNSKA Sarah' }, invoiceNumber: '260704300120',
+      issueDate: '2026-07-12', taxDate: '2026-07-12', dueDate: '2026-07-12', currency: 'EUR',
+      lineItems: [
+        { description: 'Insurance', vatRate: '23', amountWithoutVat: '19.50', vatAmount: '4.49', amountTotal: '23.99' },
+        { description: 'Door to door removal service', vatRate: '23', amountWithoutVat: '1850.00', vatAmount: '425.50', amountTotal: '2275.50' },
+      ],
+      vatBreakdown, totalAmount: '2299.49',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-fv', '2026-07-12');
+
+  it('prázdny rozpis sa zloží zo sadzieb položiek', () => {
+    expect(doklad([]).extracted.rozpisDph).toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
+  });
+
+  it('rozpis z dokladu má prednosť pred dopočtom', () => {
+    expect(doklad([{ vatRate: '23', base: '1869.50', vat: '429.99' }]).extracted.rozpisDph)
+      .toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
+    // Doklad, kde sa rozpis a položky rozchádzajú, si ponechá svoj rozpis —
+    // rozdiel má vyriešiť účtovník, nie tichý prepočet.
+    expect(doklad([{ vatRate: '19', base: '1000', vat: '190' }]).extracted.rozpisDph)
+      .toEqual([{ sadzba: 19, zaklad: 1000, dph: 190 }]);
+  });
+});
