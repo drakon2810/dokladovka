@@ -73,6 +73,23 @@ function krajinaStrany(entity: { krajina?: string; adresa?: string } | undefined
   return isoKrajina(entity?.krajina) ?? splitPostalAddress(entity?.adresa).country;
 }
 
+/**
+ * Slovo pred samotným číslom („TVA FR30300823390", „VAT DE811907980") extrakcia
+ * občas zoberie ako súčasť hodnoty. Predponu odstránime len vtedy, keď je zvyšok
+ * platné IČ DPH — inak by sme z čísla ukrojili kus.
+ */
+function bezSlovnejPredpony(value: string | undefined): string | undefined {
+  if (!value) return value;
+  const cisty = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (checkVatId(cisty) === 'valid') return value;
+  for (const predpona of ['TVA', 'VAT', 'MWST', 'USTIDNR', 'UST', 'IVA', 'BTW', 'DPH', 'NO']) {
+    if (cisty.startsWith(predpona) && checkVatId(cisty.slice(predpona.length)) === 'valid') {
+      return cisty.slice(predpona.length);
+    }
+  }
+  return value;
+}
+
 function bezMedzier(value?: string): string | undefined {
   const clean = value?.replace(/\s+/g, '').trim();
   return clean ? clean : undefined;
@@ -92,7 +109,7 @@ function opravIdentifikatory<T extends {
 }>(entity: T): T {
   const ico = bezMedzier(entity.ico);
   let dic = bezMedzier(entity.dic);
-  let icDph = bezMedzier(entity.icDph);
+  let icDph = bezSlovnejPredpony(bezMedzier(entity.icDph));
   if (dic && icDph && dic.toUpperCase() === icDph.toUpperCase()) dic = undefined;
   // Zahraničná strana slovenské DIČ nemá — čo z faktúry prišlo ako jej daňové
   // číslo (izraelské „Client VAT No.: 511149775"), je jej IČ DPH.
@@ -361,14 +378,13 @@ function checkVatId(value: unknown): VatIdCheck {
 }
 
 /**
- * Daňové číslo mimo EÚ (izraelské „511149775") nemá dvojpísmenový kód krajiny,
- * takže formátová kontrola ho vyhlási za nezmysel. Zahraničnej strane preto
- * blokovať netreba — do kontrolného výkazu ani do VIES nejde. Chybou ostáva
- * číslo so ZNÁMYM kódom krajiny a zlým formátom („SK123", „ATU1").
+ * Formát IČ DPH blokuje schválenie LEN slovenskej strane — zahraničné daňové
+ * čísla sú príliš rôznorodé („511149775" bez kódu krajiny, „TVAFR30300823390"
+ * so slovom TVA navyše). Zahraničnej strane ostáva len upozornenie.
  */
 function chybneIcDph(icDph: unknown, zahranicna: boolean): boolean {
-  if (checkVatId(icDph) !== 'invalid') return false;
-  return /^[A-Z]{2}/.test(normalizedIdentifier(icDph)) || !zahranicna;
+  if (zahranicna) return false;
+  return checkVatId(icDph) === 'invalid';
 }
 
 function validIban(value: string): boolean {
@@ -410,8 +426,9 @@ export function validateNormalizedExtraction(
     const supplierVat = checkVatId(supplier.icDph);
     if (chybneIcDph(supplier.icDph, (krajinaStrany(supplier) ?? 'SK') !== 'SK')) {
       issues.push({ code: 'invalid_supplier_vat_id', field: 'dodavatel.icDph', severity: 'error', message: 'IČ DPH dodávateľa nemá platný formát' });
-    } else if (supplierVat === 'unknown_country') {
-      issues.push({ code: 'unverified_supplier_vat_id', field: 'dodavatel.icDph', severity: 'warning', message: 'IČ DPH dodávateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
+    } else if (supplierVat !== 'valid') {
+      // Zahraničné číslo, ktoré formát nepozná: neblokuje, ale účtovník ho má vidieť.
+      issues.push({ code: 'unverified_supplier_vat_id', field: 'dodavatel.icDph', severity: 'warning', message: 'IČ DPH dodávateľa sa nedá overiť formátom — skontrolujte podľa originálu' });
     }
   }
   // Zahraničný dodávateľ nemá slovenské 8-miestne IČO ani SK/CZ DIČ — formálne
@@ -462,7 +479,7 @@ export function validateNormalizedExtraction(
     const buyerVat = checkVatId(buyer.icDph);
     if (chybneIcDph(buyer.icDph, buyerForeign)) {
       issues.push({ code: 'invalid_buyer_vat_id', field: 'odberatel.icDph', severity: buyerSeverity, message: 'IČ DPH odberateľa nemá platný formát' });
-    } else if (buyerVat === 'unknown_country') {
+    } else if (buyerVat !== 'valid') {
       issues.push({ code: 'unverified_buyer_vat_id', field: 'odberatel.icDph', severity: 'warning', message: 'IČ DPH odberateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
     }
   }

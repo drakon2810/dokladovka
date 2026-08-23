@@ -123,7 +123,7 @@ describe('normalizácia SK/CZ faktúr', () => {
       .toEqual([expect.objectContaining({ code: 'unverified_supplier_vat_id', severity: 'warning' })]);
   });
 
-  it('IČ DPH odberateľa akceptuje zahraničný formát a chybný blokuje', () => {
+  it('IČ DPH odberateľa akceptuje zahraničný formát; chybný len upozorní', () => {
     const build = (icDph: string) => normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FV',
       supplier: { nazov: 'Naša firma', ico: '87654321', icDph: 'SK2020254170' },
@@ -133,8 +133,10 @@ describe('normalizácia SK/CZ faktúr', () => {
       fieldConfidence: {}, evidence: {}, warnings: [],
     }, 'doc-buyer-vat', '2026-05-05');
     expect(validateNormalizedExtraction(build('ATU42597604'), { ico: '87654321' })).toEqual([]);
+    // Zahraničné číslo schválenie neblokuje ani pri zlom formáte — formátov je
+    // priveľa na to, aby zoznam rozhodoval za účtovníka.
     expect(validateNormalizedExtraction(build('ATU4259'), { ico: '87654321' }))
-      .toEqual([expect.objectContaining({ code: 'invalid_buyer_vat_id', severity: 'error' })]);
+      .toEqual([expect.objectContaining({ code: 'unverified_buyer_vat_id', severity: 'warning' })]);
   });
 
   it('položky bez DPH so sadzbou sa dopočítajú a neblokujú súčet', () => {
@@ -365,10 +367,11 @@ describe('mimoeurópska strana', () => {
       .filter((issue) => issue.severity === 'error')).toEqual([]);
   });
 
-  it('pokazené IČ DPH so ZNÁMYM kódom krajiny ostáva chybou aj cudzincovi', () => {
+  it('pokazené IČ DPH cudzinca je upozornenie, schválenie nezastaví', () => {
     const normalized = odberatel({ icDph: 'ATU1', adresa: 'Wagramer Str. 5, 1220 Vienna, Austria' });
-    expect(validateNormalizedExtraction(normalized, { ico: '35761571' }))
-      .toContainEqual(expect.objectContaining({ code: 'invalid_buyer_vat_id', severity: 'error' }));
+    const issues = validateNormalizedExtraction(normalized, { ico: '35761571' });
+    expect(issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'unverified_buyer_vat_id', severity: 'warning' }));
   });
 });
 
@@ -428,5 +431,42 @@ describe('adresa a kontroly podľa krajiny od modelu', () => {
   it('thajské VAT number neblokuje schválenie', () => {
     expect(validateNormalizedExtraction(doklad(thajsky), { ico: '35761571' })
       .filter((issue) => issue.severity === 'error')).toEqual([]);
+  });
+});
+
+// Francúzsky zákazník: model zobral do IČ DPH aj slovo „TVA" a formát ho
+// vyhlásil za chybu, takže sa faktúra nedala schváliť.
+describe('IČ DPH zahraničnej strany neblokuje', () => {
+  const doklad = (buyer: Record<string, string>) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FV',
+    supplier: { nazov: 'AGS Bratislava', ico: '35761571', icDph: 'SK2020254170' },
+    buyer: { nazov: 'AGS Rhône-Alpes-Auvergne', ...buyer }, invoiceNumber: '260704300135',
+    issueDate: '2026-07-30', taxDate: '2026-07-30', dueDate: '2026-08-29', currency: 'EUR',
+    lineItems: [], vatBreakdown: [], totalAmount: '4360',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-fr', '2026-07-30');
+
+  it('slovo TVA pred platným číslom sa odstráni', () => {
+    expect((doklad({ icDph: 'TVAFR30300823390', krajina: 'FR' }).extracted as { odberatel: Record<string, string> }).odberatel)
+      .toMatchObject({ icDph: 'FR30300823390' });
+  });
+
+  it('nerozpoznaný zahraničný formát je len upozornenie, nie blokácia', () => {
+    const issues = validateNormalizedExtraction(doklad({ icDph: 'XYZ-123/456', krajina: 'FR' }), { ico: '35761571' });
+    expect(issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'unverified_buyer_vat_id', severity: 'warning' }));
+  });
+
+  it('slovenskej strane pokazené IČ DPH schválenie naďalej blokuje', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'SK Dodávateľ', ico: '35761571', icDph: 'SK123', krajina: 'SK' },
+      buyer: { ico: '87654321' }, invoiceNumber: 'F-1',
+      issueDate: '2026-07-30', taxDate: '2026-07-30', dueDate: '2026-08-29', currency: 'EUR',
+      lineItems: [], vatBreakdown: [], totalAmount: '100',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-sk3', '2026-07-30');
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' }))
+      .toContainEqual(expect.objectContaining({ code: 'invalid_supplier_vat_id', severity: 'error' }));
   });
 });

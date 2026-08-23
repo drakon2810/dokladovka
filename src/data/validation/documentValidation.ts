@@ -90,17 +90,17 @@ export function jeZahranicnaStrana(strana?: {
 }
 
 /**
- * Daňové číslo mimo EÚ (izraelské „511149775", americké) nemá dvojpísmenový kód
- * krajiny, takže formátová kontrola ho vyhlási za nezmysel. Zahraničnej strane
- * schválenie blokovať nesmie — do kontrolného výkazu ani do VIES nejde. Chybu
- * naďalej hlási číslo so ZNÁMYM kódom krajiny a zlým formátom („SK123", „ATU1").
+ * Formát IČ DPH blokuje schválenie LEN slovenskej strane. Zahraničné daňové
+ * čísla sú príliš rôznorodé na to, aby ich zoznam formátov pokryl: izraelské
+ * „511149775" nemá kód krajiny vôbec, francúzske prišlo ako „TVAFR30300823390"
+ * (model zobral aj slovo TVA). Účtovník hodnotu vidí a opraví ju sám; do
+ * kontrolného výkazu ide iba slovenský doklad.
  */
-function chybneIcDph(strana: { icDph?: string; dic?: string; adresa?: string } | undefined): boolean {
+function chybneIcDph(strana: { icDph?: string; dic?: string; adresa?: string; krajina?: string } | undefined): boolean {
   const icDph = strana?.icDph;
   if (!icDph) return false;
-  if (checkVatId(icDph) !== 'invalid') return false;
-  const maKodKrajiny = /^[A-Za-z]{2}/.test(icDph.replace(/[^A-Za-z0-9]/g, ''));
-  return maKodKrajiny || !jeZahranicnaStrana(strana);
+  if (jeZahranicnaStrana(strana)) return false;
+  return checkVatId(icDph) === 'invalid';
 }
 
 export function validateDocument(
