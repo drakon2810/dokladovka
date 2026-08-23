@@ -1159,9 +1159,17 @@ export async function maybeAiAccountingSuggestion(
         supplierName: normalizeName(documentContext.supplierName) || undefined,
       };
   const pravidlo = await zhodnePravidla(database, input, protistrana, lineText);
+  // Čo na doklade UŽ je: kódy, ktoré určila extrakcia podľa pravidiel účtovníka
+  // (napr. „§ 48 ods. 8 → UNodpS"), prípadne to, čo účtovník vyplnil sám.
+  // Model text s odkazom na paragraf nevidí — v prompte sú len popisy položiek —
+  // takže by rozhodnutie z pravidla prebil väčšinovým vzorom z denníka.
+  const naDoklade = (await database.query<{ accounting: Record<string, string | undefined> } & Record<string, unknown>>(
+    'SELECT accounting FROM documents WHERE id=$1 AND tenant_id=$2',
+    [input.documentId, input.tenantId],
+  )).rows[0]?.accounting ?? {};
   const validated = await onlyActiveIds(database, input, {
-    predkontacia_id: pravidlo.candidate.predkontacia_id ?? parsed.predkontaciaId ?? undefined,
-    clenenie_dph_id: pravidlo.candidate.clenenie_dph_id ?? parsed.clenenieDphId ?? undefined,
+    predkontacia_id: pravidlo.candidate.predkontacia_id ?? naDoklade.predkontaciaId ?? parsed.predkontaciaId ?? undefined,
+    clenenie_dph_id: pravidlo.candidate.clenenie_dph_id ?? naDoklade.clenenieDphId ?? parsed.clenenieDphId ?? undefined,
     // Rad z pravidla uctovnika je zavazny aj tu.
     ciselny_rad_id: pravidlo.candidate.ciselny_rad_id ?? parsed.ciselnyRadId ?? undefined,
     // Stredisko model nevyberá — ostáva z pravidla alebo z deterministického návrhu.
@@ -1180,7 +1188,8 @@ export async function maybeAiAccountingSuggestion(
   const kvKod = validated.clenenie_dph_id
     ? platnyKvKod(await kvPreClenenie(
         database, input.tenantId, validated.clenenie_dph_id,
-        platnyKvKod(pravidlo.kvKod) ?? platnyKvKod(parsed.clenenieKvKod ?? undefined)
+        platnyKvKod(pravidlo.kvKod) ?? platnyKvKod(naDoklade.clenenieKvKod)
+          ?? platnyKvKod(parsed.clenenieKvKod ?? undefined)
           ?? platnyKvKod(kategoriaZhoda?.clenenie_kv_kod),
       ))
     : undefined;

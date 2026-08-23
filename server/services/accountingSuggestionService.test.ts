@@ -719,6 +719,52 @@ describe('accounting suggestions', () => {
     });
   }, 90_000);
 
+  it('členenie určené pravidlom pri čítaní dokladu AI neprepíše', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const zPravidla = randomUUID();
+    const zDennika = randomUUID();
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '602100 sťah.-zahr.'],
+      [zPravidla, 'cleneniaDph', 'UNodpS'], [zDennika, 'cleneniaDph', 'UDzahr'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // Extrakcia prečítala na doklade „§ 48 ods. 8" a podľa pravidla účtovníka
+    // uložila UNodpS. Model tento text v prompte nemá (v položke je len
+    // „Standard destination service"), takže ide za väčšinou v denníku.
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','na_kontrole','ready_for_review',$4::jsonb,$5::jsonb,2950,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'AGS' }, odberatel: { nazov: 'RAINIER' }, polozky: [{ popis: 'Standard destination service' }] }),
+        JSON.stringify({ clenenieDphId: zPravidla, clenenieKvKod: 'KN' })],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved(
+        { clenenieKvKod: 'A1', predkontaciaId: pred, clenenieDphId: zDennika, ciselnyRadId: null, confidence: 0.8, reason: 'Podľa denníka' },
+      )),
+    };
+    const context = {
+      documentType: 'FV', supplierName: 'AGS', odberatel: { nazov: 'RAINIER' },
+      totalAmount: 2950, currency: 'EUR', lineDescriptions: ['Standard destination service'],
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AGS' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    // Členenie aj KV ostávajú z pravidla; predkontáciu, ktorú doklad nemal, doplní model.
+    expect(navrh).toMatchObject({ clenenie_dph_id: zPravidla, clenenie_kv_kod: 'KN', predkontacia_id: pred });
+  }, 90_000);
+
   it('DPH kontrola po AI zahodí neplatiteľské odpočtové členenie mimo zúženej ponuky', async () => {
     const database = await createTestDatabase();
     databases.push(database);
