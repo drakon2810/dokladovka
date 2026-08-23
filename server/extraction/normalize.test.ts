@@ -400,3 +400,33 @@ describe('krajina strany od modelu', () => {
     expect(izraelsky.dic).toBeUndefined();
   });
 });
+
+// Thajský zákazník: rozklad textu dal do mesta „Thailand" a serverová kontrola
+// jeho VAT number blokovala, hoci krajinu (TH) model určil správne.
+describe('adresa a kontroly podľa krajiny od modelu', () => {
+  const doklad = (buyer: Record<string, string>) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FV',
+    supplier: { nazov: 'AGS Bratislava', ico: '35761571', icDph: 'SK2020254170' },
+    buyer: { nazov: 'AGS Four Winds International Moving Limited', ...buyer },
+    invoiceNumber: '260704300132',
+    issueDate: '2026-07-20', taxDate: '2026-07-20', dueDate: '2026-08-19', currency: 'EUR',
+    lineItems: [], vatBreakdown: [], totalAmount: '1980.09',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-th', '2026-07-20');
+
+  const thajsky = {
+    icDph: '0105541035341',
+    adresa: '235/15 Soi Sukhumvit 31 (Sawasdee), Klongton Nua, Watthana, Bangkok, 10110, Thailand',
+    ulica: '235/15 Soi Sukhumvit 31 (Sawasdee)', psc: '10110', obec: 'Bangkok', krajina: 'TH',
+  };
+
+  it('časti adresy od modelu sa použijú tak, ako prišli', () => {
+    expect((doklad(thajsky).extracted as { odberatel: Record<string, string> }).odberatel)
+      .toMatchObject({ ulica: '235/15 Soi Sukhumvit 31 (Sawasdee)', psc: '10110', obec: 'Bangkok', krajina: 'TH' });
+  });
+
+  it('thajské VAT number neblokuje schválenie', () => {
+    expect(validateNormalizedExtraction(doklad(thajsky), { ico: '35761571' })
+      .filter((issue) => issue.severity === 'error')).toEqual([]);
+  });
+});

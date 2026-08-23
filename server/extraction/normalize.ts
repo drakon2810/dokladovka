@@ -68,6 +68,11 @@ function isoKrajina(value: unknown): string | undefined {
   return /^[A-Z]{2}$/.test(kod) ? kod : undefined;
 }
 
+/** Krajina strany: kód od modelu, inak dohľadanie názvu v texte adresy. */
+function krajinaStrany(entity: { krajina?: string; adresa?: string } | undefined): string | undefined {
+  return isoKrajina(entity?.krajina) ?? splitPostalAddress(entity?.adresa).country;
+}
+
 function bezMedzier(value?: string): string | undefined {
   const clean = value?.replace(/\s+/g, '').trim();
   return clean ? clean : undefined;
@@ -81,7 +86,10 @@ function bezMedzier(value?: string): string | undefined {
  *   dodávateľa, SK… u odberateľa) — DIČ sa zahodí.
  * - Medzery sa odstraňujú vždy: POHODA ani kontroly formátu ich nečakajú.
  */
-function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: string; adresa?: string; krajina?: string }>(entity: T): T {
+function opravIdentifikatory<T extends {
+  ico?: string; dic?: string; icDph?: string;
+  adresa?: string; ulica?: string; psc?: string; obec?: string; krajina?: string;
+}>(entity: T): T {
   const ico = bezMedzier(entity.ico);
   let dic = bezMedzier(entity.dic);
   let icDph = bezMedzier(entity.icDph);
@@ -90,13 +98,25 @@ function opravIdentifikatory<T extends { ico?: string; dic?: string; icDph?: str
   // číslo (izraelské „Client VAT No.: 511149775"), je jej IČ DPH.
   // Krajinu určuje model z adresy (pozná aj samotné mesto: Ashdod → IL);
   // rozklad názvov v texte je len záloha pre doklady spracované predtým.
-  const krajina = isoKrajina(entity.krajina) ?? splitPostalAddress(entity.adresa).country;
+  const krajina = krajinaStrany(entity);
   const zahranicna = Boolean(krajina && krajina !== 'SK');
   if (!icDph && dic && (checkVatId(dic) === 'valid' || zahranicna)) {
     icDph = dic.toUpperCase();
     dic = undefined;
   }
-  return { ...entity, ico, dic, icDph, krajina };
+  // Časti adresy od modelu majú prednosť pred rozkladom voľného textu; keď
+  // niektorú nevráti, doplní ju rozklad (a účtovník ju vie prepísať).
+  const zRozkladu = splitPostalAddress(entity.adresa);
+  return {
+    ...entity,
+    ico,
+    dic,
+    icDph,
+    krajina,
+    ulica: entity.ulica?.trim() || zRozkladu.street,
+    psc: entity.psc?.trim() || zRozkladu.zip,
+    obec: entity.obec?.trim() || zRozkladu.city,
+  };
 }
 
 function round2(value: number): number {
@@ -388,7 +408,7 @@ export function validateNormalizedExtraction(
   }
   if (supplier.icDph) {
     const supplierVat = checkVatId(supplier.icDph);
-    if (chybneIcDph(supplier.icDph, (splitPostalAddress(supplier.adresa).country ?? 'SK') !== 'SK')) {
+    if (chybneIcDph(supplier.icDph, (krajinaStrany(supplier) ?? 'SK') !== 'SK')) {
       issues.push({ code: 'invalid_supplier_vat_id', field: 'dodavatel.icDph', severity: 'error', message: 'IČ DPH dodávateľa nemá platný formát' });
     } else if (supplierVat === 'unknown_country') {
       issues.push({ code: 'unverified_supplier_vat_id', field: 'dodavatel.icDph', severity: 'warning', message: 'IČ DPH dodávateľa má neznámy kód krajiny — skontrolujte podľa originálu' });
@@ -402,7 +422,8 @@ export function validateNormalizedExtraction(
     const n = normalizedIdentifier(value);
     return /^[A-Z]{2}/.test(n) && n.slice(0, 2) !== 'SK';
   };
-  const supplierForeign = foreignVatLike(supplier.icDph) || foreignVatLike(supplier.dic);
+  const supplierForeign = foreignVatLike(supplier.icDph) || foreignVatLike(supplier.dic)
+    || (krajinaStrany(supplier) ?? 'SK') !== 'SK';
   if (supplier.ico && !/^\d{8}$/.test(normalizedIdentifier(supplier.ico))) issues.push({ code: 'invalid_supplier_ico', field: 'dodavatel.ico', severity: supplierForeign ? 'warning' : 'error', message: 'IČO dodávateľa nemá 8 číslic' });
   if (supplier.dic && !validDic(supplier.dic)) issues.push({ code: 'invalid_supplier_dic', field: 'dodavatel.dic', severity: supplierForeign ? 'warning' : 'error', message: 'DIČ dodávateľa nemá platný formát' });
   // Na VYDANEJ faktúre je „dodávateľom" vlastná firma a jej IBAN sa do POHODY
@@ -429,7 +450,7 @@ export function validateNormalizedExtraction(
   // poznáme z adresy, takže formátové kontroly naň neuplatňujeme rovnako, ako
   // to už platí pre zahraničného dodávateľa.
   const buyerForeign = foreignVatLike(buyer.icDph) || foreignVatLike(buyer.dic)
-    || (splitPostalAddress(buyer.adresa).country ?? 'SK') !== 'SK';
+    || (krajinaStrany(buyer) ?? 'SK') !== 'SK';
   const buyerSeverity: 'warning' | 'error' = normalized.documentType === 'FV' ? 'error' : 'warning';
   // Slovenské formáty IČO/DIČ na zahraničného zákazníka neplatia. IČ DPH sa
   // kontroluje formátom jeho vlastnej krajiny (checkVatId), takže tam blokujúca

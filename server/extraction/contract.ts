@@ -23,9 +23,14 @@ const partyWireSchema = z.object({
   dic: nullableShortText,
   icDph: nullableShortText,
   adresa: nullableText,
-  // ISO kód krajiny adresy. Model ho odvodí aj z mesta — zoznam názvov krajín
-  // v kóde bude vždy neúplný („Ashdod, Israel, South District" mal krajinu
-  // uprostred, „Wien" ju nemá vôbec).
+  // Adresa po častiach tak, ako ju POHODA očakáva. Rozklad voľného textu v kóde
+  // nikdy nepokryje všetky formáty („Ashdod, Israel, South District" mala
+  // krajinu uprostred, thajská adresa dala do mesta „Thailand"); model doklad
+  // číta celý a mesto od ulice odlíši spoľahlivejšie.
+  ulica: nullableShortText,
+  psc: nullableShortText,
+  obec: nullableShortText,
+  // ISO kód krajiny adresy — model ho odvodí aj zo samotného mesta.
   krajina: nullableShortText,
   iban: nullableShortText,
   bic: nullableShortText,
@@ -221,6 +226,10 @@ interface BuyerPartyResult {
   dic?: string;
   icDph?: string;
   adresa?: string;
+  /** Adresa po častiach; model ju rozdelí spoľahlivejšie než rozklad textu. */
+  ulica?: string;
+  psc?: string;
+  obec?: string;
   /** ISO kód krajiny adresy — model ho odvodí aj zo samotného mesta. */
   krajina?: string;
 }
@@ -298,12 +307,15 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY', 'UNKNOWN']),
   supplier: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
-    icDph: z.string().optional(), adresa: z.string().optional(), krajina: z.string().optional(),
-    iban: z.string().optional(), bic: z.string().optional(),
+    icDph: z.string().optional(), adresa: z.string().optional(),
+    ulica: z.string().optional(), psc: z.string().optional(), obec: z.string().optional(),
+    krajina: z.string().optional(), iban: z.string().optional(), bic: z.string().optional(),
   }),
   buyer: z.object({
     nazov: z.string().optional(), ico: z.string().optional(), dic: z.string().optional(),
-    icDph: z.string().optional(), adresa: z.string().optional(), krajina: z.string().optional(),
+    icDph: z.string().optional(), adresa: z.string().optional(),
+    ulica: z.string().optional(), psc: z.string().optional(), obec: z.string().optional(),
+    krajina: z.string().optional(),
   }),
   invoiceNumber: z.string().optional(), orderNumber: z.string().optional(),
   deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),
