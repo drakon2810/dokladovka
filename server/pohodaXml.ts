@@ -423,13 +423,21 @@ export function buildServerDataPack(input: {
     // už existuje" a doklad sa v POHODE vôbec nezaložil.
     const numberSeries = input.codeLists.ciselneRady.get(snapshot.ucto.ciselnyRadId ?? '');
     // Účtovník smie číslo dokladu prepísať (pole v páse „Doklad bude zaúčtovaný…").
-    // Prázdne = číslo pridelí POHODA z radu. checkDuplicity="false": keď je číslo
-    // obsadené, POHODA doklad založí s upraveným číslom a vráti varovanie —
-    // radšej než aby celý prenos spadol.
+    // Prázdne = číslo pridelí POHODA z radu.
+    //
+    // POZOR na poradie priorít POHODY: numberRequested je podľa type.xsd „číslo
+    // dokladu BEZ väzby na číselnú radu" a rada (ids) ho prebíja. Keď sme
+    // posielali oboje, POHODA odpovedala „Hodnota prvku musela byť upravená" a
+    // doklad dostal číslo zo svojho počítadla (2607000001) namiesto čísla
+    // faktúry. Vlastné číslo preto posielame SAMOSTATNE, bez rady.
+    //
+    // checkDuplicity ostáva na predvolenom true: obsadené číslo znamená, že ten
+    // istý doklad už v POHODE je, a to má účtovník vidieť — nie dostať potichu
+    // druhý doklad s posunutým číslom.
     const cisloVPohode = clamp(snapshot.ucto.cisloVPohode, 32);
-    const numberXml = `<typ:ids>${escapeXml(numberSeries ?? '')}</typ:ids>${cisloVPohode
-      ? `<typ:numberRequested checkDuplicity="false">${escapeXml(cisloVPohode)}</typ:numberRequested>`
-      : ''}`;
+    const numberXml = cisloVPohode
+      ? `<typ:numberRequested>${escapeXml(cisloVPohode)}</typ:numberRequested>`
+      : `<typ:ids>${escapeXml(numberSeries ?? '')}</typ:ids>`;
     if (!accounting || !classificationVat || !numberSeries) {
       throw new Error(`Doklad ${id} nemá platné aktívne číselníky organizácie`);
     }

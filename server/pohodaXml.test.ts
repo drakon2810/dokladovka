@@ -270,13 +270,14 @@ describe('buildServerDataPack — partner a hlavička pre POHODU', () => {
     expect(bezCisla).toContain('<inv:number><typ:ids>26FP</typ:ids></inv:number>');
     expect(bezCisla).not.toContain('numberRequested');
 
-    // Účtovníkom prepísané číslo doklad v POHODE dostane presne. checkDuplicity
-    // false: obsadené číslo POHODA upraví a varuje, prenos nespadne.
+    // Účtovníkom prepísané číslo ide SAMO, bez rady: rada má v POHODE vyššiu
+    // prioritu a číslo by prebila („Hodnota prvku musela byť upravená").
     doc.snapshot.ucto = { ...doc.snapshot.ucto, cisloVPohode: '260704300120' };
     const sCislom = buildServerDataPack({ id: 'pack-6b', ico: '35761571', documents: [doc], codeLists });
     expect(sCislom).toContain(
-      '<inv:number><typ:ids>26FP</typ:ids><typ:numberRequested checkDuplicity="false">260704300120</typ:numberRequested></inv:number>',
+      '<inv:number><typ:numberRequested>260704300120</typ:numberRequested></inv:number>',
     );
+    expect(sCislom).not.toContain('<typ:ids>26FP</typ:ids>');
     assertOrder(emittedChildren(sCislom, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
   });
 });
