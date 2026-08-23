@@ -579,6 +579,60 @@ describe('accounting suggestions', () => {
     expect(String(suggestion.reason)).toContain('Pravidlo');
   }, 90_000);
 
+  it('denník: riadky tej istej protistrany idú do promptu prvé, aj keď text sedí menej', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const dph = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,79.67,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'AGS Bratislava' }, odberatel: { nazov: 'Milena Pribis' }, polozky: [{ popis: 'Skladovanie v Bratislave' }] })],
+    );
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','602200','602200 sklad.-tuz.','pohoda'),
+              ($4,$2,$3,'cleneniaDph','UD','UD','pohoda')`,
+      [pred, seeded.tenantId, seeded.organizationId, dph],
+    );
+    // Firma účtuje skladovanie firmám do KV A1 (viac riadkov aj bližší text),
+    // súkromnej osobe Milene Pribis do D2. Rozhoduje protistrana, nie text.
+    const historia = [
+      ...Array.from({ length: 6 }, (_, index) => ['cisco systems slovakia', `skladovanie sk 0${index + 1}.2026`, 'A1'] as const),
+      ...(['skladné january', 'skladné february', 'skladné march'] as const).map((text) => ['milena pribis', text, 'D2'] as const),
+    ];
+    for (const [protistrana, text, kv] of historia) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,supplier_name_normalized,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,source,riadok_hash)
+         VALUES ($1,$2,$3,'FV',$4,$5,'602200 sklad.-tuz.',$6,'UD',$7,$8,'mdb',$9)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, protistrana, text, pred, dph, kv, randomUUID()],
+      );
+    }
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({ predkontaciaId: pred, clenenieDphId: dph, clenenieKvKod: 'D2', ciselnyRadId: null, confidence: 0.9, reason: 'Denník protistrany' })),
+    };
+    const context = {
+      documentType: 'FV', supplierName: 'AGS Bratislava', supplierIco: '35761571',
+      odberatel: { nazov: 'Milena Pribis' },
+      totalAmount: 79.67, currency: 'EUR',
+      lineDescriptions: ['Skladovanie v Bratislave'],
+      polozky: [{ popis: 'Skladovanie v Bratislave', sadzbaDph: 23, suma: 64.77 }],
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AGS Bratislava' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(payload.dennik[0]).toMatchObject({ clenenieKvKod: 'D2', tejProtistrany: true });
+    expect(payload.dennik.filter((riadok: any) => riadok.tejProtistrany)).toHaveLength(3);
+    // Riadky iných odberateľov ostávajú v denníku ako porovnanie, len nižšie.
+    expect(payload.dennik.some((riadok: any) => riadok.clenenieKvKod === 'A1' && !riadok.tejProtistrany)).toBe(true);
+  }, 90_000);
+
   it('web search: preambula pred tool callom nezhodí návrh a prázdna odpoveď nezmaže deterministický', async () => {
     const database = await createTestDatabase();
     databases.push(database);

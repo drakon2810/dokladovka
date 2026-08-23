@@ -795,6 +795,7 @@ Choose predkontaciaId/clenenieDphId/ciselnyRadId ONLY from the provided code lis
 Evidence, strongest first:
 1. "pravidla" — written rules (global from the system operator, firm ones from the accountant). Binding; firm rules win over global ones.
 2. "dennik" — rows from THIS company's own POHODA journal for the SAME agenda as this document, with occurrence counts. This is how the firm actually books such operations — every firm books differently, so prefer the journal over general habits. Its kod values refer to the code lists (match by id when present, otherwise find the matching kod).
+   A row with "tejProtistrany": true is how the firm books THIS VERY counterparty. Such rows outrank rows with a more similar text but a different counterparty: the same service billed to a private person and to a VAT-registered company belongs to different KV sections, while the texts differ only by the month. Follow them unless the document itself (VAT rate, identifiers) proves this case is different.
 3. "priklady" — postings the accountant confirmed in this app, same agenda, ranked by text similarity.
 4. "kategorie" — kinds of supply distilled from the firm's history, with usage counts and exceptions.
 5. Your own accounting knowledge. You may use web search to verify Slovak VAT law (e.g. which KV section applies to a supply) when the evidence is ambiguous — use the web only for legal reasoning, never as a source of ids or codes.
@@ -839,6 +840,8 @@ export interface DennikRiadok {
   sadzbaDph?: number;
   pocet: number;
   podobnost: number;
+  /** Riadok je z dokladov TEJ ISTEJ protistrany ako práve spracovaný doklad. */
+  tejProtistrany: boolean;
 }
 
 /**
@@ -852,38 +855,56 @@ async function najdiDennik(
   input: SuggestionInput,
   lineText: string,
   documentType: string,
+  protistrana?: { nazov?: string; ico?: string },
 ): Promise<DennikRiadok[]> {
   const agendy = HISTORIA_AGENDY[documentType] ?? [];
   if (agendy.length === 0) return [];
-  const rows = (await database.query<{
-    line_text_normalized: string; predkontacia_kod?: string; predkontacia_id?: string;
-    clenenie_dph_kod?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
-    sadzba_dph?: string | number; pocet: string;
-  } & Record<string, unknown>>(
-    `SELECT line_text_normalized, predkontacia_kod, predkontacia_id,
-            clenenie_dph_kod, clenenie_dph_id, clenenie_kv_kod, sadzba_dph, count(*) AS pocet
-       FROM ucto_historia
-      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
-      GROUP BY 1,2,3,4,5,6,7
-      ORDER BY count(*) DESC
-      LIMIT 2000`,
-    [input.tenantId, input.organizationId, agendy],
-  )).rows;
-  return rows
-    .map((row) => ({
-      text: row.line_text_normalized,
-      predkontaciaKod: row.predkontacia_kod ?? undefined,
-      predkontaciaId: row.predkontacia_id ?? undefined,
-      clenenieDphKod: row.clenenie_dph_kod ?? undefined,
-      clenenieDphId: row.clenenie_dph_id ?? undefined,
-      clenenieKvKod: row.clenenie_kv_kod ?? undefined,
-      sadzbaDph: row.sadzba_dph == null ? undefined : Number(row.sadzba_dph),
-      pocet: Number(row.pocet),
-      podobnost: textSimilarity(lineText, row.line_text_normalized),
-    }))
-    // Bez textovej zhody ostáva poradie podľa početnosti — aj to je prax firmy.
-    .sort((a, b) => (b.podobnost - a.podobnost) || (b.pocet - a.pocet))
-    .slice(0, 10);
+  const nazov = normalizeName(protistrana?.nazov ?? '');
+  const ico = String(protistrana?.ico ?? '').replace(/\D/g, '');
+  const dopyt = async (lenProtistrany: boolean): Promise<DennikRiadok[]> => {
+    const rows = (await database.query<{
+      line_text_normalized: string; predkontacia_kod?: string; predkontacia_id?: string;
+      clenenie_dph_kod?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
+      sadzba_dph?: string | number; pocet: string;
+    } & Record<string, unknown>>(
+      `SELECT line_text_normalized, predkontacia_kod, predkontacia_id,
+              clenenie_dph_kod, clenenie_dph_id, clenenie_kv_kod, sadzba_dph, count(*) AS pocet
+         FROM ucto_historia
+        WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+          AND ($4::boolean = false
+               OR ($5::text <> '' AND supplier_name_normalized=$5)
+               OR ($6::text <> '' AND supplier_ico=$6))
+        GROUP BY 1,2,3,4,5,6,7
+        ORDER BY count(*) DESC
+        LIMIT 2000`,
+      [input.tenantId, input.organizationId, agendy, lenProtistrany, nazov, ico],
+    )).rows;
+    return rows
+      .map((row) => ({
+        text: row.line_text_normalized,
+        predkontaciaKod: row.predkontacia_kod ?? undefined,
+        predkontaciaId: row.predkontacia_id ?? undefined,
+        clenenieDphKod: row.clenenie_dph_kod ?? undefined,
+        clenenieDphId: row.clenenie_dph_id ?? undefined,
+        clenenieKvKod: row.clenenie_kv_kod ?? undefined,
+        sadzbaDph: row.sadzba_dph == null ? undefined : Number(row.sadzba_dph),
+        pocet: Number(row.pocet),
+        podobnost: textSimilarity(lineText, row.line_text_normalized),
+        tejProtistrany: lenProtistrany,
+      }))
+      // Bez textovej zhody ostáva poradie podľa početnosti — aj to je prax firmy.
+      .sort((a, b) => (b.podobnost - a.podobnost) || (b.pocet - a.pocet));
+  };
+  // Ako firma účtuje TÚTO protistranu, je silnejší dôkaz než podobnosť textu s
+  // dokladmi iných: „skladné" súkromnej osobe patrí do KV D2, tá istá služba
+  // firme s IČ DPH do A1 — a texty sa pritom líšia len mesiacom. Preto idú
+  // riadky protistrany do denníka vždy, aj keď ich text sedí menej.
+  const tejto = (nazov || ico) ? (await dopyt(true)).slice(0, 5) : [];
+  const kluc = (riadok: DennikRiadok) =>
+    [riadok.text, riadok.predkontaciaKod, riadok.clenenieDphKod, riadok.clenenieKvKod].join('|');
+  const uz = new Set(tejto.map(kluc));
+  const ostatne = (await dopyt(false)).filter((riadok) => !uz.has(kluc(riadok)));
+  return [...tejto, ...ostatne].slice(0, 10);
 }
 
 /**
@@ -1020,7 +1041,11 @@ export async function maybeAiAccountingSuggestion(
     documentContext.documentType,
   );
   const kategorie = await najdiKategorie(database, input, lineText, documentContext.documentType);
-  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType);
+  // Protistrana dokladu: na vydanej faktúre odberateľ, inak dodávateľ.
+  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType,
+    documentContext.documentType === 'FV'
+      ? { nazov: documentContext.odberatel?.nazov, ico: documentContext.odberatel?.ico }
+      : { nazov: documentContext.supplierName, ico: documentContext.supplierIco });
   const predkontacie = zuzPonukuPredkontacii(
     vsetkyPredkontacie, lineText, priklady,
     [...kategorie.map((kategoria) => kategoria.predkontacia_id),
@@ -1098,6 +1123,7 @@ export async function maybeAiAccountingSuggestion(
             sadzbaDph: riadok.sadzbaDph,
             pocet: riadok.pocet,
             podobnost: Number(riadok.podobnost.toFixed(2)),
+            tejProtistrany: riadok.tejProtistrany,
           })),
           // Kategórie plnení z účtovného profilu firmy — fungujú aj pre
           // dodávateľa, ktorý v histórii nikdy nebol.
