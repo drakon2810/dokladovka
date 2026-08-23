@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { looksLikePdfStructure, retryDelaySeconds } from './workerService.js';
+import { cisloVPohodeZDokladu, looksLikePdfStructure, retryDelaySeconds } from './workerService.js';
 
 describe('retryDelaySeconds', () => {
   it('gives transient errors tens of seconds, not the old 2s/4s', () => {
@@ -28,5 +28,17 @@ describe('looksLikePdfStructure', () => {
 
   it('rejects data without any PDF cross-reference structure', () => {
     expect(looksLikePdfStructure(Buffer.from('%PDF-not-a-real-file'))).toBe(false);
+  });
+});
+
+describe('cisloVPohodeZDokladu', () => {
+  it('vydaná faktúra ide do POHODY s vlastným číslom, ostatné agendy nie', () => {
+    expect(cisloVPohodeZDokladu('FV', { cisloFaktury: '260704300120' })).toBe('260704300120');
+    // Prijatú faktúru čísluje POHODA — číslo dodávateľa ide do variabilného symbolu.
+    expect(cisloVPohodeZDokladu('FP', { cisloFaktury: 'FA-225/2026' })).toBeUndefined();
+    expect(cisloVPohodeZDokladu('FV', { cisloFaktury: '  ' })).toBeUndefined();
+    expect(cisloVPohodeZDokladu('FV', undefined)).toBeUndefined();
+    // POHODA berie do čísla dokladu najviac 32 znakov.
+    expect(cisloVPohodeZDokladu('FV', { cisloFaktury: '9'.repeat(40) })).toHaveLength(32);
   });
 });

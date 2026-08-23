@@ -333,6 +333,18 @@ function datumZExtrakcie(extracted: unknown): string | undefined {
   return typeof datum === 'string' ? datum : undefined;
 }
 
+/**
+ * Číslo, s ktorým doklad vznikne v POHODE. Vydaná faktúra si nesie vlastné
+ * číslo z fakturačného systému a v POHODE má mať to isté — inak by jej POHODA
+ * pridelila číslo zo svojho počítadla radu a účtovné číslo by sa rozišlo s
+ * číslom na faktúre. Ostatné agendy čísluje POHODA sama.
+ */
+export function cisloVPohodeZDokladu(documentType: string, extracted: unknown): string | undefined {
+  if (documentType !== 'FV') return undefined;
+  const cislo = String((extracted as { cisloFaktury?: unknown } | undefined)?.cisloFaktury ?? '').trim();
+  return cislo ? cislo.slice(0, 32) : undefined;
+}
+
 async function completeRun(
   database: Database,
   job: JobRow,
@@ -407,6 +419,11 @@ async function completeRun(
   const bankUcetKod = !prepared.isReprocess && normalized.documentType === 'BV'
     ? await najdiBankovyUcet(database, job.tenant_id, job.organization_id, result.supplier.iban)
     : undefined;
+  // Vydaná faktúra ide do POHODY s vlastným číslom z dokladu; účtovník ho môže
+  // v páse prepísať alebo zmazať (potom číslo pridelí POHODA).
+  const cisloVPohode = prepared.isReprocess
+    ? undefined
+    : cisloVPohodeZDokladu(normalized.documentType, normalized.extracted);
 
   await database.transaction(async (tx) => {
     await tx.query(
@@ -445,6 +462,7 @@ async function completeRun(
           JSON.stringify({
             ...(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, result) : {}),
             ...(bankUcetKod ? { bankUcetKod } : {}),
+            ...(cisloVPohode ? { cisloVPohode } : {}),
           })],
       );
       // Partner sa založí/doplní z dodávateľa ešte pred návrhom zaúčtovania,
