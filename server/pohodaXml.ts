@@ -135,6 +135,14 @@ function documentDetailXml(
   const { ns } = tag;
   const items = polozky.map((item: any) => {
     const { bezDph, dph, spolu, unitPrice } = lineItemAmounts(item);
+    // Cudzia daň (sadzba mimo slovenských) sa do POHODY nedá poslať ako DPH —
+    // rateVAT je „none". Poslať k nej priceVAT by znamenalo doklad nižší o daň,
+    // preto ide celá suma do ceny bez dane, rovnako ako v súhrne dokladu.
+    const cudziaDan = vatRateName(item.sadzbaDph) === 'none' && dph !== 0;
+    const mnozstvo = Number.isFinite(Number(item.mnozstvo)) && Number(item.mnozstvo) !== 0 ? Number(item.mnozstvo) : 1;
+    const cena = cudziaDan ? spolu : bezDph;
+    const cenaDph = cudziaDan ? 0 : dph;
+    const cenaZaJednotku = cudziaDan ? round2(spolu / mnozstvo) : unitPrice;
     const accounting = codeLists.predkontacie.get(item.ucto?.predkontaciaId ?? '') ?? header.accounting;
     const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
     const kv = item.ucto?.clenenieKvKod || header.kv;
@@ -152,9 +160,9 @@ function documentDetailXml(
       `        <${ns}:rateVAT>${vatRateName(item.sadzbaDph)}</${ns}:rateVAT>`,
       `        <${ns}:discountPercentage>0.0</${ns}:discountPercentage>`,
       `        <${ns}:homeCurrency>`,
-      `          <typ:unitPrice>${amount(unitPrice)}</typ:unitPrice>`,
-      `          <typ:price>${amount(bezDph)}</typ:price>`,
-      `          <typ:priceVAT>${amount(dph)}</typ:priceVAT>`,
+      `          <typ:unitPrice>${amount(cenaZaJednotku)}</typ:unitPrice>`,
+      `          <typ:price>${amount(cena)}</typ:price>`,
+      `          <typ:priceVAT>${amount(cenaDph)}</typ:priceVAT>`,
       `          <typ:priceSum>${amount(spolu)}</typ:priceSum>`,
       `        </${ns}:homeCurrency>`,
       ...(accounting ? [`        <${ns}:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></${ns}:accounting>`] : []),
@@ -492,7 +500,13 @@ export function buildServerDataPack(input: {
     const vat19 = rows.filter((row: any) => Number(row.sadzba) === 19).reduce((sum: number, row: any) => sum + Number(row.dph || 0), 0);
     const base5 = rows.filter((row: any) => Number(row.sadzba) === 5).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0);
     const vat5 = rows.filter((row: any) => Number(row.sadzba) === 5).reduce((sum: number, row: any) => sum + Number(row.dph || 0), 0);
-    const base0 = rows.filter((row: any) => Number(row.sadzba) === 0).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0);
+    // Sadzba, ktorú slovenská POHODA nepozná (rakúskych 20 %, českých 21 %), je
+    // cudzia daň: nie je čo odpočítať, do priznania nevstúpi a rozdeliť ju na
+    // základ a DPH nemá kam. Ide preto CELÁ do priceNone — bez toho by z
+    // rakúskej faktúry vypadla úplne a doklad by prišiel do POHODY nulový.
+    const cudziaDan = rows.filter((row: any) => ![23, 19, 5, 0].includes(Number(row.sadzba)));
+    const base0 = rows.filter((row: any) => Number(row.sadzba) === 0).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0)
+      + cudziaDan.reduce((sum: number, row: any) => sum + Number(row.zaklad || 0) + Number(row.dph || 0), 0);
     const currency = `<typ:priceHigh>${amount(base23)}</typ:priceHigh>
         <typ:priceHighVAT>${amount(vat23)}</typ:priceHighVAT>
         <typ:priceLow>${amount(base19)}</typ:priceLow>

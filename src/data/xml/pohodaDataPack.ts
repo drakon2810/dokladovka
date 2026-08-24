@@ -290,7 +290,10 @@ export function summarizeVat(rows: VatBreakdownRow[]): VatTotals {
       t.zaklad5 += row.zaklad;
       t.dph5 += row.dph;
     } else {
-      t.zaklad0 += row.zaklad;
+      // Sadzba mimo slovenských (rakúskych 20 %, českých 21 %) je cudzia daň —
+      // POHODA ju nemá kam zaradiť a odpočítať sa nedá, preto ide do
+      // nezdaniteľnej sumy CELÁ. Pri sadzbe 0 je dph nula, tam sa nič nemení.
+      t.zaklad0 += row.zaklad + row.dph;
     }
   }
   return t;
@@ -326,8 +329,14 @@ function invoiceDetailLines(
   const lines = ['      <inv:invoiceDetail>'];
   for (const item of polozky) {
     const eff = lineItemEffective(item);
-    const bezDph = eff.bezDph ?? 0;
-    const unitPrice = item.jednotkovaCenaBezDph ?? bezDph;
+    // Cudzia daň sa do POHODY ako DPH poslať nedá (rateVAT „none") — celá suma
+    // preto ide do ceny bez dane, rovnako ako v súhrne dokladu a na serveri.
+    const cudziaDan = vatRateName(item.sadzbaDph) === 'none' && (eff.dph ?? 0) !== 0;
+    const mnozstvo = Number(item.mnozstvo) || 1;
+    const bezDph = cudziaDan ? (eff.spolu ?? 0) : (eff.bezDph ?? 0);
+    const unitPrice = cudziaDan
+      ? Math.round(((eff.spolu ?? 0) / mnozstvo) * 100) / 100
+      : item.jednotkovaCenaBezDph ?? bezDph;
     const accounting = kodOf(codeLists.predkontacie, item.ucto?.predkontaciaId) ?? header.accounting;
     const clenenie = kodOf(codeLists.cleneniaDph, item.ucto?.clenenieDphId) ?? header.clenenie;
     const centre = kodOf(codeLists.strediska ?? [], item.ucto?.strediskoId);
@@ -342,7 +351,7 @@ function invoiceDetailLines(
     lines.push('          <inv:homeCurrency>');
     lines.push(`            <typ:unitPrice>${formatXmlAmount(unitPrice)}</typ:unitPrice>`);
     lines.push(`            <typ:price>${formatXmlAmount(bezDph)}</typ:price>`);
-    lines.push(`            <typ:priceVAT>${formatXmlAmount(eff.dph ?? 0)}</typ:priceVAT>`);
+    lines.push(`            <typ:priceVAT>${formatXmlAmount(cudziaDan ? 0 : eff.dph ?? 0)}</typ:priceVAT>`);
     lines.push(`            <typ:priceSum>${formatXmlAmount(eff.spolu ?? bezDph)}</typ:priceSum>`);
     lines.push('          </inv:homeCurrency>');
     if (accounting) lines.push(`          <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>`);

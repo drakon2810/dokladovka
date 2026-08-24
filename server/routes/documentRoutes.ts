@@ -15,7 +15,7 @@ import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
 import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback } from '../services/accountingSuggestionService.js';
 import { posudDph } from '../services/dphAdvisor.js';
-import { loadDphProfil } from '../services/dphProfileService.js';
+import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 
@@ -309,17 +309,18 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     }
     // DPH profil klienta: deterministické blokácie (napr. neplatiteľ so
     // zvoleným odpočtom) sa nedajú obísť klientom — kontrola beží na serveri.
-    const dphProfil = await loadDphProfil(database, auth.tenantId, document.organization_id);
-    if (dphProfil) {
-      const posudok = posudDph({
-        documentType: document.document_type,
-        extracted: document.extracted,
-        accounting: document.accounting,
-        clenenieDph: await clenenieDphDokladu(database, auth.tenantId, document),
-      }, dphProfil);
-      if (posudok.blokacie.length > 0) {
-        throw new HttpError(409, 'dph_profil_blokacia', posudok.blokacie[0].sprava);
-      }
+    // Firma bez vyplneného profilu dostane predvolený: kontroly zo samotného
+    // dokladu (cudzia daň zahraničného dodávateľa) musia platiť pre všetkých.
+    const dphProfil = await loadDphProfil(database, auth.tenantId, document.organization_id)
+      ?? predvolenyDphProfil(auth.tenantId, document.organization_id);
+    const dphPosudok = posudDph({
+      documentType: document.document_type,
+      extracted: document.extracted,
+      accounting: document.accounting,
+      clenenieDph: await clenenieDphDokladu(database, auth.tenantId, document),
+    }, dphProfil);
+    if (dphPosudok.blokacie.length > 0) {
+      throw new HttpError(409, 'dph_profil_blokacia', dphPosudok.blokacie[0].sprava);
     }
     const approvedVersion = expectedVersion + 1;
     const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, extracted: document.extracted, ucto: document.accounting };
@@ -396,8 +397,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
-    const profil = await loadDphProfil(database, auth.tenantId, document.organization_id);
-    if (!profil) return { navrhy: [], varovania: [], blokacie: [] };
+    // Bez vyplneného profilu sa použije predvolený — doklad so zahraničnou
+    // daňou má dostať varovanie aj vo firme, ktorá profil ešte nenastavila.
+    const profil = await loadDphProfil(database, auth.tenantId, document.organization_id)
+      ?? predvolenyDphProfil(auth.tenantId, document.organization_id);
     return posudDph({
       documentType: document.document_type,
       extracted: document.extracted,

@@ -82,6 +82,16 @@ describe('zauctovanieZKodov', () => {
     expect(zauctovanieZKodov(CISELNIK, { vatClassificationCode: 'KN' })).toEqual({ clenenieKvKod: 'KN' });
   });
 
+  it('sekciu opačnej strany zahodí — A1 na prijatej faktúre neexistuje', () => {
+    // Dodávateľ si na doklad tlačí vlastné daňové kódy, ktoré vyzerajú ako
+    // sekcie KV. A1 hlási DODÁVATEĽ; na prijatej faktúre by nafúklo výkaz.
+    expect(zauctovanieZKodov(CISELNIK, { documentType: 'FP', vatControlStatementCode: 'A1' })).toEqual({});
+    expect(zauctovanieZKodov(CISELNIK, { documentType: 'FP', vatControlStatementCode: 'B2' }))
+      .toEqual({ clenenieKvKod: 'B2' });
+    expect(zauctovanieZKodov(CISELNIK, { documentType: 'FV', vatControlStatementCode: 'A1' }))
+      .toEqual({ clenenieKvKod: 'A1' });
+  });
+
   it('neznáme kódy vynechá, nie nahradí', () => {
     expect(zauctovanieZKodov(CISELNIK, {
       accountCode: '999/999', vatClassificationCode: undefined, numberSeriesCode: 'XX',

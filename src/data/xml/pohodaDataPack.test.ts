@@ -126,6 +126,14 @@ describe('summarizeVat', () => {
     expect(t.dph5).toBe(2);
     expect(t.zaklad0).toBe(10);
   });
+
+  // Rakúska faktúra (20 %) nepatrí do žiadneho slovenského koša. Daň sa
+  // predtým zahodila a doklad odchádzal do POHODY nižší o ňu.
+  it('cudzia sadzba ide celá do nezdaniteľnej sumy', () => {
+    const t = summarizeVat([{ sadzba: 20, zaklad: 89, dph: 17.8 }]);
+    expect(t.zaklad0).toBe(106.8);
+    expect(t.zaklad23).toBe(0);
+  });
 });
 
 describe('buildDataPack', () => {

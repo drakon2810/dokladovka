@@ -3,6 +3,7 @@
 // tu spáruje s tým, čo firma naozaj má v POHODE. Čo sa nespáruje, ostáva prázdne
 // a doplní ho účtovník; nikdy sa nehádže na najbližší kód.
 import type { Queryable } from '../db/database.js';
+import { platnyKvKod } from '../services/accountingSuggestionService.js';
 import type { AdditionalDocumentResult, ExtractionResult } from './contract.js';
 
 export type CodeKind = 'predkontacie' | 'cleneniaDph' | 'ciselneRady';
@@ -63,9 +64,6 @@ export function najdiKod(index: CodeIndex, kind: CodeKind, code: unknown): strin
   return najdene;
 }
 
-/** Štatutárne sekcie kontrolného výkazu — nie číselník, pevný zoznam. */
-const KV_SEKCIE = new Set(['A1', 'A2', 'B1', 'B2', 'B3', 'C1', 'C2', 'D1', 'D2', 'KN']);
-
 export interface ZauctovanieZPravidla {
   predkontaciaId?: string;
   clenenieDphId?: string;
@@ -76,7 +74,8 @@ export interface ZauctovanieZPravidla {
 /** Hlavičkové zaúčtovanie dokladu podľa kódov, ktoré model opísal z pravidla. */
 export function zauctovanieZKodov(
   index: CodeIndex,
-  zdroj: Pick<ExtractionResult, 'accountCode' | 'vatClassificationCode' | 'vatControlStatementCode' | 'numberSeriesCode'>,
+  zdroj: Pick<ExtractionResult, 'accountCode' | 'vatClassificationCode' | 'vatControlStatementCode' | 'numberSeriesCode'>
+    & { documentType?: string },
 ): ZauctovanieZPravidla {
   // Sekcia KV má vlastné pole — doklad má bežne obidve naraz („UN" ako členenie
   // DPH a „KN" do kontrolného výkazu). Kým bolo pole jedno, KN sa nedalo poslať
@@ -87,7 +86,10 @@ export function zauctovanieZKodov(
     ...(najdiKod(index, 'cleneniaDph', zdroj.vatClassificationCode) ? { clenenieDphId: najdiKod(index, 'cleneniaDph', zdroj.vatClassificationCode) } : {}),
     ...(najdiKod(index, 'ciselneRady', zdroj.numberSeriesCode) ? { ciselnyRadId: najdiKod(index, 'ciselneRady', zdroj.numberSeriesCode) } : {}),
     // Sekcia KV DPH nie je číselník firmy — model ju uvádza priamo (A1…KN).
-    ...(KV_SEKCIE.has(kv) ? { clenenieKvKod: kv } : {}),
+    // Preveruje sa aj proti agende: sekcia opačnej strany (A1 na prijatej
+    // faktúre) by odtiaľto putovala do návrhu ako „čo už na doklade je" a
+    // prebila by aj model, aj kv_section zvoleného členenia.
+    ...(platnyKvKod(kv, zdroj.documentType) ? { clenenieKvKod: kv } : {}),
   };
 }
 

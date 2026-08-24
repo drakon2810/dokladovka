@@ -57,6 +57,41 @@ describe('buildServerDataPack — variabilný symbol', () => {
   });
 });
 
+// Rakúska faktúra ASFINAG: 89,00 + 20 % = 106,80 €. Slovenská POHODA pozná len
+// sadzby 23/19/5/0, takže riadok nepadol do žiadneho koša a do POHODY by prišiel
+// doklad na 0,00 €. Cudzia daň sa neodpočítava — ide celá do priceNone.
+describe('buildServerDataPack — cudzia sadzba DPH', () => {
+  const rakuska = invoiceDocument({
+    rozpisDph: [{ sadzba: 20, zaklad: 89, dph: 17.8 }],
+    sumaSpolu: 106.8,
+    polozky: [{
+      id: 'li-0', popis: 'Annual vignette Car 2026', mnozstvo: 1, jednotkovaCenaBezDph: 89,
+      sadzbaDph: 20, sumaBezDph: 89, sumaDph: 17.8, sumaSpolu: 106.8,
+    }],
+  });
+
+  it('celá suma ide do priceNone, nie do nuly', () => {
+    const xml = buildServerDataPack({ id: 'pack-at', ico: '35761571', documents: [rakuska], codeLists });
+    expect(xml).toContain('<typ:priceNone>106.80</typ:priceNone>');
+    expect(xml).toContain('<typ:priceHigh>0.00</typ:priceHigh>');
+  });
+
+  it('položka nesie celú sumu bez DPH, aby sa daň nestratila', () => {
+    const xml = buildServerDataPack({ id: 'pack-at2', ico: '35761571', documents: [rakuska], codeLists });
+    expect(xml).toContain('<inv:rateVAT>none</inv:rateVAT>');
+    expect(xml).toContain('<typ:price>106.80</typ:price>');
+    expect(xml).toContain('<typ:priceVAT>0.00</typ:priceVAT>');
+    expect(xml).toContain('<typ:unitPrice>106.80</typ:unitPrice>');
+  });
+
+  it('slovenská sadzba ostáva rozdelená na základ a daň', () => {
+    const xml = buildServerDataPack({ id: 'pack-sk', ico: '35761571', documents: [invoiceDocument({})], codeLists });
+    expect(xml).toContain('<typ:priceHigh>70.00</typ:priceHigh>');
+    expect(xml).toContain('<typ:priceHighVAT>16.10</typ:priceHighVAT>');
+    expect(xml).toContain('<typ:priceNone>0.00</typ:priceNone>');
+  });
+});
+
 describe('buildServerDataPack — dodržanie limitov XSD schémy', () => {
   // Reálny prípad: francúzsky dodávateľ mal v poli IČO SIRET „340 256 791 00054"
   // (17 znakov) — typ:icoType má maxLength 15, takže XSD validácia u agenta

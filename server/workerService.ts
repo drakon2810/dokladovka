@@ -555,10 +555,16 @@ async function completeRun(
   if (prepared.isReprocess) return undefined;
   // Strany dokladu sú spoločné pre celý súbor aj pre doklady, ktoré z neho
   // vznikli rozdelením — líšia sa len typom, sumou a položkami.
+  const strana = (kluc: 'dodavatel' | 'odberatel') =>
+    (normalized.extracted as Record<string, { krajina?: string } | undefined>)[kluc];
   const strany = {
     supplierName: result.supplier.nazov,
     supplierIco: result.supplier.ico,
     supplierIcDph: result.supplier.icDph,
+    // Krajina dodávateľa rozhoduje, ČIA daň je na doklade: rakúskych 20 % nie
+    // je slovenská DPH a do slovenského priznania nikdy nevstúpi. Bez nej model
+    // z nenulovej sadzby usudzoval tuzemské zdaniteľné plnenie.
+    supplierKrajina: strana('dodavatel')?.krajina,
     // Odberateľ rozhoduje o DPH a sekcii KV vydanej faktúry (súkromná osoba
     // bez identifikátorov vs. podnikateľ) — model ho musí vidieť.
     odberatel: {
@@ -566,6 +572,7 @@ async function completeRun(
       ico: result.buyer.ico ?? undefined,
       dic: result.buyer.dic ?? undefined,
       icDph: result.buyer.icDph ?? undefined,
+      krajina: strana('odberatel')?.krajina,
     },
   };
   // Sadzba DPH na položkách je pre model dôkaz o daňovom režime dokladu.

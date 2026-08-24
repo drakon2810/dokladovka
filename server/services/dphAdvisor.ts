@@ -55,6 +55,9 @@ function round2(value: number): number {
 interface ExtraktDokladu {
   dodavatelNazov: string;
   dodavatelIcDph: string;
+  /** Krajina adresy dodávateľa (ISO) — spolu s IČ DPH hovorí, čia daň je na doklade. */
+  dodavatelKrajina: string;
+  mena: string;
   duzp?: string;
   sumaSpolu: number;
   zaklad: number;
@@ -78,6 +81,8 @@ function extrakt(dokument: DphPosudokDokument): ExtraktDokladu {
   return {
     dodavatelNazov: String(dodavatel.nazov ?? ''),
     dodavatelIcDph: String(dodavatel.icDph ?? '').replace(/\s+/g, '').toUpperCase(),
+    dodavatelKrajina: String(dodavatel.krajina ?? '').trim().toUpperCase(),
+    mena: String(extracted.mena ?? 'EUR'),
     duzp: (extracted.datumDodania ?? extracted.datumVystavenia) as string | undefined,
     sumaSpolu,
     zaklad: zakladZRozpisu > 0 ? zakladZRozpisu : sumaSpolu,
@@ -186,6 +191,25 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
       clenenieDphId: profil.samozdanenieClenenieDphId,
       clenenieKvKod: profil.samozdanenieClenenieKvKod,
     });
+  }
+
+  // Cudzia daň: dodávateľ so zahraničnou adresou účtuje daň pod vlastným
+  // (neslovenským) IČ DPH — rakúskych 20 %, českých 21 %, nemeckých 19 %. Taká
+  // daň do slovenského priznania nevstupuje a odpočítať sa nedá (vrátiť ju vie
+  // len žiadosť podľa §55f), takže tuzemské členenie s odpočtom je chyba, nie
+  // odhad. Zahraničná firma s IČ DPH „SK…" fakturuje slovenskú daň — tá je
+  // bežný tuzemský nákup a podmienkou na prefixe sem nespadne.
+  const cudziaDan = doklad.dphSpolu > 0 && prefix !== 'SK'
+    && doklad.dodavatelKrajina !== '' && doklad.dodavatelKrajina !== 'SK';
+  if (cudziaDan) {
+    const sprava = `Dodávateľ z ${doklad.dodavatelKrajina} fakturuje vlastnú DPH ${doklad.dphSpolu.toFixed(2)} ${doklad.mena} — zahraničná daň nevstupuje do slovenského priznania ani do kontrolného výkazu a nie je odpočítateľná.`;
+    navrhy.push({ kod: 'dph_cudzia_dan', sprava });
+    if (dokument.clenenieDph && clenenieVyzeraNaOdpocet(dokument.clenenieDph)) {
+      blokacie.push({
+        kod: 'dph_cudzia_dan_odpocet',
+        sprava: `${sprava} Členenie „${dokument.clenenieDph.kod} — ${dokument.clenenieDph.nazov}“ pritom odpočet uplatňuje. Vyberte členenie bez nároku na odpočet (nezahrnované do priznania).`,
+      });
+    }
   }
 
   // Tuzemské prenesenie daňovej povinnosti (§69): SK dodávateľ fakturuje bez DPH.

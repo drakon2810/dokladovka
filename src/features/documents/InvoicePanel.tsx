@@ -10,7 +10,7 @@ import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
-import { predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
+import { kvKodyPreTyp, predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
 import { lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
@@ -455,7 +455,14 @@ export function InvoicePanel({
     ? 'Odhad z posledného čísla číselného radu v POHODE. Skutočné číslo pridelí POHODA až pri prenose.'
     : `Na tento rad čaká ešte ${cakajuceVRade} ${cakajuceVRade === 1 ? 'ďalší doklad' : 'ďalších dokladov'}. POHODA prideľuje najbližšie voľné číslo v okamihu prenosu, takže o poradí rozhoduje to, ktorý doklad prenesiete skôr.`;
 
-  const kvOpts: DcOption[] = CLENENIE_KV_KODY.map((kod) => ({ value: kod, label: KV_LABEL[kod] ?? kod, title: KV_LABEL[kod] ?? kod }));
+  // Sekcia KV musí sedieť so stranou dokladu — prijatá faktúra do A1 („dodanie
+  // tovaru a služby") nepatrí. Už zvolená hodnota ostáva v ponuke, nech sa
+  // nestratí a účtovník ju vidí aj vtedy, keď ju treba prepísať.
+  const ponukaKv = kvKodyPreTyp(CLENENIE_KV_KODY, draft.typ);
+  const kvOpts: DcOption[] = (ucto.clenenieKvKod && !ponukaKv.includes(ucto.clenenieKvKod)
+    ? [...ponukaKv, ucto.clenenieKvKod]
+    : ponukaKv
+  ).map((kod) => ({ value: kod, label: KV_LABEL[kod] ?? kod, title: KV_LABEL[kod] ?? kod }));
   const menaOpts: DcOption[] = [
     { value: 'EUR', label: 'EUR' }, { value: 'CZK', label: 'CZK' }, { value: 'USD', label: 'USD' },
   ];

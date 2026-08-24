@@ -68,6 +68,31 @@ export function mapDphProfilRow(row: Record<string, unknown>): DphProfil {
   };
 }
 
+/**
+ * Profil firmy, ktorá ho ešte nevyplnila. Kontroly viazané na nastavenie
+ * (koeficient, uzavreté obdobie, samozdanenie, kategórie bez nároku) tak ostanú
+ * ticho, ale kontroly, ktoré vyplývajú zo samotného dokladu — cudzia daň
+ * zahraničného dodávateľa — bežia aj bez vyplneného profilu. Predtým sa bez
+ * riadku v `organization_dph_profiles` nespustila ani jedna.
+ */
+export function predvolenyDphProfil(tenantId: string, organizationId: string): DphProfil {
+  return {
+    organizationId,
+    tenantId,
+    platitelDph: 'platitel',
+    obdobieDph: 'stvrtrocne',
+    koeficient: [],
+    pomerneOdpocitanie: [],
+    rezim: 'tuzemsky',
+    nakupyZEu: false,
+    sluzbyZEu: false,
+    prenesenieDp: false,
+    pravidlaAut: [],
+    bezNaroku: [],
+    samozdanenieAktivne: false,
+  };
+}
+
 export async function loadDphProfil(
   db: Queryable,
   tenantId: string,

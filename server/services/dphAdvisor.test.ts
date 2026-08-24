@@ -138,6 +138,54 @@ describe('dphAdvisor — posudDph', () => {
     expect(varovanie?.sprava).toContain('bežné členenie');
   });
 
+  it('cudzia daň: rakúsky dodávateľ s 20 % blokuje tuzemské členenie s odpočtom', () => {
+    const rakuskaFaktura = {
+      dodavatel: {
+        nazov: 'Autobahnen- und Schnellstraßen-Finanzierungs-AG',
+        icDph: 'ATU43143200',
+        krajina: 'AT',
+      },
+      datumVystavenia: '2026-07-13',
+      datumDodania: '2026-07-13',
+      mena: 'EUR',
+      rozpisDph: [{ sadzba: 20, zaklad: 89, dph: 17.8 }],
+      sumaSpolu: 106.8,
+      polozky: [{ popis: 'Annual vignette Car 2026' }],
+    };
+    const sOdpoctom = posudDph(
+      dokument(rakuskaFaktura, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }),
+      profil(),
+    );
+    expect(sOdpoctom.navrhy.some((zistenie) => zistenie.kod === 'dph_cudzia_dan')).toBe(true);
+    expect(sOdpoctom.blokacie.map((zistenie) => zistenie.kod)).toEqual(['dph_cudzia_dan_odpocet']);
+    expect(sOdpoctom.blokacie[0].sprava).toContain('17.80');
+
+    // Členenie bez odpočtu je správna voľba — návrh ostáva, blokácia nie.
+    const bezOdpoctu = posudDph(
+      dokument(rakuskaFaktura, { id: 'cl-un', kod: 'UN', nazov: 'Nezahrnované do priznania' }),
+      profil(),
+    );
+    expect(bezOdpoctu.blokacie).toHaveLength(0);
+    expect(bezOdpoctu.navrhy.some((zistenie) => zistenie.kod === 'dph_cudzia_dan')).toBe(true);
+  });
+
+  it('cudzia daň sa nespustí na slovenskej dani ani na SK registrácii cudzej firmy', () => {
+    const domaci = posudDph(dokument(FAKTURA_S_DPH, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), profil());
+    expect(domaci.blokacie).toHaveLength(0);
+    expect(domaci.navrhy.some((zistenie) => zistenie.kod === 'dph_cudzia_dan')).toBe(false);
+
+    // Rakúska firma registrovaná v SR fakturuje slovenských 23 % — bežný nákup.
+    const skRegistracia = posudDph(dokument({
+      dodavatel: { nazov: 'Wien Handel GmbH', icDph: 'SK4020123456', krajina: 'AT' },
+      datumDodania: '2026-07-13',
+      mena: 'EUR',
+      rozpisDph: [{ sadzba: 23, zaklad: 100, dph: 23 }],
+      sumaSpolu: 123,
+    }, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), profil());
+    expect(skRegistracia.blokacie).toHaveLength(0);
+    expect(skRegistracia.navrhy.some((zistenie) => zistenie.kod === 'dph_cudzia_dan')).toBe(false);
+  });
+
   it('neplatiteľ nedostáva varovania o krátení odpočtu', () => {
     const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({
       platitelDph: 'neplatitel',

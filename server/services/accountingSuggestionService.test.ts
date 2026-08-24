@@ -539,8 +539,8 @@ describe('accounting suggestions', () => {
       create: vi.fn().mockResolvedValue(aiOdpoved({ predkontaciaId: pred, clenenieDphId: dph, clenenieKvKod: 'D2', ciselnyRadId: null, confidence: 0.9, reason: 'Podľa denníka' })),
     };
     const context = {
-      documentType: 'FV', supplierName: 'AGS Bratislava', supplierIco: '35761571',
-      odberatel: { nazov: 'Kaczynska Sarah' },
+      documentType: 'FV', supplierName: 'AGS Bratislava', supplierIco: '35761571', supplierKrajina: 'SK',
+      odberatel: { nazov: 'Kaczynska Sarah', krajina: 'PL' },
       totalAmount: 2299.49, currency: 'EUR',
       lineDescriptions: ['Door to door removal service'],
       polozky: [{ popis: 'Door to door removal service', sadzbaDph: 23, suma: 2275.5 }],
@@ -552,7 +552,10 @@ describe('accounting suggestions', () => {
     // Web search je zapnutý — model si smie overiť výklad zákona.
     expect(body.tools).toEqual([{ type: 'web_search' }]);
     const payload = JSON.parse(body.input[0].content[0].text);
-    expect(payload.dokument.odberatel).toMatchObject({ nazov: 'Kaczynska Sarah' });
+    expect(payload.dokument.odberatel).toMatchObject({ nazov: 'Kaczynska Sarah', krajina: 'PL' });
+    // Krajina dodávateľa: nenulová sadzba na zahraničnom doklade je cudzia daň,
+    // nie tuzemské plnenie — bez tohto poľa to model z promptu nevyčíta.
+    expect(payload.dokument.dodavatelKrajina).toBe('SK');
     expect(payload.dokument.polozky[0]).toMatchObject({ sadzbaDph: 23 });
     // Sadzba DPH samostatne: rozhoduje medzi tuzemským a zahraničným členením,
     // ktoré má firma v denníku obidve pre tú istú službu.
@@ -577,6 +580,79 @@ describe('accounting suggestions', () => {
     suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
     expect(suggestion).toMatchObject({ predkontacia_id: predPravidlo, clenenie_dph_id: dph, clenenie_kv_kod: 'A1' });
     expect(String(suggestion.reason)).toContain('Pravidlo');
+  }, 90_000);
+
+  it('zahraničná faktúra: odpočet cudzej dane sa neuloží a sekcia A1 na FP vypadne', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const dphTuzemske = randomUUID();
+    const dphBezOdpoctu = randomUUID();
+    // Rakúska diaľničná známka: dodávateľ z AT účtuje vlastných 20 %.
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,106.8,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId, JSON.stringify({
+        dodavatel: { nazov: 'Autobahnen- und Schnellstraßen-Finanzierungs-AG', icDph: 'ATU43143200', krajina: 'AT' },
+        rozpisDph: [{ sadzba: 20, zaklad: 89, dph: 17.8 }],
+        sumaSpolu: 106.8,
+        polozky: [{ popis: 'Annual vignette Car 2026' }],
+      })],
+    );
+    for (const [id, kind, code, name] of [
+      [pred, 'predkontacie', '518900', 'ost.sl.s DPH'],
+      [dphTuzemske, 'cleneniaDph', 'PD', 'Tuzemské plnenia'],
+      [dphBezOdpoctu, 'cleneniaDph', 'UN', 'Nezahrnované do priznania'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$6,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code, name],
+      );
+    }
+    const context = {
+      documentType: 'FP',
+      supplierName: 'Autobahnen- und Schnellstraßen-Finanzierungs-AG',
+      supplierIcDph: 'ATU43143200',
+      supplierKrajina: 'AT',
+      totalAmount: 106.8,
+      currency: 'EUR',
+      lineDescriptions: ['Annual vignette Car 2026'],
+      polozky: [{ popis: 'Annual vignette Car 2026', sadzbaDph: 20, suma: 106.8 }],
+    };
+    const input = {
+      tenantId: seeded.tenantId,
+      organizationId: seeded.organizationId,
+      documentId,
+      supplierName: 'Autobahnen- und Schnellstraßen-Finanzierungs-AG',
+    };
+
+    // Model navrhne tuzemské plnenie s odpočtom — DPH poradca to zablokuje,
+    // takže sa taký návrh vôbec neuloží (a účtovníkovi sa nepredvyplní).
+    const tuzemsky = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: dphTuzemske, clenenieKvKod: 'A1',
+        ciselnyRadId: null, confidence: 0.72, reason: 'Podľa denníka',
+      })),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, tuzemsky)).toBe(false);
+    expect((await database.query('SELECT 1 FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows).toHaveLength(0);
+
+    // Členenie bez odpočtu prejde, ale sekcia A1 hlási DODÁVATEĽ — na prijatej
+    // faktúre neexistuje, takže sa zahodí namiesto uloženia do výkazu.
+    const bezOdpoctu = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'A1',
+        ciselnyRadId: null, confidence: 0.72, reason: 'Cudzia daň sa neodpočítava',
+      })),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, bezOdpoctu)).toBe(true);
+    const suggestion = (await database.query<Record<string, any>>(
+      'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
+    expect(suggestion).toMatchObject({ source: 'ai', predkontacia_id: pred, clenenie_dph_id: dphBezOdpoctu });
+    expect(suggestion.clenenie_kv_kod).toBeNull();
   }, 90_000);
 
   it('denník: riadky tej istej protistrany idú do promptu prvé, aj keď text sedí menej', async () => {

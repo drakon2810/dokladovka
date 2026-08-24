@@ -70,6 +70,24 @@ export function predkontaciePreTyp<T extends { agenda?: string }>(items: T[], ty
 }
 
 /**
+ * Sekcie kontrolného výkazu podľa strany dokladu: A1/A2/C1/D1/D2 podáva
+ * DODÁVATEĽ (výstup), B1/B2/B3/C2 ODBERATEĽ (vstup); KN patrí obom. Pokladňa,
+ * banka a interné doklady nesú smer až v zaúčtovaní, tam sa neobmedzuje.
+ * Server drží zhodnú mapu v accountingSuggestionService.
+ */
+const KV_KODY_PRE_TYP: Partial<Record<DocumentType, readonly string[]>> = {
+  FV: ['A1', 'A2', 'C1', 'D1', 'D2', 'KN'],
+  FP: ['B1', 'B2', 'B3', 'C2', 'KN'],
+  OZ: ['B1', 'B2', 'B3', 'C2', 'KN'],
+};
+
+/** Sekcie KV použiteľné pre daný typ dokladu — prijatá faktúra do A1 nepatrí. */
+export function kvKodyPreTyp(kody: readonly string[], typ: DocumentType): readonly string[] {
+  const povolene = KV_KODY_PRE_TYP[typ];
+  return povolene ? kody.filter((kod) => povolene.includes(kod)) : kody;
+}
+
+/**
  * Položky bez agendy (ručne založené) ostávajú v ponuke a pri prázdnom výsledku
  * sa vráti všetko — inak by sa doklad nedal zaúčtovať vôbec, rovnaká
  * zhovievavosť ako pri číselných radoch.
