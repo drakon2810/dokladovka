@@ -517,3 +517,27 @@ describe('rozpis DPH pri prenesení daňovej povinnosti', () => {
     expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
   });
 });
+
+describe('oslobodené plnenie bez vytlačenej sadzby', () => {
+  // Reálny prípad MUNDUS (Rakúsko): sumy stoja v stĺpci „Mwst.-frei", model
+  // preto nevrátil žiadnu sadzbu ani rozpis DPH. Položky bez sadzby sa
+  // preskakovali, rozpis ostal prázdny a doklad sa nedal schváliť.
+  it('položky s nulovou daňou dajú rozpis so sadzbou 0 %', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'MUNDUS Spedition', icDph: 'ATU42597604' },
+      buyer: { ico: '35761571' }, invoiceNumber: '1365',
+      issueDate: '2026-07-31', taxDate: '2026-07-31', dueDate: '2026-07-31',
+      currency: 'EUR',
+      lineItems: [
+        { description: 'T-1 Erledigung', amountWithoutVat: '20', vatAmount: '0', amountTotal: '20' },
+        { description: 'Importabfertigung', amountWithoutVat: '120', vatAmount: '0', amountTotal: '120' },
+      ],
+      vatBreakdown: [],
+      totalWithoutVat: '140', totalVat: '0', totalAmount: '140',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-mundus', '2026-07-31');
+    expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 140, dph: 0 }]);
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
+  });
+});

@@ -175,7 +175,12 @@ function rozpisZPoloziek(
 ): Array<{ sadzba: number; zaklad: number; dph: number }> {
   const podlaSadzby = new Map<number, { sadzba: number; zaklad: number; dph: number }>();
   for (const polozka of polozky) {
-    const sadzba = polozka.sadzbaDph;
+    // Oslobodené plnenie (rakúske „Mwst.-frei", prenesenie daňovej povinnosti)
+    // nemá vytlačenú sadzbu, len sumu a nulovú daň. Preskočiť taký riadok
+    // znamená prázdny rozpis DPH — a ten blokuje schválenie dokladu, hoci
+    // doklad je v poriadku. Bez dane je sadzba nulová, nie neznáma.
+    const bezDane = (polozka.sumaDph ?? 0) === 0;
+    const sadzba = polozka.sadzbaDph ?? (bezDane ? 0 : undefined);
     if (sadzba === undefined || !isValidVatRate(sadzba)) continue;
     const spolu = polozka.sumaSpolu;
     const zaklad = polozka.sumaBezDph
