@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v5';
+export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v6';
 export const EXTRACTION_SCHEMA_VERSION = '2';
 export const SUPPORTED_VAT_RATES = [23, 21, 19, 12, 5, 0] as const;
 export const SUPPORTED_EXTRACTION_MIME_TYPES = [
