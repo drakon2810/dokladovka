@@ -15,7 +15,11 @@ export function escapeXml(value: unknown): string {
  * CELÝ dataPack vrátane bezchybných dokladov v tej istej dávke.
  */
 function clamp(value: unknown, maxLength: number): string {
-  return String(value ?? '').trim().slice(0, maxLength);
+  // Zlomy riadkov a viacnásobné medzery sa zlučujú do jednej: polia POHODY sú
+  // jednoriadkové a XSD počíta každý znak vrátane konca riadka. Text so zlomom
+  // prejde orezaním na presný limit a validáciu aj tak zhodí — a POHODA odmietne
+  // CELÝ dataPack, nielen tento doklad.
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
 /** Identifikátory (IČO, DIČ, IČ DPH) POHODA očakáva bez medzier. */

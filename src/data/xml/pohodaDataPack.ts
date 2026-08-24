@@ -24,6 +24,16 @@ export function escapeXml(value: string): string {
   }).join('');
 }
 
+/**
+ * Skráti hodnotu na limit oficiálnej XSD schémy POHODY a zlúči biele znaky.
+ * Text položky z faktúry býva viacriadkový a dlhší než 90 znakov — bez orezania
+ * XSD validácia zhodí CELÝ dataPack vrátane bezchybných dokladov v dávke.
+ * Musí zostať v zhode s clamp v server/pohodaXml.ts.
+ */
+function clamp(value: unknown, maxLength: number): string {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
 /** Sumy s bodkou a 2 desatinnými miestami (SPEC §7). */
 export function formatXmlAmount(value: number): string {
   return (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2);
@@ -236,7 +246,7 @@ function partnerAddressLines(
   indent: string,
 ): string[] {
   const address = supplierAddressParts(supplier);
-  const lines = [`${indent}<typ:company>${escapeXml(supplier.nazov)}</typ:company>`];
+  const lines = [`${indent}<typ:company>${escapeXml(clamp(supplier.nazov, 255))}</typ:company>`];
   if (address.obec) lines.push(`${indent}<typ:city>${escapeXml(address.obec)}</typ:city>`);
   if (address.ulica) lines.push(`${indent}<typ:street>${escapeXml(address.ulica)}</typ:street>`);
   if (address.psc) lines.push(`${indent}<typ:zip>${escapeXml(address.psc)}</typ:zip>`);
@@ -322,9 +332,9 @@ function invoiceDetailLines(
     const clenenie = kodOf(codeLists.cleneniaDph, item.ucto?.clenenieDphId) ?? header.clenenie;
     const centre = kodOf(codeLists.strediska ?? [], item.ucto?.strediskoId);
     lines.push('        <inv:invoiceItem>');
-    lines.push(`          <inv:text>${escapeXml(item.popis ?? '')}</inv:text>`);
+    lines.push(`          <inv:text>${escapeXml(clamp(item.popis, 90))}</inv:text>`);
     lines.push(`          <inv:quantity>${escapeXml(String(item.mnozstvo ?? 1))}</inv:quantity>`);
-    if (item.jednotka) lines.push(`          <inv:unit>${escapeXml(item.jednotka)}</inv:unit>`);
+    if (item.jednotka) lines.push(`          <inv:unit>${escapeXml(clamp(item.jednotka, 10))}</inv:unit>`);
     lines.push('          <inv:coefficient>1.0</inv:coefficient>');
     lines.push('          <inv:payVAT>false</inv:payVAT>');
     lines.push(`          <inv:rateVAT>${vatRateName(item.sadzbaDph)}</inv:rateVAT>`);
@@ -425,7 +435,7 @@ export function buildDataPack(
           `        <vch:dateTax>${escapeXml(d.datumDodania ?? d.datumVystavenia)}</vch:dateTax>`,
           ...(predkontacia ? [`        <vch:accounting><typ:ids>${escapeXml(predkontacia)}</typ:ids></vch:accounting>`] : []),
           ...(clenenie ? [`        <vch:classificationVAT><typ:ids>${escapeXml(clenenie)}</typ:ids></vch:classificationVAT>`] : []),
-          `        <vch:text>${escapeXml(d.textPolozky ?? `Pokladničný doklad ${d.cisloFaktury}`)}</vch:text>`,
+          `        <vch:text>${escapeXml(clamp(d.textPolozky ?? `Pokladničný doklad ${d.cisloFaktury}`, 240))}</vch:text>`,
           '        <vch:partnerIdentity><typ:address>',
           ...partnerAddressLines(d.dodavatel, '          '),
           '        </typ:address></vch:partnerIdentity>',
@@ -469,7 +479,7 @@ export function buildDataPack(
           `        <inv:classificationVAT><typ:ids>${escapeXml(clenenie)}</typ:ids></inv:classificationVAT>`,
         );
       }
-      lines.push(`        <inv:text>${escapeXml(predkontaciaNazov ?? d.textPolozky ?? `Faktúra ${d.cisloFaktury}`)}</inv:text>`);
+      lines.push(`        <inv:text>${escapeXml(clamp(predkontaciaNazov ?? d.textPolozky ?? `Faktúra ${d.cisloFaktury}`, 240))}</inv:text>`);
       // Partner dokladu je vždy PROTISTRANA: na prijatých dokladoch dodávateľ,
       // na vydanej faktúre odberateľ. Zhoda so server/pohodaXml.ts.
       const vydana = doc.typ === 'FV';

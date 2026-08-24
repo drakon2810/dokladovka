@@ -436,6 +436,30 @@ describe('splitPostalAddress a vatCountryIds', () => {
   });
 });
 
+describe('buildServerDataPack — dlhy text polozky', () => {
+  // Reálny prípad: text položky mal 106 znakov a zlom riadka uprostred. Orezanie
+  // na presných 90 nestačilo — zlom riadka XSD ráta ako znak a validácia zhodila
+  // celý prenos (POHODA odmieta CELÝ dataPack, nie len chybný doklad).
+  it('viacriadkovy text sa zlúči do jedného riadka a oreže na 90 znakov', () => {
+    const doc = invoiceDocument({
+      polozky: [{
+        id: 'li-1',
+        popis: ['Na základe vzájomnej dohody Vám fakturujeme služby za rok 2025',
+          'spracovanie účt.závierky a DPPO za rok 2025'].join(String.fromCharCode(10)),
+        mnozstvo: 1, sadzbaDph: 23, sumaBezDph: 350, sumaDph: 80.5, sumaSpolu: 430.5,
+      }],
+    });
+    const xml = buildServerDataPack({ id: 'pack-dlhy-text', ico: '35761571', documents: [doc], codeLists });
+    const detail = xml.slice(xml.indexOf('<inv:invoiceItem>'));
+    const text = new RegExp('<inv:text>([^<]*)</inv:text>').exec(detail)?.[1] ?? '';
+    // escapeXml kóduje diakritiku na číselné entity, dĺžku meriame po dekódovaní.
+    const dekodovany = text.replace(new RegExp('&#([0-9]+);', 'g'), (_, code) => String.fromCharCode(Number(code)));
+    expect(dekodovany.length).toBeLessThanOrEqual(90);
+    expect(dekodovany.includes(String.fromCharCode(10))).toBe(false);
+    expect(dekodovany.startsWith('Na z')).toBe(true);
+  });
+});
+
 describe('supplierAddressParts', () => {
   it('bez ručných polí sa odvodí z voľnej adresy a IČ DPH', () => {
     expect(supplierAddressParts({ adresa: 'Riazanská 62\n811 01 Bratislava', icDph: 'SK2020309247' }))
