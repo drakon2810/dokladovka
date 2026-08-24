@@ -1,6 +1,7 @@
 import type { DocumentItem, Organization } from '../types';
 import {
   checkVatId,
+  isLineItemQuantityConsistent,
   isTotalConsistent,
   isVatRowConsistent,
   lineItemEffective,
@@ -190,8 +191,7 @@ export function validateDocument(
       item.mnozstvo !== undefined &&
       item.jednotkovaCenaBezDph !== undefined &&
       item.sumaBezDph !== undefined &&
-      Math.abs(item.mnozstvo * item.jednotkovaCenaBezDph - item.sumaBezDph) >
-        VAT_ROW_TOLERANCE
+      !isLineItemQuantityConsistent(item.mnozstvo, item.jednotkovaCenaBezDph, item.sumaBezDph)
     ) {
       issues.push({ code: 'invalid_line_item', field: `polozky.${index}.sumaBezDph` });
     }

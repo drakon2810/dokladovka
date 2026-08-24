@@ -527,8 +527,13 @@ export function validateNormalizedExtraction(
   }
   const items = extracted.polozky as Array<any>;
   for (const [index, item] of items.entries()) {
+    // Jednotková cena je na doklade zaokrúhlená na centy, takže pri väčšom
+    // množstve sa rozdiel legálne nasčíta: 10 ks × 0,38 € vyjde 3,80, no riadok
+    // je 3,82 (skutočná cena za kus je 0,382). Tolerancia preto rastie o pol
+    // centa na kus — inak správna faktúra hlási chybu a nedá sa schváliť.
     if (item.mnozstvo !== undefined && item.jednotkovaCenaBezDph !== undefined && item.sumaBezDph !== undefined
-      && Math.abs(round2(item.mnozstvo * item.jednotkovaCenaBezDph) - item.sumaBezDph) > 0.02) {
+      && Math.abs(round2(item.mnozstvo * item.jednotkovaCenaBezDph) - item.sumaBezDph)
+        > 0.02 + Math.abs(item.mnozstvo) * 0.005 + 1e-9) {
       issues.push({ code: 'invalid_line_item', field: `polozky.${index}.sumaBezDph`, severity: 'error', message: 'Množstvo a jednotková cena nesedia so sumou položky' });
     }
     if (item.sumaBezDph !== undefined && item.sumaDph !== undefined && item.sumaSpolu !== undefined

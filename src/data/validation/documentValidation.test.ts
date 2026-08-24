@@ -66,6 +66,29 @@ function prijataFaktura(extracted: Record<string, unknown>): DocumentItem {
   } as unknown as DocumentItem;
 }
 
+// Klient musí pustiť to isté čo server: 10 ks × 0,38 € je riadok 3,82 €,
+// lebo jednotková cena je na doklade zaokrúhlená (0,382).
+describe('validateDocument — zaokrúhlená jednotková cena', () => {
+  const polozka = (mnozstvo: number, jednotkovaCenaBezDph: number) => prijataFaktura({
+    rozpisDph: [{ sadzba: 23, zaklad: 3.82, dph: 0.88 }],
+    sumaSpolu: 4.7,
+    polozky: [{
+      id: 'li-0', popis: 'Kontakt AMP Jun-Timer', mnozstvo, jednotkovaCenaBezDph,
+      sadzbaDph: 23, sumaBezDph: 3.82, sumaDph: 0.88, sumaSpolu: 4.7,
+    }],
+  });
+
+  it('neblokuje, keď sa súčin líši len o zaokrúhlenie ceny za kus', () => {
+    expect(validateDocument(polozka(10, 0.38), organization)
+      .filter((issue) => issue.code === 'invalid_line_item')).toEqual([]);
+  });
+
+  it('skutočný nesúlad množstva ostáva chybou', () => {
+    expect(validateDocument(polozka(1, 0.38), organization))
+      .toContainEqual({ code: 'invalid_line_item', field: 'polozky.0.sumaBezDph' });
+  });
+});
+
 describe('validateDocument — DIČ s prefixom neblokuje schválenie', () => {
   it('DIČ odberateľa v tvare SK… neblokuje prijatú faktúru', () => {
     expect(validateDocument(

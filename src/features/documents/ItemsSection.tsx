@@ -232,10 +232,9 @@ export function ItemsSection({
   const totals = polozky.reduce(
     (sum, item) => ({
       spolu: sum.spolu + (item.sumaSpolu ?? 0),
-      bez: sum.bez + (item.sumaBezDph ?? 0),
       dph: sum.dph + (item.sumaDph ?? 0),
     }),
-    { spolu: 0, bez: 0, dph: 0 },
+    { spolu: 0, dph: 0 },
   );
 
   const money = (value: number | undefined, onCommit: (raw: string) => void, negative?: boolean) => (
@@ -385,11 +384,13 @@ export function ItemsSection({
             </div>
           ))}
 
+          {/* Súčty musia stáť presne pod svojimi stĺpcami hlavičky (Celkom,
+              Suma DPH) — o bunku posunutý riadok ukazoval pod „Suma DPH" základ
+              dane, takže sedeli položky, ale súčet vyzeral pokazene. */}
           <div className="dk-row dk-row-total">
             <span />
             <span>Celkom</span>
             <span className="dk-r">{fmtMoney(totals.spolu, mena)}</span>
-            <span className="dk-r">{fmtMoney(totals.bez, mena)}</span>
             <span className="dk-r">{fmtMoney(totals.dph, mena)}</span>
             <span /><span /><span /><span /><span />
           </div>

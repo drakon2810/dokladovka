@@ -91,6 +91,20 @@ export function isVatRowConsistent(row: VatBreakdownRow): boolean {
   return Math.abs(expected - row.dph) <= VAT_ROW_TOLERANCE + 1e-9;
 }
 
+/**
+ * Sedí „množstvo × jednotková cena" so sumou riadku? Jednotková cena je na
+ * doklade zaokrúhlená na centy, takže pri väčšom množstve sa rozdiel nasčíta
+ * celkom legálne: 10 ks × 0,38 € vyjde 3,80, no riadok je 3,82 — skutočná cena
+ * za kus je 0,382. Tolerancia preto rastie o pol centa na kus; skutočná chyba
+ * (zlé množstvo, zlá cena) sa od sumy líši rádovo viac.
+ */
+export function isLineItemQuantityConsistent(
+  mnozstvo: number, jednotkovaCenaBezDph: number, sumaBezDph: number,
+): boolean {
+  return Math.abs(mnozstvo * jednotkovaCenaBezDph - sumaBezDph)
+    <= VAT_ROW_TOLERANCE + Math.abs(mnozstvo) * 0.005 + 1e-9;
+}
+
 export function vatBreakdownTotal(rows: VatBreakdownRow[]): number {
   return round2(rows.reduce((sum, r) => sum + r.zaklad + r.dph, 0));
 }

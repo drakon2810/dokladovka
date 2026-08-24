@@ -20,6 +20,28 @@ describe('normalizácia SK/CZ faktúr', () => {
     expect(validateNormalizedExtraction(normalized, { ico: '87654321' })).toEqual([]);
   });
 
+  // Faktúra TAMEX: 10 ks × 0,38 € = riadok 3,82 €. Jednotková cena je na
+  // doklade zaokrúhlená (0,382), takže presný súčin nikdy nesedí — kontrola to
+  // hlásila ako chybu a správnu faktúru sa nedalo schváliť.
+  it('zaokrúhlená jednotková cena pri väčšom množstve neblokuje, skutočná chyba áno', () => {
+    const doklad = (mnozstvo: string, unitPrice: string, base: string) => normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'TAMEX, spol. s r.o.', ico: '17319871', icDph: 'SK2020350035' },
+      buyer: { ico: '35761571' }, invoiceNumber: '126270102', issueDate: '2026-07-08', taxDate: '2026-07-08',
+      dueDate: '2026-07-08', currency: 'EUR',
+      lineItems: [{
+        description: 'Kontakt AMP Jun-Timer', quantity: mnozstvo, unit: 'ks', unitPriceWithoutVat: unitPrice,
+        vatRate: '23', amountWithoutVat: base, vatAmount: '0.88', amountTotal: '4.70',
+      }],
+      vatBreakdown: [{ vatRate: '23', base, vat: '0.88' }],
+      totalAmount: '4.70', fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-tamex', '2026-07-08');
+    const kody = (mnozstvo: string, unitPrice: string, base: string) =>
+      validateNormalizedExtraction(doklad(mnozstvo, unitPrice, base), { ico: '35761571' }).map((issue) => issue.code);
+    expect(kody('10', '0.38', '3.82')).not.toContain('invalid_line_item');
+    // Prehodené množstvo (1 namiesto 10) je rozdiel rádovo väčší než zaokrúhlenie.
+    expect(kody('1', '0.38', '3.82')).toContain('invalid_line_item');
+  });
+
   it('zahodí DIČ skopírované z IČ DPH u zahraničného dodávateľa (ATU…)', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'MUNDUS Spedition', dic: 'ATU42597604', icDph: 'ATU42597604' },
