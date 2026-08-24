@@ -231,9 +231,13 @@ export function normalizeExtractionResult(
   });
 
   const rozpisZOdpovede = result.vatBreakdown.flatMap((row) => {
-    const sadzba = Number(row.vatRate.replace(',', '.'));
+    let sadzba = Number(row.vatRate.replace(',', '.'));
     const zaklad = parseDecimal(row.base);
     const dph = parseDecimal(row.vat);
+    // Prenesenie daňovej povinnosti nesie nulovú daň, ale model k nej občas
+    // priradí sadzbu z hlavy — 10 % pri dani 0,00 je matematicky nemožný riadok
+    // a blokuje schválenie. Nulová daň pri nenulovom základe = nulová sadzba.
+    if (dph !== undefined && round2(dph) === 0 && zaklad !== undefined && round2(zaklad) !== 0) sadzba = 0;
     return isValidVatRate(sadzba) && zaklad !== undefined && dph !== undefined
       ? [{ sadzba, zaklad: round2(zaklad), dph: round2(dph) }]
       : [];

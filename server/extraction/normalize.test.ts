@@ -497,3 +497,23 @@ describe('IČ DPH zahraničnej strany neblokuje', () => {
       .toContainEqual(expect.objectContaining({ code: 'invalid_supplier_vat_id', severity: 'error' }));
   });
 });
+
+describe('rozpis DPH pri prenesení daňovej povinnosti', () => {
+  // Reálny prípad CMA CGM: reverse charge, na faktúre Total VAT 0,00 a žiadna
+  // sadzba. Model k nulovej dani priradil 10 % — taký riadok je matematicky
+  // nemožný, validácia ho označí a doklad sa nedá schváliť.
+  it('nulová daň pri nenulovom základe znamená nulovú sadzbu', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'CMA - CGM', icDph: 'FR72562024422' },
+      buyer: { ico: '35761571' }, invoiceNumber: 'DEIC0233844',
+      issueDate: '2026-07-28', taxDate: '2026-07-28', dueDate: '2026-08-26',
+      currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '10', base: '535.00', vat: '0.00' }],
+      totalWithoutVat: '535.00', totalVat: '0.00', totalAmount: '535.00',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-cma', '2026-07-28');
+    expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 535, dph: 0 }]);
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
+  });
+});
