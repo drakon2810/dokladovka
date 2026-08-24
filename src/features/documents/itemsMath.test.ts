@@ -78,3 +78,27 @@ describe('rozpisZPoloziek', () => {
       .toEqual([{ sadzba: 0, zaklad: 40, dph: 0 }]);
   });
 });
+
+describe('rozpisZPoloziek — zhoda s faktúrou dodávateľa', () => {
+  // Reálna faktúra Magic Print (11 položiek, 23 %). Dodávateľ tlačí základ
+  // 241,82 a daň 55,62. Delenie sumy s DPH po riadkoch dávalo 241,82/55,61,
+  // po sčítaní bez zaokrúhľovania zase 241,81/55,62 — ani jedno nesedelo
+  // s papierom, a rozpis DPH ide do kontrolného výkazu.
+  const faktura: Array<[number, number]> = [
+    [5, 3.95], [1, 5.49], [1, 2.84], [2, 22], [20, 1.19], [10, 0.4],
+    [3, 0.72], [3, 4.3], [3, 1.86], [2, 2.43], [2, 58.22],
+  ];
+
+  it('základ počíta z ceny × množstva, presne ako dodávateľ', () => {
+    const polozky = faktura.map(([mnozstvo, cena], index) => item({
+      id: `i${index}`, sadzbaDph: 23, mnozstvo, jednotkovaCenaBezDph: cena,
+    }));
+    const rozpis = rozpisZPoloziek(polozky);
+    expect(rozpis).toEqual([{ sadzba: 23, zaklad: 241.82, dph: 55.62 }]);
+  });
+
+  it('bez jednotkovej ceny sa základ odvodí zo sumy s DPH', () => {
+    const rozpis = rozpisZPoloziek([item({ sadzbaDph: 23, sumaSpolu: 123 })]);
+    expect(rozpis).toEqual([{ sadzba: 23, zaklad: 100, dph: 23 }]);
+  });
+});

@@ -102,17 +102,25 @@ export function recalcItem(item: DocumentLineItem, changed: keyof DocumentLineIt
 }
 
 /**
- * Základ a daň jednej položky. Doklad z AI často nesie len sumu s DPH — vtedy
- * sa základ odvodí zo sadzby, inak by rozpis DPH vyšiel nulový a doklad by sa
- * nedal schváliť.
+ * Základ a daň položky BEZ zaokrúhlenia. Zaokrúhľuje až súčet za sadzbu —
+ * dodávateľ počíta daň z celkového základu, nie po riadkoch, a zaokrúhlenie
+ * každého riadka sa cez desiatky položiek nazbiera na halier rozdielu oproti
+ * faktúre (11 položiek dalo 55,61 namiesto 55,62).
  */
 function zakladADan(item: DocumentLineItem): { zaklad: number; dph: number } {
   const efektivne = lineItemEffective(item);
   if (efektivne.bezDph !== undefined) return { zaklad: efektivne.bezDph, dph: efektivne.dph ?? 0 };
+  // Dodávateľ počíta základ ako cena × množstvo, nie delením sumy s DPH. Delenie
+  // dá o halier iný základ (241,81 namiesto 241,82) a rozpis sa potom rozíde s
+  // faktúrou — a s ňou aj kontrolný výkaz.
+  if (item.jednotkovaCenaBezDph !== undefined) {
+    const zaklad = item.jednotkovaCenaBezDph * (item.mnozstvo ?? 1);
+    return { zaklad, dph: (zaklad * (item.sadzbaDph ?? 0)) / 100 };
+  }
   const spolu = efektivne.spolu ?? item.sumaSpolu;
   if (spolu === undefined) return { zaklad: 0, dph: 0 };
-  const zaklad = round2(spolu / (1 + (item.sadzbaDph ?? 0) / 100));
-  return { zaklad, dph: round2(spolu - zaklad) };
+  const zaklad = spolu / (1 + (item.sadzbaDph ?? 0) / 100);
+  return { zaklad, dph: spolu - zaklad };
 }
 
 /** Sadzby, na ktoré sa zaokrúhľuje odvodená hodnota — SK aj staršie/české. */
@@ -138,11 +146,13 @@ export function rozpisZPoloziek(polozky: DocumentLineItem[]): VatBreakdownRow[] 
     const { zaklad, dph } = zakladADan(item);
     const sadzba = sadzbaPolozky(item, zaklad, dph);
     const row = byRate.get(sadzba) ?? { sadzba, zaklad: 0, dph: 0 };
-    row.zaklad = round2(row.zaklad + zaklad);
-    row.dph = round2(row.dph + dph);
+    row.zaklad += zaklad;
+    row.dph += dph;
     byRate.set(sadzba, row);
   }
-  return [...byRate.values()].sort((left, right) => right.sadzba - left.sadzba);
+  return [...byRate.values()]
+    .map((row) => ({ ...row, zaklad: round2(row.zaklad), dph: round2(row.dph) }))
+    .sort((left, right) => right.sadzba - left.sadzba);
 }
 
 export function ItemsSection({
