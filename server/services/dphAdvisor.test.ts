@@ -160,6 +160,16 @@ describe('dphAdvisor — posudDph', () => {
     expect(sOdpoctom.blokacie.map((zistenie) => zistenie.kod)).toEqual(['dph_cudzia_dan_odpocet']);
     expect(sOdpoctom.blokacie[0].sprava).toContain('17.80');
 
+    // Tvar po normalizácii: rozpis je nezdaniteľný, daň drží `cudziaDan`.
+    const poNormalizacii = posudDph(dokument({
+      ...rakuskaFaktura,
+      rozpisDph: [{ sadzba: 0, zaklad: 106.8, dph: 0 }],
+      cudziaDan: 17.8,
+    }, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), profil({ samozdanenieAktivne: true }));
+    expect(poNormalizacii.blokacie.map((zistenie) => zistenie.kod)).toEqual(['dph_cudzia_dan_odpocet']);
+    // A nie je to kandidát na samozdanenie — daň dodávateľ účtoval, len cudziu.
+    expect(poNormalizacii.navrhy.some((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat')).toBe(false);
+
     // Členenie bez odpočtu je správna voľba — návrh ostáva, blokácia nie.
     const bezOdpoctu = posudDph(
       dokument(rakuskaFaktura, { id: 'cl-un', kod: 'UN', nazov: 'Nezahrnované do priznania' }),

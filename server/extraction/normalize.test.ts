@@ -42,6 +42,44 @@ describe('normalizácia SK/CZ faktúr', () => {
     expect(kody('1', '0.38', '3.82')).toContain('invalid_line_item');
   });
 
+  // Rakúska diaľničná známka ASFINAG: 89,00 + 20 % = 106,80. Rakúska daň sa
+  // v SR neodpočíta ani nevykáže, takže doklad ide ako jedna nezdaniteľná suma.
+  it('cudziu daň nerozpisuje na základ a DPH — doklad je jedna nezdaniteľná suma', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Autobahnen- und Schnellstraßen-Finanzierungs-AG', icDph: 'ATU43143200', adresa: 'A-1030 Wien, Schnirchgasse 17', krajina: 'AT' },
+      buyer: { ico: '35761571' }, invoiceNumber: '400058799588', issueDate: '2026-07-13', taxDate: '2026-07-13',
+      dueDate: '2026-07-13', currency: 'EUR',
+      lineItems: [{
+        description: 'Annual vignette Car 2026', quantity: '1', unit: 'ks', unitPriceWithoutVat: '89.00',
+        vatRate: '20', amountWithoutVat: '89.00', vatAmount: '17.80', amountTotal: '106.80',
+      }],
+      vatBreakdown: [{ vatRate: '20', base: '89.00', vat: '17.80' }],
+      totalWithoutVat: '89.00', totalVat: '17.80', totalAmount: '106.80', fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-asfinag', '2026-07-13');
+    const extracted = normalized.extracted as any;
+    expect(extracted.rozpisDph).toEqual([{ sadzba: 0, zaklad: 106.8, dph: 0 }]);
+    expect(extracted.polozky[0]).toMatchObject({
+      sadzbaDph: 0, sumaBezDph: 106.8, sumaDph: 0, sumaSpolu: 106.8, jednotkovaCenaBezDph: 106.8,
+    });
+    // Koľko cudzej dane v sume sedí, sa nestráca — DPH poradca z toho žije.
+    expect(extracted.cudziaDan).toBe(17.8);
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
+  });
+
+  it('zahraničná faktúra BEZ dane ostáva nedotknutá (samozdanenie)', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Alza.cz a.s.', icDph: 'CZ27082440', adresa: 'Praha', krajina: 'CZ' },
+      buyer: { ico: '35761571' }, invoiceNumber: 'CZ-1', issueDate: '2026-07-13', taxDate: '2026-07-13',
+      dueDate: '2026-07-13', currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '200', vat: '0' }],
+      totalAmount: '200', fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-cz', '2026-07-13');
+    expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 200, dph: 0 }]);
+    expect((normalized.extracted as any).cudziaDan).toBeUndefined();
+  });
+
   it('zahodí DIČ skopírované z IČ DPH u zahraničného dodávateľa (ATU…)', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'MUNDUS Spedition', dic: 'ATU42597604', icDph: 'ATU42597604' },

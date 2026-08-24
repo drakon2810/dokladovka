@@ -27,6 +27,7 @@ import { suggestBankMovementAccounting } from './services/bankSuggestionService.
 import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.js';
 import { matchStatementPayments } from './services/paymentService.js';
 import { upsertPartnerZDokladu } from './services/partnerService.js';
+import { opravSkDanoveCisla } from './services/skTaxIdsService.js';
 import type { ObjectStorage } from './storage.js';
 import { PDFDocument } from 'pdf-lib';
 
@@ -352,6 +353,7 @@ async function completeRun(
   prepared: PreparedRun,
   outcome: Awaited<ReturnType<ServerDocumentExtractionProvider['extract']>>,
   startedAt: number,
+  config: ServerConfig,
 ): Promise<(AiSuggestionDocumentContext & {
   status: string;
   /** Doklady, ktoré vznikli rozdelením súboru — AI ich analyzuje rovnako. */
@@ -373,6 +375,22 @@ async function completeRun(
   }
   const fallbackDate = new Date(context.received_at).toISOString().slice(0, 10);
   const normalized = normalizeExtractionResult(result, prepared.documentId, fallbackDate);
+  // Daňové čísla slovenského dodávateľa proti registru Finančnej správy. Model
+  // ich číta z fotky bločka a jedna prehliadnutá číslica spraví z IČ DPH
+  // neplatné číslo, ktoré blokuje schválenie — a keby prešlo, išlo by tak do
+  // kontrolného výkazu. Beží pred validáciou, aby opravený doklad už nemal
+  // varovanie, a je best-effort: výpadok registra doklad nezhodí.
+  try {
+    const dodavatel = (normalized.extracted as { dodavatel?: Record<string, unknown> }).dodavatel ?? {};
+    const opravene = await opravSkDanoveCisla(config.fsOpenDataApiKey, dodavatel);
+    if (opravene) {
+      Object.assign(dodavatel, opravene);
+      // Aj do výsledku extrakcie: z neho vzniká karta partnera a kľúč duplicity.
+      Object.assign(result.supplier, opravene);
+    }
+  } catch (cause) {
+    console.warn('[sk-dane] register Finančnej správy nedostupný:', cause instanceof Error ? cause.message : cause);
+  }
   const issues = validateExtractionResult(result, normalized, {
     ico: context.organization_ico,
     dic: context.organization_dic,
@@ -758,7 +776,7 @@ export async function processNextJob(
       promptVersion: EXTRACTION_PROMPT_VERSION,
       schemaVersion: EXTRACTION_SCHEMA_VERSION,
     });
-    const summary = await completeRun(database, job, context, prepared, outcome, startedAt);
+    const summary = await completeRun(database, job, context, prepared, outcome, startedAt, config);
     // Bankový výpis: automatické párovanie odchádzajúcich transakcií na otvorené
     // faktúry podľa VS + sumy. Zlyhanie párovania nesmie zhodiť spracovanie.
     if (summary && summary.documentType === 'BV') {

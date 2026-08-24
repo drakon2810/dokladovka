@@ -4,6 +4,7 @@ import {
   type ExtractionResult,
 } from './contract.js';
 import { splitPostalAddress } from '../pohodaXml.js';
+import { jeCudziDodavatel } from '../services/dphAdvisor.js';
 
 export type DocumentType = 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD';
 
@@ -196,6 +197,52 @@ function rozpisZPoloziek(
   return [...podlaSadzby.values()].sort((left, right) => right.sadzba - left.sadzba);
 }
 
+/**
+ * Doklad s cudzou daňou ide do účtovníctva ako JEDNA nezdaniteľná suma.
+ * Rakúskych 20 % nie je DPH, ktorú by šlo odpočítať alebo vykázať — rozpis na
+ * základ a daň nemá čo znamenať, POHODA preň nemá sadzbu a celá suma jej aj tak
+ * ide do priceNone. Rozdeľovať taký doklad je len mätúce: účtovník vidí „20 %,
+ * DPH 17,80" pri doklade, ktorý sa zaúčtuje ako 106,80 bez dane.
+ *
+ * Koľko cudzej dane v sume sedí, ostáva v `cudziaDan`. Bez toho údaja by doklad
+ * vyzeral ako plnenie BEZ dane, čiže ako kandidát na samozdanenie — a DPH
+ * poradca by stratil aj varovanie, aj blokáciu odpočtu cudzej dane.
+ */
+function bezCudzejDane(
+  polozky: Array<Record<string, unknown>>,
+  rozpisDph: Array<{ sadzba: number; zaklad: number; dph: number }>,
+): {
+  polozky: Array<Record<string, unknown>>;
+  rozpisDph: Array<{ sadzba: number; zaklad: number; dph: number }>;
+  cudziaDan?: number;
+} {
+  const cudziaDan = round2(rozpisDph.reduce((sum, row) => sum + row.dph, 0));
+  // Zahraničná faktúra bez dane (prenesenie daňovej povinnosti, oslobodené
+  // plnenie) sa nemení — tam je nulová sadzba pravda dokladu, nie náhrada.
+  if (cudziaDan === 0) return { polozky, rozpisDph };
+  return {
+    polozky: polozky.map((polozka) => {
+      const spolu = (polozka.sumaSpolu as number | undefined)
+        ?? round2(((polozka.sumaBezDph as number | undefined) ?? 0) + ((polozka.sumaDph as number | undefined) ?? 0));
+      const mnozstvo = polozka.mnozstvo as number | undefined;
+      return {
+        ...polozka,
+        sadzbaDph: 0,
+        sumaBezDph: spolu,
+        sumaDph: 0,
+        sumaSpolu: spolu,
+        jednotkovaCenaBezDph: mnozstvo ? round2(spolu / mnozstvo) : spolu,
+      };
+    }),
+    rozpisDph: [{
+      sadzba: 0,
+      zaklad: round2(rozpisDph.reduce((sum, row) => sum + row.zaklad + row.dph, 0)),
+      dph: 0,
+    }],
+    cudziaDan,
+  };
+}
+
 export function normalizeExtractionResult(
   raw: unknown,
   documentId: string,
@@ -250,7 +297,12 @@ export function normalizeExtractionResult(
   // Model občas rozpis DPH vôbec nevráti, hoci položky sadzbu aj daň nesú.
   // Prázdny rozpis blokuje schválenie a do POHODY by odišli nulové základy —
   // preto sa dopočíta z položiek. Vlastný rozpis z dokladu má vždy prednosť.
-  const rozpisDph = rozpisZOdpovede.length > 0 ? rozpisZOdpovede : rozpisZPoloziek(polozky);
+  const rozpisPrepocitany = rozpisZOdpovede.length > 0 ? rozpisZOdpovede : rozpisZPoloziek(polozky);
+  const dodavatel = { ...opravIdentifikatory(result.supplier), nazov: result.supplier.nazov ?? '' };
+  // Cudzia daň sa nerozpisuje na základ a DPH — celá suma je nezdaniteľná.
+  const sumy = jeCudziDodavatel(dodavatel)
+    ? bezCudzejDane(polozky, rozpisPrepocitany)
+    : { polozky, rozpisDph: rozpisPrepocitany, cudziaDan: undefined };
 
   return {
     // INY sem dorazí len pri opakovanej extrakcii už existujúceho dokladu —
@@ -259,7 +311,7 @@ export function normalizeExtractionResult(
       ? 'FP'
       : result.documentType,
     extracted: {
-      dodavatel: { ...opravIdentifikatory(result.supplier), nazov: result.supplier.nazov ?? '' },
+      dodavatel,
       odberatel: opravIdentifikatory({ ...result.buyer }),
       cisloFaktury: result.invoiceNumber ?? '',
       cisloVypisu: result.statementNumber,
@@ -285,9 +337,12 @@ export function normalizeExtractionResult(
       // AI zhrnutie plnenia — predvyplní „Text dokladu", ktorý ide do POHODY
       // ako text účtovného zápisu; účtovník ho môže prepísať.
       textPolozky: result.documentSummary,
-      rozpisDph,
+      rozpisDph: sumy.rozpisDph,
+      // Daň, ktorú si zahraničný dodávateľ účtoval pod vlastným IČ DPH. Nie je
+      // súčasťou rozpisu (do priznania nevstupuje), ale doklad ju obsahuje.
+      cudziaDan: sumy.cudziaDan,
       sumaSpolu: totalAmount,
-      polozky,
+      polozky: sumy.polozky,
     },
     fieldConfidence: mappedConfidence,
     confidence: confidence(result.fieldConfidence),

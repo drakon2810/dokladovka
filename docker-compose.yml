@@ -105,9 +105,14 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+      # Návrh zaúčtovania beží TU, nie v API — bez tohto riadku ho robil model
+      # extrakcie (lacný gpt-5-mini), hoci nastavenie hovorí o silnejšom modeli.
+      OPENAI_ACCOUNTING_FALLBACK_MODEL: ${OPENAI_ACCOUNTING_FALLBACK_MODEL:-}
       OPENAI_STORE_RESPONSES: ${OPENAI_STORE_RESPONSES:-false}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-120000}
       OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      # Oprava daňových čísel slovenského dodávateľa proti registru FS.
+      FS_OPENDATA_API_KEY: ${FS_OPENDATA_API_KEY:-}
       # Naraz nahrata davka faktur sa spracuva sucasne, nie po jednej.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       EXTRACTION_MAX_FILE_BYTES: ${EXTRACTION_MAX_FILE_BYTES:-20971520}

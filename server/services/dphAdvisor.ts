@@ -71,7 +71,12 @@ function extrakt(dokument: DphPosudokDokument): ExtraktDokladu {
   const rozpis = Array.isArray(extracted.rozpisDph) ? extracted.rozpisDph : [];
   const polozky = Array.isArray(extracted.polozky) ? extracted.polozky : [];
   const sumaSpolu = Number(extracted.sumaSpolu ?? 0) || 0;
-  const dphSpolu = rozpis.reduce((sum: number, row: any) => sum + (Number(row?.dph) || 0), 0);
+  // Cudzia daň v rozpise DPH už nie je — normalizácia z nej spravila jednu
+  // nezdaniteľnú sumu, lebo do slovenského priznania nemá čo vstúpiť. Pre
+  // posúdenie dokladu je to však stále daň, ktorú dodávateľ účtoval: bez nej
+  // by doklad vyzeral ako plnenie bez dane, teda ako kandidát na samozdanenie.
+  const cudziaDan = Number(extracted.cudziaDan ?? 0) || 0;
+  const dphSpolu = rozpis.reduce((sum: number, row: any) => sum + (Number(row?.dph) || 0), 0) + cudziaDan;
   const zakladZRozpisu = rozpis.reduce((sum: number, row: any) => sum + (Number(row?.zaklad) || 0), 0);
   const texty = [
     String(dodavatel.nazov ?? ''),
@@ -98,6 +103,19 @@ function najdiKlucoveSlovo(texty: string[], klucoveSlova: string[]): string | un
     if (texty.some((text) => bezDiakritiky(text).includes(hladane))) return slovo;
   }
   return undefined;
+}
+
+/**
+ * Zahraničný dodávateľ, ktorý účtuje VLASTNÚ daň (rakúskych 20 %, českých 21 %,
+ * nemeckých 19 %). Firma so slovenským IČ DPH fakturuje slovenskú daň, aj keď
+ * sídli v cudzine — podľa prefixu sem preto nespadne. Keď o krajine nevieme
+ * nič, doklad sa berie ako tuzemský: mlčať je bezpečnejšie než blokovať.
+ * Používa to aj normalizácia extrakcie (rozpis DPH cudzej dane).
+ */
+export function jeCudziDodavatel(dodavatel: { icDph?: string; krajina?: string }): boolean {
+  const krajina = String(dodavatel.krajina ?? '').trim().toUpperCase();
+  const prefix = String(dodavatel.icDph ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 2);
+  return krajina !== '' && krajina !== 'SK' && prefix !== 'SK';
 }
 
 /** Heuristika: členenie DPH podľa kódu/názvu nevyzerá ako „bez odpočtu“. */
@@ -199,8 +217,8 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
   // len žiadosť podľa §55f), takže tuzemské členenie s odpočtom je chyba, nie
   // odhad. Zahraničná firma s IČ DPH „SK…" fakturuje slovenskú daň — tá je
   // bežný tuzemský nákup a podmienkou na prefixe sem nespadne.
-  const cudziaDan = doklad.dphSpolu > 0 && prefix !== 'SK'
-    && doklad.dodavatelKrajina !== '' && doklad.dodavatelKrajina !== 'SK';
+  const cudziaDan = doklad.dphSpolu > 0
+    && jeCudziDodavatel({ icDph: doklad.dodavatelIcDph, krajina: doklad.dodavatelKrajina });
   if (cudziaDan) {
     const sprava = `Dodávateľ z ${doklad.dodavatelKrajina} fakturuje vlastnú DPH ${doklad.dphSpolu.toFixed(2)} ${doklad.mena} — zahraničná daň nevstupuje do slovenského priznania ani do kontrolného výkazu a nie je odpočítateľná.`;
     navrhy.push({ kod: 'dph_cudzia_dan', sprava });

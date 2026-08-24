@@ -385,6 +385,14 @@ export interface DocumentExtractedData {
   datumDodania?: string; // DUZP
   mena: 'EUR' | 'CZK' | 'USD';
   rozpisDph: VatBreakdownRow[];
+  /**
+   * Daň, ktorú si zahraničný dodávateľ účtoval pod vlastným IČ DPH (rakúskych
+   * 20 %, českých 21 %). Do rozpisu DPH nepatrí — do slovenského priznania ani
+   * do kontrolného výkazu nevstupuje a doklad sa účtuje ako jedna nezdaniteľná
+   * suma. Drží sa tu preto, aby DPH poradca vedel odlíšiť doklad s cudzou daňou
+   * od dokladu vystaveného bez dane (samozdanenie).
+   */
+  cudziaDan?: number;
   sumaSpolu: number;
   polozky?: DocumentLineItem[];
   textPolozky?: string; // stručný popis plnenia
