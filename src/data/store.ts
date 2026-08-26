@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
   AccountingSuggestion,
+  DphAudit,
   ApprovalRule,
   DocumentPayment,
   DphProfil,
@@ -53,6 +54,7 @@ export interface AppDataState {
   inboundAttachments: InboundAttachment[];
   extractionRuns: ExtractionRun[];
   suggestions: AccountingSuggestion[];
+  dphAudit: DphAudit[];
   payments: DocumentPayment[];
   approvalRules: ApprovalRule[];
   dphProfiles: DphProfil[];

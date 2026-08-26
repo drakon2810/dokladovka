@@ -832,6 +832,7 @@ export function buildSeedState() {
     inboundAttachments: [],
     extractionRuns: [],
     suggestions: [],
+    dphAudit: [],
     codeLists,
     users: [
       {

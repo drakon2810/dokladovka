@@ -2646,6 +2646,18 @@ export async function archivePartner(partnerId: string): Promise<void> {
 
 /** Uloženie preddefinovaných poznámok organizácie (nahrádza celý zoznam). */
 /** Predvolený číselný rad na typ dokladu; null vráti automatický výber. */
+/** Uzavretie rozporu medzi pamäťou a právnou kontrolou členenia DPH. */
+export async function rozhodniDphRozpor(
+  documentId: string,
+  rozhodnutie: 'prijate' | 'ponechane',
+): Promise<void> {
+  if (!REST_DATA_MODE) return;
+  await restRequest(`/api/documents/${encodeURIComponent(documentId)}/dph-audit/rozhodnutie`, {
+    method: 'POST',
+    body: JSON.stringify({ rozhodnutie }),
+  });
+}
+
 export async function saveSeriesDefaults(
   organizationId: string,
   defaults: Array<{ documentType: DocumentType; ciselnyRadId: string | null; pokladnaKod?: string | null }>,

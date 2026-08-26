@@ -452,3 +452,23 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 }
 .dk-mode-text .dk-cell:hover:not(.dk-cell-off) { background: rgba(10, 92, 72, .1); }
 .dk-mode-text input.dk-cell-edit { display: inline-block; width: auto; min-width: 140px; }
+
+/* Rozpor medzi pamäťou a právnou kontrolou členenia DPH. Sedí pod poľom
+   Členenie DPH, nie ako baner navrchu — týka sa jedného poľa a baner je
+   vyhradený pre nesúlad organizácie. */
+.dk-rozpor {
+  border: 1px solid var(--dk-warn);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin: 2px 0 4px;
+  background: rgba(180, 83, 9, .05);
+}
+.dk-rozpor-hlava {
+  display: flex; align-items: center; gap: 5px;
+  color: var(--dk-warn); font-weight: 600; margin-bottom: 4px;
+}
+.dk-rozpor-mienky { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 3px; }
+.dk-rozpor-mienky strong { font-weight: 600; }
+.dk-rozpor-pravo { color: var(--dk-accent); }
+.dk-rozpor-dovod { color: var(--dk-soft); line-height: 1.4; margin: 0; }
+.dk-rozpor-akcie { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }

@@ -58,6 +58,7 @@ import {
   validateICO,
   vatBreakdownTotal,
 } from '../../lib/validate';
+import { rozhodniDphRozpor } from '../../data/api';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { t, type SkKey } from '../../i18n/sk';
@@ -1481,6 +1482,13 @@ export function DocumentDetailPage() {
               bankoveUcty: codeLists.bankoveUcty,
             }}
             suggestion={suggestion}
+            dphAudit={(data.dphAudit ?? []).find((item) => item.documentId === draft.id)}
+            onPrijatOdporucanie={(clenenieDphId, kvKod) => {
+              // Prázdne id = účtovník ostáva pri návrhu pamäte. V oboch
+              // prípadoch rozpor zmizne — rozhodnutie padlo.
+              if (clenenieDphId) updateUcto({ clenenieDphId, ...(kvKod ? { clenenieKvKod: kvKod } : {}) });
+              void rozhodniDphRozpor(draft.id, clenenieDphId ? 'prijate' : 'ponechane');
+            }}
             autoFilled={autoFilled}
             cakajuceVRade={cakajuceVRade}
             src={srcMap}

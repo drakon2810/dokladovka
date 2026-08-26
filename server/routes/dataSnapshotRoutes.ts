@@ -31,7 +31,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     // Pool (max 10) prebytočné zaradí do fronty; PGlite serializuje interne.
     const [
       queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
-      extractionRuns, suggestions, payments, approvalRules, dphProfiles,
+      extractionRuns, suggestions, dphAudit, payments, approvalRules, dphProfiles,
       accountingProfiles, partners, noteTemplates, emailTemplates, orgDocuments, codeListRows, seriesDefaults,
       users, batches, integration, installations, links, jobs,
     ] = await Promise.all([
@@ -55,6 +55,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       ),
       inScope('extraction_runs'),
       inScope('accounting_suggestions', 'created_at DESC'),
+      inScope('dph_audit', 'updated_at DESC'),
       inScope('document_payments', 'paid_on DESC'),
       inScope('approval_rules', 'organization_id'),
       inScope('organization_dph_profiles', 'organization_id'),
@@ -165,6 +166,16 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         clenenieKvKod: row.clenenie_kv_kod ?? undefined,
         source: row.source, confidence: Number(row.confidence), reason: row.reason,
         basedOnDocumentId: row.based_on_document_id ?? undefined, createdAt: iso(row.created_at),
+      })),
+      dphAudit: dphAudit.rows.map((row) => ({
+        documentId: row.document_id, organizationId: row.organization_id,
+        posudeneClenenieKod: row.posudene_clenenie_kod ?? undefined,
+        posudenaKvSekcia: row.posudena_kv_sekcia ?? undefined,
+        verdikt: row.verdikt,
+        odporucaneClenenieKod: row.odporucane_clenenie_kod ?? undefined,
+        odporucanaKvSekcia: row.odporucana_kv_sekcia ?? undefined,
+        dovod: row.dovod, istota: row.istota === null ? undefined : Number(row.istota),
+        rozhodnutie: row.rozhodnutie ?? undefined,
       })),
       codeLists,
       payments: payments.rows.map((row) => ({

@@ -5,7 +5,7 @@
 // a draft.ucto. Panel „Prečo?" (pôvod zaúčtovania) ostáva pri poliach
 // predkontácie, členenia DPH a kontrolného výkazu.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AccountingSuggestion, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
+import type { AccountingSuggestion, DphAudit, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
 import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
@@ -38,6 +38,10 @@ interface InvoicePanelProps {
   readOnly: boolean;
   codeLists: ItemsCodeLists & { ciselneRady: CodeListItem[]; bankoveUcty?: CodeListItem[] };
   suggestion?: AccountingSuggestion;
+  /** Verdikt právnej kontroly členenia DPH; chýba, kým kontrola nebežala. */
+  dphAudit?: DphAudit;
+  /** Prijatie odporúčania kontroly — nastaví členenie aj sekciu KV naraz. */
+  onPrijatOdporucanie?: (clenenieDphId: string | undefined, kvKod: string | undefined) => void;
   autoFilled: boolean;
   /** Zvýraznenie zdroja údajov — mapa polí, ktoré vyplnila AI. */
   src?: SourceMap;
@@ -162,7 +166,7 @@ function VysvetlenieProgress() {
 const LOW_CONFIDENCE = 0.5;
 
 export function InvoicePanel({
-  draft, readOnly, codeLists, suggestion, autoFilled,
+  draft, readOnly, codeLists, suggestion, dphAudit, onPrijatOdporucanie, autoFilled,
   src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, cakajuceVRade = 0,
   predvolenaPokladna,
   setTyp, updateUcto, updateExtracted, updateParty, updatePartyAddress,
@@ -708,6 +712,47 @@ export function InvoicePanel({
                   updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
                 }} />)}
 
+            {/* Právna kontrola nesúhlasí s tým, čo navrhla pamäť. Nič sa
+                neprepisuje — účtovník vidí obe mienky a rozhoduje. */}
+            {dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie && (
+              <>
+                <span />
+                <div className="dk-rozpor">
+                  <div className="dk-rozpor-hlava">
+                    <IcoWarn s={13} />
+                    <span>{dphAudit.verdikt === 'nesuhlasi' ? 'Právna kontrola navrhuje iné členenie' : 'Právna kontrola si nie je istá'}</span>
+                  </div>
+                  <div className="dk-rozpor-mienky">
+                    <span>
+                      Pamäť <strong>{dphAudit.posudeneClenenieKod ?? "bez návrhu"}</strong>
+                    </span>
+                    {dphAudit.odporucaneClenenieKod && (
+                      <span className="dk-rozpor-pravo">
+                        Kontrola <strong>{dphAudit.odporucaneClenenieKod}</strong>
+                      </span>
+                    )}
+                  </div>
+                  <p className="dk-rozpor-dovod">{dphAudit.dovod}</p>
+                  {!readOnly && dphAudit.odporucaneClenenieKod && onPrijatOdporucanie && (
+                    <div className="dk-rozpor-akcie">
+                      <button
+                        type="button"
+                        className="dk-btn dk-btn-ai"
+                        onClick={() => onPrijatOdporucanie(
+                          codeLists.cleneniaDph.find((item) => item.kod === dphAudit.odporucaneClenenieKod)?.id,
+                          dphAudit.odporucanaKvSekcia,
+                        )}
+                      >
+                        Použiť {dphAudit.odporucaneClenenieKod}
+                      </button>
+                      <button type="button" className="dk-btn" onClick={() => onPrijatOdporucanie(undefined, undefined)}>
+                        Ponechať
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',
               <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} placeholder={navrhDo('clenenieKvKod')}

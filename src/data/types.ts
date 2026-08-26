@@ -868,6 +868,25 @@ export type SuggestionSource =
   | 'ai'
   | 'none';
 
+/**
+ * Právna kontrola členenia DPH — druhá mienka k návrhu z pamäte. Nič
+ * neprepisuje: pri rozpore vidí účtovník obe mienky aj dôvod a rozhoduje.
+ */
+export interface DphAudit {
+  documentId: string;
+  organizationId: string;
+  /** Členenie, ktoré sa posudzovalo — po jeho zmene sa verdikt prepočíta. */
+  posudeneClenenieKod?: string;
+  posudenaKvSekcia?: string;
+  verdikt: 'suhlasi' | 'nesuhlasi' | 'neisty';
+  odporucaneClenenieKod?: string;
+  odporucanaKvSekcia?: string;
+  dovod: string;
+  istota?: number;
+  /** Ako rozpor uzavrel účtovník; prázdne = ešte ho neriešil. */
+  rozhodnutie?: 'prijate' | 'ponechane';
+}
+
 export interface AccountingSuggestion {
   tenantId: string;
   organizationId: string;

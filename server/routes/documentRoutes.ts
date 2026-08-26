@@ -111,6 +111,26 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     return result.rows;
   });
 
+  // Účtovník uzavrel rozpor medzi pamäťou a právnou kontrolou. Verdikt sa
+  // nemaže — zostáva ako stopa toho, čo kontrola hovorila, aj keď sa účtovník
+  // rozhodol inak. Bez toho by sa pri spätnej kontrole nedalo zistiť, či bol
+  // rozpor prehliadnutý alebo vedome zamietnutý.
+  app.post('/api/documents/:id/dph-audit/rozhodnutie', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ rozhodnutie: z.enum(['prijate', 'ponechane']) }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const result = await database.query(
+      `UPDATE dph_audit SET rozhodnutie=$1, rozhodol_uzivatel=$2, rozhodnute_at=now(), updated_at=now()
+        WHERE document_id=$3 AND tenant_id=$4`,
+      [body.rozhodnutie, auth.name, id, auth.tenantId],
+    );
+    if (result.rowCount === 0) throw new HttpError(404, 'audit_not_found', 'Kontrola DPH pre tento doklad neexistuje');
+    return { ok: true };
+  });
+
   app.get('/api/documents/:id', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
