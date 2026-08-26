@@ -20,6 +20,10 @@ const klasifikaciaSchema = z.object({
   /** Krátke zdôvodnenie po slovensky — ide do karantény, keď sa kroky nezhodnú. */
   dovod: z.string().max(200),
   istota: z.number().min(0).max(1),
+  /** Čo v súbore je, stranu po strane. Prázdne, keď súbor nesie jediný doklad. */
+  obsahZvazku: z.string().max(200),
+  /** Koľko strán v súbore fakturuje. Viac než jedna znamená, že doklad by sa stratil. */
+  pocetFakturaciiVSubore: z.number().int().min(0).max(50),
 }).strict();
 
 export type Klasifikacia = z.infer<typeof klasifikaciaSchema>;
@@ -55,6 +59,10 @@ Never decide a bundle by the file name, by which page comes first, or by which d
 Read the heading first, then the wording of the terms. Decide from the document itself, never from the file name.
 
 When the document does bill, decide FP or FV by WHO IS OWED THE MONEY, not by who is printed first. Labels differ by language: the party receiving payment may be called Dodávateľ, Supplier, Seller, Beneficiary, Beneficiar or Date beneficiar; the party paying may be Odberateľ, Customer, Buyer, Payer, Plátitor or Date plátitor. When the accounting client named in the request is the one being PAID, the document is FV. When the client is the one paying, it is FP. An IBAN or bank block printed next to a party means that party collects the money.
+
+obsahZvazku: when the file holds more than one document, write a short Slovak inventory naming each one with its pages, separated by " · " — for example "faktúra s. 3 · zmluva s. 1-2 · CMR s. 4". Use the words faktúra, zmluva, objednávka, CMR, akt, certifikát, výpis, iné. Leave it an empty string when the whole file is a single document.
+
+pocetFakturaciiVSubore: how many pages in this file actually BILL — each page carrying its own invoice number, its own date and a sum demanded. A contract application, a CMR and an act of services do not bill and are never counted. A single invoice printed across two pages counts once. Answer 0 for a file that bills nothing.
 
 Answer in the given JSON shape. Write dovod in Slovak, one short sentence naming what convinced you.`;
 

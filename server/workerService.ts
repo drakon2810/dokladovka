@@ -839,6 +839,31 @@ export async function processNextJob(
       outcome.result.documentType = klasifikacia.documentType;
     }
     const summary = await completeRun(database, job, context, prepared, outcome, startedAt, config);
+    // Prepravný spis chodí ako zväzok: žiadosť o prepravu, faktúra dopravcu,
+    // CMR, niekedy akt služieb. Zaúčtuje sa faktúra, ostatné strany sú jej
+    // podklady — a účtovník o nich vie len vtedy, ak mu to niekto povie.
+    if (klasifikacia?.obsahZvazku) {
+      const zaznamy = [{ ts: new Date().toISOString(), user: 'Systém', akcia: `Súbor je zväzok — ${klasifikacia.obsahZvazku}` }];
+      // Druhá faktúra v tom istom súbore sa dnes nezaúčtuje. Nech to nie je
+      // ticho: bez tohto riadka chýba náklad aj odpočet a nikto sa to nedozvie.
+      if (klasifikacia.pocetFakturaciiVSubore > 1) {
+        zaznamy.push({
+          ts: new Date().toISOString(),
+          user: 'Systém',
+          akcia: `POZOR: súbor obsahuje ${klasifikacia.pocetFakturaciiVSubore} fakturujúce doklady, zaúčtoval sa iba jeden. Ostatné treba doplniť ručne.`,
+        });
+        console.warn('[klasifikacia] zvazok s viacerymi fakturami', {
+          documentId: prepared.documentId,
+          pocet: klasifikacia.pocetFakturaciiVSubore,
+          obsah: klasifikacia.obsahZvazku,
+        });
+      }
+      await database.query(
+        `UPDATE documents SET history=history || $1::jsonb, updated_at=now()
+          WHERE id=$2 AND tenant_id=$3 AND organization_id=$4`,
+        [JSON.stringify(zaznamy), prepared.documentId, job.tenant_id, job.organization_id],
+      );
+    }
     // Bankový výpis: automatické párovanie odchádzajúcich transakcií na otvorené
     // faktúry podľa VS + sumy. Zlyhanie párovania nesmie zhodiť spracovanie.
     if (summary && summary.documentType === 'BV') {

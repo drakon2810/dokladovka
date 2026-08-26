@@ -44,6 +44,8 @@ describe('OpenAIDocumentClassifier', () => {
           documentType: 'INY',
           jeUctovnyDoklad: false,
           dovod: 'Nadpis hovorí Contract application, nie faktúra.',
+          obsahZvazku: '',
+          pocetFakturaciiVSubore: 0,
           istota: 0.94,
         },
       }),
@@ -57,7 +59,7 @@ describe('OpenAIDocumentClassifier', () => {
     const classifier = new OpenAIDocumentClassifier(config, {
       parse: async (body: any) => {
         odoslane = JSON.stringify(body.input);
-        return { output_parsed: { documentType: 'FP', jeUctovnyDoklad: true, dovod: 'x', istota: 0.5 } };
+        return { output_parsed: { documentType: 'FP', jeUctovnyDoklad: true, dovod: 'x', istota: 0.5, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
       },
     });
     await classifier.classify(vstup);
@@ -72,7 +74,7 @@ describe('OpenAIDocumentClassifier', () => {
     const classifier = new OpenAIDocumentClassifier(config, {
       parse: async (body: any) => {
         odoslane = JSON.stringify(body.input);
-        return { output_parsed: { documentType: 'FV', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9 } };
+        return { output_parsed: { documentType: 'FV', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
       },
     });
     await classifier.classify({ ...vstup, organizacia: { nazov: 'RCI REAL CARGO', ico: '57251266' } });
@@ -81,6 +83,27 @@ describe('OpenAIDocumentClassifier', () => {
 
     await classifier.classify(vstup);
     expect(odoslane).toContain('neuvedený');
+  });
+
+  // Prepravný spis chodí ako zväzok. Opis je jediné, z čoho sa účtovník
+  // dozvie, že v súbore bola aj druhá faktúra, ktorú nikto nezaúčtoval.
+  it('opis zväzku aj počet fakturujúcich strán prejdú nedotknuté', async () => {
+    const classifier = new OpenAIDocumentClassifier(config, {
+      parse: async () => ({
+        output_parsed: {
+          documentType: 'FP',
+          jeUctovnyDoklad: true,
+          dovod: 'Strana 3 obsahuje Invoice №2409.',
+          istota: 0.93,
+          obsahZvazku: 'faktúra s. 3 · zmluva s. 1-2 · CMR s. 4',
+          pocetFakturaciiVSubore: 2,
+        },
+      }),
+    });
+    expect(await classifier.classify(vstup)).toMatchObject({
+      obsahZvazku: 'faktúra s. 3 · zmluva s. 1-2 · CMR s. 4',
+      pocetFakturaciiVSubore: 2,
+    });
   });
 
   // Prázdna odpoveď nesmie zhodiť spracovanie — extrakcia určí typ sama.
