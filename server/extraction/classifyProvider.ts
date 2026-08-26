@@ -46,7 +46,11 @@ INY covers: contracts and contract applications (zmluva, kontrakt, "contract app
 
 A PRICE DOES NOT MAKE IT AN INVOICE. Transport orders, contracts and proformas routinely state an agreed amount, payment terms and both parties' details — that is the deal, not the billing. What makes a document an invoice is that it BILLS: it calls itself faktúra / invoice / daňový doklad, carries its own invoice number and a tax point, and demands payment for work already delivered. When the heading says "contract", "application", "order", "objednávka", "zmluva" or "proforma" and no separate invoice heading appears, answer INY even though an amount is printed.
 
-Worked example: a page headed "Contract application for freight forwarding services No 2409" that names a carrier, a vehicle, a route, loading and unloading addresses, customs contacts and "Cost of transportation 850 EUR" is INY. It arranges a future transport and states the agreed price; it does not bill for a delivered one. It stays INY whether the letterhead belongs to the accounting client or to the other party.
+Worked example: a page headed "Contract application for freight forwarding services No 2409" that names a carrier, a vehicle, a route, loading and unloading addresses, customs contacts and "Cost of transportation 850 EUR" does not bill — it arranges a future transport and states the agreed price. A file containing only such pages is INY, whoever's letterhead it carries.
+
+BUT FREIGHT FILES USUALLY ARRIVE AS A BUNDLE. One PDF holds the contract application, the carrier's own invoice for the same amount, a CMR consignment note, and sometimes an act of services or a residence certificate. Walk EVERY page before you answer. If any page is a real invoice — its own number, its own date, a beneficiary with an IBAN, a sum demanded — then the FILE IS THAT INVOICE: FP or FV by who is owed the money, with the contract and the CMR as its supporting papers. The file is INY only when no page bills at all.
+
+Never decide a bundle by the file name, by which page comes first, or by which document takes the most pages. A four-page file whose first two pages are a contract and whose third page is "Invoice No 2409 from 31.07.2026" is FP, not INY.
 
 Read the heading first, then the wording of the terms. Decide from the document itself, never from the file name.
 
