@@ -37,7 +37,7 @@ You get: the document's facts, the classification the bookkeeper's history sugge
 
 Judge by the place of supply.
 Services to a business customer: place of supply is where the CUSTOMER is established (§15 ods. 1). Goods and services inside Slovakia: Slovak VAT applies. Supplies to a customer in ANOTHER EU MEMBER STATE can enter the recall statement (súhrnný výkaz). Supplies to a customer in a THIRD COUNTRY (outside the EU) never enter the recall statement — a code meant for EU supplies is wrong there even when the amounts are identical.
-Reverse charge received from a foreign supplier (§69 ods. 3) shifts the tax to the Slovak customer.
+Reverse charge received from a foreign supplier (§69 ods. 3) shifts the tax to the Slovak customer — but that is TWO documents, not one. The received invoice itself carries no Slovak VAT, so its own classification is the "do not include in the VAT return" one. The self-assessment (vymeranie dane) is entered in POHODA as a SEPARATE internal document, and the §69 code together with the B1 control-statement section belongs there. You are judging the code on THIS document only. Never propose a self-assessment code for a received invoice: the list you are given already excludes codes that cannot sit on this document, so choose from what you actually see.
 Watch for exceptions where the place of supply is not the customer's seat: services connected to immovable property, passenger transport, cultural, educational and entertainment services, restaurant and catering. When such an exception may apply and you cannot resolve it from the document, answer neisty and say why.
 
 verdikt = suhlasi when the suggested code is defensible; nesuhlasi when a different code from the list is clearly correct; neisty when the document does not tell you enough.
@@ -66,6 +66,25 @@ const EU_KRAJINY = new Set([
   'AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'GR',
   'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK',
 ]);
+
+/**
+ * Číselník POHODY nesie stranu plnenia v prefixe kódu: U… uskutočnené
+ * plnenia (vydané doklady), P… prijaté plnenia, R… opravy uskutočnených
+ * plnení a DD… daňová povinnosť pri samozdanení. DD patrí na samostatný
+ * interný doklad „Vymeranie DPH", nikdy na samotnú faktúru: v knihách RCI
+ * stojí DDsl§69 deväťdesiatjedenkrát na INT — v páre s PDsluz/B1 — a ani
+ * raz na prijatej faktúre, ktorá dostáva PN.
+ *
+ * Kontrola preto vidí len kódy tej strany, na ktorej doklad stojí. Bez toho
+ * úvahu o §69 ods. 3 vyhodnotila správne, ale kód priradila nesprávnemu
+ * dokladu a účtovníkovi ponúkla vymeranie dane na prijatej faktúre.
+ */
+export function kodyPreStranu<T extends { kod: string }>(documentType: string, kody: T[]): T[] {
+  if (documentType === 'FV') return kody.filter((item) => /^[UR]/.test(item.kod));
+  if (documentType === 'FP') return kody.filter((item) => /^P/.test(item.kod));
+  // Ostatné agendy (interný doklad, pokladnica) môžu stáť na oboch stranách.
+  return kody;
+}
 
 /**
  * Fakty, v ktorých sa model nemá mýliť: krajina protistrany a či je v EÚ.
@@ -106,6 +125,7 @@ export class DphAuditor {
 
   async posud(vstup: DphAuditVstup): Promise<DphVerdikt | undefined> {
     const extracted = vstup.extracted as Record<string, any>;
+    const clenenia = kodyPreStranu(vstup.documentType, vstup.cleneniaDph);
     const response = await this.responses.parse({
       model: this.config.accountingModel,
       store: this.config.storeResponses,
@@ -132,7 +152,7 @@ export class DphAuditor {
               clenenieDph: vstup.navrhnuteClenenieKod ?? null,
               kvSekcia: vstup.navrhnutaKvSekcia ?? null,
             },
-            dostupneClenenia: vstup.cleneniaDph,
+            dostupneClenenia: clenenia,
             dostupneKvSekcie: vstup.kvSekcie,
           }),
         }],
@@ -144,7 +164,7 @@ export class DphAuditor {
     const verdikt = verdiktSchema.parse(response.output_parsed);
     // Kód mimo číselníka firmy sa zahodí — do POHODY by aj tak neprešiel a v
     // karte dokladu by len mátol. Zvyšok verdiktu (dôvod) má hodnotu ďalej.
-    const znameKody = new Set(vstup.cleneniaDph.map((item) => item.kod));
+    const znameKody = new Set(clenenia.map((item) => item.kod));
     const znameKv = new Set(vstup.kvSekcie.map((item) => item.kod));
     return {
       ...verdikt,
@@ -217,7 +237,7 @@ export function zluc(prvy: DphVerdikt, druhy: DphVerdikt): DphVerdikt {
     verdikt: 'neisty',
     odporucaneClenenieKod: null,
     odporucanaKvSekcia: null,
-    dovod: `Dve nezávislé kontroly sa nezhodli. Prvá: ${prvy.dovod} Druhá: ${druhy.dovod}`.slice(0, 400),
+    dovod: `Dve nezávislé kontroly sa nezhodli. Prvá navrhuje ${prvy.odporucaneClenenieKod ?? 'ponechať'}: ${prvy.dovod} Druhá navrhuje ${druhy.odporucaneClenenieKod ?? 'ponechať'}: ${druhy.dovod}`.slice(0, 400),
     istota: Math.min(prvy.istota, druhy.istota),
   };
 }

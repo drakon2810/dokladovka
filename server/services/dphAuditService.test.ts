@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DphAuditor, overeneFakty, trebaDruhyHlas, zluc, type DphAuditVstup } from './dphAuditService.js';
+import { DphAuditor, kodyPreStranu, overeneFakty, trebaDruhyHlas, zluc, type DphAuditVstup } from './dphAuditService.js';
 
 // Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
 // model dostane spoľahlivé fakty o krajine a nikdy nesmie prejsť s kódom,
@@ -11,6 +11,9 @@ const config = {
 } as unknown as ConstructorParameters<typeof DphAuditor>[0];
 
 const cleneniaDph = [
+  { kod: 'PN', nazov: 'Nezahrňovať do priznania DPH' },
+  { kod: 'PDsluz', nazov: 'Prijaté služby' },
+  { kod: 'DDsl§69', nazov: 'Služby, pri ktorých príjemca platí daň podľa § 69 ods.3 zákona' },
   { kod: 'UN', nazov: 'Nezahrňovať do priznania DPH' },
   { kod: 'UDzahr', nazov: 'Miesto plnenia v zahraničí s možnosťou odpočítania dane' },
   { kod: 'UD', nazov: 'Tuzemské plnenia' },
@@ -66,6 +69,33 @@ describe('overeneFakty', () => {
   });
 });
 
+
+describe('kodyPreStranu', () => {
+  // POHODA nesie stranu plnenia v prefixe: U… vydané, P… prijaté, DD…
+  // vymeranie dane na samostatnom internom doklade. V knihách RCI stojí
+  // DDsl§69 91× na INT a ani raz na prijatej faktúre — tam je PN.
+  it('prijatá faktúra nevidí kódy vydanej strany ani vymeranie dane', () => {
+    const kody = kodyPreStranu('FP', cleneniaDph).map((item) => item.kod);
+    expect(kody).toContain('PN');
+    expect(kody).toContain('PDsluz');
+    expect(kody).not.toContain('DDsl§69');
+    expect(kody).not.toContain('UN');
+    expect(kody).not.toContain('UDzahr');
+  });
+
+  it('vydaná faktúra nevidí prijatú stranu ani vymeranie dane', () => {
+    const kody = kodyPreStranu('FV', cleneniaDph).map((item) => item.kod);
+    expect(kody).toContain('UN');
+    expect(kody).toContain('UDzahr');
+    expect(kody).not.toContain('PN');
+    expect(kody).not.toContain('DDsl§69');
+  });
+
+  // Interný doklad je práve to miesto, kde vymeranie dane žije.
+  it('interný doklad vidí celý číselník', () => {
+    expect(kodyPreStranu('INT', cleneniaDph)).toHaveLength(cleneniaDph.length);
+  });
+});
 describe('DphAuditor', () => {
   it('vráti nesúhlas s odporúčaním z číselníka firmy', async () => {
     const auditor = new DphAuditor(config, {
