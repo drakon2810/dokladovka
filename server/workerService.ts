@@ -13,6 +13,7 @@ import {
 } from './extraction/contract.js';
 import { MockServerDocumentExtractionProvider, type MockExtractionHints } from './extraction/mockProvider.js';
 import { ExtractionProviderError, OpenAIDocumentExtractionProvider } from './extraction/openaiProvider.js';
+import { OpenAIDocumentClassifier, type Klasifikacia } from './extraction/classifyProvider.js';
 import { PeppolDocumentExtractionProvider } from './extraction/peppolProvider.js';
 import { SepaStatementExtractionProvider } from './extraction/sepaProvider.js';
 import { classifyXml } from './inbound/xmlClassifier.js';
@@ -760,6 +761,22 @@ export async function processNextJob(
       organizationId: job.organization_id,
       faza: 'extraction',
     }));
+    // Samostatný krok klasifikácie. V extrakčnom prompte je documentType len
+    // jedno pole z tridsiatich a zmluva s cenou skončila ako prijatá faktúra;
+    // jedna otázka na jeden dopyt to rozhoduje spoľahlivejšie. Zlyhanie kroku
+    // nesmie zhodiť spracovanie — extrakcia určí typ sama ako doteraz.
+    let klasifikacia: Klasifikacia | undefined;
+    if (provider.name === 'openai' && !dependencies.provider) {
+      try {
+        klasifikacia = await new OpenAIDocumentClassifier(config.openai).classify({
+          bytes,
+          mimeType: context.detected_mime_type as ExtractionInput['mimeType'],
+          fileName: context.original_file_name,
+        });
+      } catch {
+        klasifikacia = undefined;
+      }
+    }
     const startedAt = performance.now();
     const outcome = await provider.extract({
       documentId: prepared.documentId,
@@ -776,6 +793,12 @@ export async function processNextJob(
       promptVersion: EXTRACTION_PROMPT_VERSION,
       schemaVersion: EXTRACTION_SCHEMA_VERSION,
     });
+    // Klasifikátor riešil jedinú otázku, extrakcia tridsať polí — pri rozpore
+    // má prednosť špecializovaný krok. Týka sa to hlavne zmlúv a objednávok,
+    // ktoré extrakcia kvôli vytlačenej cene vyhodnotila ako faktúru.
+    if (klasifikacia && klasifikacia.documentType !== outcome.result.documentType) {
+      outcome.result.documentType = klasifikacia.documentType;
+    }
     const summary = await completeRun(database, job, context, prepared, outcome, startedAt, config);
     // Bankový výpis: automatické párovanie odchádzajúcich transakcií na otvorené
     // faktúry podľa VS + sumy. Zlyhanie párovania nesmie zhodiť spracovanie.
