@@ -14,6 +14,7 @@ interface FirmRow {
   farba: string;
   naKontrolu: number;
   naExport: number;
+  rozpory: number;
   nespracovane: number;
   spolu: number;
 }
@@ -39,7 +40,7 @@ export function DashboardPage() {
       if (org.archived) continue;
       byOrg.set(org.id, {
         id: org.id, nazov: org.nazov, ico: org.ico, farba: org.farba,
-        naKontrolu: 0, naExport: 0, nespracovane: 0, spolu: 0,
+        naKontrolu: 0, naExport: 0, nespracovane: 0, rozpory: 0, spolu: 0,
       });
     }
     for (const document of data.documents) {
@@ -48,6 +49,14 @@ export function DashboardPage() {
       row.spolu += 1;
       if (document.status === 'na_kontrole' || document.status === 'extrahovany') row.naKontrolu += 1;
       if (document.status === 'schvaleny') row.naExport += 1;
+    }
+    // Nevyriešený rozpor medzi pamäťou a právnou kontrolou DPH. Kým ho nikto
+    // neuzavrie, doklad odchádza do POHODY s členením, ktoré kontrola
+    // spochybnila — a zistí sa to až pri kontrolnom výkaze.
+    for (const audit of data.dphAudit ?? []) {
+      if (audit.verdikt === 'suhlasi' || audit.rozhodnutie) continue;
+      const row = byOrg.get(audit.organizationId);
+      if (row) row.rozpory += 1;
     }
     for (const email of data.inboundEmails) {
       if (!['quarantine', 'failed'].includes(email.status)) continue;
@@ -113,6 +122,7 @@ export function DashboardPage() {
                 <th className="px-4 py-2.5 font-medium">{t('firmy.stlpec.firma')}</th>
                 <th className="px-3 py-2.5 text-right font-medium">{t('firmy.stlpec.naKontrolu')}</th>
                 <th className="px-3 py-2.5 text-right font-medium">{t('firmy.stlpec.naExport')}</th>
+                <th className="px-3 py-2.5 text-right font-medium">{t('firmy.stlpec.rozpory')}</th>
                 <th className="px-3 py-2.5 text-right font-medium">{t('firmy.stlpec.nespracovane')}</th>
                 <th className="px-3 py-2.5 text-right font-medium">{t('firmy.stlpec.doklady')}</th>
                 <th className="px-4 py-2.5" />
@@ -156,6 +166,11 @@ export function DashboardPage() {
                   <td className="tnum px-3 py-3 text-right">
                     {row.naExport > 0 ? row.naExport : <span className="text-ink-mute">—</span>}
                   </td>
+                    <td className="px-3 py-2.5 text-right tnum">
+                      {row.rozpory > 0
+                        ? <span className="text-amber-700" title={t('firmy.stlpec.rozporyPopis')}>{row.rozpory}</span>
+                        : <span className="text-ink-mute">—</span>}
+                    </td>
                   <td className="tnum px-3 py-3 text-right">
                     {row.nespracovane > 0 ? (
                       <span className="font-semibold text-red-700">{row.nespracovane}</span>

@@ -274,6 +274,8 @@ export const sk = {
   'dash.nove': 'Nové',
   'dash.naKontrolu': 'Na kontrolu',
   'dash.schvalene': 'Schválené',
+  'firmy.stlpec.rozpory': 'Rozpory DPH',
+  'firmy.stlpec.rozporyPopis': 'Právna kontrola spochybnila členenie DPH a nikto to zatiaľ neuzavrel.',
   'dash.problemy': 'Chyby / Karanténa',
   'dash.posledneUdalosti': 'Posledné udalosti',
   'dash.grafTitulok': 'Doklady za posledných 30 dní',

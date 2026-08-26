@@ -65,6 +65,24 @@ describe('OpenAIDocumentClassifier', () => {
     expect(odoslane).toContain('rozhodni z obsahu');
   });
 
+  // Bez klienta model nevie, ktorá strana je "naša" — vydanú faktúru potom
+  // číta ako prijatú. Preto ide do každej správy, aj keď ho nemáme.
+  it('účtovný klient ide modelu vždy, aj keď nie je známy', async () => {
+    let odoslane = '';
+    const classifier = new OpenAIDocumentClassifier(config, {
+      parse: async (body: any) => {
+        odoslane = JSON.stringify(body.input);
+        return { output_parsed: { documentType: 'FV', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9 } };
+      },
+    });
+    await classifier.classify({ ...vstup, organizacia: { nazov: 'RCI REAL CARGO', ico: '57251266' } });
+    expect(odoslane).toContain('RCI REAL CARGO');
+    expect(odoslane).toContain('57251266');
+
+    await classifier.classify(vstup);
+    expect(odoslane).toContain('neuvedený');
+  });
+
   // Prázdna odpoveď nesmie zhodiť spracovanie — extrakcia určí typ sama.
   it('odpoveď bez obsahu vráti undefined', async () => {
     const classifier = new OpenAIDocumentClassifier(config, { parse: async () => ({}) });

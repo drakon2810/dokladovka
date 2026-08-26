@@ -192,6 +192,36 @@ export async function nacitajCiselnikPreAudit(
  * alebo dopyt zlyhá, doklad ide ďalej bez druhej mienky — kontrola je poradca,
  * nie podmienka spracovania.
  */
+/**
+ * Kedy sa oplatí druhý, nezávislý hlas. Nie vždy: pri zhode s pamäťou a vysokej
+ * istote by to bola len ďalšia faktúra na účte za rovnaký výsledok. Pýtame sa
+ * znova práve tam, kde prvá odpoveď sama priznáva slabinu alebo kde ide o zmenu
+ * oproti tomu, čo účtovníci roky robili — teda tam, kde by omyl najviac bolel.
+ */
+export function trebaDruhyHlas(verdikt: DphVerdikt): boolean {
+  if (verdikt.verdikt === 'neisty') return true;
+  if (verdikt.verdikt === 'nesuhlasi') return verdikt.istota < 0.9;
+  return false;
+}
+
+/**
+ * Zlúčenie dvoch nezávislých hlasov. Zhoda na tom istom kóde verdikt potvrdí;
+ * nezhoda ho posunie na „neistý" — dva modely, ktoré si protirečia, nie sú
+ * dôvod meniť zaúčtovanie, ale sú dôvod, aby sa na doklad pozrel človek.
+ */
+export function zluc(prvy: DphVerdikt, druhy: DphVerdikt): DphVerdikt {
+  if (prvy.verdikt === druhy.verdikt && prvy.odporucaneClenenieKod === druhy.odporucaneClenenieKod) {
+    return { ...prvy, istota: Math.max(prvy.istota, druhy.istota) };
+  }
+  return {
+    verdikt: 'neisty',
+    odporucaneClenenieKod: null,
+    odporucanaKvSekcia: null,
+    dovod: `Dve nezávislé kontroly sa nezhodli. Prvá: ${prvy.dovod} Druhá: ${druhy.dovod}`.slice(0, 400),
+    istota: Math.min(prvy.istota, druhy.istota),
+  };
+}
+
 export async function posudADulozDph(
   database: Database,
   config: ServerConfig,
@@ -206,6 +236,9 @@ export async function posudADulozDph(
   },
   auditor?: DphAuditor,
 ): Promise<DphVerdikt | undefined> {
+  // Výpis z účtu, mzdová páska ani zmluva členenie DPH nemajú — kontrola by
+  // na nich len pálila dopyty a vyrábala rozpory, ktoré nemá kto uzavrieť.
+  if (['BV', 'MZDY', 'INY', 'UNKNOWN'].includes(input.documentType)) return undefined;
   if (!auditor && (config.extractionProvider !== 'openai' || !config.openai.apiKey)) return undefined;
   const ciselnik = await nacitajCiselnikPreAudit(database, input.tenantId, input.organizationId);
   if (ciselnik.cleneniaDph.length === 0) return undefined;
@@ -218,6 +251,24 @@ export async function posudADulozDph(
     ...ciselnik,
   });
   if (!verdikt) return undefined;
+
+  // Druhý nezávislý hlas tam, kde prvá odpoveď nestojí pevne. Zlyhanie
+  // druhého dopytu nechá platiť prvý — lepšie jedna mienka než žiadna.
+  let finalny = verdikt;
+  if (trebaDruhyHlas(verdikt)) {
+    try {
+      const druhy = await (auditor ?? new DphAuditor(config.openai)).posud({
+        documentType: input.documentType,
+        extracted: input.extracted,
+        navrhnuteClenenieKod: input.navrhnuteClenenieKod,
+        navrhnutaKvSekcia: input.navrhnutaKvSekcia,
+        ...ciselnik,
+      });
+      if (druhy) finalny = zluc(verdikt, druhy);
+    } catch {
+      finalny = verdikt;
+    }
+  }
 
   await database.query(
     `INSERT INTO dph_audit
@@ -235,8 +286,8 @@ export async function posudADulozDph(
        updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
       input.navrhnuteClenenieKod ?? null, input.navrhnutaKvSekcia ?? null,
-      verdikt.verdikt, verdikt.odporucaneClenenieKod, verdikt.odporucanaKvSekcia,
-      verdikt.dovod, verdikt.istota, config.openai.accountingModel],
+      finalny.verdikt, finalny.odporucaneClenenieKod, finalny.odporucanaKvSekcia,
+      finalny.dovod, finalny.istota, config.openai.accountingModel],
   );
-  return verdikt;
+  return finalny;
 }

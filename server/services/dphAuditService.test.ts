@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DphAuditor, overeneFakty, type DphAuditVstup } from './dphAuditService.js';
+import { DphAuditor, overeneFakty, trebaDruhyHlas, zluc, type DphAuditVstup } from './dphAuditService.js';
 
 // Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
 // model dostane spoľahlivé fakty o krajine a nikdy nesmie prejsť s kódom,
@@ -120,5 +120,39 @@ describe('DphAuditor', () => {
   it('prázdna odpoveď nezhodí spracovanie', async () => {
     const auditor = new DphAuditor(config, { parse: async () => ({}) });
     expect(await auditor.posud(moldavskaFaktura)).toBeUndefined();
+  });
+});
+
+describe('druhý hlas', () => {
+  // Druhý dopyt nie je zadarmo — pýtame sa len tam, kde by omyl bolel:
+  // keď model sám priznáva neistotu, alebo keď chce meniť zaužívanú prax.
+  it('pri zhode s pamäťou sa druhý hlas nepýta', () => {
+    expect(trebaDruhyHlas(JSON.parse("{\"verdikt\":\"suhlasi\",\"odporucaneClenenieKod\":null,\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.9}"))).toBe(false);
+  });
+
+  it('neistý verdikt si vždy vyžiada druhý hlas', () => {
+    expect(trebaDruhyHlas(JSON.parse("{\"verdikt\":\"neisty\",\"odporucaneClenenieKod\":null,\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.95}"))).toBe(true);
+  });
+
+  it('nesúhlas s nízkou istotou si vyžiada druhý hlas, s vysokou nie', () => {
+    expect(trebaDruhyHlas(JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":null,\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.7}"))).toBe(true);
+    expect(trebaDruhyHlas(JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":null,\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.95}"))).toBe(false);
+  });
+
+  it('zhodné hlasy verdikt potvrdia a vezmú vyššiu istotu', () => {
+    const a = JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":\"UN\",\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.7}");
+    const b = JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":\"UN\",\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.85}");
+    expect(zluc(a, b)).toMatchObject({ verdikt: 'nesuhlasi', odporucaneClenenieKod: 'UN', istota: 0.85 });
+  });
+
+  // Dva modely, ktoré si protirečia, nie sú dôvod meniť zaúčtovanie —
+  // sú dôvod, aby sa na doklad pozrel človek.
+  it('nezhodné hlasy skončia ako neistý verdikt bez odporúčania', () => {
+    const a = JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":\"UN\",\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.8}");
+    const b = JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":\"UD\",\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.6}");
+    const spolu = zluc(a, b);
+    expect(spolu.verdikt).toBe('neisty');
+    expect(spolu.odporucaneClenenieKod).toBeNull();
+    expect(spolu.dovod).toContain('nezhodli');
   });
 });

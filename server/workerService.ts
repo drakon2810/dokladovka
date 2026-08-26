@@ -797,6 +797,11 @@ export async function processNextJob(
           bytes,
           mimeType: context.detected_mime_type as ExtractionInput['mimeType'],
           fileName: context.original_file_name,
+          organizacia: {
+            nazov: context.organization_name,
+            ico: context.organization_ico,
+            icDph: context.organization_ic_dph,
+          },
         });
       } catch {
         klasifikacia = undefined;
@@ -821,7 +826,16 @@ export async function processNextJob(
     // Klasifikátor riešil jedinú otázku, extrakcia tridsať polí — pri rozpore
     // má prednosť špecializovaný krok. Týka sa to hlavne zmlúv a objednávok,
     // ktoré extrakcia kvôli vytlačenej cene vyhodnotila ako faktúru.
-    if (klasifikacia && klasifikacia.documentType !== outcome.result.documentType) {
+    // Prednosť má, ale len keď si je istý. Neistá klasifikácia by inak prebila
+    // extrakciu, ktorá videla celý doklad — vtedy je lepšie nechať typ na nej.
+    if (klasifikacia && klasifikacia.istota >= 0.6 && klasifikacia.documentType !== outcome.result.documentType) {
+      console.info('[klasifikacia] typ prepisany', {
+        documentId: prepared.documentId,
+        zExtrakcie: outcome.result.documentType,
+        zKlasifikacie: klasifikacia.documentType,
+        istota: klasifikacia.istota,
+        dovod: klasifikacia.dovod,
+      });
       outcome.result.documentType = klasifikacia.documentType;
     }
     const summary = await completeRun(database, job, context, prepared, outcome, startedAt, config);

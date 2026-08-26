@@ -714,7 +714,13 @@ export function InvoicePanel({
 
             {/* Právna kontrola nesúhlasí s tým, čo navrhla pamäť. Nič sa
                 neprepisuje — účtovník vidí obe mienky a rozhoduje. */}
-            {dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie && (
+            {/* Verdikt platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník
+                medzitým prepol, panel zmizne — radiť k inému kódu, než aký
+                kontrola videla, by bolo horšie než mlčať. */}
+            {dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie
+              && (!dphAudit.posudeneClenenieKod
+                || dphAudit.posudeneClenenieKod
+                  === codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod) && (
               <>
                 <span />
                 <div className="dk-rozpor">
