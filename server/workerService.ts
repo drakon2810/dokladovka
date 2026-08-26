@@ -14,6 +14,7 @@ import {
 import { MockServerDocumentExtractionProvider, type MockExtractionHints } from './extraction/mockProvider.js';
 import { ExtractionProviderError, OpenAIDocumentExtractionProvider } from './extraction/openaiProvider.js';
 import { OpenAIDocumentClassifier, type Klasifikacia } from './extraction/classifyProvider.js';
+import { posudADulozDph } from './services/dphAuditService.js';
 import { PeppolDocumentExtractionProvider } from './extraction/peppolProvider.js';
 import { SepaStatementExtractionProvider } from './extraction/sepaProvider.js';
 import { classifyXml } from './inbound/xmlClassifier.js';
@@ -571,6 +572,30 @@ async function completeRun(
       metadata: { provider: prepared.providerName, extractionRunId: prepared.runId, warningCount: result.warnings.length },
     });
   });
+  // Právna kontrola členenia DPH — druhá mienka k tomu, čo navrhla pamäť.
+  // Beží AŽ ZA transakciou: dopyt do AI trvá sekundy a držať kvôli nemu
+  // otvorenú transakciu by blokovalo zápis ostatných dokladov. Zlyhanie
+  // nesmie zhodiť doklad, ktorý je už uložený — verdikt je poradca.
+  try {
+    const navrh = await database.query<{ kod?: string; kv?: string } & Record<string, unknown>>(
+      `SELECT c.code AS kod, s.clenenie_kv_kod AS kv
+         FROM accounting_suggestions s
+         LEFT JOIN code_list_items c ON c.id=s.clenenie_dph_id
+        WHERE s.document_id=$1 AND s.tenant_id=$2`,
+      [prepared.documentId, job.tenant_id],
+    );
+    await posudADulozDph(database, config, {
+      tenantId: job.tenant_id,
+      organizationId: job.organization_id,
+      documentId: prepared.documentId,
+      documentType: normalized.documentType,
+      extracted: normalized.extracted as Record<string, unknown>,
+      navrhnuteClenenieKod: navrh.rows[0]?.kod ?? undefined,
+      navrhnutaKvSekcia: navrh.rows[0]?.kv ?? undefined,
+    });
+  } catch (error) {
+    console.warn('[dph-audit] kontrola zlyhala', error);
+  }
   if (prepared.isReprocess) return undefined;
   // Strany dokladu sú spoločné pre celý súbor aj pre doklady, ktoré z neho
   // vznikli rozdelením — líšia sa len typom, sumou a položkami.

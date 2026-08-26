@@ -1,0 +1,124 @@
+import { describe, expect, it } from 'vitest';
+import { DphAuditor, overeneFakty, type DphAuditVstup } from './dphAuditService.js';
+
+// Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
+// model dostane spoľahlivé fakty o krajine a nikdy nesmie prejsť s kódom,
+// ktorý firma nemá v číselníku.
+
+const config = {
+  apiKey: 'test', model: 'gpt-test', accountingModel: 'gpt-test', ruleAnalysisModel: 'gpt-test',
+  reasoningEffort: '', storeResponses: false, timeoutMs: 1000, maxRetries: 0,
+} as unknown as ConstructorParameters<typeof DphAuditor>[0];
+
+const cleneniaDph = [
+  { kod: 'UN', nazov: 'Nezahrňovať do priznania DPH' },
+  { kod: 'UDzahr', nazov: 'Miesto plnenia v zahraničí s možnosťou odpočítania dane' },
+  { kod: 'UD', nazov: 'Tuzemské plnenia' },
+];
+const kvSekcie = [{ kod: 'KN', nazov: 'Nezahŕňať do kontrolného výkazu' }, { kod: 'A1', nazov: 'Dodanie' }];
+
+const moldavskaFaktura: DphAuditVstup = {
+  documentType: 'FV',
+  extracted: {
+    odberatel: { nazov: 'SRL "GTRADE GROUP"', krajina: 'MD', icDph: '0307883' },
+    dodavatel: { nazov: 'RCI REAL CARGO INDUSTRY s.r.o.', ico: '57251266' },
+    sumaSpolu: 51360,
+  },
+  navrhnuteClenenieKod: 'UDzahr',
+  navrhnutaKvSekcia: 'KN',
+  cleneniaDph,
+  kvSekcie,
+};
+
+describe('overeneFakty', () => {
+  // Na tomto sa model pomýlil pri CMA CGM: kód z faktúry si pomýlil so sekciou
+  // KV. Krajinu mu preto nedávame hádať — dostane ju hotovú.
+  it('pri vydanej faktúre posudzuje odberateľa a rozpozná tretiu krajinu', () => {
+    expect(overeneFakty(moldavskaFaktura)).toMatchObject({
+      rolaProtistrany: 'odberateľ',
+      krajinaProtistrany: 'MD',
+      jeVEu: false,
+      jeTretiaKrajina: true,
+    });
+  });
+
+  it('pri prijatej faktúre posudzuje dodávateľa a krajinu vezme z IČ DPH', () => {
+    const fakty = overeneFakty({
+      ...moldavskaFaktura,
+      documentType: 'FP',
+      extracted: { dodavatel: { nazov: 'CMA - CGM', icDph: 'FR72562024422' } },
+    });
+    expect(fakty).toMatchObject({ rolaProtistrany: 'dodávateľ', krajinaProtistrany: 'FR', jeVEu: true });
+  });
+
+  it('grécke EL sa berie ako krajina EÚ', () => {
+    const fakty = overeneFakty({
+      ...moldavskaFaktura,
+      documentType: 'FP',
+      extracted: { dodavatel: { icDph: 'EL123456789' } },
+    });
+    expect(fakty).toMatchObject({ krajinaProtistrany: 'EL', jeVEu: true });
+  });
+
+  it('bez krajiny aj IČ DPH sa nič nepredstiera', () => {
+    const fakty = overeneFakty({ ...moldavskaFaktura, documentType: 'FP', extracted: { dodavatel: {} } });
+    expect(fakty).toMatchObject({ jeVEu: null, jeTretiaKrajina: null });
+  });
+});
+
+describe('DphAuditor', () => {
+  it('vráti nesúhlas s odporúčaním z číselníka firmy', async () => {
+    const auditor = new DphAuditor(config, {
+      parse: async () => ({
+        output_parsed: {
+          verdikt: 'nesuhlasi',
+          odporucaneClenenieKod: 'UN',
+          odporucanaKvSekcia: 'KN',
+          dovod: 'Odberateľ je podnikateľ z tretej krajiny, miesto dodania podľa §15 ods. 1 je mimo SR.',
+          istota: 0.9,
+        },
+      }),
+    });
+    expect(await auditor.posud(moldavskaFaktura)).toMatchObject({
+      verdikt: 'nesuhlasi',
+      odporucaneClenenieKod: 'UN',
+    });
+  });
+
+  // Kód mimo číselníka by v POHODE aj tak neprešiel a v karte by len mátol.
+  it('vymyslený kód mimo číselníka sa zahodí, dôvod zostane', async () => {
+    const auditor = new DphAuditor(config, {
+      parse: async () => ({
+        output_parsed: {
+          verdikt: 'nesuhlasi',
+          odporucaneClenenieKod: 'UDdodEU',
+          odporucanaKvSekcia: 'B7',
+          dovod: 'Model si vymyslel kód, ktorý firma nemá.',
+          istota: 0.7,
+        },
+      }),
+    });
+    const verdikt = await auditor.posud(moldavskaFaktura);
+    expect(verdikt?.odporucaneClenenieKod).toBeNull();
+    expect(verdikt?.odporucanaKvSekcia).toBeNull();
+    expect(verdikt?.dovod).toContain('vymyslel');
+  });
+
+  it('modelu ide celý číselník firmy aj overené fakty', async () => {
+    let odoslane = '';
+    const auditor = new DphAuditor(config, {
+      parse: async (body: any) => {
+        odoslane = JSON.stringify(body.input);
+        return { output_parsed: { verdikt: 'suhlasi', odporucaneClenenieKod: null, odporucanaKvSekcia: null, dovod: 'ok', istota: 0.8 } };
+      },
+    });
+    await auditor.posud(moldavskaFaktura);
+    expect(odoslane).toContain('Miesto plnenia v zahrani');
+    expect(odoslane).toContain('jeTretiaKrajina');
+  });
+
+  it('prázdna odpoveď nezhodí spracovanie', async () => {
+    const auditor = new DphAuditor(config, { parse: async () => ({}) });
+    expect(await auditor.posud(moldavskaFaktura)).toBeUndefined();
+  });
+});
