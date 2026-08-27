@@ -821,7 +821,19 @@ const aiSuggestionSchema = z.object({
 }).strict();
 
 const AI_SUGGESTION_INSTRUCTIONS = `You are the accounting analyst for Slovak double-entry bookkeeping. For every document decide the full posting: predkontácia, členenie DPH and sekcia KV DPH (kontrolný výkaz).
-Choose predkontaciaId/clenenieDphId/ciselnyRadId ONLY from the provided code lists; copy "id" values exactly; null when nothing fits — never invent ids. clenenieKvKod is a section code (A1, A2, B1, B2, B3, C1, C2, D1, D2, KN), not an id.
+Choose predkontaciaId/clenenieDphId/ciselnyRadId ONLY from the provided code lists; copy "id" values exactly; null when nothing fits — never invent ids. clenenieKvKod is a section code, not an id.
+THE CONTROL STATEMENT SECTIONS, and what each one actually holds (Finančná správa, §78a):
+A1 — issued invoices where the payer is the person liable for Slovak tax, not exempt, excluding simplified invoices.
+A2 — issued invoices with the domestic transfer of liability under §69 ods. 12 písm. f) to j).
+B1 — received invoices or another document where the RECIPIENT owes the tax under §69 ods. 2, 3, 6, 7 and 9 to 12.
+B2 — received invoices from another Slovak payer under §69 ods. 1, with deduction.
+B3 — simplified invoices under §74 ods. 3.
+C1 / C2 — issued / received corrective invoices (§71 ods. 2, §25a).
+D1 — turnover recorded by an e-kasa cash register.
+D2 — supplies OTHER than those in A1 on which the payer owes tax IN SLOVAKIA, outside e-kasa.
+KN — do not include in the control statement at all.
+
+DECIDE BY WHAT THE SECTION HOLDS, never by the shape of the code. Every section except KN presumes the place of supply is IN SLOVAKIA. A service supplied to a business established abroad has its place of supply at the customer (§15 ods. 1), so it belongs in NO section and takes KN — D2 in particular is wrong for it, because nobody owes Slovak tax on it.
 Evidence, strongest first:
 1. "pravidla" — written rules (global from the system operator, firm ones from the accountant). Binding; firm rules win over global ones.
 2. "dennik" — rows from THIS company's own POHODA journal for the SAME agenda as this document, with occurrence counts. This is how the firm actually books such operations — every firm books differently, so prefer the journal over general habits. Its kod values refer to the code lists (match by id when present, otherwise find the matching kod).
