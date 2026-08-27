@@ -394,10 +394,16 @@ export function InvoicePanel({
   // Verdikt navyše platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník
   // medzitým prepol, návrh zmizne: radiť k inému kódu, než aký kontrola videla,
   // by bolo horšie než mlčať.
-  const navrhKontroly = dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie
+  const navrhKontroly = dphAudit && dphAudit.verdikt !== 'suhlasi'
     && kodVPoli
     && (!dphAudit.posudeneClenenieKod || dphAudit.posudeneClenenieKod === kodVPoli)
     ? {
+      // Po rozhodnutí návrh nezmizne bez stopy. Doteraz sa po stlačení
+      // „Ponechať" zavrela celá panel aj s odôvodnením a na doklade nezostalo
+      // nič — nedalo sa zistiť, či kontrola vôbec bežala a čo hovorila.
+      rozhodnutie: dphAudit.rozhodnutie ?? undefined,
+      /** Čo kontrola radila — po prijatí sa to už od poľa nelíši, ale patrí do záznamu. */
+      radila: dphAudit.odporucaneClenenieKod ?? undefined,
       // Ponúkame len to, čo sa naozaj líši od toho, čo na doklade stojí.
       clenenie: dphAudit.odporucaneClenenieKod && dphAudit.odporucaneClenenieKod !== kodVPoli
         ? dphAudit.odporucaneClenenieKod
@@ -427,13 +433,16 @@ export function InvoicePanel({
       <span />
       <div className="dk-navrh">
         <div className="dk-navrh-riadok">
-          {/* Bez kódu kontrola nemá čo ponúknuť — doklad sa neoveril, ale ani
-              nič nespochybnila. Taká poznámka nesmie vyzerať ako výstraha:
-              jantárová ikona nad poľom, kde niet čo opraviť, je len šum. */}
-          <span className={kod ? 'dk-navrh-kod' : 'dk-navrh-ticho'}>
-            {kod ? <><IcoWarn s={11} />Kontrola navrhuje {kod}</> : 'Kontrola doklad neposúdila'}
+          {/* Tri stavy. Rozhodnutý spor je tichý záznam, čo kontrola radila —
+              po stlačení „Ponechať" dovtedy nezostalo na doklade nič a nedalo
+              sa zistiť, či vôbec bežala. Bez kódu kontrola nemá čo ponúknuť,
+              a to tiež nie je výstraha. Jantárová ostáva len živá rada. */}
+          <span className={kod && !navrhKontroly?.rozhodnutie ? 'dk-navrh-kod' : 'dk-navrh-ticho'}>
+            {navrhKontroly?.rozhodnutie
+              ? `Kontrola navrhovala ${kod ?? '—'} · ${navrhKontroly.rozhodnutie === 'prijate' ? 'prijaté' : 'ponechané'}`
+              : kod ? <><IcoWarn s={11} />Kontrola navrhuje {kod}</> : 'Kontrola doklad neposúdila'}
           </span>
-          {!readOnly && kod && onPrijatOdporucanie && (
+          {!readOnly && kod && !navrhKontroly?.rozhodnutie && onPrijatOdporucanie && (
             <>
               <button type="button" className="dk-navrh-pouzit" onClick={pouzit}>Použiť</button>
               <span className="dk-navrh-sep">·</span>
@@ -783,13 +792,14 @@ export function InvoicePanel({
                 onChange={(value) => {
                   const picked = codeLists.cleneniaDph.find((item) => item.id === value);
                   updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
-                }} />, Boolean(navrhKontroly?.clenenie))}
+                }} />, Boolean(navrhKontroly?.clenenie && !navrhKontroly.rozhodnutie))}
 
             {/* Neistý verdikt sa ukáže tiež — bez kódu a bez tlačidiel, len
                 s dôvodom. Pochybnosť kontroly je informácia, mlčať o nej
-                znamená tváriť sa, že je všetko preverené. */}
-            {navrhKontroly && (navrhKontroly.clenenie || navrhKontroly.bezNalezu)
-              && riadokNavrhu('dph', navrhKontroly.clenenie, () => onPrijatOdporucanie?.(
+                znamená tváriť sa, že je všetko preverené. Rozhodnutý spor
+                zostáva ako tichý záznam, aby bolo vidieť, čo kontrola radila. */}
+            {navrhKontroly && (navrhKontroly.clenenie || navrhKontroly.bezNalezu || navrhKontroly.rozhodnutie)
+              && riadokNavrhu('dph', navrhKontroly.clenenie ?? navrhKontroly.radila, () => onPrijatOdporucanie?.(
                 codeLists.cleneniaDph.find((item) => item.kod === navrhKontroly.clenenie)?.id,
                 navrhKontroly.kvSekcia,
               ))}
@@ -797,7 +807,7 @@ export function InvoicePanel({
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',
               <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} placeholder={navrhDo('clenenieKvKod')}
-                onChange={(value) => updateUcto({ clenenieKvKod: value })} />, Boolean(navrhKontroly?.kvSekcia))}
+                onChange={(value) => updateUcto({ clenenieKvKod: value })} />, Boolean(navrhKontroly?.kvSekcia && !navrhKontroly.rozhodnutie))}
 
             {navrhKontroly?.kvSekcia && riadokNavrhu('kv', navrhKontroly.kvSekcia,
               () => onPrijatOdporucanie?.(undefined, navrhKontroly.kvSekcia))}
