@@ -409,6 +409,11 @@ export function InvoicePanel({
       kvSekcia: dphAudit.odporucanaKvSekcia && dphAudit.odporucanaKvSekcia !== zobrazenyKod('clenenieKvKod')
         ? dphAudit.odporucanaKvSekcia
         : undefined,
+      // Kontrola nemala čo povedať iba vtedy, keď NEPONÚKLA vôbec nič. Keď
+      // niečo navrhla a zhoduje sa to s poľom, je to tichý súhlas — nie
+      // „neposúdila". Bez tohto rozlíšenia svietilo na doklade, kde kontrola
+      // súhlasila s PN, hlásenie, že ho vôbec neposúdila.
+      bezNalezu: !dphAudit.odporucaneClenenieKod && !dphAudit.odporucanaKvSekcia,
       dovod: dphAudit.dovod,
     }
     : undefined;
@@ -784,7 +789,7 @@ export function InvoicePanel({
             {/* Neistý verdikt sa ukáže tiež — bez kódu a bez tlačidiel, len
                 s dôvodom. Pochybnosť kontroly je informácia, mlčať o nej
                 znamená tváriť sa, že je všetko preverené. */}
-            {navrhKontroly && (navrhKontroly.clenenie || !navrhKontroly.kvSekcia)
+            {navrhKontroly && (navrhKontroly.clenenie || navrhKontroly.bezNalezu)
               && riadokNavrhu('dph', navrhKontroly.clenenie, () => onPrijatOdporucanie?.(
                 codeLists.cleneniaDph.find((item) => item.kod === navrhKontroly.clenenie)?.id,
                 navrhKontroly.kvSekcia,
