@@ -383,30 +383,29 @@ export function InvoicePanel({
   };
 
   // Zámerne span, nie <button>: čítanie pôvodu má fungovať aj pri readOnly.
-  /**
-   * Kód, ktorý účtovník v poli naozaj vidí: buď vybraný, alebo — kým sa doklad
-   * neuloží — ten, čo doň svieti z pamäte ako návrh.
-   */
-  const zobrazenyKod = (pole: 'clenenieDphId' | 'clenenieKvKod'): string | undefined => {
-    if (pole === 'clenenieKvKod') return ucto.clenenieKvKod ?? suggestion?.clenenieKvKod ?? undefined;
-    const id = ucto.clenenieDphId ?? suggestion?.clenenieDphId;
-    return id ? codeLists.cleneniaDph.find((item) => item.id === id)?.kod : undefined;
-  };
+  /** Kód, ktorý na doklade naozaj STOJÍ — nie ten, čo doň svieti ako návrh. */
+  const kodVPoli = codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod;
 
-  // Verdikt platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník medzitým
-  // prepol, návrh zmizne — radiť k inému kódu, než aký kontrola videla, by bolo
-  // horšie než mlčať.
+  // Kým účtovník nič nevybral, v poli svieti sivý návrh pamäte a doklad nie je
+  // zaúčtovaný. Hádať sa s návrhom, ktorý sám ešte nikto neprijal, je predčasné
+  // — kontrola sa ozve až keď v poli niečo naozaj stojí, teda po Automatickom
+  // účtovaní alebo po ručnom výbere.
+  //
+  // Verdikt navyše platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník
+  // medzitým prepol, návrh zmizne: radiť k inému kódu, než aký kontrola videla,
+  // by bolo horšie než mlčať.
   const navrhKontroly = dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie
-    && (!dphAudit.posudeneClenenieKod || dphAudit.posudeneClenenieKod === zobrazenyKod('clenenieDphId'))
+    && kodVPoli
+    && (!dphAudit.posudeneClenenieKod || dphAudit.posudeneClenenieKod === kodVPoli)
     ? {
-      // Ponúkame len to, čo sa naozaj líši od toho, čo účtovník v poli VIDÍ.
-      // Pozor na návrh pamäte: kým sa doklad neuloží, kód je len placeholder
-      // a ucto.clenenieDphId je prázdne. Porovnanie proti nemu preto radilo
-      // „Kontrola navrhuje PN" nad poľom, kde PN svietilo z pamäte.
-      clenenie: dphAudit.odporucaneClenenieKod && dphAudit.odporucaneClenenieKod !== zobrazenyKod('clenenieDphId')
+      // Ponúkame len to, čo sa naozaj líši od toho, čo na doklade stojí.
+      clenenie: dphAudit.odporucaneClenenieKod && dphAudit.odporucaneClenenieKod !== kodVPoli
         ? dphAudit.odporucaneClenenieKod
         : undefined,
-      kvSekcia: dphAudit.odporucanaKvSekcia && dphAudit.odporucanaKvSekcia !== zobrazenyKod('clenenieKvKod')
+      // Sekcia KV má vlastné pole, takže aj vlastnú podmienku: kým je prázdne,
+      // mlčíme o nej rovnako ako o členení.
+      kvSekcia: ucto.clenenieKvKod && dphAudit.odporucanaKvSekcia
+        && dphAudit.odporucanaKvSekcia !== ucto.clenenieKvKod
         ? dphAudit.odporucanaKvSekcia
         : undefined,
       // Kontrola nemala čo povedať iba vtedy, keď NEPONÚKLA vôbec nič. Keď
