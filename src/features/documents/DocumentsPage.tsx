@@ -7,6 +7,7 @@ import {
   moveDocumentToReview,
   quarantineDocument,
   rejectDocuments,
+  deleteDocument,
   restoreDocument,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
@@ -294,6 +295,7 @@ export function DocumentsPage() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [density, setDensity] = useState<Density>('comfortable');
   const [exitingId, setExitingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DocumentItem | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const value = searchParams.get('zoradit') as SortKey | null;
     return value && ['organization', 'type', 'supplier', 'invoice', 'delivery', 'due', 'amount', 'status', 'processing', 'confidence'].includes(value)
@@ -466,6 +468,7 @@ export function DocumentsPage() {
   }, [visibleIds]);
 
   const showOrganization = currentOrgId === 'all';
+  const role = data?.role ?? 'uctovnik';
   const canUpload = (data?.role ?? 'uctovnik') !== 'schvalovatel';
 
   if (error || !data) {
@@ -1112,18 +1115,34 @@ export function DocumentsPage() {
                         <span className="tnum whitespace-nowrap text-right font-semibold">{formatMoney(document.extracted.sumaSpolu, document.extracted.mena)}</span>
                         <span>
                           {isKos ? (
-                            <button
-                              type="button"
-                              className="btn px-2.5 py-1 text-xs"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void restoreDocument(document.id)
-                                  .then(() => showToast(t('doklady.obnovene')))
-                                  .catch((cause) => showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna')));
-                              }}
-                            >
-                              {t('doklady.obnovit')}
-                            </button>
+                            <span className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                className="btn px-2.5 py-1 text-xs"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void restoreDocument(document.id)
+                                    .then(() => showToast(t('doklady.obnovene')))
+                                    .catch((cause) => showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna')));
+                                }}
+                              >
+                                {t('doklady.obnovit')}
+                              </button>
+                              {/* Mazanie je nevratné, tak sa naň pýtame — a pýtame sa až
+                                  v modáli, ktorý povie, čo presne zmizne. */}
+                              {role === 'admin' && (
+                                <button
+                                  type="button"
+                                  className="btn px-2.5 py-1 text-xs text-danger"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setDeleteTarget(document);
+                                  }}
+                                >
+                                  {t('doklady.zmazat')}
+                                </button>
+                              )}
+                            </span>
                           ) : (() => {
                             const prenos = prenosStateFor(document);
                             if (!prenos) return <span className="text-ink-mute">—</span>;
@@ -1373,6 +1392,37 @@ export function DocumentsPage() {
         />
       )}
 
+      {/* Mazanie je nevratné, takže modál nehovorí „naozaj?", ale menuje, čo
+          presne zmizne — vrátane skenu na serveri. */}
+      {deleteTarget && (
+        <Modal title={t('doklady.zmazatTitulok')} onClose={() => setDeleteTarget(null)}>
+          <p className="mb-2 text-sm font-medium text-ink">
+            {deleteTarget.extracted.dodavatel.nazov || deleteTarget.typ}
+            {deleteTarget.extracted.cisloFaktury ? ` · ${deleteTarget.extracted.cisloFaktury}` : ''}
+            {' · '}
+            {formatMoney(deleteTarget.extracted.sumaSpolu, deleteTarget.extracted.mena)}
+          </p>
+          <p className="mb-4 text-sm text-ink-soft">{t('doklady.zmazatPopis')}</p>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn" onClick={() => setDeleteTarget(null)}>
+              {t('akcia.zrusit')}
+            </button>
+            <button
+              type="button"
+              className="btn text-danger"
+              onClick={() => {
+                const id = deleteTarget.id;
+                setDeleteTarget(null);
+                void deleteDocument(id)
+                  .then(() => showToast(t('doklady.zmazane')))
+                  .catch((cause) => showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna')));
+              }}
+            >
+              {t('doklady.zmazatPotvrdit')}
+            </button>
+          </div>
+        </Modal>
+      )}
       {bulkRejectOpen && (
         <Modal title={t('zamietnutie.hromadneTitulok')} onClose={closeReject}>
           <p className="mb-3 text-sm text-ink-soft">

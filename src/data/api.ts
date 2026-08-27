@@ -2829,6 +2829,18 @@ export async function restoreDocument(documentId: string): Promise<void> {
   await refreshRestSnapshot();
 }
 
+/**
+ * Trvalé zmazanie dokladu z koša aj so skenom. Nevratné — volať len po
+ * potvrdení. Zamietnutie doklad iba označí; toto ho naozaj odstráni.
+ */
+export async function deleteDocument(documentId: string): Promise<void> {
+  const s = storeApi.get();
+  assertCapability(s.role, 'organization.manage', 'Natrvalo zmazať doklad môže iba admin');
+  if (!REST_DATA_MODE) throw new Error('Mazanie dokladu vyžaduje spustený backend');
+  await restRequest(`/api/documents/${documentId}`, { method: 'DELETE' });
+  await refreshRestSnapshot();
+}
+
 export async function removeDocumentPayment(documentId: string, paymentId: string): Promise<void> {
   if (!REST_DATA_MODE) throw new Error('Úhrady vyžadujú spustený backend');
   await restRequest(`/api/documents/${documentId}/payments/${paymentId}`, { method: 'DELETE' });

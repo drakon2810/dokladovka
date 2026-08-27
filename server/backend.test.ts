@@ -109,6 +109,25 @@ describe('backend foundation', () => {
     expect(rejected.statusCode).toBe(200);
     expect(rejected.json()).toMatchObject({ status: 'zamietnuty' });
     expect(rejected.json().history.at(-1).akcia).toContain('Doklad nie je úplný');
+
+    // Zamietnutie je len mäkké — doklad, sken aj história spracovania ostávajú.
+    // Trvalé mazanie z koša je tá druhá, dovtedy chýbajúca cesta: e-mail sa
+    // nedal zmazať, lebo z neho vznikol doklad, a doklad sa nedal zmazať vôbec.
+    const docId = documents.rows[0].id as string;
+    const prilohy = await database.query<{ storage_key: string }>(
+      'SELECT storage_key FROM inbound_attachments WHERE document_id=$1', [docId],
+    );
+    expect(prilohy.rowCount).toBe(1);
+    await expect(storage.get(prilohy.rows[0].storage_key)).resolves.toBeInstanceOf(Uint8Array);
+
+    const zmazany = await app.inject({
+      method: 'DELETE', url: `/api/documents/${docId}`, headers: sessionHeaders(login),
+    });
+    expect(zmazany.statusCode).toBe(204);
+    expect((await database.query('SELECT 1 FROM documents WHERE id=$1', [docId])).rowCount).toBe(0);
+    expect((await database.query('SELECT 1 FROM extraction_runs WHERE document_id=$1', [docId])).rowCount).toBe(0);
+    expect((await database.query('SELECT 1 FROM inbound_attachments WHERE document_id=$1', [docId])).rowCount).toBe(0);
+    await expect(storage.get(prilohy.rows[0].storage_key)).rejects.toThrow();
     await app.close();
   }, 90_000);
 

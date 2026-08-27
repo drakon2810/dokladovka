@@ -750,6 +750,87 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     return result.rows[0];
   });
 
+  /**
+   * Trvalé zmazanie dokladu z koša — aj s naskenovaným súborom.
+   *
+   * Zamietnutie je len mäkké: doklad ostáva v databáze, sken v úložisku a
+   * z e-mailu sa preto nedal zmazať ani ten („najprv zmažte doklad", lenže
+   * mazať doklad sa nedalo vôbec). Toto je tá chýbajúca cesta.
+   *
+   * Nevratné. Preto len admin a len na zamietnutom doklade: čokoľvek, čo ešte
+   * žije v pracovnom postupe, sa musí najprv zamietnuť, aby bol krok vedomý.
+   */
+  app.delete('/api/documents/:id', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (document.status !== 'zamietnuty') {
+      throw new HttpError(409, 'not_rejected', 'Natrvalo zmazať možno len doklad z koša');
+    }
+
+    // Kľúče skenov si vypýtame ešte pred mazaním — potom už nebude odkiaľ.
+    const prilohy = await database.query<{ storage_key: string | null }>(
+      'SELECT storage_key FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2',
+      [id, auth.tenantId],
+    );
+
+    await database.transaction(async (tx) => {
+      // Väzby bez ON DELETE CASCADE by mazanie zablokovali. Cudzie doklady sa
+      // nemažú — len sa im odkaz uvoľní, aby po zmazanom nezostal visieť.
+      //
+      // Poradie nie je ľubovoľné: doklad ukazuje na svoj použitý beh extrakcie
+      // (applied_extraction_run_id), takže odkaz musí padnúť skôr, než behy.
+      await tx.query('UPDATE documents SET applied_extraction_run_id=NULL WHERE id=$1', [id]);
+      await tx.query('DELETE FROM extraction_runs WHERE document_id=$1', [id]);
+      // Job môže visieť na prílohe aj bez document_id (spracovanie sa spustí
+      // skôr, než doklad vznikne). processing_jobs.attachment_id nemá CASCADE,
+      // takže by inak zablokoval mazanie prílohy — ide preč po oboch väzbách.
+      await tx.query(
+        `DELETE FROM processing_jobs
+          WHERE document_id=$1
+             OR attachment_id IN (SELECT id FROM inbound_attachments WHERE document_id=$1)`,
+        [id],
+      );
+      await tx.query('UPDATE accounting_suggestions SET based_on_document_id=NULL WHERE based_on_document_id=$1', [id]);
+      await tx.query('UPDATE document_payments SET bank_statement_document_id=NULL WHERE bank_statement_document_id=$1', [id]);
+      await tx.query('UPDATE documents SET split_from_document_id=NULL WHERE split_from_document_id=$1', [id]);
+      await tx.query('UPDATE documents SET duplicate_of_document_id=NULL WHERE duplicate_of_document_id=$1', [id]);
+      // Príloha odchádza s dokladom: inak by sa súbor bez bajtov vrátil medzi
+      // nespracované a účtovník by ho videl znova.
+      await tx.query('DELETE FROM inbound_attachments WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
+      // Zvyšok (návrh zaúčtovania, úhrady, verdikt DPH, pamäť rozhodnutí)
+      // odíde kaskádou.
+      await tx.query('DELETE FROM documents WHERE id=$1 AND tenant_id=$2', [id, auth.tenantId]);
+    });
+
+    // Bajty až po transakcii: úložisko nie je transakčné a mazanie je
+    // opakovateľné, takže zlyhanie tu nechá databázu čistú a súbor osirie —
+    // opačné poradie by nechalo doklad bez skenu.
+    for (const priloha of prilohy.rows) {
+      if (!priloha.storage_key) continue;
+      try {
+        await storage.delete(priloha.storage_key);
+      } catch (error) {
+        request.log.warn({ err: error, documentId: id }, 'sken sa nepodarilo zmazať z úložiska');
+      }
+    }
+
+    await writeAudit(database, {
+      tenantId: auth.tenantId,
+      organizationId: document.organization_id,
+      actorType: 'user',
+      actorId: auth.userId,
+      action: 'document.deleted',
+      entityType: 'document',
+      entityId: id,
+      correlationId: request.id,
+    });
+    return reply.code(204).send();
+  });
+
   app.post('/api/documents/:id/reprocess', async (request, reply) => {
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
