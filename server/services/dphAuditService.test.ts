@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DphAuditor, kodyPreStranu, overeneFakty, trebaDruhyHlas, zluc, type DphAuditVstup } from './dphAuditService.js';
+import { DphAuditor, kodyPreStranu, overeneFakty, trebaDruhyHlas, zluc, zosuladSPraxou, type DphAuditVstup } from './dphAuditService.js';
 
 // Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
 // model dostane spoľahlivé fakty o krajine a nikdy nesmie prejsť s kódom,
@@ -153,6 +153,30 @@ describe('DphAuditor', () => {
   });
 });
 
+
+describe('zosuladSPraxou', () => {
+  // PN aj PNnevymer zapisujú do priznania rovnako — nikam. Zákon medzi nimi
+  // nerozhoduje, RCI má v knihách PN stokrát a PNnevymer ani raz.
+  it('pri zhodnom správaní vyhrá kód, ktorý firma naozaj používa', () => {
+    expect(zosuladSPraxou('PNnevymer', new Map([['PN', 100]]))).toBe('PN');
+  });
+
+  // Toto je poistka proti tomu, aby sa zaužívaná chyba vrátila zadnými
+  // dvermi: UDzahr zapisuje do riadku 13, UN nikam — zámena sa nesmie stať.
+  it('kódy s rôznym správaním sa nezamenia ani pri silnom zvyku', () => {
+    expect(zosuladSPraxou('UN', new Map([['UDzahr', 116]]))).toBe('UN');
+  });
+
+  it('kód, ktorý firma používa, zostáva nedotknutý', () => {
+    expect(zosuladSPraxou('PN', new Map([['PN', 75], ['PNnevymer', 3]]))).toBe('PN');
+  });
+
+  it('bez zvyku a bez popisu sa nič nemení', () => {
+    expect(zosuladSPraxou('PNnevymer', new Map())).toBe('PNnevymer');
+    expect(zosuladSPraxou('VYMYSLENY', new Map([['PN', 10]]))).toBe('VYMYSLENY');
+    expect(zosuladSPraxou(null, new Map())).toBeNull();
+  });
+});
 describe('druhý hlas', () => {
   // Druhý dopyt nie je zadarmo — pýtame sa len tam, kde by omyl bolel:
   // keď model sám priznáva neistotu, alebo keď chce meniť zaužívanú prax.

@@ -196,6 +196,9 @@ export function InvoicePanel({
   // „Prečo?" — jeden zdieľaný stav: dáta sa načítajú raz na doklad, panel sa
   // otvára pod polom, na ktorom bol klik.
   const [precoOpen, setPrecoOpen] = useState<PrecoField | null>(null);
+  // Dôvod právnej kontroly je zbalený za „prečo?" a rozbalí sa na mieste.
+  // V pokoji tak návrh zaberie jeden riadok mriežky namiesto celého panelu.
+  const [dovodOpen, setDovodOpen] = useState<'dph' | 'kv' | null>(null);
   const [preco, setPreco] = useState<DocumentPreco | null>(null);
   const [precoState, setPrecoState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [dovodDraft, setDovodDraft] = useState('');
@@ -380,8 +383,56 @@ export function InvoicePanel({
   };
 
   // Zámerne span, nie <button>: čítanie pôvodu má fungovať aj pri readOnly.
-  const precoWrap = (field: PrecoField, control: ReactNode) => (
-    <div className="dv-preco-field dk-with-preco">
+  // Verdikt platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník medzitým
+  // prepol, návrh zmizne — radiť k inému kódu, než aký kontrola videla, by bolo
+  // horšie než mlčať.
+  const navrhKontroly = dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie
+    && (!dphAudit.posudeneClenenieKod
+      || dphAudit.posudeneClenenieKod === codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod)
+    ? {
+      clenenie: dphAudit.odporucaneClenenieKod ?? undefined,
+      // Sekciu ponúkame len keď sa naozaj líši od tej na doklade — inak by pod
+      // poľom visel riadok, ktorý nič nemení.
+      kvSekcia: dphAudit.odporucanaKvSekcia && dphAudit.odporucanaKvSekcia !== ucto.clenenieKvKod
+        ? dphAudit.odporucanaKvSekcia
+        : undefined,
+      dovod: dphAudit.dovod,
+    }
+    : undefined;
+
+  /**
+   * Návrh právnej kontroly ako jeden riadok mriežky pod poľom, ktorého sa týka.
+   * Bez rámu a bez prekrytia: v pokoji zaberie riadok namiesto celého panelu,
+   * dôvod sa rozbalí až za „prečo?". Nič sa neprepisuje — účtovník rozhoduje.
+   */
+  const riadokNavrhu = (field: 'dph' | 'kv', kod: string, pouzit: () => void) => (
+    <>
+      <span />
+      <div className="dk-navrh">
+        <div className="dk-navrh-riadok">
+          <span className="dk-navrh-kod"><IcoWarn s={11} />Kontrola navrhuje {kod}</span>
+          {!readOnly && onPrijatOdporucanie && (
+            <>
+              <button type="button" className="dk-navrh-pouzit" onClick={pouzit}>Použiť</button>
+              <span className="dk-navrh-sep">·</span>
+              <button type="button" className="dk-navrh-ponechat" onClick={() => onPrijatOdporucanie(undefined, undefined)}>Ponechať</button>
+              <span className="dk-navrh-sep">·</span>
+            </>
+          )}
+          <button
+            type="button" className="dk-navrh-preco"
+            onClick={() => setDovodOpen(dovodOpen === field ? null : field)}
+          >
+            {dovodOpen === field ? 'skryť dôvod' : 'prečo?'}
+          </button>
+        </div>
+        {dovodOpen === field && <p className="dk-navrh-dovod">{navrhKontroly?.dovod}</p>}
+      </div>
+    </>
+  );
+
+  const precoWrap = (field: PrecoField, control: ReactNode, navrh = false) => (
+    <div className={`dv-preco-field dk-with-preco${navrh ? ' dk-pole-navrh' : ''}`}>
       {control}
       <span
         role="button" tabIndex={0} title="Prečo práve táto hodnota?"
@@ -710,59 +761,20 @@ export function InvoicePanel({
                 onChange={(value) => {
                   const picked = codeLists.cleneniaDph.find((item) => item.id === value);
                   updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
-                }} />)}
+                }} />, Boolean(navrhKontroly?.clenenie))}
 
-            {/* Právna kontrola nesúhlasí s tým, čo navrhla pamäť. Nič sa
-                neprepisuje — účtovník vidí obe mienky a rozhoduje. */}
-            {/* Verdikt platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník
-                medzitým prepol, panel zmizne — radiť k inému kódu, než aký
-                kontrola videla, by bolo horšie než mlčať. */}
-            {dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie
-              && (!dphAudit.posudeneClenenieKod
-                || dphAudit.posudeneClenenieKod
-                  === codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod) && (
-              <>
-                <span />
-                <div className="dk-rozpor">
-                  <div className="dk-rozpor-hlava">
-                    <IcoWarn s={13} />
-                    <span>{dphAudit.verdikt === 'nesuhlasi' ? 'Právna kontrola navrhuje iné členenie' : 'Právna kontrola si nie je istá'}</span>
-                  </div>
-                  <div className="dk-rozpor-mienky">
-                    <span>
-                      Pamäť <strong>{dphAudit.posudeneClenenieKod ?? "bez návrhu"}</strong>
-                    </span>
-                    {dphAudit.odporucaneClenenieKod && (
-                      <span className="dk-rozpor-pravo">
-                        Kontrola <strong>{dphAudit.odporucaneClenenieKod}</strong>
-                      </span>
-                    )}
-                  </div>
-                  <p className="dk-rozpor-dovod">{dphAudit.dovod}</p>
-                  {!readOnly && dphAudit.odporucaneClenenieKod && onPrijatOdporucanie && (
-                    <div className="dk-rozpor-akcie">
-                      <button
-                        type="button"
-                        className="dk-btn dk-btn-ai"
-                        onClick={() => onPrijatOdporucanie(
-                          codeLists.cleneniaDph.find((item) => item.kod === dphAudit.odporucaneClenenieKod)?.id,
-                          dphAudit.odporucanaKvSekcia,
-                        )}
-                      >
-                        Použiť {dphAudit.odporucaneClenenieKod}
-                      </button>
-                      <button type="button" className="dk-btn" onClick={() => onPrijatOdporucanie(undefined, undefined)}>
-                        Ponechať
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+            {navrhKontroly?.clenenie && riadokNavrhu('dph', navrhKontroly.clenenie, () => onPrijatOdporucanie?.(
+              codeLists.cleneniaDph.find((item) => item.kod === navrhKontroly.clenenie)?.id,
+              navrhKontroly.kvSekcia,
+            ))}
+
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',
               <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} placeholder={navrhDo('clenenieKvKod')}
-                onChange={(value) => updateUcto({ clenenieKvKod: value })} />)}
+                onChange={(value) => updateUcto({ clenenieKvKod: value })} />, Boolean(navrhKontroly?.kvSekcia))}
+
+            {navrhKontroly?.kvSekcia && riadokNavrhu('kv', navrhKontroly.kvSekcia,
+              () => onPrijatOdporucanie?.(undefined, navrhKontroly.kvSekcia))}
           </div>
         </div>
 

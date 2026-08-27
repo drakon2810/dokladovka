@@ -453,22 +453,32 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 .dk-mode-text .dk-cell:hover:not(.dk-cell-off) { background: rgba(10, 92, 72, .1); }
 .dk-mode-text input.dk-cell-edit { display: inline-block; width: auto; min-width: 140px; }
 
-/* Rozpor medzi pamäťou a právnou kontrolou členenia DPH. Sedí pod poľom
-   Členenie DPH, nie ako baner navrchu — týka sa jedného poľa a baner je
+/* Návrh právnej kontroly ako jeden riadok mriežky pod poľom, ktorého sa týka.
+   Rámovaný panel s dôvodom zaberal v pokoji cez 190 px a odtláčal celú kartu;
+   tu je to riadok a dôvod je zbalený za „prečo?". Baner navrchu zostáva
    vyhradený pre nesúlad organizácie. */
-.dk-rozpor {
-  border: 1px solid var(--dk-warn);
-  border-radius: 8px;
-  padding: 6px 8px;
-  margin: 2px 0 4px;
-  background: rgba(180, 83, 9, .05);
+.dk-navrh { display: flex; flex-direction: column; gap: 4px; padding: 3px 6px 5px; }
+.dk-navrh-riadok { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dk-navrh-kod {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--dk-warn); font-weight: 600;
 }
-.dk-rozpor-hlava {
-  display: flex; align-items: center; gap: 5px;
-  color: var(--dk-warn); font-weight: 600; margin-bottom: 4px;
+.dk-navrh-riadok button {
+  border: 0; background: none; padding: 0; font: inherit; cursor: pointer;
+  text-underline-offset: 2px;
 }
-.dk-rozpor-mienky { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 3px; }
-.dk-rozpor-mienky strong { font-weight: 600; }
-.dk-rozpor-pravo { color: var(--dk-accent); }
-.dk-rozpor-dovod { color: var(--dk-soft); line-height: 1.4; margin: 0; }
-.dk-rozpor-akcie { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.dk-navrh-pouzit { color: var(--dk-accent); font-weight: 600; text-decoration: underline; }
+.dk-navrh-pouzit:hover { filter: brightness(.88); }
+.dk-navrh-ponechat { color: var(--dk-soft); text-decoration: underline; }
+.dk-navrh-ponechat:hover { color: inherit; }
+.dk-navrh-preco { color: var(--dk-muted); }
+.dk-navrh-preco:hover { color: inherit; }
+.dk-navrh-sep { color: var(--dk-border); }
+.dk-navrh-dovod {
+  margin: 0; padding-left: 11px;
+  border-left: 2.5px solid rgba(180, 83, 9, .35);
+  color: var(--dk-soft); line-height: 1.6;
+}
+/* Pole, ku ktorému návrh patrí, nesie jantárové podčiarknutie — inak by riadok
+   pod ním visel bez ukotvenia a nebolo by vidieť, čoho sa týka. */
+.dk-pole-navrh { box-shadow: inset 0 -2px 0 rgba(180, 83, 9, .35); border-radius: 3px; }

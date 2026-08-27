@@ -1484,10 +1484,12 @@ export function DocumentDetailPage() {
             suggestion={suggestion}
             dphAudit={(data.dphAudit ?? []).find((item) => item.documentId === draft.id)}
             onPrijatOdporucanie={(clenenieDphId, kvKod) => {
-              // Prázdne id = účtovník ostáva pri návrhu pamäte. V oboch
-              // prípadoch rozpor zmizne — rozhodnutie padlo.
-              if (clenenieDphId) updateUcto({ clenenieDphId, ...(kvKod ? { clenenieKvKod: kvKod } : {}) });
-              void rozhodniDphRozpor(draft.id, clenenieDphId ? 'prijate' : 'ponechane');
+              // Prázdne oboje = účtovník ostáva pri návrhu pamäte. Sekcia KV má
+              // vlastný riadok návrhu, takže sa dá prijať aj bez zmeny kódu
+              // členenia. V oboch prípadoch rozpor zmizne — rozhodnutie padlo.
+              const prijate = Boolean(clenenieDphId || kvKod);
+              if (prijate) updateUcto({ ...(clenenieDphId ? { clenenieDphId } : {}), ...(kvKod ? { clenenieKvKod: kvKod } : {}) });
+              void rozhodniDphRozpor(draft.id, prijate ? 'prijate' : 'ponechane');
             }}
             autoFilled={autoFilled}
             cakajuceVRade={cakajuceVRade}

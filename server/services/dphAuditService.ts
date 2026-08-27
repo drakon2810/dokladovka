@@ -3,6 +3,7 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
+import { POHODA_DPH_KODY, popisKodu, type StranaPlnenia } from "./pohodaDphKody.js";
 
 // Právna kontrola členenia DPH — druhá mienka k tomu, čo navrhla pamäť.
 //
@@ -33,7 +34,11 @@ export type DphVerdikt = z.infer<typeof verdiktSchema>;
 
 const INSTRUCTIONS = `You are a Slovak VAT reviewer. You check whether the VAT classification chosen for one document is correct, and you never invent codes.
 
-You get: the document's facts, the classification the bookkeeper's history suggests, and the COMPLETE list of VAT classification codes available in this company's POHODA code list, each with its legal description. You may only ever name a code from that list. If nothing in the list fits, answer neisty with odporucaneClenenieKod null.
+You get: the document's facts, the classification the bookkeeper's history suggests, and the VAT classification codes available in this company's POHODA code list. You may only ever name a code from that list. If nothing in the list fits, answer neisty with odporucaneClenenieKod null.
+
+EVERY CODE COMES WITH WHAT IT ACTUALLY DOES: riadkyPriznania says which rows of the VAT return it writes the amount into, suhrnnyVykaz says whether it enters the recall statement. JUDGE BY THAT, NEVER BY THE NAME. Two codes can carry the same name and behave differently — "Miesto plnenia v zahraničí s možnosťou odpočítania dane" exists twice, once writing into riadok 13 and once feeding the recall statement with code 2. Decide what the transaction must report, then pick the code that reports exactly that.
+
+The rule that settles most of it, from Poučenie DPHv25 point 9: "V daňovom priznaní sa neuvádzajú transakcie s miestom dodania mimo tuzemska." A supply whose place of supply is outside Slovakia belongs in NO row of the return. A code that writes into any row is therefore wrong for it, however well its name fits.
 
 Judge by the place of supply.
 Services to a business customer: place of supply is where the CUSTOMER is established (§15 ods. 1). Goods and services inside Slovakia: Slovak VAT applies. Supplies to a customer in ANOTHER EU MEMBER STATE can enter the recall statement (súhrnný výkaz). Supplies to a customer in a THIRD COUNTRY (outside the EU) never enter the recall statement — a code meant for EU supplies is wrong there even when the amounts are identical.
@@ -68,22 +73,22 @@ const EU_KRAJINY = new Set([
 ]);
 
 /**
- * Číselník POHODY nesie stranu plnenia v prefixe kódu: U… uskutočnené
- * plnenia (vydané doklady), P… prijaté plnenia, R… opravy uskutočnených
- * plnení a DD… daňová povinnosť pri samozdanení. DD patrí na samostatný
- * interný doklad „Vymeranie DPH", nikdy na samotnú faktúru: v knihách RCI
- * stojí DDsl§69 deväťdesiatjedenkrát na INT — v páre s PDsluz/B1 — a ani
- * raz na prijatej faktúre, ktorá dostáva PN.
+ * Kódy, ktoré smú stáť na doklade danej strany. Rozhoduje referenčný zoznam
+ * POHODY (pohodaDphKody.ts), nie tvar skratky — skratka je práve to, čo mýli.
  *
- * Kontrola preto vidí len kódy tej strany, na ktorej doklad stojí. Bez toho
- * úvahu o §69 ods. 3 vyhodnotila správne, ale kód priradila nesprávnemu
- * dokladu a účtovníkovi ponúkla vymeranie dane na prijatej faktúre.
+ * DD… je vymeranie dane na samostatnom internom doklade: v knihách RCI stojí
+ * DDsl§69 deväťdesiatjedenkrát na INT, v páre s PDsluz/B1, a ani raz na
+ * prijatej faktúre, ktorá dostáva PN. Bez tohto filtra kontrola úvahu o §69
+ * ods. 3 vyhodnotila správne, ale kód priradila nesprávnemu dokladu.
+ *
+ * Kód, ktorý si firma založila sama a v referenčnom zozname nie je, tiež
+ * vypadne: nevieme, do ktorého riadku priznania zapisuje, tak o ňom mlčíme.
  */
 export function kodyPreStranu<T extends { kod: string }>(documentType: string, kody: T[]): T[] {
-  if (documentType === 'FV') return kody.filter((item) => /^[UR]/.test(item.kod));
-  if (documentType === 'FP') return kody.filter((item) => /^P/.test(item.kod));
+  const strana: StranaPlnenia | undefined = documentType === 'FV' ? 'U' : documentType === 'FP' ? 'P' : undefined;
   // Ostatné agendy (interný doklad, pokladnica) môžu stáť na oboch stranách.
-  return kody;
+  if (!strana) return kody;
+  return kody.filter((item) => popisKodu(item.kod)?.strana === strana);
 }
 
 /**
@@ -106,6 +111,28 @@ export function overeneFakty(vstup: DphAuditVstup): Record<string, unknown> {
     jeVEu: jeEu ?? null,
     jeTretiaKrajina: jeEu === undefined ? null : !jeEu,
   };
+}
+
+/**
+ * Dva kódy môžu do priznania aj do súhrnného výkazu zapisovať to isté —
+ * PN a PNnevymer sú oba „nikam". Zákon medzi nimi nerozhoduje, rozhoduje
+ * zvyk firmy: RCI má v knihách PN stokrát a PNnevymer ani raz.
+ *
+ * Zámena sa smie stať LEN pri zhodnom správaní. Pri UDzahr a UN sa nikdy
+ * nespustí — tie sa líšia riadkom 13 — takže zaužívaná chyba sa cez tento
+ * krok späť nedostane.
+ */
+export function zosuladSPraxou(kod: string | null, prax: ReadonlyMap<string, number>): string | null {
+  const popis = popisKodu(kod);
+  if (!kod || !popis || (prax.get(kod) ?? 0) > 0) return kod;
+  const rovnake = POHODA_DPH_KODY.filter((iny) => iny.kod !== kod
+    && iny.strana === popis.strana
+    && iny.sv === popis.sv
+    && iny.riadky.length === popis.riadky.length
+    && iny.riadky.every((cislo, index) => cislo === popis.riadky[index])
+    && (prax.get(iny.kod) ?? 0) > 0);
+  if (rovnake.length === 0) return kod;
+  return rovnake.reduce((a, b) => ((prax.get(b.kod) ?? 0) > (prax.get(a.kod) ?? 0) ? b : a)).kod;
 }
 
 export class DphAuditor {
@@ -152,7 +179,14 @@ export class DphAuditor {
               clenenieDph: vstup.navrhnuteClenenieKod ?? null,
               kvSekcia: vstup.navrhnutaKvSekcia ?? null,
             },
-            dostupneClenenia: clenenia,
+            dostupneClenenia: clenenia.map((item) => {
+              const popis = popisKodu(item.kod);
+              return {
+                ...item,
+                riadkyPriznania: popis?.riadky.length ? popis.riadky : 'žiadny riadok priznania',
+                suhrnnyVykaz: popis?.sv ? `kód ${popis.sv}` : 'nevstupuje do súhrnného výkazu',
+              };
+            }),
             dostupneKvSekcie: vstup.kvSekcie,
           }),
         }],
@@ -183,14 +217,25 @@ export async function nacitajCiselnikPreAudit(
   database: Database,
   tenantId: string,
   organizationId: string,
-): Promise<{ cleneniaDph: Array<{ kod: string; nazov: string }>; kvSekcie: Array<{ kod: string; nazov: string }> }> {
+  documentType: string,
+): Promise<{ cleneniaDph: Array<{ kod: string; nazov: string }>; kvSekcie: Array<{ kod: string; nazov: string }>; prax: Map<string, number> }> {
   const result = await database.query<{ code: string; name: string } & Record<string, unknown>>(
     `SELECT code, name FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND kind='cleneniaDph' AND active=true
       ORDER BY code`,
     [tenantId, organizationId],
   );
+  // Zvyk firmy rozhoduje len tam, kde sa dva kódy správajú rovnako.
+  const historia = await database.query<{ kod: string; pocet: string }>(
+    `SELECT clenenie_dph_kod AS kod, count(*)::text AS pocet FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=$3 AND clenenie_dph_kod IS NOT NULL
+      GROUP BY 1`,
+    [tenantId, organizationId, documentType],
+  );
+  const prax = new Map(historia.rows.map((row) => [row.kod.trim(), Number(row.pocet)]));
+
   return {
+    prax,
     cleneniaDph: result.rows.map((row) => ({ kod: row.code.trim(), nazov: row.name })),
     kvSekcie: [
       { kod: 'A1', nazov: 'Vyhotovené faktúry, platiteľ je osobou povinnou platiť daň' },
@@ -260,7 +305,7 @@ export async function posudADulozDph(
   // na nich len pálila dopyty a vyrábala rozpory, ktoré nemá kto uzavrieť.
   if (['BV', 'MZDY', 'INY', 'UNKNOWN'].includes(input.documentType)) return undefined;
   if (!auditor && (config.extractionProvider !== 'openai' || !config.openai.apiKey)) return undefined;
-  const ciselnik = await nacitajCiselnikPreAudit(database, input.tenantId, input.organizationId);
+  const ciselnik = await nacitajCiselnikPreAudit(database, input.tenantId, input.organizationId, input.documentType);
   if (ciselnik.cleneniaDph.length === 0) return undefined;
 
   const verdikt = await (auditor ?? new DphAuditor(config.openai)).posud({
@@ -288,6 +333,13 @@ export async function posudADulozDph(
     } catch {
       finalny = verdikt;
     }
+  }
+
+  // Odporúčaný kód zladíme so zvykom firmy — len medzi kódmi, ktoré
+  // do priznania aj do výkazu zapisujú to isté.
+  const zladeny = zosuladSPraxou(finalny.odporucaneClenenieKod, ciselnik.prax);
+  if (zladeny !== finalny.odporucaneClenenieKod) {
+    finalny = { ...finalny, odporucaneClenenieKod: zladeny };
   }
 
   await database.query(
