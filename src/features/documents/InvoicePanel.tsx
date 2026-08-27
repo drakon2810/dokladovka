@@ -423,11 +423,11 @@ export function InvoicePanel({
       <span />
       <div className="dk-navrh">
         <div className="dk-navrh-riadok">
-          {/* Bez kódu ide o neistý verdikt — kontrola sa nevie rozhodnúť.
-              Doteraz sa taký doklad tváril, že je všetko v poriadku; účtovník
-              sa o pochybnosti nedozvedel a nemal ju kde prečítať. */}
-          <span className="dk-navrh-kod">
-            <IcoWarn s={11} />{kod ? `Kontrola navrhuje ${kod}` : 'Kontrola si nie je istá'}
+          {/* Bez kódu kontrola nemá čo ponúknuť — doklad sa neoveril, ale ani
+              nič nespochybnila. Taká poznámka nesmie vyzerať ako výstraha:
+              jantárová ikona nad poľom, kde niet čo opraviť, je len šum. */}
+          <span className={kod ? 'dk-navrh-kod' : 'dk-navrh-ticho'}>
+            {kod ? <><IcoWarn s={11} />Kontrola navrhuje {kod}</> : 'Kontrola doklad neposúdila'}
           </span>
           {!readOnly && kod && onPrijatOdporucanie && (
             <>

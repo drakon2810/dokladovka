@@ -305,10 +305,16 @@ export function zluc(prvy: DphVerdikt, druhy: DphVerdikt): DphVerdikt {
   if (prvy.verdikt === druhy.verdikt && prvy.odporucaneClenenieKod === druhy.odporucaneClenenieKod) {
     return { ...prvy, istota: Math.max(prvy.istota, druhy.istota) };
   }
+  // Pri nezhode sa verdikt označí ako neistý, ale kandidát sa NEZAHADZUJE.
+  // Predtým tu ostalo prázdno a účtovník videl „Kontrola si nie je istá" bez
+  // jediného kódu — pochybnosť bez východiska, s ktorou sa nedalo nič urobiť.
+  // Ponúkne sa návrh istejšieho z dvoch hlasov a dôvod pomenuje oba, nech je
+  // vidieť, v čom sa rozišli.
+  const istejsi = prvy.istota >= druhy.istota ? prvy : druhy;
   return {
     verdikt: 'neisty',
-    odporucaneClenenieKod: null,
-    odporucanaKvSekcia: null,
+    odporucaneClenenieKod: istejsi.odporucaneClenenieKod,
+    odporucanaKvSekcia: istejsi.odporucanaKvSekcia,
     dovod: `Dve nezávislé kontroly sa nezhodli. Prvá navrhuje ${prvy.odporucaneClenenieKod ?? 'ponechať'}: ${prvy.dovod} Druhá navrhuje ${druhy.odporucaneClenenieKod ?? 'ponechať'}: ${druhy.dovod}`.slice(0, 400),
     istota: Math.min(prvy.istota, druhy.istota),
   };

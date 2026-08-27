@@ -236,7 +236,9 @@ describe('druhý hlas', () => {
     const b = JSON.parse("{\"verdikt\":\"nesuhlasi\",\"odporucaneClenenieKod\":\"UD\",\"odporucanaKvSekcia\":null,\"dovod\":\"d\",\"istota\":0.6}");
     const spolu = zluc(a, b);
     expect(spolu.verdikt).toBe('neisty');
-    expect(spolu.odporucaneClenenieKod).toBeNull();
+    // Kandidat sa uz nezahadzuje — uctovnik potrebuje s cim pracovat,
+    // ponukne sa navrh istejsieho hlasu a dovod pomenuje oba.
+    expect(spolu.odporucaneClenenieKod).toBe('UN');
     expect(spolu.dovod).toContain('nezhodli');
   });
 });
