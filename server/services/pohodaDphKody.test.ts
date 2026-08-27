@@ -9,7 +9,7 @@ describe('popisKodu', () => {
   // Toto je celý prípad Moldavska v jednom riadku: názov sľubuje „miesto
   // plnenia v zahraničí", ale kód zapisuje sumu do riadku 13 priznania.
   it('UDzahr zapisuje do riadku 13, UN nikam', () => {
-    expect(popisKodu('UDzahr')).toMatchObject({ strana: 'U', riadky: [13], sv: null });
+    expect(popisKodu('UDzahr')).toMatchObject({ strana: 'U', riadky: ['13'], sv: null });
     expect(popisKodu('UN')).toMatchObject({ strana: 'U', riadky: [], sv: null });
   });
 
@@ -21,8 +21,8 @@ describe('popisKodu', () => {
   });
 
   it('vymeranie dane stojí na strane DD, odpočet na strane P', () => {
-    expect(popisKodu('DDsl§69')).toMatchObject({ strana: 'DD', riadky: [9, 10] });
-    expect(popisKodu('PDsluz')).toMatchObject({ strana: 'P', riadky: [18, 19] });
+    expect(popisKodu('DDsl§69')).toMatchObject({ strana: 'DD', riadky: ['09', '10'] });
+    expect(popisKodu('PDsluz')).toMatchObject({ strana: 'P', riadky: ['18', '18a', '19'] });
     expect(popisKodu('PN')).toMatchObject({ strana: 'P', riadky: [] });
   });
 
