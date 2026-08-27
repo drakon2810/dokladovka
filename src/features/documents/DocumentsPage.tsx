@@ -296,6 +296,7 @@ export function DocumentsPage() {
   const [density, setDensity] = useState<Density>('comfortable');
   const [exitingId, setExitingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DocumentItem | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const value = searchParams.get('zoradit') as SortKey | null;
     return value && ['organization', 'type', 'supplier', 'invoice', 'delivery', 'due', 'amount', 'status', 'processing', 'confidence'].includes(value)
@@ -504,6 +505,12 @@ export function DocumentsPage() {
   const selectionApproved = selectedDocuments.length > 0
     && selectedDocuments.every((document) => document.status === 'schvaleny')
     && data.role !== 'schvalovatel';
+  // Výber v koši: schvaľovať ani zamietať zamietnutý doklad nedáva zmysel —
+  // účtovník tam chce buď obnoviť, alebo zmazať. Ponuka „Zamietnuť" nad
+  // zamietnutým dokladom ho len znova zamietla a vyzeralo to ako zlyhané
+  // mazanie.
+  const selectionRejected = selectedDocuments.length > 0
+    && selectedDocuments.every((document) => document.status === 'zamietnuty');
   // Interné číslo = číslo, ktoré dokladu pridelila POHODA pri prenose. Vracia ho
   // agent v response_meta prenosu; pred prenosom je stĺpec prázdny.
   const pohodaNumberFor = (document: DocumentItem): string | undefined => {
@@ -629,6 +636,41 @@ export function DocumentsPage() {
       if (!document) throw new Error('selected_document_missing');
       return { id, expectedVersion: document.version };
     });
+
+  const runBulkRestore = async () => {
+    setBulkBusy(true);
+    try {
+      for (const id of selectedIds) await restoreDocument(id);
+      showToast(`${t('doklady.obnovene')} (${selectedIds.length})`);
+      setSelected(new Set());
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // Mazanie ide po jednom: server maže doklad aj so skenom a čiastočný úspech
+  // je tu v poriadku — čo sa zmazalo, ostáva zmazané, zvyšok sa dá zopakovať.
+  const runBulkDelete = async () => {
+    setBulkBusy(true);
+    let zmazane = 0;
+    try {
+      for (const id of selectedIds) {
+        await deleteDocument(id);
+        zmazane += 1;
+      }
+      showToast(`${t('doklady.zmazane')} (${zmazane})`);
+      setSelected(new Set());
+    } catch (cause) {
+      showToast(
+        `${t('doklady.zmazane')} (${zmazane}). ${cause instanceof Error ? cause.message : t('chyba.vseobecna')}`,
+        { tone: 'error' },
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const runBulkApprove = async () => {
     setBulkBusy(true);
@@ -1283,7 +1325,29 @@ export function DocumentsPage() {
               <span className="tnum text-[#7FE8C6]">{selected.size}</span>
             </span>
             <span className="mx-1 h-5 w-px bg-white/15" />
-            {selectionApproved ? (
+            {selectionRejected ? (
+              // Kôš: obnoviť alebo zmazať natrvalo. Nič iné tu nedáva zmysel.
+              <>
+                <button
+                  type="button"
+                  className="h-[34px] rounded-[9px] bg-white/10 px-3 text-[12.5px] font-semibold text-[#EAF0EC] transition hover:bg-white/20 disabled:opacity-50"
+                  disabled={bulkBusy}
+                  onClick={() => void runBulkRestore()}
+                >
+                  {t('doklady.obnovit')}
+                </button>
+                {role === 'admin' && (
+                  <button
+                    type="button"
+                    className="h-[34px] rounded-[9px] bg-white/10 px-3 text-[12.5px] font-semibold text-[#FFC9C2] transition hover:bg-white/20 disabled:opacity-50"
+                    disabled={bulkBusy}
+                    onClick={() => setBulkDeleteOpen(true)}
+                  >
+                    {t('doklady.zmazat')}
+                  </button>
+                )}
+              </>
+            ) : selectionApproved ? (
               // Schválené doklady: jediná zmysluplná akcia je export do POHODY.
               <button
                 type="button"
@@ -1416,6 +1480,30 @@ export function DocumentsPage() {
                 void deleteDocument(id)
                   .then(() => showToast(t('doklady.zmazane')))
                   .catch((cause) => showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna')));
+              }}
+            >
+              {t('doklady.zmazatPotvrdit')}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {bulkDeleteOpen && (
+        <Modal title={t('doklady.zmazatTitulok')} onClose={() => setBulkDeleteOpen(false)}>
+          <p className="mb-2 text-sm font-medium text-ink">
+            {t('doklady.bulk.vybranych').replace(/^./, (c) => c.toUpperCase())}: {selectedIds.length}
+          </p>
+          <p className="mb-4 text-sm text-ink-soft">{t('doklady.zmazatPopis')}</p>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn" onClick={() => setBulkDeleteOpen(false)}>
+              {t('akcia.zrusit')}
+            </button>
+            <button
+              type="button"
+              className="btn text-danger"
+              disabled={bulkBusy}
+              onClick={() => {
+                setBulkDeleteOpen(false);
+                void runBulkDelete();
               }}
             >
               {t('doklady.zmazatPotvrdit')}
