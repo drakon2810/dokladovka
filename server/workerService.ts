@@ -271,7 +271,12 @@ function asProviderError(error: unknown, documentId?: string): ExtractionProvide
   if (error instanceof ExtractionProviderError) return error;
   console.error('[worker] spracovanie zlyhalo mimo extrakcie', { documentId, error });
   const dovod = error instanceof Error ? error.message : String(error);
-  return new ExtractionProviderError('processing_failed', `Spracovanie zlyhalo: ${dovod}`.slice(0, 400), false);
+  // Retryable zámerne: neznáma chyba je častejšie výpadok než chyba dokladu.
+  // Doklad „kontrakt 2406" padol o 11:05 a o 11:09 ten istý súbor prešiel —
+  // opakovanie by ho vyliečilo samo, lenže job umrel na prvom pokuse zo
+  // šiestich. Ak je chyba naozaj trvalá, pokusy sa vyčerpajú a job skončí
+  // v dead_letter, kde je stále vidieť.
+  return new ExtractionProviderError('processing_failed', `Spracovanie zlyhalo: ${dovod}`.slice(0, 400), true);
 }
 
 /**

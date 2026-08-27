@@ -383,21 +383,30 @@ export function InvoicePanel({
   };
 
   // Zámerne span, nie <button>: čítanie pôvodu má fungovať aj pri readOnly.
+  /**
+   * Kód, ktorý účtovník v poli naozaj vidí: buď vybraný, alebo — kým sa doklad
+   * neuloží — ten, čo doň svieti z pamäte ako návrh.
+   */
+  const zobrazenyKod = (pole: 'clenenieDphId' | 'clenenieKvKod'): string | undefined => {
+    if (pole === 'clenenieKvKod') return ucto.clenenieKvKod ?? suggestion?.clenenieKvKod ?? undefined;
+    const id = ucto.clenenieDphId ?? suggestion?.clenenieDphId;
+    return id ? codeLists.cleneniaDph.find((item) => item.id === id)?.kod : undefined;
+  };
+
   // Verdikt platí pre členenie, ktoré sa posudzovalo. Keď ho účtovník medzitým
   // prepol, návrh zmizne — radiť k inému kódu, než aký kontrola videla, by bolo
   // horšie než mlčať.
   const navrhKontroly = dphAudit && dphAudit.verdikt !== 'suhlasi' && !dphAudit.rozhodnutie
-    && (!dphAudit.posudeneClenenieKod
-      || dphAudit.posudeneClenenieKod === codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod)
+    && (!dphAudit.posudeneClenenieKod || dphAudit.posudeneClenenieKod === zobrazenyKod('clenenieDphId'))
     ? {
-      // Ponúkame len to, čo sa naozaj líši od hodnoty na doklade. Rada, ktorá
-      // nič nemení, je pre účtovníka šum — a účtovník mohol pole prepnúť aj
-      // sám potom, čo kontrola dobehla.
-      clenenie: dphAudit.odporucaneClenenieKod
-        && dphAudit.odporucaneClenenieKod !== codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod
+      // Ponúkame len to, čo sa naozaj líši od toho, čo účtovník v poli VIDÍ.
+      // Pozor na návrh pamäte: kým sa doklad neuloží, kód je len placeholder
+      // a ucto.clenenieDphId je prázdne. Porovnanie proti nemu preto radilo
+      // „Kontrola navrhuje PN" nad poľom, kde PN svietilo z pamäte.
+      clenenie: dphAudit.odporucaneClenenieKod && dphAudit.odporucaneClenenieKod !== zobrazenyKod('clenenieDphId')
         ? dphAudit.odporucaneClenenieKod
         : undefined,
-      kvSekcia: dphAudit.odporucanaKvSekcia && dphAudit.odporucanaKvSekcia !== ucto.clenenieKvKod
+      kvSekcia: dphAudit.odporucanaKvSekcia && dphAudit.odporucanaKvSekcia !== zobrazenyKod('clenenieKvKod')
         ? dphAudit.odporucanaKvSekcia
         : undefined,
       dovod: dphAudit.dovod,
@@ -409,13 +418,18 @@ export function InvoicePanel({
    * Bez rámu a bez prekrytia: v pokoji zaberie riadok namiesto celého panelu,
    * dôvod sa rozbalí až za „prečo?". Nič sa neprepisuje — účtovník rozhoduje.
    */
-  const riadokNavrhu = (field: 'dph' | 'kv', kod: string, pouzit: () => void) => (
+  const riadokNavrhu = (field: 'dph' | 'kv', kod: string | undefined, pouzit: () => void) => (
     <>
       <span />
       <div className="dk-navrh">
         <div className="dk-navrh-riadok">
-          <span className="dk-navrh-kod"><IcoWarn s={11} />Kontrola navrhuje {kod}</span>
-          {!readOnly && onPrijatOdporucanie && (
+          {/* Bez kódu ide o neistý verdikt — kontrola sa nevie rozhodnúť.
+              Doteraz sa taký doklad tváril, že je všetko v poriadku; účtovník
+              sa o pochybnosti nedozvedel a nemal ju kde prečítať. */}
+          <span className="dk-navrh-kod">
+            <IcoWarn s={11} />{kod ? `Kontrola navrhuje ${kod}` : 'Kontrola si nie je istá'}
+          </span>
+          {!readOnly && kod && onPrijatOdporucanie && (
             <>
               <button type="button" className="dk-navrh-pouzit" onClick={pouzit}>Použiť</button>
               <span className="dk-navrh-sep">·</span>
@@ -767,10 +781,14 @@ export function InvoicePanel({
                   updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
                 }} />, Boolean(navrhKontroly?.clenenie))}
 
-            {navrhKontroly?.clenenie && riadokNavrhu('dph', navrhKontroly.clenenie, () => onPrijatOdporucanie?.(
-              codeLists.cleneniaDph.find((item) => item.kod === navrhKontroly.clenenie)?.id,
-              navrhKontroly.kvSekcia,
-            ))}
+            {/* Neistý verdikt sa ukáže tiež — bez kódu a bez tlačidiel, len
+                s dôvodom. Pochybnosť kontroly je informácia, mlčať o nej
+                znamená tváriť sa, že je všetko preverené. */}
+            {navrhKontroly && (navrhKontroly.clenenie || !navrhKontroly.kvSekcia)
+              && riadokNavrhu('dph', navrhKontroly.clenenie, () => onPrijatOdporucanie?.(
+                codeLists.cleneniaDph.find((item) => item.kod === navrhKontroly.clenenie)?.id,
+                navrhKontroly.kvSekcia,
+              ))}
 
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',

@@ -803,9 +803,14 @@ export function DocumentDetailPage() {
     role === 'schvalovatel'
       ? draft.status === 'na_kontrole'
       : ['na_kontrole', 'extrahovany'].includes(draft.status);
-  const buyerMismatch =
-    Boolean(draft.extracted.odberatel?.ico) &&
-    draft.extracted.odberatel?.ico !== organization.ico;
+  // Ktorá strana dokladu má byť naša firma, závisí od smeru. Na prijatej
+  // faktúre je ňou odberateľ, na vydanej dodávateľ — dovtedy sa porovnával
+  // vždy odberateľ, takže každá vydaná faktúra hlásila nesúlad, hoci
+  // odberateľom je zákazník a zhodovať sa nemá.
+  const nasaStranaIco = ['FV', 'PPD'].includes(draft.typ)
+    ? draft.extracted.dodavatel?.ico
+    : draft.extracted.odberatel?.ico;
+  const buyerMismatch = Boolean(nasaStranaIco) && nasaStranaIco !== organization.ico;
   const foreignSupplier = isForeignSupplier(draft.extracted.dodavatel);
   const codeLists = {
     predkontacie: data.codeLists.predkontacie.filter(
@@ -1168,7 +1173,7 @@ export function DocumentDetailPage() {
       {buyerMismatch && (
         <div className="anim-in rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">{t('detail.icoMismatch')}</p>
-          <p>{t('detail.icoMismatchPopis')}</p>
+          <p>{t(['FV', 'PPD'].includes(draft.typ) ? 'detail.icoMismatchPopisVydana' : 'detail.icoMismatchPopis')}</p>
         </div>
       )}
       {(draft.status === 'duplicita' ||

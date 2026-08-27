@@ -383,6 +383,8 @@ export const sk = {
   'detail.icoMismatch': 'Možný nesúlad organizácie',
   'detail.icoMismatchPopis':
     'IČO odberateľa z dokladu sa nezhoduje s IČO organizácie.',
+  'detail.icoMismatchPopisVydana':
+    'IČO dodávateľa z dokladu sa nezhoduje s IČO organizácie.',
   'detail.dodavatel': 'Dodávateľ',
   'detail.nazov': 'Názov',
   'detail.ico': 'IČO',
