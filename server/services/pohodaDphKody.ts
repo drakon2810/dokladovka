@@ -30,6 +30,18 @@ export interface PohodaDphKod {
   /** Kód pre súhrnný výkaz, alebo null keď doň plnenie nevstupuje. */
   sv: string | null;
   nazov: string;
+  /**
+   * „Ponúkať" z POHODY — či sa kód vôbec má ponúkať pri zadávaní dokladu.
+   * Z tridsiatich jedna kódov prijatej strany ich POHODA ponúka dvanásť;
+   * zvyšok sú zriedkavé režimy (osobitná úprava §68d, dovoz, krátenie nároku),
+   * ktoré firma nepoužíva. Model medzi nimi predtým vyberal ako medzi
+   * rovnocennými — a raz vybral PNnevymer, ktorý je práve tu vypnutý.
+   *
+   * Neuvedené = ponúka sa. Vydaná strana zatiaľ príznak nemá, tak sa
+   * neobmedzuje; nastavenie je per firma a natrvalo ho prinesie až agent
+   * (POHODA ho dáva v classificationVAT ako element „offer").
+   */
+  ponukat?: boolean;
 }
 
 export const POHODA_DPH_KODY: readonly PohodaDphKod[] = [
@@ -39,35 +51,35 @@ export const POHODA_DPH_KODY: readonly PohodaDphKod[] = [
   { kod: 'DDsluz', ref: 'D02', strana: 'DD', riadky: [9, 10], sv: null, nazov: 'Tovary a služby, pri ktorých daň platí príjemca' },
   { kod: 'DDsl§69', ref: 'D05', strana: 'DD', riadky: [9, 10], sv: null, nazov: 'Služby, pri ktorých príjemca platí daň podľa § 69 ods.3 zákona' },
   { kod: 'DRozdiel', ref: 'D06', strana: 'DD', riadky: [24, 25], sv: null, nazov: 'Rozdiel v zákl. dane a v dani po oprave (§25 od.1 až 3) - tovary a služby (D01 - D05)' },
-  { kod: 'PB', ref: 'P03', strana: 'P', riadky: [], sv: null, nazov: 'Tuzemské plnenia - bez nároku' },
-  { kod: 'PBnadEU', ref: 'P06', strana: 'P', riadky: [], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU - bez nároku' },
-  { kod: 'PBsluz', ref: 'P09', strana: 'P', riadky: [], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - bez nároku' },
-  { kod: 'PBtovar', ref: 'P12', strana: 'P', riadky: [], sv: null, nazov: 'Dovoz tovaru - bez nároku' },
-  { kod: 'PD', ref: 'P01', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia' },
-  { kod: 'PD-OsU', ref: 'P19', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - osobitná úprava §68d' },
-  { kod: 'PD-OsUdod', ref: 'P23', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - faktúra vystavená v osobitnej úprave §68d' },
-  { kod: 'PD1odb', ref: 'P13', strana: 'P', riadky: [], sv: null, nazov: 'Nadobudnutie tovaru prvým odberateľom' },
-  { kod: 'PDdopr', ref: 'P14', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Nadobudnutie nového dopravného prostriedku' },
-  { kod: 'PDnadEU', ref: 'P04', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU' },
-  { kod: 'PDopr-OsU', ref: 'P21', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - osobitná úprava §68d' },
-  { kod: 'PDopr-OsUdod', ref: 'P25', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - faktúra vystavená v osobitnej úprave §68d' },
-  { kod: 'PDoprava', ref: 'P15', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane' },
-  { kod: 'PDopr§53b', ref: 'P27', strana: 'P', riadky: [29], sv: null, nazov: 'Oprava odpočítanej dane (§53b)' },
-  { kod: 'PDsluz', ref: 'P07', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca' },
-  { kod: 'PDtovar', ref: 'P10', strana: 'P', riadky: [18, 19, 22, 23], sv: null, nazov: 'Dovoz tovaru' },
-  { kod: 'PK', ref: 'P02', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - krátiť nárok' },
-  { kod: 'PK-OsU', ref: 'P20', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - osobitná úprava §68d - krátiť nárok' },
-  { kod: 'PK-OsUdod', ref: 'P24', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - faktúra vystavená v osobitnej úprave §68d - krátiť nárok' },
-  { kod: 'PKnadEU', ref: 'P05', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU - krátiť nárok' },
-  { kod: 'PKopr-OsU', ref: 'P22', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - osobitná úprava §68d - krátiť nárok' },
-  { kod: 'PKopr-OsUdod', ref: 'P26', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - faktúra vystavená v osobitnej úprave §68d - krátiť nárok' },
-  { kod: 'PKoprava', ref: 'P18', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane (§ 53) - krátiť nárok' },
-  { kod: 'PKopr§53b', ref: 'P28', strana: 'P', riadky: [29], sv: null, nazov: 'Oprava odpočítanej dane (§53b) – krátiť nárok' },
-  { kod: 'PKsluz', ref: 'P08', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - krátiť nárok' },
-  { kod: 'PKtovar', ref: 'P11', strana: 'P', riadky: [18, 19, 22, 23], sv: null, nazov: 'Dovoz tovaru - krátiť nárok' },
-  { kod: 'PN', ref: 'P', strana: 'P', riadky: [], sv: null, nazov: 'Nezahrňovať do priznania DPH' },
-  { kod: 'PNnevymer', ref: 'P', strana: 'P', riadky: [], sv: null, nazov: 'Nezahrňovať do priznania DPH - nevymeriavať DPH' },
-  { kod: 'PVdaň', ref: 'P16', strana: 'P', riadky: [31], sv: null, nazov: 'Vrátená daň' },
+  { kod: 'PB', ref: 'P03', strana: 'P', riadky: [], sv: null, nazov: 'Tuzemské plnenia - bez nároku', ponukat: true },
+  { kod: 'PBnadEU', ref: 'P06', strana: 'P', riadky: [], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU - bez nároku', ponukat: false },
+  { kod: 'PBsluz', ref: 'P09', strana: 'P', riadky: [], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - bez nároku', ponukat: false },
+  { kod: 'PBtovar', ref: 'P12', strana: 'P', riadky: [], sv: null, nazov: 'Dovoz tovaru - bez nároku', ponukat: false },
+  { kod: 'PD', ref: 'P01', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia', ponukat: true },
+  { kod: 'PD-OsU', ref: 'P19', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - osobitná úprava §68d', ponukat: false },
+  { kod: 'PD-OsUdod', ref: 'P23', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - faktúra vystavená v osobitnej úprave §68d', ponukat: true },
+  { kod: 'PD1odb', ref: 'P13', strana: 'P', riadky: [], sv: null, nazov: 'Nadobudnutie tovaru prvým odberateľom', ponukat: false },
+  { kod: 'PDdopr', ref: 'P14', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Nadobudnutie nového dopravného prostriedku', ponukat: false },
+  { kod: 'PDnadEU', ref: 'P04', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU', ponukat: true },
+  { kod: 'PDopr-OsU', ref: 'P21', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - osobitná úprava §68d', ponukat: false },
+  { kod: 'PDopr-OsUdod', ref: 'P25', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - faktúra vystavená v osobitnej úprave §68d', ponukat: true },
+  { kod: 'PDoprava', ref: 'P15', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane', ponukat: true },
+  { kod: 'PDopr§53b', ref: 'P27', strana: 'P', riadky: [29], sv: null, nazov: 'Oprava odpočítanej dane (§53b)', ponukat: false },
+  { kod: 'PDsluz', ref: 'P07', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca', ponukat: true },
+  { kod: 'PDtovar', ref: 'P10', strana: 'P', riadky: [18, 19, 22, 23], sv: null, nazov: 'Dovoz tovaru', ponukat: false },
+  { kod: 'PK', ref: 'P02', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - krátiť nárok', ponukat: true },
+  { kod: 'PK-OsU', ref: 'P20', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - osobitná úprava §68d - krátiť nárok', ponukat: false },
+  { kod: 'PK-OsUdod', ref: 'P24', strana: 'P', riadky: [18, 19, 20, 21], sv: null, nazov: 'Tuzemské plnenia - faktúra vystavená v osobitnej úprave §68d - krátiť nárok', ponukat: true },
+  { kod: 'PKnadEU', ref: 'P05', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU - krátiť nárok', ponukat: false },
+  { kod: 'PKopr-OsU', ref: 'P22', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - osobitná úprava §68d - krátiť nárok', ponukat: false },
+  { kod: 'PKopr-OsUdod', ref: 'P26', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane - faktúra vystavená v osobitnej úprave §68d - krátiť nárok', ponukat: true },
+  { kod: 'PKoprava', ref: 'P18', strana: 'P', riadky: [28], sv: null, nazov: 'Oprava odpočítanej dane (§ 53) - krátiť nárok', ponukat: true },
+  { kod: 'PKopr§53b', ref: 'P28', strana: 'P', riadky: [29], sv: null, nazov: 'Oprava odpočítanej dane (§53b) – krátiť nárok', ponukat: false },
+  { kod: 'PKsluz', ref: 'P08', strana: 'P', riadky: [18, 19], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - krátiť nárok', ponukat: false },
+  { kod: 'PKtovar', ref: 'P11', strana: 'P', riadky: [18, 19, 22, 23], sv: null, nazov: 'Dovoz tovaru - krátiť nárok', ponukat: false },
+  { kod: 'PN', ref: 'P', strana: 'P', riadky: [], sv: null, nazov: 'Nezahrňovať do priznania DPH', ponukat: true },
+  { kod: 'PNnevymer', ref: 'P', strana: 'P', riadky: [], sv: null, nazov: 'Nezahrňovať do priznania DPH - nevymeriavať DPH', ponukat: false },
+  { kod: 'PVdaň', ref: 'P16', strana: 'P', riadky: [31], sv: null, nazov: 'Vrátená daň', ponukat: false },
   { kod: 'UD', ref: 'U01', strana: 'U', riadky: [1, 2, 3, 4], sv: null, nazov: 'Tuzemské plnenia' },
   { kod: 'UD-OsU', ref: 'U30', strana: 'U', riadky: [1, 2, 3, 4], sv: null, nazov: 'Tuzemské plnenia - osobitná úprava §68d' },
   { kod: 'UDcest', ref: 'U14', strana: 'U', riadky: [], sv: null, nazov: 'Osobitná úprava pre cestovné služby' },
@@ -122,5 +134,8 @@ export function popisKodu(kod: string | undefined | null): PohodaDphKod | undefi
 export function kodyPreDoklad(documentType: string, kody: readonly string[]): string[] {
   const strana: StranaPlnenia | undefined = documentType === 'FV' ? 'U' : documentType === 'FP' ? 'P' : undefined;
   if (!strana) return [...kody];
-  return kody.filter((kod) => popisKodu(kod)?.strana === strana);
+  return kody.filter((kod) => {
+    const popis = popisKodu(kod);
+    return popis?.strana === strana && popis.ponukat !== false;
+  });
 }

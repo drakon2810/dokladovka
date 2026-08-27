@@ -88,7 +88,12 @@ export function kodyPreStranu<T extends { kod: string }>(documentType: string, k
   const strana: StranaPlnenia | undefined = documentType === 'FV' ? 'U' : documentType === 'FP' ? 'P' : undefined;
   // Ostatné agendy (interný doklad, pokladnica) môžu stáť na oboch stranách.
   if (!strana) return kody;
-  return kody.filter((item) => popisKodu(item.kod)?.strana === strana);
+  return kody.filter((item) => {
+    const popis = popisKodu(item.kod);
+    // Kód, ktorý POHODA pri zadávaní vôbec neponúka, nie je pre model
+    // rovnocenná možnosť — je to režim, ktorý firma nepoužíva.
+    return popis?.strana === strana && popis.ponukat !== false;
+  });
 }
 
 /**

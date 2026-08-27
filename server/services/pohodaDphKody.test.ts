@@ -43,7 +43,7 @@ describe('popisKodu', () => {
 
 describe('kodyPreDoklad', () => {
   // Číselník RCI v malom: obe strany plus vymeranie dane.
-  const ciselnik = ['PN', 'PD', 'PDsluz', 'DDsl§69', 'UN', 'UDzahr', 'UDzahrSl', 'VLASTNY'];
+  const ciselnik = ['PN', 'PNnevymer', 'PD', 'PDsluz', 'PKsluz', 'DDsl§69', 'UN', 'UDzahr', 'UDzahrSl', 'VLASTNY'];
 
   // Presne tento filter chýbal, keď kontrola prijatej faktúre od moldavského
   // dopravcu ponúkla DDsl§69 — vymeranie dane patrí na interný doklad.
@@ -57,6 +57,22 @@ describe('kodyPreDoklad', () => {
     expect(kody).toEqual(['UN', 'UDzahr', 'UDzahrSl']);
   });
 
+
+  // POHODA má na prijatej strane tridsaťjeden kódov a ponúka z nich dvanásť.
+  // Zvyšok sú režimy, ktoré firma nepoužíva — model medzi nimi predtým
+  // vyberal ako medzi rovnocennými a raz siahol práve po PNnevymer.
+  it('kód, ktorý POHODA neponúka, sa modelu vôbec nedostane', () => {
+    const kody = kodyPreDoklad('FP', ciselnik);
+    expect(kody).not.toContain('PNnevymer');
+    expect(kody).not.toContain('PKsluz');
+    expect(kody).toContain('PN');
+  });
+
+  it('ponúkaných kódov prijatej strany je výrazne menej než všetkých', () => {
+    const vsetky = POHODA_DPH_KODY.filter((polozka) => polozka.strana === 'P');
+    const ponukane = vsetky.filter((polozka) => polozka.ponukat !== false);
+    expect(ponukane.length).toBeLessThan(vsetky.length / 2);
+  });
   // Vlastný kód firmy nevieme posúdiť, tak ho neponúkame ani na jednej strane.
   it('kód mimo zoznamu vypadne z oboch strán', () => {
     expect(kodyPreDoklad('FP', ciselnik)).not.toContain('VLASTNY');
