@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DphAuditor, kodyPreStranu, overeneFakty, trebaDruhyHlas, zluc, zosuladSPraxou, type DphAuditVstup } from './dphAuditService.js';
+import { DphAuditor, bezPrazdnehoNavrhu, kodyPreStranu, overeneFakty, trebaDruhyHlas, zluc, zosuladSPraxou, type DphAuditVstup } from './dphAuditService.js';
 
 // Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
 // model dostane spoľahlivé fakty o krajine a nikdy nesmie prejsť s kódom,
@@ -175,6 +175,36 @@ describe('zosuladSPraxou', () => {
     expect(zosuladSPraxou('PNnevymer', new Map())).toBe('PNnevymer');
     expect(zosuladSPraxou('VYMYSLENY', new Map([['PN', 10]]))).toBe('VYMYSLENY');
     expect(zosuladSPraxou(null, new Map())).toBeNull();
+  });
+});
+
+describe('bezPrazdnehoNavrhu', () => {
+  // Skutočný prípad z karty SERMAV: kontrola navrhla PNnevymer, zladenie so
+  // zvykom firmy ho vymenilo za PN — a PN na doklade už stálo. Účtovníkovi
+  // potom svietilo „Kontrola navrhuje PN" nad poľom, kde PN bolo.
+  it('rada zhodná s pamäťou vypadne a spor sa zavrie', () => {
+    const vysledok = bezPrazdnehoNavrhu({"verdikt":"nesuhlasi","odporucaneClenenieKod":"PN","odporucanaKvSekcia":"KN","dovod":"d","istota":0.9}, 'PN', 'KN');
+    expect(vysledok.odporucaneClenenieKod).toBeNull();
+    expect(vysledok.odporucanaKvSekcia).toBeNull();
+    expect(vysledok.verdikt).toBe('suhlasi');
+  });
+
+  it('keď sa líši aspoň sekcia KV, spor zostáva otvorený', () => {
+    const vysledok = bezPrazdnehoNavrhu({"verdikt":"nesuhlasi","odporucaneClenenieKod":"PN","odporucanaKvSekcia":"B1","dovod":"d","istota":0.9}, 'PN', 'KN');
+    expect(vysledok.odporucaneClenenieKod).toBeNull();
+    expect(vysledok.odporucanaKvSekcia).toBe('B1');
+    expect(vysledok.verdikt).toBe('nesuhlasi');
+  });
+
+  // Neistý verdikt sa na súhlas neprepisuje — neistota nie je zhoda.
+  it('neistý verdikt zostáva neistý', () => {
+    expect(bezPrazdnehoNavrhu({"verdikt":"neisty","odporucaneClenenieKod":"PN","odporucanaKvSekcia":"KN","dovod":"d","istota":0.9}, 'PN', 'KN').verdikt).toBe('neisty');
+  });
+
+  it('skutočný rozpor prejde nedotknutý', () => {
+    const vysledok = bezPrazdnehoNavrhu({"verdikt":"nesuhlasi","odporucaneClenenieKod":"UN","odporucanaKvSekcia":null,"dovod":"d","istota":0.9}, 'UDzahr', undefined);
+    expect(vysledok.odporucaneClenenieKod).toBe('UN');
+    expect(vysledok.verdikt).toBe('nesuhlasi');
   });
 });
 describe('druhý hlas', () => {

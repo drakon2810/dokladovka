@@ -390,9 +390,13 @@ export function InvoicePanel({
     && (!dphAudit.posudeneClenenieKod
       || dphAudit.posudeneClenenieKod === codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod)
     ? {
-      clenenie: dphAudit.odporucaneClenenieKod ?? undefined,
-      // Sekciu ponúkame len keď sa naozaj líši od tej na doklade — inak by pod
-      // poľom visel riadok, ktorý nič nemení.
+      // Ponúkame len to, čo sa naozaj líši od hodnoty na doklade. Rada, ktorá
+      // nič nemení, je pre účtovníka šum — a účtovník mohol pole prepnúť aj
+      // sám potom, čo kontrola dobehla.
+      clenenie: dphAudit.odporucaneClenenieKod
+        && dphAudit.odporucaneClenenieKod !== codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod
+        ? dphAudit.odporucaneClenenieKod
+        : undefined,
       kvSekcia: dphAudit.odporucanaKvSekcia && dphAudit.odporucanaKvSekcia !== ucto.clenenieKvKod
         ? dphAudit.odporucanaKvSekcia
         : undefined,

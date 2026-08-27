@@ -135,6 +135,33 @@ export function zosuladSPraxou(kod: string | null, prax: ReadonlyMap<string, num
   return rovnake.reduce((a, b) => ((prax.get(b.kod) ?? 0) > (prax.get(a.kod) ?? 0) ? b : a)).kod;
 }
 
+/**
+ * Rada, ktorá nič nemení, nie je rada. Stáva sa to po zladení so zvykom firmy:
+ * kontrola navrhla PNnevymer, zvyk ho vymenil za PN — a PN na doklade už bolo.
+ * Verdikt pritom ostal „nesúhlasí", takže účtovníkovi svietilo „Kontrola
+ * navrhuje PN" nad poľom, kde PN stálo.
+ *
+ * Odporúčanie, ktoré sa rovná tomu, čo navrhla pamäť, sa preto zahodí. Keď
+ * takto vypadnú obe — kód aj sekcia KV — nie je o čom sa sporiť a verdikt sa
+ * mení na súhlas, aby doklad zmizol aj z počítadla rozporov.
+ */
+export function bezPrazdnehoNavrhu(
+  verdikt: DphVerdikt,
+  navrhnuteClenenie: string | undefined,
+  navrhnutaKv: string | undefined,
+): DphVerdikt {
+  const clenenie = verdikt.odporucaneClenenieKod === navrhnuteClenenie ? null : verdikt.odporucaneClenenieKod;
+  const kv = verdikt.odporucanaKvSekcia === navrhnutaKv ? null : verdikt.odporucanaKvSekcia;
+  if (clenenie === verdikt.odporucaneClenenieKod && kv === verdikt.odporucanaKvSekcia) return verdikt;
+  const nicNezostalo = clenenie === null && kv === null;
+  return {
+    ...verdikt,
+    odporucaneClenenieKod: clenenie,
+    odporucanaKvSekcia: kv,
+    verdikt: nicNezostalo && verdikt.verdikt === 'nesuhlasi' ? 'suhlasi' : verdikt.verdikt,
+  };
+}
+
 export class DphAuditor {
   private readonly responses: ResponsesParser;
 
@@ -341,6 +368,7 @@ export async function posudADulozDph(
   if (zladeny !== finalny.odporucaneClenenieKod) {
     finalny = { ...finalny, odporucaneClenenieKod: zladeny };
   }
+  finalny = bezPrazdnehoNavrhu(finalny, input.navrhnuteClenenieKod, input.navrhnutaKvSekcia);
 
   await database.query(
     `INSERT INTO dph_audit
