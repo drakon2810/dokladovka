@@ -12,6 +12,11 @@ import {
 } from '../../lib/validate';
 import { splitPostalAddress } from '../xml/pohodaDataPack';
 
+/** Do POHODY ide len slovenské číslo účtu — zahraničný IBAN sa nikam neprenáša. */
+function jeSlovenskyIban(iban: string): boolean {
+  return /^\s*SK/i.test(iban);
+}
+
 export type DocumentValidationCode =
   | 'supplier_name_required'
   | 'invoice_number_required'
@@ -135,7 +140,13 @@ export function validateDocument(
   }
   // Vydaná faktúra: IBAN patrí vlastnej firme, do POHODY nejde a editor ho ani
   // nezobrazuje — blokovať schválenie na ňom by bola slepá ulička.
-  if (doc.typ !== 'FV' && supplier.iban && !validateIBAN(supplier.iban)) {
+  //
+  // To isté platí pre zahraničný IBAN aj na prijatej faktúre: do POHODY sa
+  // prenáša len slovenské číslo účtu (skIbanAccount berie výhradne SK…), takže
+  // moldavský ani rumunský IBAN sa nikam nedostane a chyba v ňom nemá následok.
+  // Na skenoch zahraničných dopravcov pritom OCR pravidelne číta 1 ako I —
+  // doklad sa tak nedal schváliť kvôli údaju, ktorý nikam nejde.
+  if (doc.typ !== 'FV' && supplier.iban && jeSlovenskyIban(supplier.iban) && !validateIBAN(supplier.iban)) {
     issues.push({ code: 'invalid_iban', field: 'dodavatel.iban' });
   }
   if (!isValidIsoDate(extracted.datumVystavenia)) {

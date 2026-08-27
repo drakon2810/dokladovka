@@ -165,6 +165,17 @@ describe('validateDocument — pokazený IBAN vlastnej firmy na vydanej faktúre
       organization,
     )).toContainEqual({ code: 'invalid_iban', field: 'dodavatel.iban' });
   });
+
+  // Sken moldavského dopravcu: OCR prečítalo 1 ako I a z IBAN-u ostala zmes,
+  // ktorú mod-97 správne odmietne. Do POHODY sa však prenáša výhradne slovenské
+  // číslo účtu, takže tento údaj nikam nejde — a doklad sa preň nedal schváliť.
+  it('pokazený zahraničný IBAN schválenie neblokuje — do POHODY nejde', () => {
+    const issues = validateDocument(
+      prijataFaktura({ dodavatel: { nazov: 'Arvi Invest Logistics SRL', iban: 'MD55VI0225I I100000205USD' } }),
+      organization,
+    );
+    expect(issues.map((issue) => issue.code)).not.toContain('invalid_iban');
+  });
 });
 
 // Reálny prípad: americký zákazník na vydanej faktúre má „Client VAT No."
