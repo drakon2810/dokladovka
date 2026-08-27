@@ -257,9 +257,21 @@ function sourceFormat(mimeType: string, documentType: string): string {
   return documentType === 'PD' ? 'blocek_foto' : 'foto';
 }
 
-function asProviderError(error: unknown): ExtractionProviderError {
+/**
+ * Vonkajší catch drží celé spracovanie — extrakciu, normalizáciu aj zápisy do
+ * databázy. Čokoľvek v ňom zlyhá, účtovník doteraz uvidel „Výsledok AI
+ * extrakcie nemá platný formát" a šiel hľadať chybu do dokladu, hoci padnúť
+ * mohol zápis. Skutočnú príčinu sme pritom nikde nemali: do logu sa nedostala
+ * a v extraction_runs zostala len tá zavádzajúca veta.
+ *
+ * Chyba, ktorá nie je od extrakčného providera, si preto nesie vlastnú správu
+ * ďalej a zároveň sa zaloguje aj so stackom.
+ */
+function asProviderError(error: unknown, documentId?: string): ExtractionProviderError {
   if (error instanceof ExtractionProviderError) return error;
-  return new ExtractionProviderError('invalid_extraction_result', 'Výsledok AI extrakcie nemá platný formát', false);
+  console.error('[worker] spracovanie zlyhalo mimo extrakcie', { documentId, error });
+  const dovod = error instanceof Error ? error.message : String(error);
+  return new ExtractionProviderError('processing_failed', `Spracovanie zlyhalo: ${dovod}`.slice(0, 400), false);
 }
 
 /**
@@ -920,7 +932,7 @@ export async function processNextJob(
     return true;
   } catch (error) {
     await database.transaction((tx) => failJob(
-      tx, job, prepared, asProviderError(error), Math.max(0, Math.round(performance.now() - jobStartedAt)),
+      tx, job, prepared, asProviderError(error, prepared?.documentId), Math.max(0, Math.round(performance.now() - jobStartedAt)),
     ));
     return true;
   }
