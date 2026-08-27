@@ -1048,6 +1048,46 @@ describe('predvolený číselný rad', () => {
   }, 90_000);
 });
 
+describe('kód radu v čísle dokladu', () => {
+  // Skutočný prípad RCI: rad 2611 „Prijaté faktúry" mal 162 dokladov
+  // (last_number 2611162), rad 2612 „Prijaté dobropisy" dva (261200002).
+  // POHODA píše do čísla aj kód radu, takže porovnanie celého reťazca dalo
+  // 261 200 002 > 2 611 162 a prijatá faktúra chodila do dobropisov.
+  it('vyhrá rad s vyšším počítadlom, nie s dlhším odsadením núl', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const faktury = randomUUID();
+    const dobropisy = randomUUID();
+    for (const [id, code, name, lastNumber] of [
+      [faktury, '2611', 'Prijaté faktúry', '2611162'],
+      [dobropisy, '2612', 'Prijaté dobropisy', '261200002'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,last_number)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$5,'pohoda','prijate_faktury',$6)`,
+        [id, seeded.tenantId, seeded.organizationId, code, name, lastNumber],
+      );
+    }
+    await database.query(
+      `INSERT INTO documents
+        (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,0,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'SERMAV GRUP SRL' }, cisloFaktury: '2527', datumVystavenia: '2026-08-10', mena: 'EUR', rozpisDph: [], sumaSpolu: 850 })],
+    );
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+      supplierName: 'SERMAV GRUP SRL',
+    });
+    const row = await database.query<{ ciselny_rad_id: string | null } & Record<string, unknown>>(
+      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    );
+    expect(row.rows[0]?.ciselny_rad_id).toBe(faktury);
+  }, 90_000);
+});
+
 describe('mesačné číselné rady', () => {
   // Reálny prípad: firma vedie rad na každý mesiac. Júlovej faktúre automatika
   // pridelila júnový rad (naposledy použitý) a POHODA jej dala číslo z neho.

@@ -348,6 +348,11 @@ async function resolveSeriesDefault(
     if (podlaMesiaca.length === 1) return podlaMesiaca[0].id;
   }
 
+  // Rad sa vyberá podľa toho, koľko dokladov v ňom už je. POHODA však do
+  // last_number ukladá celé číslo dokladu aj s kódom radu — „2611162" je rad
+  // 2611 a stošesťdesiaty druhý doklad, „261200002" je rad 2612 a druhý.
+  // Bez odrezania kódu vyhráva rad s dlhším odsadením núl, takže prijatá
+  // faktúra dostávala rad „Prijaté dobropisy" s dvomi dokladmi.
   const automatic = await tx.query<{ id: string } & Record<string, unknown>>(
     `SELECT c.id
        FROM code_list_items c
@@ -360,7 +365,11 @@ async function resolveSeriesDefault(
       WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
         AND c.active=true AND c.agenda=$3
       ORDER BY COALESCE(u.pouzitia, 0) DESC,
-               COALESCE(NULLIF(regexp_replace(COALESCE(c.last_number, ''), '\\D', '', 'g'), ''), '0')::numeric DESC,
+               COALESCE(NULLIF(regexp_replace(
+                 CASE WHEN c.last_number LIKE c.code || '%'
+                      THEN substr(c.last_number, length(c.code) + 1)
+                      ELSE COALESCE(c.last_number, '') END,
+                 '\\D', '', 'g'), ''), '0')::numeric DESC,
                c.code
       LIMIT 1`,
     [input.tenantId, input.organizationId, agenda],
