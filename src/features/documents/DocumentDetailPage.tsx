@@ -68,6 +68,7 @@ import { BankStatementPreview } from './BankStatementPreview';
 import { InvoicePanel } from './InvoicePanel';
 import { BankPanel } from './BankPanel';
 import { ExportPohodaModal } from './ExportPohodaModal';
+import { oznacPrecitany } from './precitane';
 import { SplitDocumentModal, splitGroup } from './SplitDocumentModal';
 import {
   SOURCE_SECTIONS,
@@ -319,6 +320,8 @@ export function DocumentDetailPage() {
   const { data, loading, error } = useDataQuery();
 
   const sourceDocument = data?.documents.find((item) => item.id === id);
+  // Jediné miesto, cez ktoré vedie otvorenie dokladu — zoznam sem naviguje.
+  useEffect(() => { if (id) oznacPrecitany(id); }, [id]);
   const organization = data?.organizations.find((item) => item.id === sourceDocument?.orgId);
   const role = data?.role ?? 'uctovnik';
   const [draft, setDraft] = useState<DocumentItem>();

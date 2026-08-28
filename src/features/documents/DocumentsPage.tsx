@@ -23,6 +23,7 @@ import { showToast } from '../../components/toast';
 import { t, type SkKey } from '../../i18n/sk';
 import { formatDate, formatMoney } from '../../lib/format';
 import { UploadModal } from './UploadModal';
+import { oznacPrecitane, poslednaNavsteva, usePrecitane, zapisNavstevu } from './precitane';
 import { ExportPohodaModal } from './ExportPohodaModal';
 
 const PaymentQrModal = lazy(() =>
@@ -400,6 +401,16 @@ export function DocumentsPage() {
     if (supplierFilter && !suppliers.includes(supplierFilter)) setSupplierFilter('');
   }, [supplierFilter, suppliers]);
 
+  // Zmrazené pri vstupe: keby sa čítalo priebežne, pás by zmizol v sekunde,
+  // v ktorej sa objaví. Zápis novej návštevy ide až po prvom vykreslení.
+  const [odNavstevy] = useState(() => poslednaNavsteva());
+  const precitane = usePrecitane();
+  useEffect(() => { zapisNavstevu(); }, []);
+  // Pri prvom otvorení niet voči čomu porovnávať — bez tejto podmienky by
+  // účtovník uvidel „247 nových dokladov" a pás by nič neznamenal.
+  const jeNovy = (document: DocumentItem) =>
+    odNavstevy !== '' && !precitane.has(document.id) && document.prijateDna > odNavstevy;
+
   const filteredDocuments = useMemo(
     () =>
       queueScopedDocuments.filter((document) => {
@@ -460,6 +471,10 @@ export function DocumentsPage() {
     };
     const multiplier = sortDirection === 'asc' ? 1 : -1;
     return [...filteredDocuments].sort((left, right) => {
+      // Neotvorené navrch, nech je zoradenie akékoľvek — to je celý zmysel
+      // „doklady ako neprečítaná pošta": nové sa nesmú stratiť v strede.
+      const noveNaprv = Number(jeNovy(right)) - Number(jeNovy(left));
+      if (noveNaprv !== 0) return noveNaprv;
       const leftValue = valueOf(left);
       const rightValue = valueOf(right);
       const compared =
@@ -471,6 +486,8 @@ export function DocumentsPage() {
         : compared * multiplier;
     });
   }, [filteredDocuments, organizationMap, sortDirection, sortKey]);
+
+  const novychVoView = sortedDocuments.filter(jeNovy).length;
 
   const visibleIds = useMemo(
     () => new Set(sortedDocuments.map((document) => document.id)),
@@ -887,6 +904,23 @@ export function DocumentsPage() {
         </div>
       </div>
 
+      {novychVoView > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-[13px] border border-[#C7E3D8] bg-[#F1F9F5] px-4 py-3">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-[#16A37B] shadow-[0_0_0_4px_rgba(22,163,123,.18)]" aria-hidden />
+          <span className="text-[13.5px] font-semibold text-[#0A6650]">
+            <span className="tnum">{novychVoView}</span> {t('doklady.nove.pas')}
+          </span>
+          <span className="text-[13px] text-ink-soft">{t('doklady.nove.popis')}</span>
+          <button
+            type="button"
+            className="ml-auto text-[13px] font-semibold text-accent transition hover:text-accent-hover"
+            onClick={() => oznacPrecitane(sortedDocuments.map((document) => document.id))}
+          >
+            {t('doklady.nove.oznacit')}
+          </button>
+        </div>
+      )}
+
       {/* Filtre */}
       <div className="mb-4 flex flex-wrap items-center gap-2.5">
         <FilterPill caption={t('fronta.label')} active={Boolean(queueFilter)}>
@@ -1091,6 +1125,7 @@ export function DocumentsPage() {
                     const manualLabel = manualProcessingLabel(document);
                     const isSelected = selected.has(document.id);
                     const isKos = activeTab === 'kos';
+                    const novy = jeNovy(document);
                     const payable = document.typ !== 'BV';
                     const rowLabel = [
                       showOrganization ? organization?.nazov : null,
@@ -1108,7 +1143,9 @@ export function DocumentsPage() {
                         role="link"
                         aria-label={rowLabel}
                         tabIndex={0}
-                        className="group relative cursor-pointer border-b border-line-soft text-[13px] text-ink transition last:border-0 hover:bg-[#F7F9F7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                        className={`group relative cursor-pointer border-b border-line-soft text-[13px] text-ink transition last:border-0 hover:bg-[#F7F9F7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${
+                          novy ? 'border-l-[3px] border-l-accent' : 'border-l-[3px] border-l-transparent'
+                        }`}
                         style={{
                           display: 'grid',
                           gridTemplateColumns: gridTemplate,
@@ -1149,7 +1186,15 @@ export function DocumentsPage() {
                         )}
                         <span><TypBadge typ={document.typ} /></span>
                         <span className="min-w-0">
-                          <span className="block truncate font-medium">{document.extracted.dodavatel.nazov}</span>
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            {novy && <span className="h-2 w-2 shrink-0 rounded-full bg-[#16A37B]" aria-hidden />}
+                            <span className="truncate font-medium">{document.extracted.dodavatel.nazov}</span>
+                            {novy && (
+                              <span className="shrink-0 rounded-[5px] bg-accent px-1.5 py-0.5 text-[10px] font-bold tracking-[.06em] text-white">
+                                {t('doklady.nove.odznak')}
+                              </span>
+                            )}
+                          </span>
                           <span className="tnum block truncate text-[11.5px] text-ink-faint">
                             {t('doklady.ico')} {document.extracted.dodavatel.ico ?? '—'}
                           </span>
