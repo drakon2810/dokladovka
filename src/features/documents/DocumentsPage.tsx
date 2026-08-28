@@ -212,16 +212,31 @@ function sumCurrency(docs: DocumentItem[]): 'EUR' | 'CZK' | 'USD' {
 }
 
 /** Pill-obal filtra: uppercase caption + natívny select/input vnútri. */
-function FilterPill({ caption, icon, children }: { caption: string; icon?: ReactNode; children: ReactNode }) {
+/**
+ * Filter ako chip (maketa „Doklady 1a"). Nastavený filter je zafarbený, takže
+ * sa dá jedným pohľadom zistiť, čím je zoznam orezaný — pri šiestich rovnako
+ * vyzerajúcich rámčekoch to predtým prezrádzala až prečítaná hodnota.
+ */
+function FilterPill({ caption, icon, children, active }: {
+  caption: string; icon?: ReactNode; children: ReactNode; active?: boolean;
+}) {
   return (
-    <label className="inline-flex h-[38px] cursor-pointer items-center gap-2 rounded-[10px] border border-line bg-surface px-3 transition hover:border-[#A7D9C9] hover:shadow-card">
-      {icon && <span className="text-ink-faint">{icon}</span>}
-      <span className="text-[9.5px] font-bold uppercase tracking-wider text-ink-mute">{caption}</span>
+    <label
+      className={`inline-flex h-[36px] cursor-pointer items-center gap-2 rounded-full border px-3.5 transition ${
+        active
+          ? 'border-[#C7E3D8] bg-tint text-accent-hover'
+          : 'border-line bg-surface hover:border-[#A7D9C9] hover:shadow-card'
+      }`}
+    >
+      {icon && <span className={active ? 'text-accent-hover' : 'text-ink-faint'}>{icon}</span>}
+      <span className={`text-[9.5px] font-bold uppercase tracking-wider ${active ? 'text-accent-hover/70' : 'text-ink-mute'}`}>
+        {caption}
+      </span>
       {children}
     </label>
   );
 }
-const selectCls = 'cursor-pointer border-0 bg-transparent pr-0.5 text-[13px] font-semibold text-ink outline-none';
+const selectCls = 'cursor-pointer border-0 bg-transparent pr-0.5 text-[13px] font-semibold text-inherit outline-none';
 
 function HeaderCell({
   label,
@@ -800,12 +815,15 @@ export function DocumentsPage() {
     <div>
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">{t('doklady.titulok')}</h1>
-          {tabCount('na_kontrole') > 0 && (
-            <p className="mt-0.5 text-[13px] text-ink-faint">
-              {tabCount('na_kontrole')} {t('notif.cakaNaKontrolu').toLowerCase()}
-            </p>
-          )}
+          <h1 className="text-2xl font-bold tracking-[-.02em]">{t('doklady.titulok')}</h1>
+          {/* Zhrnutie namiesto holého nadpisu: koľko dokladov firma má a koľko
+              z nich naozaj čaká na účtovníka. */}
+          <p className="mt-0.5 text-[13px] text-ink-soft">
+            <span className="tnum">{tabCount('vsetky')}</span> {t('doklady.pocetDokladov')}
+            {tabCount('na_kontrole') > 0 && (
+              <> · <span className="tnum">{tabCount('na_kontrole')}</span> {t('notif.cakaNaKontrolu').toLowerCase()}</>
+            )}
+          </p>
         </div>
         {data.role !== 'schvalovatel' && (
           <div className="flex items-center gap-2">
@@ -816,34 +834,35 @@ export function DocumentsPage() {
         )}
       </div>
 
-      {/* Taby */}
-      <div className="mb-4 flex items-center gap-1 overflow-x-auto border-b border-line" role="tablist">
-        {statusTabs.map((tab) => {
-          const isActive = activeTab === tab.id && !exactStatus;
-          const count = tabCount(tab.id);
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              className={`relative -mb-px inline-flex items-center gap-2 whitespace-nowrap px-3 py-2.5 text-[13.5px] transition ${
-                isActive ? 'font-semibold text-accent-hover' : 'font-medium text-ink-soft hover:text-ink'
-              }`}
-              onClick={() => selectTab(tab.id)}
-            >
-              {tab.label}
-              <span
-                className={`tnum inline-flex h-[19px] min-w-[19px] items-center justify-center rounded-full px-1.5 text-[11px] font-semibold ${
-                  isActive ? 'bg-tint text-accent-hover' : count === 0 ? 'bg-transparent text-ink-mute' : 'bg-line-soft text-ink-faint'
+      {/* Taby ako segmentovaný prepínač (maketa „Doklady 1a"): aktívny je biely
+          v sivom lôžku, nie podčiarknutý — na page bez rámov sa podčiarknutie
+          strácalo medzi filtrami pod ním. */}
+      <div className="mb-3.5 flex items-center gap-3">
+        <div className="flex w-fit items-center gap-1.5 overflow-x-auto rounded-[12px] bg-[#EAEEEB] p-1" role="tablist">
+          {statusTabs.map((tab) => {
+            const isActive = activeTab === tab.id && !exactStatus;
+            const count = tabCount(tab.id);
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-[9px] px-3.5 py-1.5 text-[13px] transition ${
+                  isActive
+                    ? 'bg-white font-semibold text-ink shadow-[0_1px_2px_rgba(27,31,29,.06)]'
+                    : 'text-ink-soft hover:text-ink'
                 }`}
+                onClick={() => selectTab(tab.id)}
               >
-                {count}
-              </span>
-              {isActive && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-t bg-accent" aria-hidden />}
-            </button>
-          );
-        })}
+                {tab.label}
+                <span className={`tnum text-[11px] font-semibold ${isActive ? 'text-ink-soft' : 'text-ink-mute'}`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
         <div className="ml-auto hidden items-center gap-1 rounded-[9px] border border-line bg-surface p-0.5 md:flex">
           <button
             type="button"
@@ -870,7 +889,7 @@ export function DocumentsPage() {
 
       {/* Filtre */}
       <div className="mb-4 flex flex-wrap items-center gap-2.5">
-        <FilterPill caption={t('fronta.label')}>
+        <FilterPill caption={t('fronta.label')} active={Boolean(queueFilter)}>
           <select
             className={selectCls}
             value={queueFilter}
@@ -892,7 +911,7 @@ export function DocumentsPage() {
             ))}
           </select>
         </FilterPill>
-        <FilterPill caption={t('doklady.filter.typ')}>
+        <FilterPill caption={t('doklady.filter.typ')} active={Boolean(typeFilter)}>
           <select className={selectCls} value={typeFilter} aria-label={t('doklady.filter.typ')} onChange={(event) => setTypeFilter(event.target.value as DocumentType | '')}>
             <option value="">{t('doklady.filter.vsetko')}</option>
             {DOCUMENT_TYPES.map((type) => (
@@ -900,7 +919,7 @@ export function DocumentsPage() {
             ))}
           </select>
         </FilterPill>
-        <FilterPill caption={t('doklady.filter.dodavatel')}>
+        <FilterPill caption={t('doklady.filter.dodavatel')} active={Boolean(supplierFilter)}>
           <select className={`${selectCls} max-w-[160px]`} value={supplierFilter} aria-label={t('doklady.filter.dodavatel')} onChange={(event) => setSupplierFilter(event.target.value)}>
             <option value="">{t('doklady.filter.vsetko')}</option>
             {suppliers.map((supplier) => (
@@ -908,12 +927,12 @@ export function DocumentsPage() {
             ))}
           </select>
         </FilterPill>
-        <FilterPill caption={t('doklady.filter.obdobieOd')} icon={<IcCal />}>
-          <input className="tnum w-[112px] cursor-pointer border-0 bg-transparent text-[13px] font-semibold text-ink outline-none" type="date" value={dateFrom} aria-label={t('doklady.filter.obdobieOd')} onChange={(event) => setDateFrom(event.target.value)} />
+        <FilterPill caption={t('doklady.filter.obdobieOd')} icon={<IcCal />} active={Boolean(dateFrom || dateTo)}>
+          <input className="tnum w-[112px] cursor-pointer border-0 bg-transparent text-[13px] font-semibold text-inherit outline-none" type="date" value={dateFrom} aria-label={t('doklady.filter.obdobieOd')} onChange={(event) => setDateFrom(event.target.value)} />
           <span className="text-ink-mute">–</span>
-          <input className="tnum w-[112px] cursor-pointer border-0 bg-transparent text-[13px] font-semibold text-ink outline-none" type="date" value={dateTo} aria-label={t('doklady.filter.obdobieDo')} onChange={(event) => setDateTo(event.target.value)} />
+          <input className="tnum w-[112px] cursor-pointer border-0 bg-transparent text-[13px] font-semibold text-inherit outline-none" type="date" value={dateTo} aria-label={t('doklady.filter.obdobieDo')} onChange={(event) => setDateTo(event.target.value)} />
         </FilterPill>
-        <FilterPill caption={t('doklady.filter.zdroj')}>
+        <FilterPill caption={t('doklady.filter.zdroj')} active={Boolean(sourceFilter)}>
           <select className={selectCls} value={sourceFilter} aria-label={t('doklady.filter.zdroj')} onChange={(event) => setSourceFilter(event.target.value as SourceFilter)}>
             <option value="">{t('doklady.filter.vsetko')}</option>
             <option value="email">{t('doklady.zdroj.email')}</option>
@@ -921,7 +940,7 @@ export function DocumentsPage() {
             <option value="upload">{t('doklady.zdroj.upload')}</option>
           </select>
         </FilterPill>
-        <FilterPill caption={t('doklady.filter.spracovanie')}>
+        <FilterPill caption={t('doklady.filter.spracovanie')} active={Boolean(processingFilter)}>
           <select className={selectCls} value={processingFilter} aria-label={t('doklady.filter.spracovanie')} onChange={(event) => setProcessingFilter(event.target.value as ProcessingFilter)}>
             <option value="">{t('doklady.filter.vsetko')}</option>
             <option value="caka">{t('doklady.spracovanie.caka')}</option>
