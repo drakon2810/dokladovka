@@ -959,3 +959,18 @@ export interface SimulateInboundEmailResult {
   attachments: InboundAttachment[];
   createdDocumentIds: string[];
 }
+
+/**
+ * Pripravenosť firmy pre sprievodcu prípravou. Počítá ju server pri snapshote —
+ * pamäť má tisíce riadkov a sprievodca z nich potrebuje jediné: či tam už niečo
+ * je. Kroky 1-4 na sebe závisia, piaty (schránka) vzniká automaticky.
+ */
+export interface PripravaFirmy {
+  organizationId: string;
+  /** Firma je spárovaná s účtovnou jednotkou v POHODE cez Mostík. */
+  mostik: boolean;
+  ciselniky: number;
+  pamat: number;
+  kategorie: number;
+  schranka: boolean;
+}

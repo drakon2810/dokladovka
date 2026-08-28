@@ -33,7 +33,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
       extractionRuns, suggestions, dphAudit, payments, approvalRules, dphProfiles,
       accountingProfiles, partners, noteTemplates, emailTemplates, orgDocuments, codeListRows, seriesDefaults,
-      users, batches, integration, installations, links, jobs,
+      users, batches, integration, installations, links, jobs, priprava,
     ] = await Promise.all([
       inScope('document_queues', 'name'),
       inScope('organization_bank_accounts', 'label'),
@@ -81,6 +81,24 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         `SELECT id,tenant_id,organization_id,document_ids,status,idempotency_key,request_xml_hash,response_meta,
                 attempt,created_at,created_by,sent_at,completed_at,retry_of_job_id
            FROM export_jobs WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ORDER BY created_at DESC`, [auth.tenantId, organizationIds],
+      ),
+      // Pripravenosť firmy pre sprievodcu. Počty, nie riadky: pamäť má tisíce
+      // záznamov a sprievodca z nich potrebuje jediné — či tam vôbec niečo je.
+      database.query<Record<string, any>>(
+        `SELECT o.id AS organization_id,
+                EXISTS (SELECT 1 FROM pohoda_company_links l
+                         WHERE l.organization_id=o.id AND l.tenant_id=o.tenant_id) AS mostik,
+                (SELECT count(*) FROM code_list_items c
+                  WHERE c.organization_id=o.id AND c.tenant_id=o.tenant_id AND c.active) AS ciselniky,
+                (SELECT count(*) FROM ucto_decisions d
+                  WHERE d.organization_id=o.id AND d.tenant_id=o.tenant_id) AS pamat,
+                (SELECT count(*) FROM ucto_kategorie k
+                  WHERE k.organization_id=o.id AND k.tenant_id=o.tenant_id AND k.active) AS kategorie,
+                EXISTS (SELECT 1 FROM organization_email_aliases a
+                         WHERE a.organization_id=o.id AND a.tenant_id=o.tenant_id AND a.status='active') AS schranka
+           FROM organizations o
+          WHERE o.tenant_id=$1 AND o.id=ANY($2::text[])`,
+        [auth.tenantId, organizationIds],
       ),
     ]);
 
@@ -226,6 +244,14 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         status: row.status, idempotencyKey: row.idempotency_key, requestXmlHash: row.request_xml_hash,
         responseMeta: row.response_meta ?? undefined, attempt: row.attempt, createdAt: iso(row.created_at), createdBy: row.created_by,
         sentAt: iso(row.sent_at), completedAt: iso(row.completed_at), retryOfJobId: row.retry_of_job_id ?? undefined,
+      })),
+      pripravaFiriem: priprava.rows.map((row) => ({
+        organizationId: row.organization_id,
+        mostik: Boolean(row.mostik),
+        ciselniky: Number(row.ciselniky),
+        pamat: Number(row.pamat),
+        kategorie: Number(row.kategorie),
+        schranka: Boolean(row.schranka),
       })),
     };
   });

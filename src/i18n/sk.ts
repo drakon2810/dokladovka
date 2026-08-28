@@ -214,6 +214,13 @@ export const sk = {
   // ===== Všeobecné =====
   'akcia.ulozit': 'Uložiť',
   'akcia.zrusit': 'Zrušiť',
+  'akcia.zavriet': 'Zavrieť',
+  'priprava.titulok': 'Príprava firmy',
+  'priprava.hotovo': 'Hotovo',
+  'priprava.zavriPoznamka': 'Môžete zavrieť a vrátiť sa neskôr — postup zostane zachovaný.',
+  'priprava.hotovoPoznamka': 'Firma je pripravená prijímať doklady.',
+  'priprava.adresaSkopirovana': 'Adresa skopírovaná',
+  'priprava.dokoncit': 'Dokončiť prípravu',
   'akcia.pridat': 'Pridať',
   'akcia.upravit': 'Upraviť',
   'akcia.vymazat': 'Vymazať',

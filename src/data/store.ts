@@ -32,6 +32,7 @@ import type {
   OrganizationEmailAlias,
   PohodaCompanyLink,
   Role,
+  PripravaFirmy,
 } from './types';
 import {
   buildSeedState,
@@ -72,6 +73,8 @@ export interface AppDataState {
   agentInstallations: AgentInstallation[];
   pohodaCompanyLinks: PohodaCompanyLink[];
   exportJobs: ExportJob[];
+  /** Pripravenosť jednotlivých firiem — pre sprievodcu prípravou. */
+  pripravaFiriem?: PripravaFirmy[];
 }
 
 export const APP_STORE_PERSIST_VERSION = 7;

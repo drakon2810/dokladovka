@@ -1,0 +1,71 @@
+/* Sprievodca prípravou firmy — variant B z makety „Onboarding sprievodca".
+   Päť krokov naraz: účtovník vidí celú cestu, aktuálny vytiahne farba. */
+
+@keyframes pfFajka {
+  from { transform: scale(.55); opacity: 0; }
+  70% { transform: scale(1.06); }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.pf-hlava { margin-bottom: 12px; }
+.pf-firma { font-size: 12px; color: #5A635D; }
+.pf-priebeh { margin-top: 12px; display: flex; align-items: center; gap: 10px; }
+.pf-pas { flex: 1; height: 4px; border-radius: 3px; background: #E4E8E4; overflow: hidden; }
+.pf-pas-vypln { height: 100%; border-radius: 3px; background: #0E7A5F; transition: width .3s ease; }
+.pf-pocet { font-size: 11.5px; color: #5A635D; }
+
+.pf-kroky { display: flex; flex-direction: column; gap: 6px; }
+
+.pf-krok {
+  display: flex; gap: 10px; align-items: flex-start;
+  border: 1px solid #E4E8E4; background: #fff;
+  border-radius: 10px; padding: 10px 12px;
+}
+/* Aktuálny krok je jediný zvýraznený — pri piatich naraz musí „čo teraz"
+   vytiahnuť farba, inak je to stena textu. */
+.pf-krok-naRade { border-color: #A7D9C9; }
+.pf-krok-zamknuty { background: #F7F8F6; }
+
+.pf-znak {
+  width: 20px; height: 20px; flex: 0 0 20px; margin-top: 1px;
+  border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  background: #E7F2ED; color: #0A6650;
+}
+.pf-znak-hotovy { background: #0E7A5F; color: #fff; animation: pfFajka .25s cubic-bezier(.34, 1.56, .64, 1) both; }
+.pf-znak-zamknuty { background: #EDF0EC; color: #8A928C; }
+
+.pf-telo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.pf-riadok { display: flex; align-items: center; gap: 8px; }
+.pf-nazov { flex: 1; font-size: 12.5px; font-weight: 500; }
+.pf-krok-zamknuty .pf-nazov { color: #8A928C; }
+
+.pf-stav { font-size: 11px; font-weight: 500; padding: 3px 7px; border-radius: 5px; background: #F4F6F3; color: #5A635D; }
+.pf-stav-hotovy { color: #0A6650; background: #E7F2ED; }
+.pf-stav-zamknuty { color: #8A928C; }
+
+.pf-popis { font-size: 12px; color: #5A635D; text-wrap: pretty; }
+.pf-hotovo { font-size: 12px; color: #5A635D; }
+.pf-zamknute { font-size: 12px; color: #8A928C; }
+
+.pf-pata {
+  margin-top: 14px; padding-top: 11px; border-top: 1px solid #E4E8E4;
+  display: flex; align-items: center; gap: 10px;
+}
+.pf-poznamka { flex: 1; font-size: 11.5px; color: #8A928C; text-wrap: pretty; }
+
+/* Vstup späť do sprievodcu v ľavom paneli — prstenec ukazuje, koľko chýba. */
+.pf-vstup {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 6px; padding: 8px;
+  border: 1px solid #A7D9C9; background: #E7F2ED; border-radius: 9px;
+  cursor: pointer; width: 100%; font: inherit; text-align: left;
+}
+.pf-vstup:hover { border-color: #0E7A5F; }
+.pf-prstenec {
+  position: relative; width: 22px; height: 22px; flex: 0 0 22px;
+  border-radius: 50%; display: grid; place-items: center;
+}
+.pf-prstenec::after { content: ''; width: 15px; height: 15px; border-radius: 50%; background: #E7F2ED; }
+.pf-vstup-text { font-size: 12px; font-weight: 500; color: #0A6650; }
+.pf-vstup-pocet { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums; color: #0E7A5F; }
