@@ -176,6 +176,10 @@ export function CodeListsTab() {
   const [preview, setPreview] = useState<CodeListImportPreview>();
   const [busy, setBusy] = useState(false);
   const [mostikBusy, setMostikBusy] = useState(false);
+  // Osem číselníkov pod sebou znamenalo, že spodné štyri nikto nevidel bez
+  // skrolovania. Navigátor (maketa „Nastavenia 1c") ukáže naraz jeden a zvyšok
+  // drží po ruke aj s počtami.
+  const [vybranyDruh, setVybranyDruh] = useState<CodeListKind>('predkontacie');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -306,16 +310,37 @@ export function CodeListsTab() {
         <p className="mt-2 text-xs text-ink-soft">{t('nast.cis.pohodaNavod')}</p>
       </section>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {KINDS.map(({ kind, label }) => (
+      <div className="card overflow-hidden">
+        <div className="grid grid-cols-1 md:grid-cols-[248px_1fr]">
+          <nav className="flex flex-col gap-0.5 border-b border-line-soft bg-[#FBFCFA] p-3 md:border-b-0 md:border-r" aria-label={t('nast.cis.navigator')}>
+            {KINDS.map(({ kind, label }) => {
+              const pocet = codeLists[kind].filter((item) => item.orgId === orgId && item.active).length;
+              const aktivny = kind === vybranyDruh;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  aria-current={aktivny}
+                  className={`flex items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-left text-[13.5px] transition ${
+                    aktivny ? 'bg-tint font-semibold text-accent-hover' : 'text-ink hover:bg-app'
+                  }`}
+                  onClick={() => setVybranyDruh(kind)}
+                >
+                  <span className={`h-4 w-[3px] shrink-0 rounded-[3px] ${aktivny ? 'bg-accent' : 'bg-transparent'}`} aria-hidden />
+                  <span className="flex-1 truncate">{label}</span>
+                  <span className="tnum text-xs text-ink-faint">{pocet}</span>
+                </button>
+              );
+            })}
+          </nav>
           <CodeListEditor
-            key={kind}
-            kind={kind}
-            label={label}
+            key={vybranyDruh}
+            kind={vybranyDruh}
+            label={KINDS.find(({ kind }) => kind === vybranyDruh)!.label}
             orgId={orgId}
-            items={codeLists[kind].filter((item) => item.orgId === orgId)}
+            items={codeLists[vybranyDruh].filter((item) => item.orgId === orgId)}
           />
-        ))}
+        </div>
       </div>
 
       {preview && (
@@ -436,8 +461,13 @@ function CodeListEditor({
   }
 
   return (
-    <section className="card p-3">
-      <h3 className="mb-2 text-sm font-semibold">{label}</h3>
+    <section className="min-w-0 p-5">
+      <div className="mb-3 flex items-center gap-2.5">
+        <h3 className="text-[15px] font-semibold">{label}</h3>
+        <span className="tnum rounded-full bg-tint px-2.5 py-0.5 text-xs font-semibold text-accent-hover">
+          {activeItems.length}
+        </span>
+      </div>
       <CodeListTable
         label={label}
         kind={kind}

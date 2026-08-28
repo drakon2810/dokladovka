@@ -448,43 +448,132 @@ export function TreningAiTab() {
       )}
 
       {suppliers.length > 0 && (
-        <section className="card p-4">
-          <h3 className="mb-1 text-sm font-semibold">{t('trening.dodavateliaVPamati')}</h3>
-          <p className="mb-3 max-w-3xl text-xs text-ink-soft">{t('trening.vylucitPopis')}</p>
-          <ul className="space-y-1">
-            {suppliers.map((supplier) => {
-              const key = supplier.supplierIco ? `ico:${supplier.supplierIco}` : `name:${supplier.supplierName ?? ''}`;
-              return (
-                <li key={key} className="flex items-center gap-3 rounded border border-line p-2 text-sm">
-                  <div className="min-w-0 flex-1">
-                    <p className={`truncate ${supplier.vylucene ? 'text-ink-soft line-through' : ''}`}>
-                      {supplier.supplierName ?? '—'}{supplier.supplierIco ? ` · ${supplier.supplierIco}` : ''}
-                    </p>
-                  </div>
-                  <span className="tnum text-xs text-ink-soft">{supplier.pocet}</span>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={busy}
-                    onClick={() => {
-                      if (!orgId) return;
-                      void excludeAiTrainingSupplier(orgId, {
-                        supplierIco: supplier.supplierIco,
-                        supplierName: supplier.supplierName,
-                        excluded: !supplier.vylucene,
-                      })
-                        .then(() => refreshSuppliers(orgId))
-                        .catch(() => showToast(t('chyba.vseobecna'), { tone: 'error' }));
-                    }}
-                  >
-                    {supplier.vylucene ? t('trening.zaradit') : t('trening.vylucit')}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
+        <DodavateliaVPamati
+          suppliers={suppliers}
+          busy={busy}
+          onPrepnut={(supplier) => {
+            if (!orgId) return;
+            void excludeAiTrainingSupplier(orgId, {
+              supplierIco: supplier.supplierIco,
+              supplierName: supplier.supplierName,
+              excluded: !supplier.vylucene,
+            })
+              .then(() => refreshSuppliers(orgId))
+              .catch(() => showToast(t('chyba.vseobecna'), { tone: 'error' }));
+          }}
+        />
       )}
     </div>
+  );
+}
+
+/** Hranice skupín — účtovník hľadá „toho, čo chodí často", nie 549 riadkov. */
+const SKUPINY = [
+  { id: 'caste', nazov: 'trening.dod.caste', poznamka: 'trening.dod.castePopis', patri: (pocet: number) => pocet >= 30 },
+  { id: 'obcasne', nazov: 'trening.dod.obcasne', poznamka: 'trening.dod.obcasnePopis', patri: (pocet: number) => pocet >= 10 && pocet < 30 },
+  { id: 'zriedkave', nazov: 'trening.dod.zriedkave', poznamka: 'trening.dod.zriedkavePopis', patri: (pocet: number) => pocet < 10 },
+] as const;
+
+/**
+ * Dodávatelia v pamäti — maketa „Nastavenia 1c“. Plochý zoznam 549 mien sa
+ * nedal prejsť očami; hľadanie a tri skupiny podľa frekvencie z neho robia
+ * niečo, v čom sa dá nájsť konkrétny dodávateľ.
+ */
+function DodavateliaVPamati({
+  suppliers,
+  busy,
+  onPrepnut,
+}: {
+  suppliers: AiTrainingSupplier[];
+  busy: boolean;
+  onPrepnut: (supplier: AiTrainingSupplier) => void;
+}) {
+  const [hladane, setHladane] = useState('');
+  const [zbalene, setZbalene] = useState<ReadonlySet<string>>(() => new Set(['zriedkave']));
+  const dopyt = hladane.trim().toLowerCase();
+
+  const najdene = dopyt
+    ? suppliers.filter((supplier) =>
+        `${supplier.supplierName ?? ''} ${supplier.supplierIco ?? ''}`.toLowerCase().includes(dopyt))
+    : suppliers;
+
+  return (
+    <section className="card p-4">
+      <div className="mb-1 flex flex-wrap items-center gap-3">
+        <h3 className="text-sm font-semibold">{t('trening.dodavateliaVPamati')}</h3>
+        <input
+          className="input ml-auto w-full max-w-[260px] px-3 py-1.5 text-[13px]"
+          placeholder={t('trening.dod.hladat')}
+          value={hladane}
+          onChange={(event) => setHladane(event.target.value)}
+          aria-label={t('trening.dod.hladat')}
+        />
+      </div>
+      <p className="mb-3 max-w-3xl text-xs text-ink-soft">{t('trening.vylucitPopis')}</p>
+
+      {najdene.length === 0 ? (
+        <p className="py-6 text-center text-sm text-ink-soft">{t('stav.ziadneData')}</p>
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          {SKUPINY.map((skupina) => {
+            const riadky = najdene.filter((supplier) => skupina.patri(supplier.pocet));
+            if (riadky.length === 0) return null;
+            // Pri hľadaní sa otvorí všetko — inak by účtovník našiel zhodu
+            // schovanú v zbalenej skupine a myslel si, že tam nie je.
+            const otvorena = Boolean(dopyt) || !zbalene.has(skupina.id);
+            return (
+              <div key={skupina.id} className="overflow-hidden rounded-[13px] border border-line">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 bg-[#FBFCFA] px-4 py-3 text-left transition hover:bg-app"
+                  aria-expanded={otvorena}
+                  onClick={() => setZbalene((current) => {
+                    const dalsie = new Set(current);
+                    if (dalsie.has(skupina.id)) dalsie.delete(skupina.id);
+                    else dalsie.add(skupina.id);
+                    return dalsie;
+                  })}
+                >
+                  <svg
+                    width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden
+                    className={`shrink-0 text-ink-soft transition-transform ${otvorena ? 'rotate-180' : ''}`}
+                  >
+                    <path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="text-[13.5px] font-semibold">{t(skupina.nazov)}</span>
+                  <span className="tnum rounded-full border border-line bg-surface px-2 py-0.5 text-[11.5px] font-semibold text-ink-soft">
+                    {riadky.length}
+                  </span>
+                  <span className="ml-auto text-[12.5px] text-ink-faint">{t(skupina.poznamka)}</span>
+                </button>
+                {otvorena && (
+                  <div className="px-4 pb-2.5">
+                    {riadky.map((supplier) => {
+                      const kluc = supplier.supplierIco ? `ico:${supplier.supplierIco}` : `name:${supplier.supplierName ?? ''}`;
+                      return (
+                        <div key={kluc} className="flex items-center gap-3.5 border-t border-line-soft py-2.5 first:border-0">
+                          <span className={`min-w-0 flex-1 truncate text-[13.5px] ${supplier.vylucene ? 'text-ink-soft line-through' : ''}`}>
+                            {supplier.supplierName ?? '—'}{supplier.supplierIco ? ` · ${supplier.supplierIco}` : ''}
+                          </span>
+                          <span className="tnum text-[12.5px] text-ink-soft">{supplier.pocet}</span>
+                          <button
+                            type="button"
+                            className="text-[12.5px] text-ink-faint transition hover:text-red-700 disabled:opacity-50"
+                            disabled={busy}
+                            onClick={() => onPrepnut(supplier)}
+                          >
+                            {supplier.vylucene ? t('trening.zaradit') : t('trening.vylucit')}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
