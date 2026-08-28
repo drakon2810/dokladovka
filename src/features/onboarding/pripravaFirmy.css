@@ -69,3 +69,20 @@
 .pf-prstenec::after { content: ''; width: 15px; height: 15px; border-radius: 50%; background: #E7F2ED; }
 .pf-vstup-text { font-size: 12px; font-weight: 500; color: #0A6650; }
 .pf-vstup-pocet { margin-left: auto; font-size: 11.5px; font-variant-numeric: tabular-nums; color: #0E7A5F; }
+
+/* Krok, ktorý beží. Analýza trvá minúty a agent sťahuje na pozadí — bez
+   točenia to vyzerá, že sa kliknutím nestalo nič. */
+@keyframes pfTocenie { to { transform: rotate(360deg); } }
+
+.pf-spinner {
+  display: inline-block; width: 12px; height: 12px; flex: 0 0 12px;
+  border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: pfTocenie .7s linear infinite;
+}
+.pf-znak .pf-spinner { color: #0A6650; }
+.pf-krok-naRade .pf-znak { background: #E7F2ED; }
+.pf-stav-bezi { color: #0A6650; background: #E7F2ED; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-spinner { animation-duration: 2.4s; }
+}

@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 import { useNavigate } from 'react-router-dom';
 import type { Organization, PripravaFirmy } from '../../data/types';
 import { Modal } from '../../components/ui';
-import { analyzeUctoProfil } from '../../data/api';
+import { analyzeUctoProfil, backfillUctoHistory } from '../../data/api';
 import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
@@ -23,9 +23,15 @@ import './pripravaFirmy.css';
  * nie je — a keď účtovník krok spraví inde, sprievodca to vidí tiež.
  */
 
-/** Ktorej firme je sprievodca otvorený. Zdieľané, lebo firmu sa dá založiť
- *  z ľavého panela aj z Nastavení — a okno vykresľuje Layout. */
-const usePripravaStore = create<{ orgId: string | null }>(() => ({ orgId: null }));
+/** Ktorej firme je sprievodca otvorený a ktorý krok práve beží. Zdieľané,
+ *  lebo firmu sa dá založiť z ľavého panela aj z Nastavení — a okno
+ *  vykresľuje Layout.
+ *
+ *  Bežiaci krok je tu, nie v komponente: analýza trvá minúty a účtovník
+ *  okno medzitým zavrie. Po otvorení musí vidieť, že sa stále pracuje. */
+const usePripravaStore = create<{ orgId: string | null; bezi: { orgId: string; krok: number } | null }>(
+  () => ({ orgId: null, bezi: null }),
+);
 export const usePripravaOrgId = () => usePripravaStore((s) => s.orgId);
 export function otvorPripravu(orgId: string): void { usePripravaStore.setState({ orgId }); }
 export function zavriPripravu(): void { usePripravaStore.setState({ orgId: null }); }
@@ -39,8 +45,12 @@ interface Krok {
   /** Kam krok vedie. Prázdne pri kroku, ktorý sa spraví na mieste. */
   cesta?: string;
   akcia: string;
-  /** Krok, ktorý sa dá spustiť rovno v okne. Vracia hlášku pre účtovníka. */
-  spustit?: (organizationId: string) => Promise<string>;
+  /** Krok, ktorý sa dá spustiť rovno v okne. */
+  spustit?: (organizationId: string) => Promise<unknown>;
+  /** Práca beží na pozadí (agent) — točí sa, kým krok nie je splnený. */
+  beziKymNeHotovy?: boolean;
+  /** i18n kľúč hlášky počas behu. */
+  bezimText?: Parameters<typeof t>[0];
   /** Čo sa ukáže, keď je hotový — konkrétne číslo, nie „OK". */
   hotovo: (priprava: PripravaFirmy, organizacia: Organization) => string;
   splneny: (priprava: PripravaFirmy, organizacia: Organization) => boolean;
@@ -85,10 +95,11 @@ export const KROKY: readonly Krok[] = [
     akcia: 'Naučiť pamäť',
     // Beží na mieste — účtovník nemá dôvod odchádzať do Nastavení a hľadať
     // tam medzi Excelom, .mdb a dvoma tlačidlami to správne.
-    spustit: async (organizationId) => {
-      await requestMostikTrainingSync(organizationId);
-      return 'Mostík sťahuje históriu z POHODY — potrvá to chvíľu.';
-    },
+    // Požiadavka sa agentovi len zapíše; sťahuje ju na pozadí. Krok preto
+    // beží ďalej, kým sa v pamäti naozaj neobjavia rozhodnutia.
+    spustit: (organizationId) => requestMostikTrainingSync(organizationId),
+    beziKymNeHotovy: true,
+    bezimText: 'priprava.stahujem',
     hotovo: (priprava) => `${priprava.pamat} zapamätaných rozhodnutí`,
     splneny: (priprava) => priprava.pamat > 0,
     zavisly: true,
@@ -98,10 +109,20 @@ export const KROKY: readonly Krok[] = [
     nazov: 'Spustiť analýzu (účtovný profil)',
     popis: 'Z histórie sa vytvoria kategórie plnení — čo firma nakupuje a ako to účtuje.',
     akcia: 'Spustiť analýzu',
+    // Mostík plní pamäť (ucto_decisions), analýza číta korpus histórie
+    // (ucto_historia). Že sú to dve tabuľky, nie je problém účtovníka —
+    // preklopenie je idempotentné, tak ho spraví analýza sama. Bez neho
+    // padala na 409 „v histórii je primálo riadkov".
     spustit: async (organizationId) => {
+      await backfillUctoHistory(organizationId);
       const vysledok = await analyzeUctoProfil(organizationId);
-      return `Hotovo — ${vysledok.kategorii} kategórií plnení.`;
+      // Nula kategórií nie je úspech — model nevrátil nič použiteľné. Bez
+      // tejto kontroly sprievodca ohlási hotovo a krok po zavretí okna zase
+      // svieti ako nespravený, bez vysvetlenia.
+      if (vysledok.kategorii === 0) throw new Error(t('priprava.analyzaPrazdna'));
     },
+    beziKymNeHotovy: true,
+    bezimText: 'priprava.analyzujem',
     hotovo: (priprava) => `${priprava.kategorie} kategórií plnení`,
     splneny: (priprava) => priprava.kategorie > 0,
     zavisly: true,
@@ -132,6 +153,10 @@ function IkonaFajka() {
   );
 }
 
+function IkonaBezi() {
+  return <span className="pf-spinner" aria-hidden="true" />;
+}
+
 function IkonaZamok() {
   return (
     <svg viewBox="0 0 12 12" width="9" height="9" aria-hidden="true">
@@ -149,8 +174,14 @@ interface Props {
 
 export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat }: Props) {
   const navigate = useNavigate();
-  const [bezi, setBezi] = useState<number | null>(null);
+  const beziZaznam = usePripravaStore((stav) => stav.bezi);
   const stavy = useMemo(() => stavKrokov(priprava, organizacia), [priprava, organizacia]);
+  const bezi = beziZaznam?.orgId === organizacia.id ? beziZaznam.krok : null;
+  // Krok na pozadí dobehol — spinner zhasne, len čo to vidno v dátach.
+  const beziciHotovy = bezi !== null && stavy[bezi - 1] === 'hotovy';
+  useEffect(() => {
+    if (beziciHotovy) usePripravaStore.setState({ bezi: null });
+  }, [beziciHotovy]);
   const hotove = stavy.filter((stav) => stav === 'hotovy').length;
   const vsetkoHotove = hotove === KROKY.length;
 
@@ -174,13 +205,16 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
           return (
             <div key={krok.cislo} className={`pf-krok pf-krok-${stav}`}>
               <span className={`pf-znak pf-znak-${stav}`}>
-                {stav === 'hotovy' ? <IkonaFajka /> : stav === 'zamknuty' ? <IkonaZamok /> : krok.cislo}
+                {stav === 'hotovy' ? <IkonaFajka />
+                  : bezi === krok.cislo ? <IkonaBezi />
+                  : stav === 'zamknuty' ? <IkonaZamok /> : krok.cislo}
               </span>
               <div className="pf-telo">
                 <div className="pf-riadok">
                   <span className="pf-nazov">{krok.nazov}</span>
-                  <span className={`pf-stav pf-stav-${stav}`}>
-                    {stav === 'hotovy' ? 'Hotové' : stav === 'zamknuty' ? 'Zamknuté' : 'Na rade'}
+                  <span className={`pf-stav pf-stav-${bezi === krok.cislo ? 'bezi' : stav}`}>
+                    {bezi === krok.cislo ? 'Pracujem'
+                      : stav === 'hotovy' ? 'Hotové' : stav === 'zamknuty' ? 'Zamknuté' : 'Na rade'}
                   </span>
                 </div>
                 <div className="pf-popis">{krok.popis}</div>
@@ -192,17 +226,23 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
                   <div>
                     <button
                       type="button"
-                      className="dk-btn dk-btn-ai"
+                      className="btn btn-primary"
                       disabled={bezi !== null}
                       onClick={() => {
                         // Krok, ktorý vie bežať sám, sa spustí tu — účtovník
                         // neodchádza do Nastavení hľadať to správne tlačidlo.
                         if (krok.spustit) {
-                          setBezi(krok.cislo);
+                          usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo } });
                           void krok.spustit(organizacia.id)
-                            .then((sprava) => showToast(sprava))
-                            .catch((chyba) => showToast(chyba instanceof Error ? chyba.message : t('chyba.vseobecna'), { tone: 'error' }))
-                            .finally(() => setBezi(null));
+                            .then(() => {
+                              // Agent sťahuje na pozadí; spinner zhasne až keď
+                              // sa výsledok objaví v dátach (5 s poll).
+                              if (!krok.beziKymNeHotovy) usePripravaStore.setState({ bezi: null });
+                            })
+                            .catch((chyba) => {
+                              usePripravaStore.setState({ bezi: null });
+                              showToast(chyba instanceof Error ? chyba.message : t('chyba.vseobecna'), { tone: 'error' });
+                            });
                           return;
                         }
                         if (krok.cesta) {
@@ -213,7 +253,8 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
                         if (organizacia.emailAlias) onKopirovat?.(organizacia.emailAlias);
                       }}
                     >
-                      {bezi === krok.cislo ? t('priprava.bezi') : krok.akcia}
+                      {bezi === krok.cislo && <span className="pf-spinner pf-spinner-btn" aria-hidden="true" />}
+                      {bezi === krok.cislo ? t(krok.bezimText ?? 'priprava.bezi') : krok.akcia}
                     </button>
                   </div>
                 )}
@@ -227,7 +268,7 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
         <span className="pf-poznamka">
           {vsetkoHotove ? t('priprava.hotovoPoznamka') : t('priprava.zavriPoznamka')}
         </span>
-        <button type="button" className={vsetkoHotove ? 'dk-btn dk-btn-ai' : 'btn'} onClick={onClose}>
+        <button type="button" className={vsetkoHotove ? 'btn btn-primary' : 'btn'} onClick={onClose}>
           {vsetkoHotove ? t('priprava.hotovo') : t('akcia.zavriet')}
         </button>
       </div>
