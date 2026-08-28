@@ -837,6 +837,8 @@ D1 — turnover recorded by an e-kasa cash register.
 D2 — supplies OTHER than those in A1 on which the payer owes tax IN SLOVAKIA, outside e-kasa.
 KN — do not include in the control statement at all.
 
+REVERSE CHARGE LIVES ON A DIFFERENT DOCUMENT. When a foreign supplier bills a Slovak payer with no VAT and the tax is self-assessed under §69 ods. 3, the RECEIVED INVOICE itself is not a Slovak taxable supply: it takes the classification this firm uses for invoices outside the VAT return, and KN. The self-assessment — the classification that reports the tax and its KV section B1 — belongs to a SEPARATE internal document the accountant creates. Do not move the internal document's classification onto the invoice, however correct the law is: you would report the tax twice and on the wrong document.
+"ciselniky.cleneniaDph" is already narrowed to what this firm actually uses on THIS document type. A classification you remember from Slovak VAT law but cannot find in that list is the signal above, not an omission — pick from the list.
 DECIDE BY WHAT THE SECTION HOLDS, never by the shape of the code. Every section except KN presumes the place of supply is IN SLOVAKIA. A service supplied to a business established abroad has its place of supply at the customer (§15 ods. 1), so it belongs in NO section and takes KN — D2 in particular is wrong for it, because nobody owes Slovak tax on it.
 Evidence, strongest first:
 1. "pravidla" — written rules (global from the system operator, firm ones from the accountant). Binding; firm rules win over global ones.
@@ -871,6 +873,35 @@ interface KategoriaPreNavrh extends Record<string, unknown> {
 
 /** Typ dokladu → agendy korpusu histórie (ucto_historia). PD sa v POHODE delí
  *  na výdavkové a príjmové pokladničné doklady; MZDY sú interné doklady. */
+/**
+ * Členenia DPH, ktoré firma na TOMTO type dokladu reálne používa — z vlastnej
+ * histórie POHODY.
+ *
+ * Bez toho dostal model celý číselník (91 členení) a vybral z neho DDsl§69,
+ * ktoré firma použila 194× — vždy na internom doklade a ani raz na prijatej
+ * faktúre. Zákon vyhodnotil správne (§69 ods. 3, prenesenie daňovej povinnosti),
+ * ale samozdanenie sa účtuje na SAMOSTATNOM internom doklade; prijatá faktúra
+ * sama nesie členenie mimo priznania.
+ *
+ * Prázdna množina = firma na tejto agende históriu nemá; vtedy sa ponuka
+ * nezužuje, inak by nová firma nedostala na výber nič.
+ */
+async function cleneniaPodlaAgendy(
+  database: Database,
+  input: SuggestionInput,
+  documentType: string,
+): Promise<Set<string>> {
+  const agendy = HISTORIA_AGENDY[documentType] ?? [];
+  if (agendy.length === 0) return new Set();
+  const rows = await database.query<{ kod: string }>(
+    `SELECT DISTINCT clenenie_dph_kod AS kod FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda = ANY($3::text[])
+        AND clenenie_dph_kod IS NOT NULL AND clenenie_dph_kod <> ''`,
+    [input.tenantId, input.organizationId, agendy],
+  );
+  return new Set(rows.rows.map((row) => row.kod.trim()));
+}
+
 const HISTORIA_AGENDY: Record<string, readonly string[]> = {
   FP: ['FP'],
   FV: ['FV'],
@@ -1151,6 +1182,27 @@ export async function maybeAiAccountingSuggestion(
   // tak odpočet ani nemôže navrhnúť.
   const dphProfil = await loadDphProfil(database, input.tenantId, input.organizationId);
   let cleneniaDph = byKind('cleneniaDph');
+
+  // Ponuka sa zúži na členenia, ktoré firma na tomto type dokladu naozaj
+  // používa. Kódy z dôkazov, ktoré modelu posielame, a členenie z doterajšieho
+  // (deterministického) návrhu ostávajú v ponuke vždy — ten už nesie pravidlo
+  // účtovníka aj predvoľbu partnera, takže model môže nasledovať vlastný podklad.
+  const pouzivane = await cleneniaPodlaAgendy(database, input, documentContext.documentType);
+  if (pouzivane.size > 0) {
+    const nutne = new Set<string>([
+      ...dennik.map((riadok) => riadok.clenenieDphKod).filter((kod): kod is string => Boolean(kod)),
+      ...kategorie.map((kategoria) => kategoria.clenenie_dph_kod).filter((kod): kod is string => Boolean(kod)),
+    ]);
+    // Príklady nesú id, nie kód — držia sa v ponuke rovnako ako doterajší návrh.
+    const nutneIds = new Set<string>([
+      ...priklady.map((priklad) => priklad.clenenieDphId).filter((id): id is string => Boolean(id)),
+      ...(doterajsi?.clenenie_dph_id ? [doterajsi.clenenie_dph_id] : []),
+    ]);
+    const zuzene = cleneniaDph.filter((item) =>
+      pouzivane.has(item.kod.trim()) || nutne.has(item.kod.trim()) || nutneIds.has(item.id));
+    if (zuzene.length > 0) cleneniaDph = zuzene;
+  }
+
   if (dphProfil && dphProfil.platitelDph !== 'platitel' && dphProfil.clenenieBezOdpoctuId) {
     const bezOdpoctu = cleneniaDph.filter((item) => item.id === dphProfil.clenenieBezOdpoctuId);
     if (bezOdpoctu.length > 0) cleneniaDph = bezOdpoctu;

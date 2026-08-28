@@ -1191,4 +1191,104 @@ describe('AI nevyberá číselný rad', () => {
     const suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
     expect(suggestion.ciselny_rad_id).toBe(radPokladna);
   }, 90_000);
+  // Reálny prípad: španielsky dodávateľ, služba bez DPH. Model zákon vyhodnotil
+  // správne (§69 ods. 3), ale DDsl§69 + KV B1 patria na SAMOSTATNÝ interný
+  // doklad — firma ich použila 194× a ani raz na prijatej faktúre. Ponuka mu
+  // taký kód nesmie dať do ruky.
+  it('členenie, ktoré firma na tejto agende nikdy nepoužila, sa modelu neponúkne', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const pn = randomUUID();
+    const ddsl = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,480,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Taller ESP S.L.' }, polozky: [{ popis: 'reparacion vehiculo' }] })],
+    );
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '518/321'], [pn, 'cleneniaDph', 'PN'], [ddsl, 'cleneniaDph', 'DDsl§69'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // História firmy: PN chodí na prijatých faktúrach, DDsl§69 iba na interných.
+    for (const [agenda, kod, dphId] of [
+      ['FP', 'PN', pn], ['FP', 'PN', pn], ['INT', 'DDsl§69', ddsl], ['INT', 'DDsl§69', ddsl],
+    ] as const) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,source,riadok_hash)
+         VALUES ($1,$2,$3,$4,'oprava vozidla','518/321',$5,$6,$7,'mdb',$8)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, agenda, pred, kod, dphId, randomUUID()],
+      );
+    }
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: pn, clenenieKvKod: 'KN', ciselnyRadId: null,
+        confidence: 0.8, reason: 'Prijatá faktúra mimo priznania',
+      })),
+    };
+    const context = { documentType: 'FP', supplierName: 'Taller ESP S.L.', supplierKrajina: 'ES',
+      totalAmount: 480, currency: 'EUR', lineDescriptions: ['reparacion vehiculo'] };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Taller ESP S.L.' },
+      context, parser)).toBe(true);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const ponuka = payload.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod);
+    expect(ponuka).toContain('PN');
+    expect(ponuka).not.toContain('DDsl§69');
+  }, 90_000);
+
+  it('bez histórie na tejto agende sa ponuka členení nezúži', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pn = randomUUID();
+    const ddsl = randomUUID();
+    const pred = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Nová firma' }, polozky: [{ popis: 'sluzba' }] })],
+    );
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`,
+      [pred, seeded.tenantId, seeded.organizationId],
+    );
+    for (const [id, code] of [[pn, 'PN'], [ddsl, 'DDsl§69']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, code],
+      );
+    }
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: pn, clenenieKvKod: null, ciselnyRadId: null,
+        confidence: 0.7, reason: 'Bez histórie',
+      })),
+    };
+    await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Nová firma' },
+      { documentType: 'FP', supplierName: 'Nová firma', totalAmount: 100, currency: 'EUR', lineDescriptions: ['sluzba'] },
+      parser);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const ponuka = payload.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod);
+    // Nová firma nemá čím zúžiť — dostane celý číselník, inak by nemala z čoho vybrať.
+    expect(ponuka).toEqual(expect.arrayContaining(['PN', 'DDsl§69']));
+  }, 90_000);
+
 });
