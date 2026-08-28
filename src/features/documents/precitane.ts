@@ -8,8 +8,10 @@ import { create } from 'zustand';
 
 const KLUC_PRECITANE = 'dokladovka.precitaneDoklady';
 const KLUC_NAVSTEVA = 'dokladovka.poslednaNavsteva';
-/** Strop zoznamu — staršie id sú aj tak pod poslednou návštevou. */
-const MAX_ID = 500;
+// Strop zoznamu prečítaných. Nad ním by najstaršie id vypadli a ich doklady by
+// sa vrátili ako „nové" — preto je nastavený vysoko a „Označiť všetky ako
+// prečítané" posúva zároveň značku návštevy, čím zoznam prestane rásť.
+const MAX_ID = 2000;
 
 function nacitaj(): string[] {
   try {
@@ -53,15 +55,24 @@ export function oznacPrecitane(noveIds: readonly string[]): void {
 }
 
 /**
- * Kedy bol zoznam naposledy otvorený. Číta sa RAZ pri vstupe na stránku —
- * keby sa čítalo priebežne, pás „od poslednej návštevy" by zmizol v tej istej
- * sekunde, v ktorej sa objaví.
+ * Odkedy sa počítajú nové doklady. Pri prvom použití sa značka založí na
+ * TERAZ — archív firmy nie je „nový" a pás s tisíckou dokladov by nič
+ * nehovoril; doklad, ktorý príde od tejto chvíle, už nový je.
+ *
+ * Značka sa NEPOSÚVA pri každom otvorení zoznamu. Keby áno, otvorenie jednej
+ * faktúry by pri návrate zhaslo aj ostatné, ktoré prišli s ňou — prečítané sa
+ * preto držia po jednom dokladoch a značka sa posúva len na „Označiť všetky
+ * ako prečítané".
  */
 export function poslednaNavsteva(): string {
   try {
-    return localStorage.getItem(KLUC_NAVSTEVA) ?? '';
+    const ulozena = localStorage.getItem(KLUC_NAVSTEVA);
+    if (ulozena) return ulozena;
+    const teraz = new Date().toISOString();
+    localStorage.setItem(KLUC_NAVSTEVA, teraz);
+    return teraz;
   } catch {
-    return '';
+    return new Date().toISOString();
   }
 }
 

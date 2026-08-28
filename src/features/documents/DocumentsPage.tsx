@@ -401,15 +401,10 @@ export function DocumentsPage() {
     if (supplierFilter && !suppliers.includes(supplierFilter)) setSupplierFilter('');
   }, [supplierFilter, suppliers]);
 
-  // Zmrazené pri vstupe: keby sa čítalo priebežne, pás by zmizol v sekunde,
-  // v ktorej sa objaví. Zápis novej návštevy ide až po prvom vykreslení.
-  const [odNavstevy] = useState(() => poslednaNavsteva());
+  const odNavstevy = poslednaNavsteva();
   const precitane = usePrecitane();
-  useEffect(() => { zapisNavstevu(); }, []);
-  // Pri prvom otvorení niet voči čomu porovnávať — bez tejto podmienky by
-  // účtovník uvidel „247 nových dokladov" a pás by nič neznamenal.
   const jeNovy = (document: DocumentItem) =>
-    odNavstevy !== '' && !precitane.has(document.id) && document.prijateDna > odNavstevy;
+    !precitane.has(document.id) && document.prijateDna > odNavstevy;
 
   const filteredDocuments = useMemo(
     () =>
@@ -914,7 +909,12 @@ export function DocumentsPage() {
           <button
             type="button"
             className="ml-auto text-[13px] font-semibold text-accent transition hover:text-accent-hover"
-            onClick={() => oznacPrecitane(sortedDocuments.map((document) => document.id))}
+            onClick={() => {
+              // Značka návštevy sa posúva len tu — inak by návrat z detailu
+              // zhasol aj doklady, ktoré účtovník neotvoril.
+              oznacPrecitane(sortedDocuments.map((document) => document.id));
+              zapisNavstevu();
+            }}
           >
             {t('doklady.nove.oznacit')}
           </button>
