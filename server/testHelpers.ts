@@ -36,6 +36,7 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
       model: 'gpt-5-mini',
       accountingModel: 'gpt-5.6-terra',
       ruleAnalysisModel: 'gpt-5.6-sol',
+      embeddingModel: 'text-embedding-3-small',
       storeResponses: false,
       timeoutMs: 120_000,
       maxRetries: 2,

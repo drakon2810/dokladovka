@@ -36,6 +36,7 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
       OPENAI_ACCOUNTING_FALLBACK_MODEL: ${OPENAI_ACCOUNTING_FALLBACK_MODEL:-}
       OPENAI_RULE_ANALYSIS_MODEL: ${OPENAI_RULE_ANALYSIS_MODEL:-}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-}
       OPENAI_STORE_RESPONSES: ${OPENAI_STORE_RESPONSES:-false}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-120000}
       OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
@@ -108,6 +109,9 @@ services:
       # Návrh zaúčtovania beží TU, nie v API — bez tohto riadku ho robil model
       # extrakcie (lacný gpt-5-mini), hoci nastavenie hovorí o silnejšom modeli.
       OPENAI_ACCOUNTING_FALLBACK_MODEL: ${OPENAI_ACCOUNTING_FALLBACK_MODEL:-}
+      # Sémantický výber kategórií plnenia beží tiež tu — bez tohto riadku by
+      # doklad s cudzojazyčným textom kategórie znova nedostal.
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-}
       OPENAI_STORE_RESPONSES: ${OPENAI_STORE_RESPONSES:-false}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-120000}
       OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}

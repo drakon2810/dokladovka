@@ -48,6 +48,8 @@ export interface ServerConfig {
     model: string;
     accountingModel: string;
     ruleAnalysisModel: string;
+    /** Model pre sémantický výber kategórií plnenia (embeddingy). */
+    embeddingModel: string;
     /**
      * Koľko má model „premýšľať" pred extrakciou. Vyťahovanie polí z dokladu nie
      * je úvaha, ale čítanie, takže vyššie úsilie väčšinou len predlžuje čakanie.
@@ -190,6 +192,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         model: extractionModel,
         accountingModel: env.OPENAI_ACCOUNTING_FALLBACK_MODEL?.trim() || extractionModel,
         ruleAnalysisModel: env.OPENAI_RULE_ANALYSIS_MODEL?.trim() || extractionModel,
+        // Sémantický výber kategórií plnenia. Vlastný model, nie fallback na
+        // extrakčný: embeddingy sú iná trieda modelu a gpt-* by tu zlyhalo.
+        embeddingModel: env.OPENAI_EMBEDDING_MODEL?.trim() || 'text-embedding-3-small',
         reasoningEffort: reasoningEffort(env.OPENAI_REASONING_EFFORT),
         storeResponses: env.OPENAI_STORE_RESPONSES === 'true',
         timeoutMs: positiveInteger(env.OPENAI_API_TIMEOUT_MS || env.OPENAI_TIMEOUT_MS, 120_000),

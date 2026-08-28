@@ -168,8 +168,19 @@ describe('účtovný profil firmy', () => {
         },
       }),
     };
-    const vysledok = await analyzujUctovnyProfil(database, testConfig(), seeded, parser);
+    // Vektory sa počítajú JEDNÝM volaním po poslednej dávke — uloz() prepisuje
+    // celú mapu po každej dávke, takže embedovanie vnútri by tú istú kategóriu
+    // zaplatilo raz za dávku.
+    const embedder = { create: vi.fn().mockResolvedValue({ data: [{ embedding: [1, 0] }, { embedding: [0, 1] }] }) };
+    const vysledok = await analyzujUctovnyProfil(database, testConfig(), seeded, parser, embedder);
     expect(vysledok.kategorii).toBe(2);
+    expect(embedder.create).toHaveBeenCalledTimes(1);
+    const ulozene = (await database.query<Record<string, any>>(
+      'SELECT nazov, vektor, vektor_model FROM ucto_kategorie WHERE organization_id=$1 ORDER BY nazov',
+      [seeded.organizationId],
+    )).rows;
+    expect(ulozene.map((row) => row.vektor_model)).toEqual(['text-embedding-3-small', 'text-embedding-3-small']);
+    expect(ulozene.every((row) => Array.isArray(row.vektor) && row.vektor.length === 2)).toBe(true);
     expect((parser.parse.mock.calls[0][0] as any).model).toBe('gpt-5.6-sol');
 
     const kategorie = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
@@ -236,6 +247,70 @@ describe('účtovný profil firmy', () => {
     expect(suggestion.clenenie_kv_kod).toBe('B2');
   }, 90_000);
 
+  // Reálny prípad: talianska faktúra „Intervento del 13/03/2026 | Bollo virtuale".
+  // Slovník kategórie „Asistenčné služby" ju netrafil ani jedným znakom, model
+  // dostal PRÁZDNY zoznam kategórií a predkontáciu volil podľa názvu z rozvrhu.
+  it('cudzojazyčný text dostane kategóriu podľa významu, ale istotu nedvíha', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const ids = await seedCodeLists(database, seeded, [
+      ['predkontacie', '518/321'], ['cleneniaDph', 'PD'], ['ciselneRady', 'PF'],
+    ]);
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,480,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    // Slovník je čisto slovenský a text faktúry je taliansky — lexikálna zhoda 0.
+    // pocet 120 je nad prahom predvyplnenia, takže test zároveň stráži, že
+    // sémantický kandidát istotu NEDVÍHA.
+    await database.query(
+      `INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,popis,slovnik,predkontacia_kod,
+         predkontacia_id,clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,agendy,pocet,vektor,vektor_model)
+       VALUES ($1,$2,$3,'Asistenčné služby a odťah vozidiel','Pomoc na ceste',
+         '["asistenčné služby","odťah vozidla"]'::jsonb,'518/321',$4,'PD',$5,'B2','["FP"]'::jsonb,120,
+         '[1,0,0]'::jsonb,'text-embedding-3-small')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId,
+        ids.get('predkontacie:518/321'), ids.get('cleneniaDph:PD')],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        clenenieKvKod: null,
+        predkontaciaId: ids.get('predkontacie:518/321'), clenenieDphId: ids.get('cleneniaDph:PD'),
+        ciselnyRadId: null, confidence: 0.95, reason: 'Asistencia na ceste',
+      })),
+    };
+    // Vektor dokladu mieri tam, kam vektor kategórie — kosínus 1.
+    const embedder = { create: vi.fn().mockResolvedValue({ data: [{ embedding: [1, 0, 0] }] }) };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AUTOSERVICE ALPINA S.r.l.' };
+    const context = { documentType: 'FP', supplierName: 'AUTOSERVICE ALPINA S.r.l.', totalAmount: 480, currency: 'EUR',
+      lineDescriptions: ['Intervento del 13/03/2026', 'Bollo virtuale'] };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser, embedder)).toBe(true);
+
+    // 1. Kategória sa k modelu DOSTALA, hoci slovník netrafil ani jedno slovo.
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(payload.kategorie).toHaveLength(1);
+    expect(payload.kategorie[0]).toMatchObject({
+      nazov: 'Asistenčné služby a odťah vozidiel', zhodaSlov: 0, podobnostVyznamu: 1,
+    });
+
+    const suggestion = (await database.query<Record<string, any>>(
+      'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    expect(suggestion.predkontacia_id).toBe(ids.get('predkontacie:518/321'));
+    // 2. Ale istota ostáva pod prahom predvyplnenia (0.9): zaradenie podľa
+    // významu je hypotéza, nie doložená prax firmy.
+    expect(Number(suggestion.confidence)).toBeLessThan(0.9);
+    expect(suggestion.reason).toContain('Významovo zaradené');
+    // 3. A hlavne: sekciu KV od seba NEDÁ. Sémantického kandidáta viaže na
+    // doklad len rovnosť predkontácie — tú istú nesie viac kategórií, takže by
+    // do kontrolného výkazu doniesla sekciu kategória bez spoločného slova.
+    expect(suggestion.clenenie_kv_kod).not.toBe('B2');
+  }, 90_000);
+
   // Model má 120 s strop a nula opakovaní. Kým sa kategórie ukladali až po
   // poslednej dávke, jedna pomalá dávka z deviatich zahodila všetkých osem
   // zaplatených pred ňou — firma s 1 217 textami sa nikdy nedopočítala.
@@ -282,8 +357,8 @@ describe('účtovný profil firmy', () => {
     const ids = await seedCodeLists(database, seeded, [['predkontacie', '518/321'], ['cleneniaDph', 'PD']]);
     const kategoriaId = randomUUID();
     await database.query(
-      `INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,slovnik,agendy,pocet)
-       VALUES ($1,$2,$3,'Preprava','["preprava"]'::jsonb,'["FP"]'::jsonb,10)`,
+      `INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,slovnik,agendy,pocet,vektor,vektor_model)
+       VALUES ($1,$2,$3,'Preprava','["preprava"]'::jsonb,'["FP"]'::jsonb,10,'[1,0]'::jsonb,'text-embedding-3-small')`,
       [kategoriaId, seeded.tenantId, seeded.organizationId],
     );
 
@@ -295,6 +370,13 @@ describe('účtovný profil firmy', () => {
       clenenieDphKod: 'NEEXISTUJE',
       clenenieKvKod: 'B2',
     });
+    // Vektor vznikol z názvu/popisu/slovníka — po ich zmene ukazuje na pôvodný
+    // význam. NULL = vyberaj lexikálne, teda presne to, čo účtovník upravil.
+    const poUprave = (await database.query<Record<string, any>>(
+      'SELECT vektor, vektor_model FROM ucto_kategorie WHERE id=$1', [kategoriaId],
+    )).rows[0];
+    expect(poUprave.vektor).toBeNull();
+    expect(poUprave.vektor_model).toBeNull();
     expect(upravena).toMatchObject({
       nazov: 'Preprava a špedícia',
       slovnik: ['preprava', 'freight'],

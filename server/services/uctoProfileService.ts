@@ -6,6 +6,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
+import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -119,6 +120,7 @@ export async function analyzujUctovnyProfil(
   config: ServerConfig,
   input: { tenantId: string; organizationId: string },
   injectedParser?: ProfileParser,
+  injectedEmbedder?: Embedder,
 ): Promise<AnalyzaVysledok> {
   if (!injectedParser && (config.extractionProvider !== 'openai' || !config.openai.apiKey)) {
     throw new HttpError(409, 'ai_unavailable', 'AI analýza nie je nakonfigurovaná (chýba OpenAI kľúč)');
@@ -148,6 +150,10 @@ export async function analyzujUctovnyProfil(
   // KAŽDEJ dávke: jeden model má 120 s strop a nula opakovaní, takže jediná
   // pomalá dávka z deviatich predtým zahodila všetkých osem zaplatených pred
   // ňou. Firma s 1 217 textami sa takto nikdy nedopočítala.
+  // Vektory sa dopĺňajú až po poslednej dávke (viď nižšie): uloz() prepisuje
+  // celú mapu po každej dávke, takže embedovanie vnútri by tú istú kategóriu
+  // zaplatilo raz za dávku. Do vtedy ostávajú NULL = dnešné lexikálne správanie.
+  const vektory = new Map<string, number[]>();
   const uloz = async () => {
     await database.transaction(async (tx) => {
       await tx.query('DELETE FROM ucto_kategorie WHERE tenant_id=$1 AND organization_id=$2',
@@ -156,15 +162,21 @@ export async function analyzujUctovnyProfil(
         await tx.query(
           `INSERT INTO ucto_kategorie
             (id,tenant_id,organization_id,nazov,popis,slovnik,predkontacia_kod,predkontacia_id,
-             clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,vynimky,agendy,pocet,konflikt)
-           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)`,
+             clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,vynimky,agendy,pocet,konflikt,
+             vektor,vektor_model)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,
+             $16::jsonb,$17)`,
           [randomUUID(), input.tenantId, input.organizationId, kategoria.nazov, kategoria.popis,
             JSON.stringify(kategoria.slovnik), kategoria.predkontaciaKod,
             kategoria.predkontaciaKod ? idPreKod.get(`predkontacie:${kategoria.predkontaciaKod}`) ?? null : null,
             kategoria.clenenieDphKod,
             kategoria.clenenieDphKod ? idPreKod.get(`cleneniaDph:${kategoria.clenenieDphKod}`) ?? null : null,
             kategoria.clenenieKvKod, JSON.stringify(kategoria.vynimky), JSON.stringify(kategoria.agendy),
-            kategoria.pocet, kategoria.konflikt],
+            kategoria.pocet, kategoria.konflikt,
+            // Kľúčom je OBSAH, nie id: randomUUID() beží v tomto cykle, takže
+            // tá istá kategória má po každej dávke iné id.
+            vektory.has(kategoria.nazov) ? JSON.stringify(vektory.get(kategoria.nazov)) : null,
+            vektory.has(kategoria.nazov) ? config.openai.embeddingModel : null],
         );
       }
     });
@@ -257,6 +269,23 @@ export async function analyzujUctovnyProfil(
     // Zaplatené dávky sú v databáze hneď, nie až po poslednej.
     await uloz();
     console.info(`[ucto-profil] dávka ${davok}/${Math.ceil(texty.length / DAVKA)} — ${kategorie.size} kategórií`);
+  }
+
+  // Sémantické vektory až tu: jedno dávkové volanie na celý profil namiesto
+  // jedného na kategóriu a dávku. Zlyhanie nie je chyba analýzy — kategórie sú
+  // uložené a bez vektora sa vyberajú lexikálne, presne ako doteraz.
+  const zoznam = [...kategorie.values()];
+  if (zoznam.length > 0) {
+    const vysledok = await vytvorVektory(
+      config,
+      zoznam.map((kategoria) => textPreVektor(kategoria.nazov, kategoria.popis, kategoria.slovnik)),
+      injectedEmbedder,
+    );
+    if (vysledok) {
+      zoznam.forEach((kategoria, index) => vektory.set(kategoria.nazov, vysledok[index]));
+      await uloz();
+      console.info(`[ucto-profil] vektory pre ${vysledok.length} kategórií (${config.openai.embeddingModel})`);
+    }
   }
 
   return {
@@ -352,6 +381,12 @@ export async function updateUctoKategoria(
   if (zmena.nazov !== undefined) pridaj('nazov=', zmena.nazov);
   if (zmena.popis !== undefined) pridaj('popis=', zmena.popis);
   if (zmena.slovnik !== undefined) pridaj('slovnik=', JSON.stringify(zmena.slovnik), '::jsonb');
+  // Vektor vznikol z názvu, popisu a slovníka — po ich zmene by ukazoval na
+  // pôvodný význam. NULL znamená „vyberaj lexikálne", teda presne to, čo
+  // účtovník práve upravil; ďalšia analýza vektor prepočíta.
+  if (zmena.nazov !== undefined || zmena.popis !== undefined || zmena.slovnik !== undefined) {
+    polia.push('vektor=NULL', 'vektor_model=NULL');
+  }
   if (zmena.clenenieKvKod !== undefined) {
     const kv = zmena.clenenieKvKod === null ? null : platnyKvKod(zmena.clenenieKvKod);
     if (zmena.clenenieKvKod !== null && !kv) {
