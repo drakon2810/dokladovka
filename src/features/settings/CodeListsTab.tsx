@@ -23,6 +23,8 @@ import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { AGENDA_PRE_TYP } from '../../data/pohoda/agendas';
 import { Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
+import { OrgDot } from '../../components/ui';
+import { formatDateTime } from '../../lib/format';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { t } from '../../i18n/sk';
 
@@ -83,7 +85,12 @@ const TYP_LABEL: Partial<Record<DocumentType, string>> = {
  * vyberie rad, ktorý firma v POHODE reálne používa (podľa počtu použití
  * a najvyššieho čísla radu).
  */
-function SeriesDefaultsCard({ organizationId }: { organizationId: string }) {
+/**
+ * Predvolené číselné rady. Zbalené (maketa „Nastavenia 2a"): je to nastavenie
+ * „raz a zabudni" — šesť riadkov navrchu tlačilo samotné číselníky pod ohyb.
+ */
+function PredvoleneRady({ organizationId }: { organizationId: string }) {
+  const [otvorene, setOtvorene] = useState(false);
   const { data } = useDataQuery();
   const [busy, setBusy] = useState(false);
   const rady = (data?.codeLists.ciselneRady ?? []).filter((item) => item.orgId === organizationId && item.active);
@@ -112,9 +119,27 @@ function SeriesDefaultsCard({ organizationId }: { organizationId: string }) {
   }
 
   return (
-    <section className="card mb-4 p-4">
-      <h2 className="text-sm font-semibold">{t('nast.cis.predvoleneRady')}</h2>
-      <p className="mb-3 mt-1 max-w-3xl text-xs text-ink-soft">{t('nast.cis.predvoleneRadyPopis')}</p>
+    <section className="mx-6 border-t border-line-soft">
+      <button
+        type="button"
+        className="flex w-full items-center gap-3 py-3.5 text-left"
+        aria-expanded={otvorene}
+        onClick={() => setOtvorene((stav) => !stav)}
+      >
+        <svg
+          width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden
+          className={`shrink-0 text-ink-soft transition-transform ${otvorene ? 'rotate-180' : ''}`}
+        >
+          <path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="text-[14.5px] font-semibold">{t('nast.cis.predvoleneRady')}</span>
+        <span className="ml-auto text-[12.5px] text-ink-faint">
+          {otvorene ? t('nast.cis.radyPocet') : t('nast.cis.radySuhrn')}
+        </span>
+      </button>
+      {otvorene && (
+      <div className="pb-5">
+      <p className="mb-3 max-w-3xl text-xs text-ink-soft">{t('nast.cis.predvoleneRadyPopis')}</p>
       <div className="grid gap-2 sm:grid-cols-2">
         {(Object.keys(AGENDA_PRE_TYP) as DocumentType[]).map((typ) => {
           const ponuka = rady.filter((item) => item.agenda === AGENDA_PRE_TYP[typ]);
@@ -155,6 +180,8 @@ function SeriesDefaultsCard({ organizationId }: { organizationId: string }) {
           );
         })}
       </div>
+      </div>
+      )}
     </section>
   );
 }
@@ -261,36 +288,46 @@ export function CodeListsTab() {
     }
   }
 
+  const vsetkyPolozky = KINDS.reduce(
+    (sucet, { kind }) => sucet + codeLists[kind].filter((item) => item.orgId === orgId && item.active).length, 0);
+  // Posledná synchronizácia je najnovší syncedAt spomedzi položiek — samostatné
+  // pole neexistuje a účtovník potrebuje vedieť, či pozerá na čerstvé číselníky.
+  const poslednySync = KINDS
+    .flatMap(({ kind }) => codeLists[kind].filter((item) => item.orgId === orgId))
+    .reduce<string | undefined>((najnovsi, item) =>
+      item.syncedAt && (!najnovsi || item.syncedAt > najnovsi) ? item.syncedAt : najnovsi, undefined);
+
   return (
-    <div>
-      <div className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-        {t('nast.cis.banner')}
-      </div>
-      {/* Organizácia sa preberá z globálneho prepínača v hlavičke. */}
-      <p className="mb-4 text-sm text-ink-soft">
-        {t('detail.organizacia')}: <strong className="text-ink">{organization?.nazov ?? '—'}</strong>
-      </p>
-
-      {organization && <SeriesDefaultsCard organizationId={organization.id} />}
-
-      <section className="card mb-4 p-4">
-        <div className="flex flex-wrap gap-2">
-          {/* Doklado-parity: číselníky natiahne agent priamo z POHODY — bez ručného XML. */}
+    <div className="card overflow-hidden">
+      {/* Jedna hlavička s akciami (maketa „Nastavenia 2a"): predtým boli názov,
+          firma, banner a tri tlačidlá v štyroch samostatných blokoch nad sebou
+          a obsah číselníkov začínal až pod ohybom. */}
+      <div className="flex flex-wrap items-start justify-between gap-5 px-6 pb-4 pt-5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h2 className="text-[19px] font-semibold tracking-[-.01em]">{t('nast.cis.titulok')}</h2>
+            {organization && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-tint px-2.5 py-1 text-[12.5px] font-semibold text-accent-hover">
+                <OrgDot org={organization} size={6} />
+                {organization.nazov}
+              </span>
+            )}
+          </div>
+          <p className="mt-1.5 text-[13px] text-ink-soft">
+            {poslednySync
+              ? `${t('nast.cis.poslednySync')} ${formatDateTime(poslednySync)} · `
+              : ''}
+            <span className="tnum">{vsetkyPolozky}</span> {t('nast.cis.poloziek')}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            className="btn border-accent/40 bg-accent/10 font-semibold text-accent-hover"
+            className="btn btn-primary"
             disabled={!organization || mostikBusy}
             onClick={() => void syncViaMostik()}
           >
             {mostikBusy ? t('stav.nacitavam') : t('nast.cis.syncMostikom')}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={!organization || busy}
-            onClick={downloadRequest}
-          >
-            {t('nast.cis.stiahnutRequest')}
           </button>
           <label className={`btn ${busy ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}>
             {t('nast.cis.importXml')}
@@ -306,41 +343,61 @@ export function CodeListsTab() {
               }}
             />
           </label>
+          {/* Stiahnutie requestu je krok pre ručný XML import — patrí k nemu, nie
+              medzi dve hlavné akcie, ktoré účtovník používa denne. */}
+          <button
+            type="button"
+            className="btn px-2.5"
+            title={t('nast.cis.stiahnutRequest')}
+            aria-label={t('nast.cis.stiahnutRequest')}
+            disabled={!organization || busy}
+            onClick={downloadRequest}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+              <circle cx="8" cy="3.2" r="1.35" /><circle cx="8" cy="8" r="1.35" /><circle cx="8" cy="12.8" r="1.35" />
+            </svg>
+          </button>
         </div>
-        <p className="mt-2 text-xs text-ink-soft">{t('nast.cis.pohodaNavod')}</p>
-      </section>
+      </div>
 
-      <div className="card overflow-hidden">
-        <div className="grid grid-cols-1 md:grid-cols-[248px_1fr]">
-          <nav className="flex flex-col gap-0.5 border-b border-line-soft bg-[#FBFCFA] p-3 md:border-b-0 md:border-r" aria-label={t('nast.cis.navigator')}>
-            {KINDS.map(({ kind, label }) => {
-              const pocet = codeLists[kind].filter((item) => item.orgId === orgId && item.active).length;
-              const aktivny = kind === vybranyDruh;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  aria-current={aktivny}
-                  className={`flex items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-left text-[13.5px] transition ${
-                    aktivny ? 'bg-tint font-semibold text-accent-hover' : 'text-ink hover:bg-app'
-                  }`}
-                  onClick={() => setVybranyDruh(kind)}
-                >
-                  <span className={`h-4 w-[3px] shrink-0 rounded-[3px] ${aktivny ? 'bg-accent' : 'bg-transparent'}`} aria-hidden />
-                  <span className="flex-1 truncate">{label}</span>
-                  <span className="tnum text-xs text-ink-faint">{pocet}</span>
-                </button>
-              );
-            })}
-          </nav>
-          <CodeListEditor
-            key={vybranyDruh}
-            kind={vybranyDruh}
-            label={KINDS.find(({ kind }) => kind === vybranyDruh)!.label}
-            orgId={orgId}
-            items={codeLists[vybranyDruh].filter((item) => item.orgId === orgId)}
-          />
-        </div>
+      {organization && <PredvoleneRady organizationId={organization.id} />}
+
+      <div className="grid grid-cols-1 border-t border-line-soft md:grid-cols-[248px_1fr]">
+        <nav className="flex flex-col gap-0.5 border-b border-line-soft bg-[#FBFCFA] p-3 md:border-b-0 md:border-r" aria-label={t('nast.cis.titulok')}>
+          <div className="px-3 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[.06em] text-ink-mute">
+            {t('nast.cis.titulok')}
+          </div>
+          {KINDS.map(({ kind, label }) => {
+            const pocet = codeLists[kind].filter((item) => item.orgId === orgId && item.active).length;
+            const aktivny = kind === vybranyDruh;
+            return (
+              <button
+                key={kind}
+                type="button"
+                aria-current={aktivny}
+                className={`flex items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-left text-[13.5px] transition ${
+                  aktivny ? 'bg-tint font-semibold text-accent-hover' : 'text-ink hover:bg-app'
+                }`}
+                onClick={() => setVybranyDruh(kind)}
+              >
+                <span className={`h-4 w-[3px] shrink-0 rounded-[3px] ${aktivny ? 'bg-accent' : 'bg-transparent'}`} aria-hidden />
+                <span className="flex-1 truncate">{label}</span>
+                {/* Prázdny číselník sa nemá tváriť rovnako dôležito ako plný. */}
+                <span className={`tnum text-xs ${pocet === 0 ? 'text-line' : 'text-ink-faint'}`}>{pocet}</span>
+              </button>
+            );
+          })}
+          <p className="mt-auto border-t border-line-soft px-3 pb-1 pt-3 text-[12px] leading-relaxed text-ink-faint">
+            {t('nast.cis.pohodaNavod')}
+          </p>
+        </nav>
+        <CodeListEditor
+          key={vybranyDruh}
+          kind={vybranyDruh}
+          label={KINDS.find(({ kind }) => kind === vybranyDruh)!.label}
+          orgId={orgId}
+          items={codeLists[vybranyDruh].filter((item) => item.orgId === orgId)}
+        />
       </div>
 
       {preview && (
@@ -438,8 +495,15 @@ function CodeListEditor({
 }) {
   const [kod, setKod] = useState('');
   const [nazov, setNazov] = useState('');
+  const [hladane, setHladane] = useState('');
   const activeItems = items.filter((item) => item.active);
   const inactiveItems = items.filter((item) => !item.active);
+  // Predkontácií je vyše tisíc — bez hľadania sa v nich konkrétny účet nedá nájsť.
+  const dopyt = hladane.trim().toLocaleLowerCase('sk');
+  const najdene = dopyt
+    ? activeItems.filter((item) =>
+        `${item.kod} ${item.nazov}`.toLocaleLowerCase('sk').includes(dopyt))
+    : activeItems;
 
   async function updateItem(
     item: CodeListItem,
@@ -462,19 +526,47 @@ function CodeListEditor({
 
   return (
     <section className="min-w-0 p-5">
-      <div className="mb-3 flex items-center gap-2.5">
+      <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <h3 className="text-[15px] font-semibold">{label}</h3>
         <span className="tnum rounded-full bg-tint px-2.5 py-0.5 text-xs font-semibold text-accent-hover">
           {activeItems.length}
         </span>
+        <input
+          className="input ml-auto w-full max-w-[250px] px-3 py-1.5 text-[13px]"
+          placeholder={t('nast.cis.hladat')}
+          value={hladane}
+          onChange={(event) => setHladane(event.target.value)}
+          aria-label={`${label} — ${t('nast.cis.hladat')}`}
+        />
       </div>
-      <CodeListTable
-        label={label}
-        kind={kind}
-        items={activeItems}
-        onUpdate={updateItem}
-        onDeactivate={deactivate}
-      />
+      {activeItems.length === 0 ? (
+        // Prázdny číselník bez vysvetlenia vyzerá ako chyba appky.
+        <div className="flex flex-col items-center gap-2 py-14 text-center">
+          <span className="grid h-11 w-11 place-items-center rounded-[12px] bg-app text-ink-mute" aria-hidden>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M4 5.5h12M4 10h12M4 14.5h8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+          </span>
+          <span className="text-sm font-semibold">{t('nast.cis.prazdneTitulok')}</span>
+          <span className="max-w-[340px] text-[13px] leading-relaxed text-ink-soft">{t('nast.cis.prazdnePopis')}</span>
+        </div>
+      ) : (
+        <>
+          <CodeListTable
+            label={label}
+            kind={kind}
+            items={najdene}
+            onUpdate={updateItem}
+            onDeactivate={deactivate}
+          />
+          {dopyt && (
+            <p className="mt-2 text-[12.5px] text-ink-faint">
+              {t('nast.cis.zobrazenych')} <span className="tnum">{najdene.length}</span> z{' '}
+              <span className="tnum">{activeItems.length}</span>
+            </p>
+          )}
+        </>
+      )}
       <form
         className="mt-2 flex gap-2"
         onSubmit={(event) => {
