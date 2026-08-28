@@ -1,3 +1,4 @@
+import { contentDisposition } from '../contentDisposition.js';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -458,12 +459,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     );
     const attachment = source.rows[0];
     if (!attachment?.storage_key) throw new HttpError(404, 'attachment_missing', 'Zdrojový súbor neexistuje');
-    const safeName = attachment.original_file_name.replace(/[\r\n"\\]/g, '_').slice(0, 180);
-    // Hlavička HTTP unesie len latin-1, takže diakritika ide v RFC 5987 filename*;
-    // agent číta práve tú a na ASCII variant padne len keď chýba.
-    const asciiName = safeName.replace(/[^\x20-\x7e]/g, '_') || 'doklad';
     reply.header('Content-Type', attachment.detected_mime_type ?? 'application/octet-stream');
-    reply.header('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+    reply.header('Content-Disposition', contentDisposition('attachment', attachment.original_file_name));
     return reply.send(Buffer.from(await storage.get(attachment.storage_key)));
   });
 
@@ -645,7 +642,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       return reply
         .type(contentType)
         .header('Content-Length', String(info.size))
-        .header('Content-Disposition', `attachment; filename="${fileName}"`)
+        .header('Content-Disposition', contentDisposition('attachment', fileName))
         .header('Cache-Control', cacheControl)
         .send(createReadStream(filePath));
     } catch {

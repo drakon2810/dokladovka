@@ -1,5 +1,6 @@
 // Schránka organizácie (sekcia Dokumenty): voľné súbory mimo účtovného workflow.
 // Prísna izolácia per-organizácia; obsah sa ukladá do privátneho object storage.
+import { contentDisposition } from '../contentDisposition.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import OpenAI from 'openai';
@@ -142,9 +143,8 @@ export function registerOrgDocumentRoutes(
     );
     const row = result.rows[0];
     if (!row) throw new HttpError(404, 'document_not_found', 'Dokument neexistuje');
-    const downloadName = row.file_name.replace(/[\r\n"\\]/g, '_').slice(0, 180);
     reply.header('Content-Type', row.mime_type);
-    reply.header('Content-Disposition', `inline; filename="${downloadName}"`);
+    reply.header('Content-Disposition', contentDisposition('inline', String(row.file_name)));
     return reply.send(Buffer.from(await storage.get(row.storage_key)));
   });
 

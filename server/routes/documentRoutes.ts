@@ -1,3 +1,4 @@
+import { contentDisposition } from '../contentDisposition.js';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -159,9 +160,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     );
     const source = attachment.rows[0];
     if (!source?.storage_key) throw new HttpError(404, 'attachment_missing', 'Zdrojový súbor neexistuje');
-    const safeName = source.original_file_name.replace(/[\r\n"\\]/g, '_').slice(0, 180);
     reply.header('Content-Type', source.detected_mime_type ?? 'application/octet-stream');
-    reply.header('Content-Disposition', `inline; filename="${safeName}"`);
+    reply.header('Content-Disposition', contentDisposition('inline', source.original_file_name));
     return reply.send(Buffer.from(await storage.get(source.storage_key)));
   });
 
@@ -1092,7 +1092,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     if (!result.rows[0]) throw new HttpError(404, 'export_not_found', 'Export neexistuje');
     await requireOrganizationAccess(database, auth, result.rows[0].organization_id);
     reply.header('Content-Type', 'application/xml; charset=windows-1250');
-    reply.header('Content-Disposition', `attachment; filename="${result.rows[0].xml_file_name}"`);
+    reply.header('Content-Disposition', contentDisposition('attachment', String(result.rows[0].xml_file_name)));
     return result.rows[0].xml_snapshot;
   });
 }

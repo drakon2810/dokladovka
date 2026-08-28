@@ -1021,7 +1021,11 @@ export function InvoicePanel({
           {(autoFilled || aiApplied) && (
             <div className="dk-note" style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0A6650' }}>
               <IcoCheck s={12} w={2.6} />
-              Zaúčtované z pamäte{predkConfidence != null ? ` · istota ${predkConfidence} %` : ''}
+              {/* Zdroj sa nesmie zamlčať: „z pamäte" tu svietilo aj nad
+                  návrhom modelu, takže účtovník nevedel, či číslo pochádza
+                  z jeho vlastnej histórie, alebo si ho AI odvodila. */}
+              Zaúčtované — {SOURCE_LABEL[suggestion?.source ?? 'none'] ?? suggestion?.source}
+              {predkConfidence != null ? ` · istota ${predkConfidence} %` : ''}
             </div>
           )}
         </div>
