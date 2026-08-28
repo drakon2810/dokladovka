@@ -1248,6 +1248,125 @@ describe('AI nevyberá číselný rad', () => {
     expect(ponuka).not.toContain('DDsl§69');
   }, 90_000);
 
+  // Adversarialna kontrola nasla, ze prve zuzenie odoberalo aj SPRAVNY kod:
+  // prva nadobudacia faktura z EU je legitimny prvy vyskyt, nie omyl.
+  it('kod, ktory firma nepouzila nikde, ostane v ponuke', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const pn = randomUUID();
+    const ddsl = randomUUID();
+    const nadEU = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,500,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'EU Dodavatel GmbH' }, polozky: [{ popis: 'tovar z DE' }] })],
+    );
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '501/321'], [pn, 'cleneniaDph', 'PN'],
+      [ddsl, 'cleneniaDph', 'DDsl§69'], [nadEU, 'cleneniaDph', 'PDnadEU'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // PN chodi na FP, DDsl§69 iba na INT, PDnadEU nikde.
+    for (const [agenda, kod, dphId] of [
+      ['FP', 'PN', pn], ['FP', 'PN', pn], ['INT', 'DDsl§69', ddsl], ['INT', 'DDsl§69', ddsl],
+    ] as const) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,source,riadok_hash)
+         VALUES ($1,$2,$3,$4,'tovar','501/321',$5,$6,$7,'mdb',$8)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, agenda, pred, kod, dphId, randomUUID()],
+      );
+    }
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: nadEU, clenenieKvKod: null, ciselnyRadId: null,
+        confidence: 0.8, reason: 'Nadobudnutie tovaru z EU',
+      })),
+    };
+    await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'EU Dodavatel GmbH' },
+      { documentType: 'FP', supplierName: 'EU Dodavatel GmbH', supplierKrajina: 'DE',
+        totalAmount: 500, currency: 'EUR', lineDescriptions: ['tovar z DE'] }, parser);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const ponuka = payload.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod);
+    // Dokazane patri inam -> preč. Nepoužité nikde -> ostáva.
+    expect(ponuka).not.toContain('DDsl§69');
+    expect(ponuka).toContain('PDnadEU');
+    expect(ponuka).toContain('PN');
+    // Model vidí aj počet použití, nielen kratší zoznam.
+    expect(payload.ciselniky.cleneniaDph.find((i: { kod: string }) => i.kod === 'PN'))
+      .toMatchObject({ pouziteNaTomtoTypeDokladu: 2 });
+  }, 90_000);
+
+  // Poistka pre neplatiteľa DPH z ponuky iba VYBERÁ — keby zúženie vyhodilo
+  // členenie bez nároku na odpočet, ticho by sa zmenila na no-op a model by
+  // dostal na výber výhradne odpočtové kódy.
+  it('členenie bez nároku na odpočet zúženie neodstráni', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const pd = randomUUID();
+    const bezOdpoctu = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Dodavatel' }, polozky: [{ popis: 'sluzba' }] })],
+    );
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '518/321'], [pd, 'cleneniaDph', 'PD'], [bezOdpoctu, 'cleneniaDph', 'PB'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // História je plná odpočtového PD; PB v nej nie je ani raz.
+    for (let index = 0; index < 3; index += 1) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,source,riadok_hash)
+         VALUES ($1,$2,$3,'FP','sluzba','518/321',$4,'PD',$5,'mdb',$6)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, pred, pd, randomUUID()],
+      );
+    }
+    await database.query(
+      `INSERT INTO organization_dph_profiles (organization_id,tenant_id,platitel_dph,clenenie_bez_odpoctu_id)
+       VALUES ($1,$2,'neplatitel',$3)`,
+      [seeded.organizationId, seeded.tenantId, bezOdpoctu],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: bezOdpoctu, clenenieKvKod: null, ciselnyRadId: null,
+        confidence: 0.8, reason: 'Neplatiteľ DPH',
+      })),
+    };
+    await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Dodavatel' },
+      { documentType: 'FP', supplierName: 'Dodavatel', totalAmount: 100, currency: 'EUR', lineDescriptions: ['sluzba'] },
+      parser);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const ponuka = payload.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod);
+    // Poistka zafungovala: v ponuke ostalo LEN členenie bez nároku na odpočet.
+    expect(ponuka).toEqual(['PB']);
+  }, 90_000);
+
   it('bez histórie na tejto agende sa ponuka členení nezúži', async () => {
     const database = await createTestDatabase();
     databases.push(database);
