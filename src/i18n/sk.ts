@@ -1354,6 +1354,7 @@ export const sk = {
   'uctoProfil.spustitAnalyzu': 'Spustiť analýzu',
   'uctoProfil.analyzujem': 'Analyzujem…',
   'uctoProfil.analyzaHotova': 'Analýza dokončená.',
+  'uctoProfil.analyzaCiastocna': 'Analýza dobehla čiastočne — časť dávok model nestihol. Spustite ju ešte raz, doplní zvyšok.',
   'uctoProfil.ziadneKategorie': 'Zatiaľ žiadne kategórie — spustite analýzu.',
   'uctoProfil.agendaVsetky': 'Všetky agendy',
   'uctoProfil.ziadneVAgende': 'V tejto agende zatiaľ nie je žiadna kategória.',

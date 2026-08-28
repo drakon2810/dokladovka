@@ -127,6 +127,9 @@ export const KROKY: readonly Krok[] = [
       // tejto kontroly sprievodca ohlási hotovo a krok po zavretí okna zase
       // svieti ako nespravený, bez vysvetlenia.
       if (vysledok.kategorii === 0) throw new Error(t('priprava.analyzaPrazdna'));
+      if (vysledok.zlyhanychDavok > 0) {
+        showToast(`${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`);
+      }
     },
     beziKymNeHotovy: true,
     bezimText: 'priprava.analyzujem',

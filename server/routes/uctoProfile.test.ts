@@ -236,6 +236,45 @@ describe('účtovný profil firmy', () => {
     expect(suggestion.clenenie_kv_kod).toBe('B2');
   }, 90_000);
 
+  // Model má 120 s strop a nula opakovaní. Kým sa kategórie ukladali až po
+  // poslednej dávke, jedna pomalá dávka z deviatich zahodila všetkých osem
+  // zaplatených pred ňou — firma s 1 217 textami sa nikdy nedopočítala.
+  it('dávka, ktorú model nestihol, nezahodí kategórie z dávok pred ňou', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await seedCodeLists(database, seeded, [['predkontacie', '518/321'], ['cleneniaDph', 'PD']]);
+    // Dosť rôznych textov na dve dávky (DAVKA = 150).
+    for (let index = 0; index < 160; index += 1) {
+      await importUctoHistory(database, {
+        ...seeded,
+        rows: [{ agenda: 'FP', lineText: `Preprava tovaru ${index}`, predkontaciaKod: '518/321', clenenieDphKod: 'PD' }],
+        source: 'mdb',
+      });
+    }
+    const parser = {
+      parse: vi.fn()
+        .mockResolvedValueOnce({
+          output_parsed: {
+            kategorie: [{
+              nazov: 'Preprava a špedícia', popis: 'Doprava tovaru', slovnik: ['preprava'],
+              predkontaciaKod: '518/321', clenenieDphKod: 'PD', clenenieKvKod: 'B2',
+              vynimky: [], konflikt: null,
+            }],
+          },
+        })
+        .mockRejectedValueOnce(new Error('Request timed out.')),
+    };
+
+    const vysledok = await analyzujUctovnyProfil(database, testConfig(), seeded, parser);
+    expect(vysledok.davok).toBe(2);
+    expect(vysledok.zlyhanychDavok).toBe(1);
+    expect(vysledok.kategorii).toBe(1);
+    // A hlavne: to, čo prvá dávka priniesla, je naozaj v databáze.
+    const kategorie = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
+    expect(kategorie.map((item) => item.nazov)).toEqual(['Preprava a špedícia']);
+  }, 120_000);
+
   it('ručná úprava kategórie previaže známy kód na číselník, neznámy nechá ako text', async () => {
     const database = await createTestDatabase();
     databases.push(database);

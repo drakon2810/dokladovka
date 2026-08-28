@@ -104,6 +104,8 @@ export interface AnalyzaVysledok {
   kategorii: number;
   textov: number;
   davok: number;
+  /** Dávky, ktoré model nestihol (120 s strop) alebo odmietol. */
+  zlyhanychDavok: number;
   pokrytieRiadkov: number;
 }
 
@@ -126,14 +128,50 @@ export async function analyzujUctovnyProfil(
     throw new HttpError(409, 'not_enough_data', 'V histórii je primálo riadkov — najprv naimportujte históriu z POHODY');
   }
 
+  // Vlastný strop, nie ten z extrakcie: dávka je 150 textov naraz a beží raz
+  // za život firmy, nie pri každom doklade. So 120 s padala každá deviata.
   const parser = injectedParser ?? (new OpenAI({
     apiKey: config.openai.apiKey,
-    timeout: config.openai.timeoutMs,
-    maxRetries: 0,
+    timeout: Math.max(config.openai.timeoutMs, 300_000),
+    maxRetries: 1,
   }).responses as unknown as ProfileParser);
 
+  const idPreKod = new Map((await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
+    `SELECT id, kind, code FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')`,
+    [input.tenantId, input.organizationId],
+  )).rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
+
   const kategorie = new Map<string, z.infer<typeof kategoriaSchema> & { pocet: number; agendy: string[] }>();
+
+  // Zápis celej mapy — analýza je prepočet profilu, nie prírastok. Volá sa po
+  // KAŽDEJ dávke: jeden model má 120 s strop a nula opakovaní, takže jediná
+  // pomalá dávka z deviatich predtým zahodila všetkých osem zaplatených pred
+  // ňou. Firma s 1 217 textami sa takto nikdy nedopočítala.
+  const uloz = async () => {
+    await database.transaction(async (tx) => {
+      await tx.query('DELETE FROM ucto_kategorie WHERE tenant_id=$1 AND organization_id=$2',
+        [input.tenantId, input.organizationId]);
+      for (const kategoria of kategorie.values()) {
+        await tx.query(
+          `INSERT INTO ucto_kategorie
+            (id,tenant_id,organization_id,nazov,popis,slovnik,predkontacia_kod,predkontacia_id,
+             clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,vynimky,agendy,pocet,konflikt)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)`,
+          [randomUUID(), input.tenantId, input.organizationId, kategoria.nazov, kategoria.popis,
+            JSON.stringify(kategoria.slovnik), kategoria.predkontaciaKod,
+            kategoria.predkontaciaKod ? idPreKod.get(`predkontacie:${kategoria.predkontaciaKod}`) ?? null : null,
+            kategoria.clenenieDphKod,
+            kategoria.clenenieDphKod ? idPreKod.get(`cleneniaDph:${kategoria.clenenieDphKod}`) ?? null : null,
+            kategoria.clenenieKvKod, JSON.stringify(kategoria.vynimky), JSON.stringify(kategoria.agendy),
+            kategoria.pocet, kategoria.konflikt],
+        );
+      }
+    });
+  };
+
   let davok = 0;
+  let zlyhanychDavok = 0;
   for (let start = 0; start < texty.length; start += DAVKA) {
     const davka = texty.slice(start, start + DAVKA);
     davok += 1;
@@ -141,7 +179,9 @@ export async function analyzujUctovnyProfil(
     const povoleneUcty = new Set(davka.flatMap((item) => item.kombinacie.map((k) => k.predkontaciaKod)).filter(Boolean));
     const povoleneDph = new Set(davka.flatMap((item) => item.kombinacie.map((k) => k.clenenieDphKod)).filter(Boolean));
 
-    const response = await parser.parse({
+    let response: { output_parsed?: unknown };
+    try {
+      response = await parser.parse({
       model: config.openai.ruleAnalysisModel,
       store: config.openai.storeResponses,
       instructions: INSTRUCTIONS,
@@ -161,8 +201,18 @@ export async function analyzujUctovnyProfil(
         }],
       }],
       text: { format: zodTextFormat(davkaSchema, 'ucto_kategorie') },
-    });
-    if (!response.output_parsed) continue;
+      });
+    } catch (cause) {
+      // Vypršaný alebo odmietnutý model zhodí dávku, nie celú analýzu —
+      // predchádzajúce dávky sú už uložené a účtovník dostane, čo sa stihlo.
+      zlyhanychDavok += 1;
+      console.warn(`[ucto-profil] dávka ${davok} zlyhala: ${cause instanceof Error ? cause.message : String(cause)}`);
+      continue;
+    }
+    if (!response.output_parsed) {
+      zlyhanychDavok += 1;
+      continue;
+    }
     const parsed = davkaSchema.parse(response.output_parsed);
     // Koľko riadkov histórie kategória naozaj pokrýva, sa NEODHADUJE: spočíta
     // sa deterministicky cez jej vlastný slovník. Toto číslo rozhoduje, či sa
@@ -204,39 +254,16 @@ export async function analyzujUctovnyProfil(
         agendy: agendyKategorie(kategoria),
       });
     }
+    // Zaplatené dávky sú v databáze hneď, nie až po poslednej.
+    await uloz();
+    console.info(`[ucto-profil] dávka ${davok}/${Math.ceil(texty.length / DAVKA)} — ${kategorie.size} kategórií`);
   }
-
-  const idPreKod = new Map((await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
-    `SELECT id, kind, code FROM code_list_items
-      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')`,
-    [input.tenantId, input.organizationId],
-  )).rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
-
-  await database.transaction(async (tx) => {
-    // Analýza je prepočet celého profilu, nie prírastok — staré kategórie idú preč.
-    await tx.query('DELETE FROM ucto_kategorie WHERE tenant_id=$1 AND organization_id=$2',
-      [input.tenantId, input.organizationId]);
-    for (const kategoria of kategorie.values()) {
-      await tx.query(
-        `INSERT INTO ucto_kategorie
-          (id,tenant_id,organization_id,nazov,popis,slovnik,predkontacia_kod,predkontacia_id,
-           clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,vynimky,agendy,pocet,konflikt)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)`,
-        [randomUUID(), input.tenantId, input.organizationId, kategoria.nazov, kategoria.popis,
-          JSON.stringify(kategoria.slovnik), kategoria.predkontaciaKod,
-          kategoria.predkontaciaKod ? idPreKod.get(`predkontacie:${kategoria.predkontaciaKod}`) ?? null : null,
-          kategoria.clenenieDphKod,
-          kategoria.clenenieDphKod ? idPreKod.get(`cleneniaDph:${kategoria.clenenieDphKod}`) ?? null : null,
-          kategoria.clenenieKvKod, JSON.stringify(kategoria.vynimky), JSON.stringify(kategoria.agendy),
-          kategoria.pocet, kategoria.konflikt],
-      );
-    }
-  });
 
   return {
     kategorii: kategorie.size,
     textov: texty.length,
     davok,
+    zlyhanychDavok,
     pokrytieRiadkov: texty.reduce((sum, item) => sum + item.pocet, 0),
   };
 }

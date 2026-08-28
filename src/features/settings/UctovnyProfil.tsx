@@ -77,7 +77,11 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       // nepamätal, boli len návod na chybu.
       await backfillUctoHistory(orgId);
       const vysledok = await analyzeUctoProfil(orgId);
-      showToast(`${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`);
+      // Nedokončené dávky sa nesmú zamlčať — profil je vtedy neúplný a
+      // účtovník má dôvod pustiť analýzu znova.
+      showToast(vysledok.zlyhanychDavok > 0
+        ? `${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`
+        : `${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`);
       await obnov();
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });

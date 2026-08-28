@@ -3074,7 +3074,7 @@ export async function backfillUctoHistory(orgId: string): Promise<{ imported: nu
 
 export async function analyzeUctoProfil(
   orgId: string,
-): Promise<{ kategorii: number; textov: number; davok: number; pokrytieRiadkov: number }> {
+): Promise<{ kategorii: number; textov: number; davok: number; zlyhanychDavok: number; pokrytieRiadkov: number }> {
   if (!REST_DATA_MODE) throw new Error('Analýza je dostupná len s pripojeným serverom');
   return restRequest(
     `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/analyze`,
