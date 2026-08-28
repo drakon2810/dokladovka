@@ -1,7 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { create } from 'zustand';
 import { useNavigate } from 'react-router-dom';
 import type { Organization, PripravaFirmy } from '../../data/types';
 import { Modal } from '../../components/ui';
+import { analyzeUctoProfil } from '../../data/api';
+import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
+import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import './pripravaFirmy.css';
 
@@ -19,6 +23,13 @@ import './pripravaFirmy.css';
  * nie je — a keď účtovník krok spraví inde, sprievodca to vidí tiež.
  */
 
+/** Ktorej firme je sprievodca otvorený. Zdieľané, lebo firmu sa dá založiť
+ *  z ľavého panela aj z Nastavení — a okno vykresľuje Layout. */
+const usePripravaStore = create<{ orgId: string | null }>(() => ({ orgId: null }));
+export const usePripravaOrgId = () => usePripravaStore((s) => s.orgId);
+export function otvorPripravu(orgId: string): void { usePripravaStore.setState({ orgId }); }
+export function zavriPripravu(): void { usePripravaStore.setState({ orgId: null }); }
+
 export type StavKroku = 'hotovy' | 'naRade' | 'zamknuty';
 
 interface Krok {
@@ -28,6 +39,8 @@ interface Krok {
   /** Kam krok vedie. Prázdne pri kroku, ktorý sa spraví na mieste. */
   cesta?: string;
   akcia: string;
+  /** Krok, ktorý sa dá spustiť rovno v okne. Vracia hlášku pre účtovníka. */
+  spustit?: (organizationId: string) => Promise<string>;
   /** Čo sa ukáže, keď je hotový — konkrétne číslo, nie „OK". */
   hotovo: (priprava: PripravaFirmy, organizacia: Organization) => string;
   splneny: (priprava: PripravaFirmy, organizacia: Organization) => boolean;
@@ -38,6 +51,15 @@ interface Krok {
 export const KROKY: readonly Krok[] = [
   {
     cislo: 1,
+    nazov: 'E-mailová schránka',
+    popis: 'Adresa, na ktorú budete faktúry preposielať. Vznikla automaticky pri založení firmy.',
+    akcia: 'Skopírovať adresu',
+    hotovo: (_priprava, organizacia) => organizacia.emailAlias || 'adresa je pripravená',
+    splneny: (priprava, organizacia) => priprava.schranka || Boolean(organizacia.emailAlias),
+    zavisly: false,
+  },
+  {
+    cislo: 2,
     nazov: 'Pripojiť Mostík',
     popis: 'Agent na vašom počítači spojí Dokladovku s POHODOU. Bez neho sa nedá stiahnuť nič ďalšie.',
     cesta: '/nastavenia?tab=mostik',
@@ -47,7 +69,7 @@ export const KROKY: readonly Krok[] = [
     zavisly: true,
   },
   {
-    cislo: 2,
+    cislo: 3,
     nazov: 'Stiahnuť číselníky z POHODY',
     popis: 'Predkontácie, členenia DPH, číselné rady, strediská a bankové účty.',
     cesta: '/nastavenia?tab=ciselniky',
@@ -57,33 +79,32 @@ export const KROKY: readonly Krok[] = [
     zavisly: true,
   },
   {
-    cislo: 3,
+    cislo: 4,
     nazov: 'Naučiť pamäť z histórie',
-    popis: 'Systém prejde vaše doklady v POHODE a zapamätá si, ako ste ich účtovali.',
-    cesta: '/nastavenia?tab=trening',
-    akcia: 'Otvoriť Tréning AI',
+    popis: 'Mostík stiahne vaše doklady z POHODY a systém si zapamätá, ako ste ich účtovali.',
+    akcia: 'Naučiť pamäť',
+    // Beží na mieste — účtovník nemá dôvod odchádzať do Nastavení a hľadať
+    // tam medzi Excelom, .mdb a dvoma tlačidlami to správne.
+    spustit: async (organizationId) => {
+      await requestMostikTrainingSync(organizationId);
+      return 'Mostík sťahuje históriu z POHODY — potrvá to chvíľu.';
+    },
     hotovo: (priprava) => `${priprava.pamat} zapamätaných rozhodnutí`,
     splneny: (priprava) => priprava.pamat > 0,
     zavisly: true,
   },
   {
-    cislo: 4,
+    cislo: 5,
     nazov: 'Spustiť analýzu (účtovný profil)',
     popis: 'Z histórie sa vytvoria kategórie plnení — čo firma nakupuje a ako to účtuje.',
-    cesta: '/nastavenia?tab=trening',
     akcia: 'Spustiť analýzu',
+    spustit: async (organizationId) => {
+      const vysledok = await analyzeUctoProfil(organizationId);
+      return `Hotovo — ${vysledok.kategorii} kategórií plnení.`;
+    },
     hotovo: (priprava) => `${priprava.kategorie} kategórií plnení`,
     splneny: (priprava) => priprava.kategorie > 0,
     zavisly: true,
-  },
-  {
-    cislo: 5,
-    nazov: 'E-mailová schránka',
-    popis: 'Adresa, na ktorú budete faktúry preposielať. Vznikla automaticky pri založení firmy.',
-    akcia: 'Skopírovať adresu',
-    hotovo: (_priprava, organizacia) => organizacia.emailAlias || 'adresa je pripravená',
-    splneny: (priprava, organizacia) => priprava.schranka || Boolean(organizacia.emailAlias),
-    zavisly: false,
   },
 ];
 
@@ -128,6 +149,7 @@ interface Props {
 
 export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat }: Props) {
   const navigate = useNavigate();
+  const [bezi, setBezi] = useState<number | null>(null);
   const stavy = useMemo(() => stavKrokov(priprava, organizacia), [priprava, organizacia]);
   const hotove = stavy.filter((stav) => stav === 'hotovy').length;
   const vsetkoHotove = hotove === KROKY.length;
@@ -171,7 +193,18 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
                     <button
                       type="button"
                       className="dk-btn dk-btn-ai"
+                      disabled={bezi !== null}
                       onClick={() => {
+                        // Krok, ktorý vie bežať sám, sa spustí tu — účtovník
+                        // neodchádza do Nastavení hľadať to správne tlačidlo.
+                        if (krok.spustit) {
+                          setBezi(krok.cislo);
+                          void krok.spustit(organizacia.id)
+                            .then((sprava) => showToast(sprava))
+                            .catch((chyba) => showToast(chyba instanceof Error ? chyba.message : t('chyba.vseobecna'), { tone: 'error' }))
+                            .finally(() => setBezi(null));
+                          return;
+                        }
                         if (krok.cesta) {
                           onClose();
                           navigate(krok.cesta);
@@ -180,7 +213,7 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
                         if (organizacia.emailAlias) onKopirovat?.(organizacia.emailAlias);
                       }}
                     >
-                      {krok.akcia}
+                      {bezi === krok.cislo ? t('priprava.bezi') : krok.akcia}
                     </button>
                   </div>
                 )}

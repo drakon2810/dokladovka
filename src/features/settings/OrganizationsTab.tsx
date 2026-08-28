@@ -17,6 +17,7 @@ import type { Organization } from '../../data/types';
 import { t } from '../../i18n/sk';
 import { ConfirmDialog, CopyButton, Modal, OrgDot } from '../../components/ui';
 import { showToast } from '../../components/toast';
+import { otvorPripravu } from '../onboarding/PripravaFirmyModal';
 import { BankAccountsModal } from './BankAccountsModal';
 
 const DEFAULT_COLORS = ['#0E7A5F', '#B45309', '#4338CA', '#0369A1', '#B91C1C', '#334155'];
@@ -170,6 +171,9 @@ export function OrganizationsTab() {
           onCreated={(result) => {
             setCreated(result);
             setModal(null);
+            // Rovnaký sprievodca ako pri založení firmy z ľavého panela —
+            // inak by účtovník dostal prázdnu appku a jedenásť záložiek.
+            otvorPripravu(result.organization.id);
           }}
         />
       )}

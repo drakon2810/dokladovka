@@ -220,6 +220,7 @@ export const sk = {
   'priprava.zavriPoznamka': 'Môžete zavrieť a vrátiť sa neskôr — postup zostane zachovaný.',
   'priprava.hotovoPoznamka': 'Firma je pripravená prijímať doklady.',
   'priprava.adresaSkopirovana': 'Adresa skopírovaná',
+  'priprava.bezi': 'Pracujem…',
   'priprava.dokoncit': 'Dokončiť prípravu',
   'akcia.pridat': 'Pridať',
   'akcia.upravit': 'Upraviť',

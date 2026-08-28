@@ -9,7 +9,7 @@ import { setCurrentOrg } from '../data/api';
 import { useDataQuery } from '../data/query';
 import { t } from '../i18n/sk';
 import { OrgDot, ToastViewport } from '../components/ui';
-import { PripravaFirmyModal, KROKY, hotovychKrokov } from '../features/onboarding/PripravaFirmyModal';
+import { PripravaFirmyModal, KROKY, hotovychKrokov, usePripravaOrgId, otvorPripravu, zavriPripravu } from '../features/onboarding/PripravaFirmyModal';
 import { showToast } from '../components/toast';
 import { OrganizationFormModal } from '../features/settings/OrganizationsTab';
 import { useAuth } from '../auth/AuthContext';
@@ -142,7 +142,6 @@ export function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [organizationModalOpen, setOrganizationModalOpen] = useState(false);
-  const [pripravaOrgId, setPripravaOrgId] = useState<string | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -159,6 +158,7 @@ export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { session, logout } = useAuth();
+  const pripravaOrgId = usePripravaOrgId();
 
   const { data } = useDataQuery();
   const role = session?.user.role ?? data?.role ?? 'uctovnik';
@@ -169,6 +169,10 @@ export function Layout() {
 
   const activeOrgs = organizations.filter((o) => !o.archived);
   const currentOrg = organizations.find((o) => o.id === currentOrgId);
+  const pripravaAktualnej = currentOrg
+    ? (data?.pripravaFiriem ?? []).find((item) => item.organizationId === currentOrg.id)
+    : undefined;
+  const hotoveKroky = currentOrg && pripravaAktualnej ? hotovychKrokov(pripravaAktualnej, currentOrg) : KROKY.length;
   const userName = session?.user.name ?? '—';
   const activeQueueId = new URLSearchParams(location.search).get('fronta');
 
@@ -365,6 +369,18 @@ export function Layout() {
               </motion.div>
             )}
           </AnimatePresence>
+          {/* Nedokončená príprava — len pri vybranej firme. Sprievodca sa dá
+              zavrieť kedykoľvek, takže musí byť odkiaľ sa vrátiť. */}
+          {!collapsed && currentOrg && pripravaAktualnej && hotoveKroky < KROKY.length && (
+            <button type="button" className="pf-vstup" onClick={() => otvorPripravu(currentOrg.id)}>
+              <span
+                className="pf-prstenec"
+                style={{ background: `conic-gradient(#0E7A5F ${(hotoveKroky / KROKY.length) * 360}deg, #C9DED5 0)` }}
+              />
+              <span className="pf-vstup-text">{t('priprava.dokoncit')}</span>
+              <span className="pf-vstup-pocet">{hotoveKroky}/{KROKY.length}</span>
+            </button>
+          )}
         </div>
 
         {/* Navigácia */}
@@ -477,25 +493,6 @@ export function Layout() {
                         </span>
                       </button>
                     </div>
-                    {/* Nedokončená príprava firmy. Sprievodca sa dá zavrieť
-                        kedykoľvek, takže musí byť odkiaľ sa vrátiť — inak by
-                        účtovník o zvyšných krokoch už nevedel. */}
-                    {(() => {
-                      const priprava = (data?.pripravaFiriem ?? []).find((item) => item.organizationId === org.id);
-                      if (!priprava) return null;
-                      const hotove = hotovychKrokov(priprava, org);
-                      if (hotove === KROKY.length) return null;
-                      return (
-                        <button type="button" className="pf-vstup" onClick={() => setPripravaOrgId(org.id)}>
-                          <span
-                            className="pf-prstenec"
-                            style={{ background: `conic-gradient(#0E7A5F ${(hotove / KROKY.length) * 360}deg, #C9DED5 0)` }}
-                          />
-                          <span className="pf-vstup-text">{t('priprava.dokoncit')}</span>
-                          <span className="pf-vstup-pocet">{hotove}/{KROKY.length}</span>
-                        </button>
-                      );
-                    })()}
                     <AnimatePresence initial={false}>
                       {open && (
                         <motion.div
@@ -901,7 +898,7 @@ export function Layout() {
             // Nová firma je prázdna appka a jedenásť záložiek v Nastaveniach.
             // Sprievodca sa otvorí rovno — a dá sa zavrieť, ak účtovník vie,
             // čo robí; vráti sa doň z ľavého panela.
-            setPripravaOrgId(result.organization.id);
+            otvorPripravu(result.organization.id);
             showToast(
               `${t('nast.org.vytvorena')} ${result.primaryEmailAlias.address}`,
               {
@@ -920,7 +917,7 @@ export function Layout() {
           <PripravaFirmyModal
             organizacia={org}
             priprava={priprava}
-            onClose={() => setPripravaOrgId(null)}
+            onClose={zavriPripravu}
             onKopirovat={(adresa) => { void navigator.clipboard?.writeText(adresa); showToast(t('priprava.adresaSkopirovana')); }}
           />
         );
