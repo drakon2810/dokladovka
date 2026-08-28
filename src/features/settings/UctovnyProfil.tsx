@@ -31,7 +31,7 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
   const { data } = useDataQuery();
   const [stats, setStats] = useState<UctoHistoryStats>();
   const [kategorie, setKategorie] = useState<UctoKategoria[]>([]);
-  const [busy, setBusy] = useState<'backfill' | 'analyza' | 'kategoria'>();
+  const [busy, setBusy] = useState<'analyza' | 'kategoria'>();
   const [uprava, setUprava] = useState<KategoriaUprava>();
   /** Vybraná agenda, alebo undefined pre všetky — pokladňa sa účtuje inak než faktúry. */
   const [agenda, setAgenda] = useState<string>();
@@ -64,20 +64,20 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
     };
   }, [orgId]);
 
-  async function spusti(akcia: 'backfill' | 'analyza') {
+  async function spusti() {
     // Analýza je prepočet celého profilu — ručné úpravy aj zmazania kategórií
     // sa ňou stratia, tak sa to nesmie stať potichu.
-    if (akcia === 'analyza' && kategorie.length > 0 && !window.confirm(t('uctoProfil.analyzaPrepise'))) return;
+    if (kategorie.length > 0 && !window.confirm(t('uctoProfil.analyzaPrepise'))) return;
     setUprava(undefined);
-    setBusy(akcia);
+    setBusy('analyza');
     try {
-      if (akcia === 'backfill') {
-        const { imported } = await backfillUctoHistory(orgId);
-        showToast(`${t('uctoProfil.preklopene')} (${imported})`);
-      } else {
-        const vysledok = await analyzeUctoProfil(orgId);
-        showToast(`${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`);
-      }
+      // Mostík plní pamäť rozhodnutí, analýza číta korpus histórie. Že sú to
+      // dve tabuľky, nie je otázka pre účtovníka — preklopenie je idempotentné,
+      // tak beží vždy pred analýzou. Dve tlačidlá v poradí, ktoré si nikto
+      // nepamätal, boli len návod na chybu.
+      await backfillUctoHistory(orgId);
+      const vysledok = await analyzeUctoProfil(orgId);
+      showToast(`${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`);
       await obnov();
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
@@ -191,11 +191,8 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn" disabled={busy !== undefined} onClick={() => void spusti('backfill')}>
-          {busy === 'backfill' ? t('stav.nacitavam') : t('uctoProfil.preklopit')}
-        </button>
-        <button type="button" className="btn btn-primary" disabled={busy !== undefined || (stats?.spolu ?? 0) < 5}
-          onClick={() => void spusti('analyza')}>
+        <button type="button" className="btn btn-primary" disabled={busy !== undefined}
+          onClick={() => void spusti()}>
           {busy === 'analyza' ? t('uctoProfil.analyzujem') : t('uctoProfil.spustitAnalyzu')}
         </button>
       </div>

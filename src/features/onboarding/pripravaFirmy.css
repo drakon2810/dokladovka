@@ -86,3 +86,21 @@
 @media (prefers-reduced-motion: reduce) {
   .pf-spinner { animation-duration: 2.4s; }
 }
+
+/* Tlačidlo kroku je menšie než hlavné tlačidlá appky — v zozname piatich
+   krokov je to akcia jedného riadku, nie hlavná akcia okna. */
+.pf-akcia {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 7px; border: 1px solid transparent;
+  background: #0E7A5F; color: #fff;
+  font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background .15s ease;
+}
+.pf-akcia:hover:not(:disabled) { background: #0A6650; }
+.pf-akcia:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Krok, ktorý beží sám (agent ťahá číselníky) — nie je čo klikať, len čakať. */
+.pf-bezi {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: #0A6650;
+}

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Organization, PripravaFirmy } from '../../data/types';
 import { Modal } from '../../components/ui';
 import { analyzeUctoProfil, backfillUctoHistory } from '../../data/api';
-import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
+import { requestMostikCodeListSync, requestMostikTrainingSync } from '../../data/mostik/mostikService';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 import './pripravaFirmy.css';
@@ -49,6 +49,8 @@ interface Krok {
   spustit?: (organizationId: string) => Promise<unknown>;
   /** Práca beží na pozadí (agent) — točí sa, kým krok nie je splnený. */
   beziKymNeHotovy?: boolean;
+  /** Spustí sa sám, len čo príde na rad — nie je čo klikať. */
+  automaticky?: boolean;
   /** i18n kľúč hlášky počas behu. */
   bezimText?: Parameters<typeof t>[0];
   /** Čo sa ukáže, keď je hotový — konkrétne číslo, nie „OK". */
@@ -82,8 +84,13 @@ export const KROKY: readonly Krok[] = [
     cislo: 3,
     nazov: 'Stiahnuť číselníky z POHODY',
     popis: 'Predkontácie, členenia DPH, číselné rady, strediská a bankové účty.',
-    cesta: '/nastavenia?tab=ciselniky',
-    akcia: 'Otvoriť číselníky',
+    // Agent číselníky ťahá sám (hodinový cyklus). Žiadosť ho len zobudí, aby
+    // to bolo do ~30 s namiesto do hodiny — účtovník nemá čo klikať, len čaká.
+    akcia: '',
+    spustit: (organizationId) => requestMostikCodeListSync(organizationId),
+    automaticky: true,
+    beziKymNeHotovy: true,
+    bezimText: 'priprava.ciselnikyBezia',
     hotovo: (priprava) => `${priprava.ciselniky} položiek číselníkov`,
     splneny: (priprava) => priprava.ciselniky > 0,
     zavisly: true,
@@ -182,6 +189,27 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
   useEffect(() => {
     if (beziciHotovy) usePripravaStore.setState({ bezi: null });
   }, [beziciHotovy]);
+  const spusti = (krok: Krok) => {
+    usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo } });
+    void krok.spustit!(organizacia.id)
+      .then(() => {
+        // Agent pracuje na pozadí; spinner zhasne až keď je výsledok v dátach.
+        if (!krok.beziKymNeHotovy) usePripravaStore.setState({ bezi: null });
+      })
+      .catch((chyba) => {
+        usePripravaStore.setState({ bezi: null });
+        showToast(chyba instanceof Error ? chyba.message : t('chyba.vseobecna'), { tone: 'error' });
+      });
+  };
+
+  // Krok, ktorý si účtovník neklikáva, sa rozbehne sám, len čo príde na rad.
+  const automatickyKrok = KROKY.find((krok, i) => krok.automaticky && stavy[i] === 'naRade');
+  const cakaAutomaticky = Boolean(automatickyKrok) && beziZaznam === null;
+  useEffect(() => {
+    if (cakaAutomaticky && automatickyKrok) spusti(automatickyKrok);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cakaAutomaticky, automatickyKrok?.cislo]);
+
   const hotove = stavy.filter((stav) => stav === 'hotovy').length;
   const vsetkoHotove = hotove === KROKY.length;
 
@@ -222,40 +250,33 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
                 {stav === 'zamknuty' && blokujuci && (
                   <div className="pf-zamknute">Najprv dokončite krok {blokujuci.cislo} — {blokujuci.nazov.toLowerCase()}.</div>
                 )}
-                {stav === 'naRade' && (
+                {stav === 'naRade' && (bezi === krok.cislo || !krok.automaticky) && (
                   <div>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={bezi !== null}
-                      onClick={() => {
-                        // Krok, ktorý vie bežať sám, sa spustí tu — účtovník
-                        // neodchádza do Nastavení hľadať to správne tlačidlo.
-                        if (krok.spustit) {
-                          usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo } });
-                          void krok.spustit(organizacia.id)
-                            .then(() => {
-                              // Agent sťahuje na pozadí; spinner zhasne až keď
-                              // sa výsledok objaví v dátach (5 s poll).
-                              if (!krok.beziKymNeHotovy) usePripravaStore.setState({ bezi: null });
-                            })
-                            .catch((chyba) => {
-                              usePripravaStore.setState({ bezi: null });
-                              showToast(chyba instanceof Error ? chyba.message : t('chyba.vseobecna'), { tone: 'error' });
-                            });
-                          return;
-                        }
-                        if (krok.cesta) {
-                          onClose();
-                          navigate(krok.cesta);
-                          return;
-                        }
-                        if (organizacia.emailAlias) onKopirovat?.(organizacia.emailAlias);
-                      }}
-                    >
-                      {bezi === krok.cislo && <span className="pf-spinner pf-spinner-btn" aria-hidden="true" />}
-                      {bezi === krok.cislo ? t(krok.bezimText ?? 'priprava.bezi') : krok.akcia}
-                    </button>
+                    {bezi === krok.cislo ? (
+                      <div className="pf-bezi">
+                        <span className="pf-spinner" aria-hidden="true" />
+                        {t(krok.bezimText ?? 'priprava.bezi')}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="pf-akcia"
+                        disabled={bezi !== null}
+                        onClick={() => {
+                          // Krok, ktorý vie bežať sám, sa spustí tu — účtovník
+                          // neodchádza do Nastavení hľadať to správne tlačidlo.
+                          if (krok.spustit) return spusti(krok);
+                          if (krok.cesta) {
+                            onClose();
+                            navigate(krok.cesta);
+                            return;
+                          }
+                          if (organizacia.emailAlias) onKopirovat?.(organizacia.emailAlias);
+                        }}
+                      >
+                        {krok.akcia}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

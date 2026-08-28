@@ -10,7 +10,10 @@ vi.mock('../../data/api', () => ({
   backfillUctoHistory: (...args: unknown[]) => backfill(...(args as [])),
   analyzeUctoProfil: (...args: unknown[]) => analyze(...(args as [])),
 }));
-vi.mock('../../data/mostik/mostikService', () => ({ requestMostikTrainingSync: vi.fn() }));
+vi.mock('../../data/mostik/mostikService', () => ({
+  requestMostikTrainingSync: vi.fn(),
+  requestMostikCodeListSync: vi.fn(),
+}));
 
 const { KROKY, stavKrokov } = await import('./PripravaFirmyModal');
 
@@ -37,5 +40,16 @@ describe('príprava firmy', () => {
 
   it('s hotovou pamäťou je analýza na rade', () => {
     expect(stavKrokov(priprava, organizacia)[4]).toBe('naRade');
+  });
+
+  it('číselníky si účtovník neklikáva — agent ich ťahá sám', () => {
+    const ciselniky = KROKY.find((krok) => krok.cislo === 3)!;
+    expect(ciselniky.automaticky).toBe(true);
+    expect(ciselniky.cesta).toBeUndefined();
+    expect(ciselniky.spustit).toBeTypeOf('function');
+  });
+
+  it('automatický je práve jeden krok — inak by sa spúšťali cez seba', () => {
+    expect(KROKY.filter((krok) => krok.automaticky)).toHaveLength(1);
   });
 });
