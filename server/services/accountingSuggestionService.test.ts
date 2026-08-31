@@ -1370,6 +1370,66 @@ describe('AI nevyberá číselný rad', () => {
   // Simulacia na realnych datach: pri agende bez historie (prvy ostatny zavazok
   // firmy) ma KAZDY kod tu=0 a inde>0. Bez tejto poistky by ponuka spadla na
   // kody nepouzite nikde — teda na jediny nespravny.
+  // Zuzenie ponuky samo osebe nic nezakazuje: pokyny DPH profilu piu modelu
+  // to iste id doslovne do promptu ("pouzi clenenie DPH s id ...") a
+  // onlyActiveIds kontroluje iba active=true. Bez vynutenia by DDsl§69
+  // skoncilo na prijatej fakture rovnako ako predtym, len tichsie.
+  it('kód patriaci na iný doklad sa zahodí, aj keď ho model vráti napriek zúženiu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const pn = randomUUID();
+    const ddsl = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,480,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'ES Dodavatel' }, polozky: [{ popis: 'sluzba' }] })],
+    );
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '518/321'], [pn, 'cleneniaDph', 'PN'], [ddsl, 'cleneniaDph', 'DDsl§69'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    for (const [agenda, kod, dphId] of [
+      ['FP', 'PN', pn], ['FP', 'PN', pn], ['INT', 'DDsl§69', ddsl], ['INT', 'DDsl§69', ddsl],
+    ] as const) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,source,riadok_hash)
+         VALUES ($1,$2,$3,$4,'sluzba','518/321',$5,$6,$7,'mdb',$8)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, agenda, pred, kod, dphId, randomUUID()],
+      );
+    }
+
+    // Model kód vráti napriek tomu, že v ponuke nebol — presne to, čo mu
+    // pokyny DPH profilu vedia podsunúť aj s id.
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: ddsl, clenenieKvKod: 'B1', ciselnyRadId: null,
+        confidence: 0.9, reason: 'Samozdanenie podľa §69',
+      })),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'ES Dodavatel' },
+      { documentType: 'FP', supplierName: 'ES Dodavatel', supplierKrajina: 'ES',
+        totalAmount: 480, currency: 'EUR', lineDescriptions: ['sluzba'] }, parser)).toBe(true);
+
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    // Kód sa na doklad nedostal ani cez odpoveď modelu.
+    expect(navrh.clenenie_dph_id).not.toBe(ddsl);
+    // A s ním nešla do kontrolného výkazu ani sekcia B1.
+    expect(navrh.clenenie_kv_kod).not.toBe('B1');
+  }, 90_000);
+
   it('agenda bez histórie sa nezužuje, hoci firma inde účtuje', async () => {
     const database = await createTestDatabase();
     databases.push(database);

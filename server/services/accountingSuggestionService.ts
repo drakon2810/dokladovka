@@ -1192,7 +1192,8 @@ export async function maybeAiAccountingSuggestion(
   // nároku na odpočet sa ponuka členení zúži na členenie bez odpočtu — model
   // tak odpočet ani nemôže navrhnúť.
   const dphProfil = await loadDphProfil(database, input.tenantId, input.organizationId);
-  let cleneniaDph = byKind('cleneniaDph');
+  const vsetkyClenenia = byKind('cleneniaDph');
+  let cleneniaDph = vsetkyClenenia;
 
   // Z ponuky vypadne LEN kód s dôkazom, že patrí na iný doklad: nula použití na
   // tejto agende a nenulová inde. Kód, ktorý firma nepoužila nikde, ostáva —
@@ -1200,8 +1201,15 @@ export async function maybeAiAccountingSuggestion(
   // jediný správny kód je horšia chyba než tá, ktorú riešime.
   const pouzitie = await pouzitieCleneni(database, input, documentContext.documentType);
   const kodyDokazov = new Set<string>([
+    // Denník je filtrovaný agendou (HISTORIA_AGENDY), takže je bezpečný.
     ...dennik.map((riadok) => riadok.clenenieDphKod).filter((kod): kod is string => Boolean(kod)),
-    ...kategorie.map((kategoria) => kategoria.clenenie_dph_kod).filter((kod): kod is string => Boolean(kod)),
+    // Kategórie agendu NEFILTRUJÚ — agenda je pri nich len tie-break. Kategória
+    // postavená na texte, ktorý firma účtuje na faktúre aj na internom doklade,
+    // by inak vrátila do ponuky presne ten kód, kvôli ktorému zúženie vzniklo.
+    ...kategorie
+      .filter((kategoria) => Array.isArray(kategoria.agendy)
+        && (kategoria.agendy as string[]).includes(documentContext.documentType))
+      .map((kategoria) => kategoria.clenenie_dph_kod).filter((kod): kod is string => Boolean(kod)),
   ]);
   // Príklady a doterajší návrh nesú id, nie kód. Členenie bez nároku na odpočet
   // musí prežiť tiež: poistka pre neplatiteľa DPH nižšie z ponuky iba VYBERÁ,
@@ -1386,6 +1394,24 @@ export async function maybeAiAccountingSuggestion(
   // číselný rad sa nepočítajú — rad určuje nastavenie firmy (radPreTyp nižšie),
   // takže model, ktorý nič nespoznal, by inak prázdnou odpoveďou prepísal dobrý
   // deterministický návrh (napr. predvoľbu partnera s istotou 0.9).
+  // Zúženie ponuky samo osebe nič nezakazuje — modelu vie ten istý kód podsunúť
+  // hneď dvoje: pokyny DPH profilu ho píšu do promptu doslovne aj s id
+  // („použi členenie DPH s id …", dphAdvisor.ts), a onlyActiveIds kontroluje iba
+  // active=true. Bez tejto poistky by DDsl§69 skončilo na prijatej faktúre
+  // rovnako ako predtým, len tichšie. Kód dokázateľne patriaci na iný doklad sa
+  // preto zahodí a rozhodne ďalší zdroj v poradí.
+  if (mameHistoriuTu && validated.clenenie_dph_id) {
+    const kod = vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)?.kod.trim();
+    const stat = kod ? pouzitie.get(kod) : undefined;
+    const dokazane = kod ? kodyDokazov.has(kod) : false;
+    if (stat && stat.tu === 0 && stat.inde > 0 && !dokazane
+      && validated.clenenie_dph_id !== dphProfil?.clenenieBezOdpoctuId) {
+      console.warn(`[ai-navrh] ${input.documentId}: členenie ${kod} firma na ${documentContext.documentType}`
+        + ` nikdy nepoužila (${stat.inde}× inde) — zahadzujem`);
+      delete validated.clenenie_dph_id;
+    }
+  }
+
   if (!hasAccounting(validated)) return false;
   // Kategória, ktorú model nasledoval — nesie aj sekciu KV z reálnej histórie.
   const kategoriaZhoda = kategorie.find((kategoria) =>
