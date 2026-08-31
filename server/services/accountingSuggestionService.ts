@@ -98,6 +98,11 @@ async function najdiPodobnePriklady(
   lineText: string,
   aktivnePredkontacie: Set<string>,
   documentType: string,
+  /**
+   * Dobropis sa účtuje opačným smerom a do inej sekcie KV než bežná faktúra,
+   * takže ako príklad pre ňu neplatí — a naopak. Filter preto berie DVOJICU.
+   */
+  podtyp: string = 'bezna',
 ): Promise<PodobnyPriklad[]> {
   if (!lineText) return [];
   const rows = (await database.query<{
@@ -108,8 +113,9 @@ async function najdiPodobnePriklady(
        FROM ucto_decisions
       WHERE tenant_id=$1 AND organization_id=$2 AND excluded=false
         AND predkontacia_id IS NOT NULL AND coalesce(document_type,'FP')=$3
+        AND coalesce(podtyp,'bezna')=$4
       ORDER BY created_at DESC LIMIT 500`,
-    [input.tenantId, input.organizationId, documentType],
+    [input.tenantId, input.organizationId, documentType, podtyp],
   )).rows;
 
   const scored = rows
@@ -800,6 +806,8 @@ export async function recordUctoDecision(tx: Queryable, input: {
   organizationId: string;
   documentId: string;
   documentType?: string;
+  /** Druh faktúry — dobropis nesmie slúžiť ako príklad pre bežnú faktúru. */
+  podtyp?: string;
   extracted: unknown;
   accounting: Record<string, string | undefined>;
 }): Promise<void> {
@@ -810,19 +818,21 @@ export async function recordUctoDecision(tx: Queryable, input: {
   await tx.query(
     `INSERT INTO ucto_decisions
       (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
-       predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,polozky_ucto,source,document_type)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'approved',$14)
+       predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,polozky_ucto,source,document_type,podtyp)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'approved',$14,$15)
      ON CONFLICT (document_id) WHERE document_id IS NOT NULL DO UPDATE SET
        supplier_ico=excluded.supplier_ico, supplier_name_normalized=excluded.supplier_name_normalized,
        line_text_normalized=excluded.line_text_normalized, predkontacia_id=excluded.predkontacia_id,
        clenenie_dph_id=excluded.clenenie_dph_id, ciselny_rad_id=excluded.ciselny_rad_id,
        stredisko_id=excluded.stredisko_id, clenenie_kv_kod=excluded.clenenie_kv_kod,
-       polozky_ucto=excluded.polozky_ucto, document_type=excluded.document_type, created_at=now()`,
+       polozky_ucto=excluded.polozky_ucto, document_type=excluded.document_type,
+       podtyp=excluded.podtyp, created_at=now()`,
     [randomUUID(), input.tenantId, input.organizationId, input.documentId, ico, nazov,
       normalizeLineText(input.extracted) || null,
       input.accounting.predkontaciaId ?? null, input.accounting.clenenieDphId ?? null,
       input.accounting.ciselnyRadId ?? null, input.accounting.strediskoId ?? null,
-      input.accounting.clenenieKvKod ?? null, polozkyUctoJson(input.extracted), input.documentType ?? null],
+      input.accounting.clenenieKvKod ?? null, polozkyUctoJson(input.extracted), input.documentType ?? null,
+      input.podtyp ?? 'bezna'],
   );
 }
 
@@ -1221,7 +1231,7 @@ export async function maybeAiAccountingSuggestion(
   const lineText = normalizeName(documentContext.lineDescriptions.join(' | ')).slice(0, 1000);
   const priklady = await najdiPodobnePriklady(
     database, input, lineText, new Set(vsetkyPredkontacie.map((item) => item.id)),
-    documentContext.documentType,
+    documentContext.documentType, documentContext.podtyp,
   );
   const kategorie = await najdiKategorie(
     database, config, input, lineText, documentContext.documentType, injectedEmbedder);

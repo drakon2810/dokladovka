@@ -126,8 +126,40 @@ public sealed class AgentTests
         var parsed = PohodaXml.ParseTrainingDecisions(response);
         // Duplicitná faktúra sa zlúči, vydaná a nezaúčtovaná sa preskočia.
         var row = Assert.Single(parsed.Items);
-        Assert.Equal(new TrainingDecision("87654321", "Reality s.r.o.", "Prenájom kancelárie", "518/321", "PD", "C2"), row);
+        Assert.Equal(new TrainingDecision("bezna", "87654321", "Reality s.r.o.", "Prenájom kancelárie", "518/321", "PD", "C2"), row);
         Assert.Empty(parsed.Warnings);
+    }
+
+    // Dobropis lezal v pamati ako bezna prijata faktura a sluzil jej ako
+    // priklad, hoci sa uctuje opacne a do inej sekcie kontrolneho vykazu.
+    [Fact]
+    public void PamatNesiePodtypFaktury()
+    {
+        static string Faktura(string typ, string firma, string text) => $"""
+              <rsp:responsePackItem id="x" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>{typ}</inv:invoiceType>
+                      <inv:partnerIdentity><typ:address><typ:company>{firma}</typ:company></typ:address></inv:partnerIdentity>
+                      <inv:text>{text}</inv:text>
+                      <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            """;
+        var response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+            """
+            + Faktura("receivedInvoice", "Dodávateľ s.r.o.", "Servis vozidla")
+            + Faktura("receivedCreditNotice", "Dodávateľ s.r.o.", "Oprava základu dane")
+            + Faktura("receivedAdvanceInvoice", "Dodávateľ s.r.o.", "Preddavok")
+            + "</rsp:responsePack>";
+
+        var podtypy = PohodaXml.ParseTrainingDecisions(response).Items.Select(row => row.Podtyp).ToArray();
+        Assert.Equal(new[] { "bezna", "dobropis", "zalohova" }, podtypy);
     }
 
     [Fact]

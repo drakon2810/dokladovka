@@ -358,6 +358,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       organizationId: document.organization_id,
       documentId: id,
       documentType: String(document.document_type ?? '') || undefined,
+      podtyp: String(document.podtyp ?? 'bezna'),
       extracted: document.extracted,
       accounting: document.accounting,
     });

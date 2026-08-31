@@ -51,6 +51,12 @@ public sealed record AgentRelease(
 public sealed record AgentSyncResult(string OrganizationId, string Kind, string State, int ItemCount, int DurationMs, string? ErrorCode = null);
 // Riadok histórie zaúčtovania pre Tréning AI — kódy číselníkov prekladá server.
 public sealed record TrainingDecision(
+    /// <summary>
+    /// Druh faktúry z invoiceType. Agent ho čítal aj doteraz, ale zahadzoval —
+    /// v pamäti tak dobropisy ležali ako bežné prijaté faktúry a slúžili im ako
+    /// príklad, hoci sa účtujú opačne a do inej sekcie kontrolného výkazu.
+    /// </summary>
+    string Podtyp,
     string? SupplierIco,
     string? SupplierName,
     string? LineText,
@@ -126,8 +132,8 @@ public sealed class BackendClient
         SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset }), cancellationToken);
 
     // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
-    public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, CancellationToken cancellationToken) =>
-        SendJsonAsync<TrainingImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/training-decisions", new { rows, done }), cancellationToken);
+    public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, bool reset, CancellationToken cancellationToken) =>
+        SendJsonAsync<TrainingImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/training-decisions", new { rows, done, reset }), cancellationToken);
 
     public Task<IReadOnlyList<AgentExportJob>> GetExportQueueAsync(string organizationId, CancellationToken cancellationToken) =>
         SendJsonAsync<IReadOnlyList<AgentExportJob>>(

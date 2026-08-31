@@ -311,7 +311,10 @@ public sealed class AgentCycleRunner
                 : parsed.Items.Chunk(2000).ToList();
             for (var index = 0; index < batches.Count; index++)
             {
-                var result = await _backend.UploadTrainingDecisionsAsync(organization.OrganizationId, batches[index], index == batches.Count - 1, cancellationToken);
+                // Prvá dávka nesie reset: hromadne načítaná pamäť sa postaví z tohto
+                // prenosu. Rozhodnutia schválené účtovníkom v appke ostávajú.
+                var result = await _backend.UploadTrainingDecisionsAsync(
+                    organization.OrganizationId, batches[index], index == batches.Count - 1, index == 0, cancellationToken);
                 imported += result.Imported;
                 duplicates += result.Duplicates;
                 rejected += result.Rejected;
@@ -403,7 +406,8 @@ public sealed class AgentCycleRunner
         }
         try
         {
-            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, cancellationToken);
+            // Prázdny prenos iba uzatvára žiadosť — pamäť sa nemaže.
+            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, cancellationToken);
             _trainingSyncAttempts.Remove(organizationId);
             _log.Info("training_sync_abandoned", new { organizationId, attempts, errorCode });
         }

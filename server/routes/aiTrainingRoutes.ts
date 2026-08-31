@@ -16,6 +16,12 @@ import { BEZ_PREDKONTACIA_SQL, normalizeName, platnyKvKod } from '../services/ac
 
 // Zdieľané s agentom (PUT /api/agent/organizations/:id/training-decisions).
 export const trainingRowSchema = z.object({
+  /**
+   * Druh faktúry z POHODY. Mostík ho číta z invoiceType, doteraz ho zahadzoval
+   * a všetko pristálo ako bežná faktúra — vrátane dobropisov, ktoré sa účtujú
+   * opačným smerom a do inej sekcie kontrolného výkazu.
+   */
+  podtyp: z.enum(['bezna', 'dobropis', 'tarchopis', 'zalohova']).optional(),
   supplierIco: z.string().trim().max(20).optional(),
   supplierName: z.string().trim().max(300).optional(),
   lineText: z.string().trim().max(2000).optional(),
@@ -170,7 +176,7 @@ export async function importTrainingRows(
   const resolved: Array<{
     supplierIco: string | null; supplierName: string | null; lineText: string | null;
     predkontaciaId: string | null; clenenieDphId: string | null; ciselnyRadId: string | null;
-    strediskoId: string | null; clenenieKvKod: string | null;
+    strediskoId: string | null; clenenieKvKod: string | null; podtyp: string;
   }> = [];
 
   input.rows.forEach((row, index) => {
@@ -204,6 +210,7 @@ export async function importTrainingRows(
       return;
     }
     resolved.push({
+      podtyp: row.podtyp ?? 'bezna',
       supplierIco,
       supplierName,
       lineText: normalizeName(row.lineText).slice(0, 1000) || null,
@@ -228,8 +235,8 @@ export async function importTrainingRows(
         const result = await tx.query(
           `INSERT INTO ucto_decisions
             (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
-             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type)
-           SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import','FP'
+             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type,podtyp)
+           SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import','FP',$12
             WHERE NOT EXISTS (
               SELECT 1 FROM ucto_decisions
                WHERE tenant_id=$2 AND organization_id=$3 AND source='import'
@@ -240,9 +247,13 @@ export async function importTrainingRows(
                  AND clenenie_dph_id IS NOT DISTINCT FROM $8
                  AND ciselny_rad_id IS NOT DISTINCT FROM $9
                  AND stredisko_id IS NOT DISTINCT FROM $10
-                 AND clenenie_kv_kod IS NOT DISTINCT FROM $11)`,
+                 AND clenenie_kv_kod IS NOT DISTINCT FROM $11
+                 -- Bez podtypu by sa dobropis a faktúra s rovnakým textom
+                 -- a účtom zlúčili do jedného riadku a druh by sa stratil.
+                 AND podtyp IS NOT DISTINCT FROM $12)`,
           [randomUUID(), tenantId, organizationId, row.supplierIco, row.supplierName, row.lineText,
-            row.predkontaciaId, row.clenenieDphId, row.ciselnyRadId, row.strediskoId, row.clenenieKvKod],
+            row.predkontaciaId, row.clenenieDphId, row.ciselnyRadId, row.strediskoId, row.clenenieKvKod,
+            row.podtyp ?? 'bezna'],
         );
         if (result.rowCount > 0) imported += 1;
         else duplicates += 1;

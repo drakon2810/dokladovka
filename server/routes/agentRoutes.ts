@@ -391,9 +391,25 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   app.put('/api/agent/organizations/:id/training-decisions', async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const body = z.object({ rows: z.array(trainingRowSchema).max(10_000), done: z.boolean().default(true) }).strict().parse(request.body);
+    const body = z.object({
+      rows: z.array(trainingRowSchema).max(10_000),
+      done: z.boolean().default(true),
+      /** Prvá dávka úplného prenosu — hromadne načítaná pamäť sa postaví nanovo. */
+      reset: z.boolean().optional(),
+    }).strict().parse(request.body);
     const organization = await database.query('SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    // Iba source='import', teda to, čo sa hromadne načítalo. Rozhodnutia, ktoré
+    // účtovník sám schválil v appke, majú source='approved' a ostávajú — sú to
+    // tie cennejšie. Bez resetu by staré riadky ostali s podtypom 'bezna' a
+    // dobropisy by naďalej slúžili ako príklad pre bežné faktúry; podtyp je
+    // súčasťou deduplikačného kľúča, takže by sa iba pridali druhé.
+    if (body.reset) {
+      const zmazane = await database.query(
+        `DELETE FROM ucto_decisions WHERE tenant_id=$1 AND organization_id=$2 AND source='import'`,
+        [agent.tenant_id, id]);
+      console.info(`[pamat] ${id}: reset pred prenosom, zahodených ${zmazane.rowCount ?? 0} načítaných rozhodnutí`);
+    }
     const result = body.rows.length > 0
       ? await importTrainingRows(database, {
           tenantId: agent.tenant_id,

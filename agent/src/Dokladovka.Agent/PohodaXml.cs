@@ -31,6 +31,15 @@ public static class PohodaXml
 
     // Prijaté typy agendy FA — parita s ručným importom .mdb (RelTpFak 11/12/15).
     private static readonly string[] ReceivedInvoiceTypes = ["receivedInvoice", "receivedCreditNotice", "receivedAdvanceInvoice"];
+
+    /// <summary>invoiceType z POHODY → podtyp, ako ho pozná server.</summary>
+    private static string PodtypZTypu(string? invoiceType) => invoiceType switch
+    {
+        "receivedCreditNotice" or "issuedCreditNotice" => "dobropis",
+        "receivedDebitNote" or "issuedDebitNote" => "tarchopis",
+        "receivedAdvanceInvoice" or "issuedAdvanceInvoice" => "zalohova",
+        _ => "bezna",
+    };
     // Zákonné sekcie kontrolného výkazu DPH (parita s CLENENIE_KV_KODY na webe).
     private static readonly HashSet<string> KvSekcie = new(["A1", "A2", "B1", "B2", "B3", "C1", "C2", "D1", "D2", "KN"], StringComparer.Ordinal);
 
@@ -69,6 +78,7 @@ public static class PohodaXml
             var clenenieDph = HeaderRefIds(header, "classificationVAT");
             if ((supplierIco is null && supplierName is null) || (predkontacia is null && clenenieDph is null)) continue;
             var row = new TrainingDecision(
+                PodtypZTypu(type),
                 supplierIco,
                 supplierName,
                 Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value),
