@@ -484,3 +484,29 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 /* Pole, ku ktorému návrh patrí, nesie jantárové podčiarknutie — inak by riadok
    pod ním visel bez ukotvenia a nebolo by vidieť, čoho sa týka. */
 .dk-pole-navrh { box-shadow: inset 0 -2px 0 rgba(180, 83, 9, .35); border-radius: 3px; }
+
+/* Návrh DPH poradcu v paneli „prečo?". Býval modrým pásom nad celým dokladom
+   a zaberal výšku aj tam, kde s ním účtovník nemal čo robiť; teraz je pri poli,
+   ktorého sa týka, a je vidieť, až keď sa naň účtovník spýta. */
+.dv-preco-navrhy { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.dv-preco-navrh {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 7px 9px; border-radius: 8px;
+  background: #F0F7FD; border: 1px solid #D6E9F8;
+  font-size: 12px; line-height: 1.45; color: #0C4A6E;
+}
+.dv-preco-navrh > span { flex: 1; min-width: 0; text-wrap: pretty; }
+.dv-preco-navrh-btn {
+  flex: none; align-self: center; border: 1px solid #BBDCF2; background: #fff;
+  border-radius: 6px; padding: 3px 9px; font: inherit; font-size: 11.5px; font-weight: 600;
+  color: #075985; cursor: pointer;
+}
+.dv-preco-navrh-btn:hover { border-color: #7FBEE6; background: #F7FBFE; }
+
+/* „?" s návrhom poradcu nesie bodku — inak by o skrytom texte nikto nevedel. */
+.dv-preco-btn.dv-preco-ma-navrh { position: relative; }
+.dv-preco-btn.dv-preco-ma-navrh::after {
+  content: ''; position: absolute; top: -1px; right: -1px;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: #0284C7; box-shadow: 0 0 0 1.5px #fff;
+}

@@ -1225,31 +1225,6 @@ export function DocumentDetailPage() {
           ))}
         </div>
       )}
-      {dphAdvice && dphAdvice.navrhy.length > 0 && (
-        <div className="anim-in rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-          <p className="font-semibold">{t('detail.dph.navrh')} — {t('detail.dph.titulok')}</p>
-          {dphAdvice.navrhy.map((zistenie) => (
-            <div key={`${zistenie.kod}-${zistenie.sprava}`} className="mt-1 flex flex-wrap items-center gap-2">
-              <p>{zistenie.sprava}</p>
-              {!readOnly
-                && (zistenie.clenenieDphId || zistenie.clenenieKvKod)
-                && (draft.ucto.clenenieDphId !== zistenie.clenenieDphId
-                  || (zistenie.clenenieKvKod && draft.ucto.clenenieKvKod !== zistenie.clenenieKvKod)) && (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => updateUcto({
-                    ...(zistenie.clenenieDphId ? { clenenieDphId: zistenie.clenenieDphId } : {}),
-                    ...(zistenie.clenenieKvKod ? { clenenieKvKod: zistenie.clenenieKvKod } : {}),
-                  })}
-                >
-                  {t('detail.dph.pouzitClenenie')}
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
 
       <div
         ref={splitRef}
@@ -1491,6 +1466,7 @@ export function DocumentDetailPage() {
             }}
             suggestion={suggestion}
             dphAudit={(data.dphAudit ?? []).find((item) => item.documentId === draft.id)}
+            dphNavrhy={dphAdvice?.navrhy}
             onPrijatOdporucanie={(clenenieDphId, kvKod) => {
               // Prázdne oboje = účtovník ostáva pri návrhu pamäte. Sekcia KV má
               // vlastný riadok návrhu, takže sa dá prijať aj bez zmeny kódu

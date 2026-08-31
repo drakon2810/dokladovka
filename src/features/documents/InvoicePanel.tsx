@@ -5,7 +5,7 @@
 // a draft.ucto. Panel „Prečo?" (pôvod zaúčtovania) ostáva pri poliach
 // predkontácie, členenia DPH a kontrolného výkazu.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AccountingSuggestion, DphAudit, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
+import type { AccountingSuggestion, DphAudit, DphZistenie, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
 import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
@@ -42,6 +42,9 @@ interface InvoicePanelProps {
   dphAudit?: DphAudit;
   /** Prijatie odporúčania kontroly — nastaví členenie aj sekciu KV naraz. */
   onPrijatOdporucanie?: (clenenieDphId: string | undefined, kvKod: string | undefined) => void;
+  /** Návrhy DPH poradcu podľa profilu klienta. Bývali pásom nad dokladom;
+   *  patria k poľu, ktorého sa týkajú, a nie nad celú obrazovku. */
+  dphNavrhy?: readonly DphZistenie[];
   autoFilled: boolean;
   /** Zvýraznenie zdroja údajov — mapa polí, ktoré vyplnila AI. */
   src?: SourceMap;
@@ -166,7 +169,7 @@ function VysvetlenieProgress() {
 const LOW_CONFIDENCE = 0.5;
 
 export function InvoicePanel({
-  draft, readOnly, codeLists, suggestion, dphAudit, onPrijatOdporucanie, autoFilled,
+  draft, readOnly, codeLists, suggestion, dphAudit, onPrijatOdporucanie, dphNavrhy, autoFilled,
   src, srcEdited, srcOn, activeSrc, onHoverSrc, onExport, exportDisabledReason, onSplit, cakajuceVRade = 0,
   predvolenaPokladna,
   setTyp, updateUcto, updateExtracted, updateParty, updatePartyAddress,
@@ -257,6 +260,44 @@ export function InvoicePanel({
     </div>
   );
 
+  /**
+   * Návrh DPH poradcu pri poli, ktorého sa týka. Predtým to bol modrý pás nad
+   * celým dokladom — zaberal výšku aj tam, kde s ním účtovník nemal čo robiť.
+   * Návrh bez členenia aj bez sekcie KV je všeobecná poznámka a patrí k členeniu.
+   */
+  const navrhyPreField = (field: PrecoField) => {
+    const patri = (zistenie: DphZistenie) => (zistenie.clenenieKvKod && !zistenie.clenenieDphId
+      ? field === 'kv' : field === 'dph');
+    const zoznam = (dphNavrhy ?? []).filter(patri);
+    if (zoznam.length === 0) return null;
+    return (
+      <div className="dv-preco-navrhy">
+        {zoznam.map((zistenie) => {
+          const menilByNieco = Boolean(zistenie.clenenieDphId || zistenie.clenenieKvKod)
+            && (ucto.clenenieDphId !== zistenie.clenenieDphId
+              || (zistenie.clenenieKvKod && ucto.clenenieKvKod !== zistenie.clenenieKvKod));
+          return (
+            <div key={`${zistenie.kod}-${zistenie.sprava}`} className="dv-preco-navrh">
+              <span>{zistenie.sprava}</span>
+              {!readOnly && menilByNieco && (
+                <button
+                  type="button"
+                  className="dv-preco-navrh-btn"
+                  onClick={() => updateUcto({
+                    ...(zistenie.clenenieDphId ? { clenenieDphId: zistenie.clenenieDphId } : {}),
+                    ...(zistenie.clenenieKvKod ? { clenenieKvKod: zistenie.clenenieKvKod } : {}),
+                  })}
+                >
+                  Použiť
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderPreco = (field: PrecoField) => {
     if (precoState !== 'ready' || !preco) {
       return (
@@ -279,6 +320,7 @@ export function InvoicePanel({
         <div className="dv-preco-panel">
           {precoHead()}
           <div className="dv-preco-body dv-preco-muted">Pre tento doklad nevznikol žiadny návrh — hodnotu vybral účtovník ručne.</div>
+          <div className="dv-preco-body">{navrhyPreField(field)}</div>
         </div>
       );
     }
@@ -311,6 +353,7 @@ export function InvoicePanel({
               <span>Návrh bol „{navrhVal}" — aktuálnu hodnotu zmenil účtovník.</span>
             </div>
           )}
+          {navrhyPreField(field)}
           {vysvetlenie?.stav === 'loading' && <VysvetlenieProgress />}
           {vysvetlenie?.stav === 'done' && vysvetlenie.data && (
             <div className="dv-preco-vys">
@@ -462,12 +505,18 @@ export function InvoicePanel({
     </>
   );
 
-  const precoWrap = (field: PrecoField, control: ReactNode, navrh = false) => (
+  const precoWrap = (field: PrecoField, control: ReactNode, navrh = false) => {
+    // Bodka na „?" — návrh DPH poradcu už nie je pásom nad dokladom, takže bez
+    // nej by účtovník nemal ako vedieť, že je tam čo čítať.
+    const maNavrh = ((dphNavrhy ?? []).some((zistenie) => (zistenie.clenenieKvKod && !zistenie.clenenieDphId
+      ? field === 'kv' : field === 'dph')));
+    return (
     <div className={`dv-preco-field dk-with-preco${navrh ? ' dk-pole-navrh' : ''}`}>
       {control}
       <span
-        role="button" tabIndex={0} title="Prečo práve táto hodnota?"
-        className={`dv-preco-btn${precoOpen === field ? ' dv-open' : ''}`}
+        role="button" tabIndex={0}
+        title={maNavrh ? 'Návrh DPH poradcu — kliknutím zobrazíte' : 'Prečo práve táto hodnota?'}
+        className={`dv-preco-btn${precoOpen === field ? ' dv-open' : ''}${maNavrh ? ' dv-preco-ma-navrh' : ''}`}
         onClick={() => togglePreco(field)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePreco(field); } }}
       >
@@ -475,7 +524,8 @@ export function InvoicePanel({
       </span>
       {precoOpen === field && renderPreco(field)}
     </div>
-  );
+    );
+  };
 
   // ---- Zvýraznenie zdroja údajov -------------------------------------------
   const srcField = (path: string) => (srcOn ? src?.[path] : undefined);
