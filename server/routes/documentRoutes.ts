@@ -343,7 +343,9 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       throw new HttpError(409, 'dph_profil_blokacia', dphPosudok.blokacie[0].sprava);
     }
     const approvedVersion = expectedVersion + 1;
-    const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, extracted: document.extracted, ucto: document.accounting };
+    // Podtyp ide do snapshotu spolu s typom — invoiceType pre POHODU sa určuje
+    // z dvojice a bez neho by dobropis odišiel ako bežná faktúra.
+    const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, podtyp: document.podtyp ?? 'bezna', extracted: document.extracted, ucto: document.accounting };
     const result = await database.query<Record<string, unknown>>(
       `UPDATE documents SET status='schvaleny', version=$1, approved_version=$1, approved_snapshot=$2::jsonb, updated_at=now()
         WHERE id=$3 AND tenant_id=$4 AND version=$5 RETURNING *`,

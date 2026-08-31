@@ -11,7 +11,7 @@ const ponuka = (
   navrh?: string,
   zvolene?: string,
 ) => {
-  const podlaAgendy = predkontaciePreTyp(vsetky, typ);
+  const podlaAgendy = predkontaciePreTyp(vsetky, { typ, podtyp: 'bezna' });
   const chybajuce = [navrh, zvolene]
     .filter((id): id is string => Boolean(id) && !podlaAgendy.some((item) => item.id === id))
     .map((id) => vsetky.find((item) => item.id === id))

@@ -10,7 +10,7 @@ import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
-import { kvKodyPreTyp, predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
+import { druh, kvKodyPreTyp, predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
 import { lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
@@ -576,7 +576,8 @@ export function InvoicePanel({
 
   // Rad musí sedieť s agendou dokladu — pokladničný doklad nesmie dostať rad
   // prijatých faktúr. Už zvolený rad ostáva v ponuke, nech sa hodnota nestratí.
-  const ponukaRadov = radyPreTyp(codeLists.ciselneRady, draft.typ);
+  const druhDokladu = druh(draft);
+  const ponukaRadov = radyPreTyp(codeLists.ciselneRady, druhDokladu);
   // POHODA má pre každú agendu vlastné predkontácie — na vydanú faktúru nepatrí nákupová.
   //
   // Značka agendy z POHODY ale hovorí, kde bola predkontácia ZALOŽENÁ, nie kde
@@ -584,13 +585,13 @@ export function InvoicePanel({
   // prijatých faktúrach. Bez tejto výnimky návrh AI z ponuky vypadol, pole
   // ukázalo „—" a účtovník ten účet nevedel vybrať ani ručne.
   const predkontacieProDoklad = useMemo(() => {
-    const podlaAgendy = predkontaciePreTyp(codeLists.predkontacie, draft.typ);
+    const podlaAgendy = predkontaciePreTyp(codeLists.predkontacie, druhDokladu);
     const chybajuce = [suggestion?.predkontaciaId, ucto.predkontaciaId]
       .filter((id): id is string => Boolean(id) && !podlaAgendy.some((item) => item.id === id))
       .map((id) => codeLists.predkontacie.find((item) => item.id === id))
       .filter((item): item is CodeListItem => Boolean(item));
     return chybajuce.length > 0 ? [...chybajuce, ...podlaAgendy] : podlaAgendy;
-  }, [codeLists.predkontacie, draft.typ, suggestion?.predkontaciaId, ucto.predkontaciaId]);
+  }, [codeLists.predkontacie, druhDokladu.typ, druhDokladu.podtyp, suggestion?.predkontaciaId, ucto.predkontaciaId]);
   const radOpts = ponukaRadov.some((item) => item.id === ucto.ciselnyRadId) || !ucto.ciselnyRadId
     ? ponukaRadov
     : [...ponukaRadov, ...codeLists.ciselneRady.filter((item) => item.id === ucto.ciselnyRadId)];
@@ -606,7 +607,7 @@ export function InvoicePanel({
   // Sekcia KV musí sedieť so stranou dokladu — prijatá faktúra do A1 („dodanie
   // tovaru a služby") nepatrí. Už zvolená hodnota ostáva v ponuke, nech sa
   // nestratí a účtovník ju vidí aj vtedy, keď ju treba prepísať.
-  const ponukaKv = kvKodyPreTyp(CLENENIE_KV_KODY, draft.typ);
+  const ponukaKv = kvKodyPreTyp(CLENENIE_KV_KODY, druhDokladu);
   const kvOpts: DcOption[] = (ucto.clenenieKvKod && !ponukaKv.includes(ucto.clenenieKvKod)
     ? [...ponukaKv, ucto.clenenieKvKod]
     : ponukaKv

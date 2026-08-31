@@ -41,6 +41,8 @@ function isoDate(value: unknown): string | undefined {
 interface Snapshot {
   version: number;
   typ: string;
+  /** Dobropis, ťarchopis, zálohová. Chýba pri dokladoch spred zavedenia. */
+  podtyp?: string;
   extracted: Record<string, any>;
   ucto: Record<string, string | undefined>;
 }
@@ -62,11 +64,19 @@ export interface PohodaCodeLookup {
   predkontacieNazvy?: Map<string, string>;
 }
 
-function invoiceType(type: string): string {
-  if (type === 'FP') return 'receivedInvoice';
-  if (type === 'FV') return 'issuedInvoice';
+/**
+ * Typ faktúry pre POHODA. Rozhoduje DVOJICA: dobropis a ťarchopis sú v POHODE
+ * samostatné hodnoty invoiceType, nie iné agendy — presne ako v jej XSD
+ * (issuedCreditNotice = Dobropis, issuedDebitNote = Vrubopis/ťarchopis).
+ */
+function invoiceType(type: string, podtyp?: string): string {
   if (type === 'OZ') return 'commitment';
-  throw new Error(`Nepodporovaný typ dokladu pre POHODA: ${type}`);
+  const strana = type === 'FP' ? 'received' : type === 'FV' ? 'issued' : undefined;
+  if (!strana) throw new Error(`Nepodporovaný typ dokladu pre POHODA: ${type}`);
+  if (podtyp === 'dobropis') return `${strana}CreditNotice`;
+  if (podtyp === 'tarchopis') return `${strana}DebitNote`;
+  if (podtyp === 'zalohova') return `${strana}AdvanceInvoice`;
+  return `${strana}Invoice`;
 }
 
 function skIbanAccount(iban: unknown): { accountNo: string; bankCode: string } | undefined {
@@ -628,7 +638,7 @@ export function buildServerDataPack(input: {
     return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
-        <inv:invoiceType>${invoiceType(snapshot.typ)}</inv:invoiceType>
+        <inv:invoiceType>${invoiceType(snapshot.typ, snapshot.podtyp)}</inv:invoiceType>
         <inv:number>${numberXml}</inv:number>
         <inv:symVar>${escapeXml(clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20))}</inv:symVar>
         ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</inv:originalDocument>` : ''}

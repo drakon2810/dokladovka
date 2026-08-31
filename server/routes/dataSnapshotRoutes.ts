@@ -145,7 +145,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         graceUntil: iso(row.grace_until), disabledAt: iso(row.disabled_at),
       })),
       documents: documents.rows.map((row) => ({
-        id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, queueId: row.queue_id ?? '', typ: row.document_type,
+        id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, queueId: row.queue_id ?? '', typ: row.document_type, podtyp: row.podtyp ?? 'bezna',
         status: row.status, processingStatus: row.processing_status, pdfUrl: `/api/documents/${row.id}/file`, prijateDna: iso(row.created_at),
         zdroj: row.source, confidence: Number(row.confidence), fieldConfidence: row.field_confidence,
         extracted: row.extracted, ucto: row.accounting, history: row.history, comments: row.comments,

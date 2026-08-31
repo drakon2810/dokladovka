@@ -6,6 +6,22 @@ export type DocumentType = 'FP' | 'FV' | 'BV' | 'MZDY' | 'OZ' | 'PD';
 // FP faktúra prijatá, FV faktúra vydaná, BV bankový výpis,
 // MZDY mzdové podklady, OZ ostatný záväzok, PD pokladničný doklad
 
+/**
+ * Podtyp faktúry. V POHODE sú dobropis a ťarchopis TYP vnútri agendy faktúr
+ * (to isté okno, susedné číselné rady, navyše pole „Pôv. doklad"), kým zálohová
+ * faktúra má vlastnú agendu a žiadne členenie DPH — daňový moment ešte nenastal.
+ *
+ * Rozhoduje vždy DVOJICA (typ, podtyp), nikdy typ sám: dobropis sa účtuje inak
+ * než faktúra a patrí do inej sekcie kontrolného výkazu (C1/C2 namiesto A1/B1).
+ */
+export type DocumentPodtyp = 'bezna' | 'dobropis' | 'tarchopis' | 'zalohova';
+
+/** Doklad tak, ako o ňom rozhodujú mapy agend — typ sám nestačí. */
+export interface DruhDokladu {
+  typ: DocumentType;
+  podtyp: DocumentPodtyp;
+}
+
 export type DocumentStatus =
   | 'novy' // prišiel e-mailom, čaká na extrakciu
   | 'extrahovany' // AI dokončila vyťaženie, čaká na kontrolu
@@ -467,6 +483,8 @@ export interface DocumentItem {
   orgId: string;
   queueId: string;
   typ: DocumentType;
+  /** Chýba pri dokladoch spracovaných pred zavedením podtypu — vtedy „bezna". */
+  podtyp?: DocumentPodtyp;
   status: DocumentStatus;
   processingStatus: ProcessingStatus;
   /** Seed URL; ručne nahrané súbory sa načítajú cez zdroj.localFileKey. */

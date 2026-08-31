@@ -919,7 +919,24 @@ const HISTORIA_AGENDY: Record<string, readonly string[]> = {
   PD: ['VPD', 'PPD', 'PD'],
   MZDY: ['INT', 'MZDY'],
   OZ: ['OZ'],
+  // Dobropis, ťarchopis a zálohová faktúra sú v korpuse vlastné agendy, hoci
+  // v POHODE zdieľajú okno s faktúrou. Miešať ich do FP/FV by otrávilo
+  // štatistiku: dobropis ide do opačnej sekcie KV a zálohová do žiadnej.
+  // Napĺňa ich Mostík (etapa 2); do vtedy sú prázdne a nič sa z nich neberie.
+  'FP-D': ['FP-D'],
+  'FP-T': ['FP-T'],
+  'FP-Z': ['FP-Z'],
+  'FV-D': ['FV-D'],
+  'FV-T': ['FV-T'],
+  'FV-Z': ['FV-Z'],
 };
+
+/** Agenda korpusu pre druh dokladu — dvojica, nikdy typ sám. */
+export function agendaHistorie(typ: string, podtyp?: string): string {
+  if (!podtyp || podtyp === 'bezna' || (typ !== 'FP' && typ !== 'FV')) return typ;
+  const pismeno = podtyp === 'dobropis' ? 'D' : podtyp === 'tarchopis' ? 'T' : 'Z';
+  return `${typ}-${pismeno}`;
+}
 
 export interface DennikRiadok {
   text: string;

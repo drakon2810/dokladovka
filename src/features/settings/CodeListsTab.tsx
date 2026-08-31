@@ -20,7 +20,7 @@ import {
   buildCodeListRequestXml,
 } from '../../data/pohoda/requestTemplates';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
-import { AGENDA_PRE_TYP } from '../../data/pohoda/agendas';
+import { AGENDA_PRE_TYP, agendaRadu } from '../../data/pohoda/agendas';
 import { Modal } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { OrgDot } from '../../components/ui';
@@ -141,8 +141,10 @@ function PredvoleneRady({ organizationId }: { organizationId: string }) {
       <div className="pb-5">
       <p className="mb-3 max-w-3xl text-xs text-ink-soft">{t('nast.cis.predvoleneRadyPopis')}</p>
       <div className="grid gap-2 sm:grid-cols-2">
+        {/* Predvoľby sa nastavujú pre bežné doklady; dobropis a ťarchopis
+            zdieľajú agendu faktúr a zálohová má vlastnú, ktorá predvoľbu nemá. */}
         {(Object.keys(AGENDA_PRE_TYP) as DocumentType[]).map((typ) => {
-          const ponuka = rady.filter((item) => item.agenda === AGENDA_PRE_TYP[typ]);
+          const ponuka = rady.filter((item) => item.agenda === agendaRadu({ typ, podtyp: 'bezna' }));
           return (
             <label key={typ} className="flex items-center gap-2 text-sm">
               <span className="w-40 shrink-0 text-ink-soft">{TYP_LABEL[typ]}</span>
