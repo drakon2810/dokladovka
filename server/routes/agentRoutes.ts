@@ -426,6 +426,15 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     const organization = await database.query(
       'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    // Prvá dávka úplného prenosu korpus zahodí: agent posiela CELÚ históriu,
+    // takže je to zrkadlo POHODY, nie hromada, čo len rastie. Bez toho by po
+    // rozdelení agend (dobropis FP → FP-D) vznikol iný hash a doklady by sa
+    // zdvojili — pôvodné pod FP a tie isté ešte raz pod FP-D.
+    if (body.reset) {
+      const zmazane = await database.query(
+        'DELETE FROM ucto_historia WHERE tenant_id=$1 AND organization_id=$2', [agent.tenant_id, id]);
+      console.info(`[ucto-historia] ${id}: reset pred prenosom, zahodených ${zmazane.rowCount ?? 0} riadkov`);
+    }
     const result = body.rows.length > 0
       ? await importUctoHistory(database, {
           tenantId: agent.tenant_id, organizationId: id, rows: body.rows, source: 'mdb',

@@ -368,9 +368,14 @@ public sealed class AgentCycleRunner
         var duplicates = 0;
         // Dávky po 2 000 riadkov — server berie najviac 20 000 na požiadavku
         // a bodyLimit je 30 MB; história býva rádovo väčšia než pamäť.
+        var prvaDavka = true;
         foreach (var batch in parsed.Rows.Chunk(2000))
         {
-            var result = await _backend.UploadUctoHistoryAsync(organization.OrganizationId, batch, cancellationToken);
+            // Prvá dávka nesie reset — server korpus zahodí a postaví z tohto
+            // prenosu. Až potom sa dávky pripájajú.
+            var result = await _backend.UploadUctoHistoryAsync(
+                organization.OrganizationId, batch, prvaDavka, cancellationToken);
+            prvaDavka = false;
             imported += result.Imported;
             duplicates += result.Duplicates;
         }

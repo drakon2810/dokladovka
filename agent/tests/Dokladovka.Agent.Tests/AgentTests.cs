@@ -202,6 +202,60 @@ public sealed class AgentTests
         Assert.Empty(parsed.Warnings);
     }
 
+    // Dobropis, ťarchopis a zálohová faktúra sa predtým zlievali do FP/FV a
+    // korpus ich nevedel rozlíšiť. Dobropis je pritom oprava základu dane
+    // (sekcia KV C1/C2, nie A1/B1) a zálohová do výkazu nevstupuje vôbec —
+    // v jednej hromade si prevažujúce zaúčtovania protirečili.
+    // Ťarchopis sa navyše nesťahoval vôbec, v zozname typov chýbal.
+    [Fact]
+    public void DobropisTarchopisAZalohovaMajuVlastnuAgendu()
+    {
+        static string Faktura(string typ, string cislo) => $"""
+              <rsp:responsePackItem id="x" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>{typ}</inv:invoiceType>
+                      <inv:number><typ:numberRequested>{cislo}</typ:numberRequested></inv:number>
+                      <inv:partnerIdentity><typ:address><typ:company>Dodávateľ s.r.o.</typ:company></typ:address></inv:partnerIdentity>
+                      <inv:text>Oprava základu dane</inv:text>
+                      <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            """;
+        var response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+            """
+            + Faktura("receivedInvoice", "F1")
+            + Faktura("receivedCreditNotice", "D1")
+            + Faktura("receivedDebitNote", "T1")
+            + Faktura("receivedAdvanceInvoice", "Z1")
+            + Faktura("issuedCreditNotice", "D2")
+            + Faktura("issuedDebitNote", "T2")
+            + Faktura("issuedAdvanceInvoice", "Z2")
+            + "</rsp:responsePack>";
+
+        var agendy = PohodaXml.ParseHistoryRows(response).Rows.Select(row => row.Agenda).ToArray();
+        Assert.Equal(new[] { "FP", "FP-D", "FP-T", "FP-Z", "FV-D", "FV-T", "FV-Z" }, agendy);
+    }
+
+    [Fact]
+    public void PoziadavkaHistorieSiPytaAjTarchopisy()
+    {
+        var request = PohodaXml.BuildHistoryListRequest("35761571", "req-1");
+        foreach (var typ in new[]
+        {
+            "receivedInvoice", "receivedCreditNotice", "receivedDebitNote", "receivedAdvanceInvoice",
+            "issuedInvoice", "issuedCreditNotice", "issuedDebitNote", "issuedAdvanceInvoice",
+        })
+        {
+            Assert.Contains($"invoiceType=\"{typ}\"", request);
+        }
+    }
+
     [Fact]
     public void HistoriaPreskociDokladBezTextuAleboBezZauctovania()
     {

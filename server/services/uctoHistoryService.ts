@@ -16,10 +16,20 @@ import { jeBezPredkontacia, normalizeName, platnyKvKod } from './accountingSugge
  * `PD`, `MZDY` a `INE` sú staré hodnoty z importov spred rozdelenia; nové riadky
  * ich už nepoužívajú, ale v databáze zostávajú, tak musia prejsť validáciou.
  */
-export const AGENDY = ['FP', 'FV', 'PPD', 'VPD', 'OZ', 'INT', 'BV', 'PD', 'MZDY', 'INE'] as const;
+export const AGENDY = [
+  'FP', 'FV', 'PPD', 'VPD', 'OZ', 'INT', 'BV', 'PD', 'MZDY', 'INE',
+  // Dobropis, ťarchopis a zálohová faktúra. V POHODE zdieľajú okno s faktúrou,
+  // v korpuse musia stáť samostatne: dobropis je oprava základu dane a ide do
+  // opačnej sekcie KV (C1/C2), zálohová do výkazu nevstupuje vôbec. V jednej
+  // hromade s FP/FV by si prevažujúce zaúčtovania protirečili — presne tak, ako
+  // sa to stalo s DDsl§69, ktoré firma používa len na interných dokladoch.
+  'FP-D', 'FP-T', 'FP-Z', 'FV-D', 'FV-T', 'FV-Z',
+] as const;
 
 /** Agendy, ktoré sa účtovníkovi ponúkajú ako filter — v poradí ako v type dokladu. */
-export const AGENDY_ZOBRAZENE = ['VPD', 'PPD', 'FP', 'FV', 'OZ', 'INT'] as const;
+export const AGENDY_ZOBRAZENE = [
+  'VPD', 'PPD', 'FP', 'FP-D', 'FP-T', 'FP-Z', 'FV', 'FV-D', 'FV-T', 'FV-Z', 'OZ', 'INT',
+] as const;
 
 /** Riadok histórie tak, ako ho posiela prehliadač (.mdb) aj agent (POHODA XML). */
 export const historyRowSchema = z.object({
@@ -44,6 +54,16 @@ export type HistoryRow = z.infer<typeof historyRowSchema>;
 /** Dávka: 20 000 krátkych riadkov sa pod bodyLimit (30 MB) pohodlne zmestí. */
 export const historyImportSchema = z.object({
   rows: z.array(historyRowSchema).max(20_000),
+  /**
+   * Prvá dávka úplného prenosu z POHODY. Korpus sa vtedy zahodí a postaví
+   * nanovo, lebo agent posiela CELÚ históriu — bez toho by v ňom navždy
+   * ostávali riadky zmazané v POHODE a pri zmene agendy (dobropis z FP na FP-D)
+   * by sa zmenil hash a doklady by sa zdvojili.
+   *
+   * Podľa zdroja mazať nejde: riadky agenta majú source 'mdb' rovnako ako ručný
+   * import, aby sa navzájom neduplikovali.
+   */
+  reset: z.boolean().optional(),
 }).strict();
 
 interface ResolvedRow {

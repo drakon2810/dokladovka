@@ -115,9 +115,15 @@ public sealed class BackendClient
     public Task SendSyncResultAsync(AgentSyncResult result, CancellationToken cancellationToken) =>
         SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Post, "api/agent/sync-results", result), cancellationToken);
 
-    /// <summary>Korpus histórie pre účtovný profil — všetky dokladové agendy.</summary>
-    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, CancellationToken cancellationToken) =>
-        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows }), cancellationToken);
+    /// <summary>
+    /// Korpus histórie pre účtovný profil — všetky dokladové agendy.
+    /// <paramref name="reset"/> na PRVEJ dávke: server korpus zahodí a postaví
+    /// nanovo. Agent posiela celú históriu, takže korpus je zrkadlo POHODY —
+    /// bez toho by v ňom ostávali riadky zmazané v POHODE a po zmene agendy
+    /// (dobropis FP → FP-D) by sa doklady zdvojili pod oboma agendami.
+    /// </summary>
+    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, bool reset, CancellationToken cancellationToken) =>
+        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset }), cancellationToken);
 
     // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
     public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, CancellationToken cancellationToken) =>

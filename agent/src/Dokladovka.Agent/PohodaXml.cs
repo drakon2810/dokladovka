@@ -86,10 +86,20 @@ public static class PohodaXml
 
     // Agendy korpusu histórie. Typ faktúry určuje agendu priamo; pokladňu delí
     // smer dokladu a interné doklady sú vlastná agenda. Banka sa neučí.
+    //
+    // Dobropis, ťarchopis a zálohová faktúra dostávajú VLASTNÚ agendu, hoci
+    // v POHODE zdieľajú okno s faktúrou. Predtým sa všetky zliali do FP/FV a
+    // korpus ich nevedel rozlíšiť: dobropis je oprava základu dane (sekcia KV
+    // C1/C2, nie A1/B1) a zálohová do výkazu nevstupuje vôbec. V jednej hromade
+    // si prevažujúce zaúčtovania protirečili.
+    //
+    // Ťarchopis (DebitNote) sa predtým nesťahoval vôbec — v zozname chýbal.
     private static readonly (string Type, string Agenda)[] HistoryInvoiceTypes =
     [
-        ("receivedInvoice", "FP"), ("receivedCreditNotice", "FP"), ("receivedAdvanceInvoice", "FP"),
-        ("issuedInvoice", "FV"), ("issuedCreditNotice", "FV"), ("issuedAdvanceInvoice", "FV"),
+        ("receivedInvoice", "FP"), ("receivedCreditNotice", "FP-D"),
+        ("receivedDebitNote", "FP-T"), ("receivedAdvanceInvoice", "FP-Z"),
+        ("issuedInvoice", "FV"), ("issuedCreditNotice", "FV-D"),
+        ("issuedDebitNote", "FV-T"), ("issuedAdvanceInvoice", "FV-Z"),
     ];
 
     /// <summary>
