@@ -1232,89 +1232,6 @@ export function DocumentDetailPage() {
         style={{ '--detail-left': `${splitPercent}%` } as CSSProperties}
       >
         <section className="card anim-in min-w-0 self-start overflow-hidden xl:sticky xl:top-4">
-          <div className="flex flex-wrap items-center gap-2 border-b border-line p-3">
-            <button
-              type="button"
-              className="btn px-2"
-              disabled={!hasAttachedFile}
-              onClick={() => setZoom((value) => Math.max(0.6, round2(value - 0.1)))}
-              aria-label={`${t('detail.titulok')} −`}
-            >
-              −
-            </button>
-            <span className="tnum w-14 text-center text-sm">{Math.round(zoom * 100)} %</span>
-            <button
-              type="button"
-              className="btn px-2"
-              disabled={!hasAttachedFile}
-              onClick={() => setZoom((value) => Math.min(2, round2(value + 0.1)))}
-              aria-label={`${t('detail.titulok')} +`}
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className="btn px-2.5 text-xs"
-              disabled={!hasAttachedFile || zoom === DEFAULT_ZOOM}
-              onClick={() => setZoom(DEFAULT_ZOOM)}
-            >
-              {t('detail.naSirku')}
-            </button>
-            {formatBadgeKey && (
-              <span className="ml-2 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] font-semibold text-accent-hover">
-                {t(formatBadgeKey)}
-              </span>
-            )}
-            {!imagePreview && !xmlPreview && hasAttachedFile && (
-              <>
-                <button
-                  type="button"
-                  className="btn ml-2 px-2"
-                  disabled={pageNumber <= 1}
-                  onClick={() => setPageNumber((value) => Math.max(1, value - 1))}
-                  aria-label={`${t('detail.strana')} ←`}
-                >
-                  ←
-                </button>
-                <span className="tnum text-sm">
-                  {t('detail.strana')} {pageNumber} {t('detail.z')} {pageCount || '—'}
-                </span>
-                <button
-                  type="button"
-                  className="btn px-2"
-                  disabled={!pageCount || pageNumber >= pageCount}
-                  onClick={() => setPageNumber((value) => Math.min(pageCount, value + 1))}
-                  aria-label={`${t('detail.strana')} →`}
-                >
-                  →
-                </button>
-              </>
-            )}
-            {srcSections.length > 0 && (
-              <label className="dv-src-toggle ml-auto">
-                <input
-                  type="checkbox"
-                  checked={srcOn}
-                  onChange={(event) => {
-                    setSrcOn(event.target.checked);
-                    setActiveSrc(undefined);
-                    localStorage.setItem(SRC_STORAGE_KEY, event.target.checked ? '1' : '0');
-                  }}
-                />
-                <span className="dv-src-switch" />
-                {t('detail.zvyraznitZdroj')}
-              </label>
-            )}
-            {fileUrl && (
-              <a
-                className={`btn ${srcSections.length > 0 ? 'ml-2' : 'ml-auto'}`}
-                href={fileUrl}
-                download={draft.zdroj.povodnyNazovSuboru}
-              >
-                {t('detail.stiahnutSubor')}
-              </a>
-            )}
-          </div>
           {/* Legenda stojí nad dokladom — tam, kde treba farbu rozlúštiť; pravý
               stĺpec je popísaný nadpismi sekcií. */}
           {srcOn && srcSections.length > 0 && (
@@ -1339,6 +1256,10 @@ export function DocumentDetailPage() {
               celá stránka (teda aj formulár vedľa). `safe center` centruje, kým
               sa doklad zmestí; po priblížení nechá doskrolovať aj k ľavému
               okraju (obyčajné `center` by ho odrezalo). */}
+          {/* Ovládanie náhľadu je plávajúca pilulka (maketa „Prehliadač dokladu
+              1a"), preto obal s position:relative — kotví ju o oblasť náhľadu,
+              nie o kartu, aby nezakrývala legendu zdrojov nad ňou. */}
+          <div className="dv-nahlad">
           <div
             ref={previewRef}
             className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-6rem)]"
@@ -1400,6 +1321,99 @@ export function DocumentDetailPage() {
                 />
               </Document>
             )}
+          </div>
+
+          {/* Bez súboru niet čo ovládať — pilulka plná zablokovaných tlačidiel
+              nad hláškou „doklad chýba" je horšia než žiadna. */}
+          {hasAttachedFile && (
+            <div className="dv-pilulka">
+              {formatBadgeKey && <span className="dv-pilulka-format">{t(formatBadgeKey)}</span>}
+              <button
+                type="button"
+                className="dv-pil-btn"
+                onClick={() => setZoom((value) => Math.max(0.6, round2(value - 0.1)))}
+                aria-label={`${t('detail.titulok')} −`}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d="M5 12h14" /></svg>
+              </button>
+              {/* Percento je zároveň „Na šírku" — samostatné tlačidlo by pilulku
+                  predĺžilo o slovo, ktoré účtovník stlačí raz za čas. */}
+              <button
+                type="button"
+                className="dv-pil-zoom tnum"
+                disabled={zoom === DEFAULT_ZOOM}
+                title={t('detail.naSirku')}
+                onClick={() => setZoom(DEFAULT_ZOOM)}
+              >
+                {Math.round(zoom * 100)} %
+              </button>
+              <button
+                type="button"
+                className="dv-pil-btn"
+                onClick={() => setZoom((value) => Math.min(2, round2(value + 0.1)))}
+                aria-label={`${t('detail.titulok')} +`}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><path d="M12 5v14M5 12h14" /></svg>
+              </button>
+
+              {!imagePreview && !xmlPreview && (
+                <>
+                  <span className="dv-pil-ciara" aria-hidden />
+                  <button
+                    type="button"
+                    className="dv-pil-btn dv-pil-btn-tichy"
+                    disabled={pageNumber <= 1}
+                    onClick={() => setPageNumber((value) => Math.max(1, value - 1))}
+                    aria-label={`${t('detail.strana')} ←`}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M15 18l-6-6 6-6" /></svg>
+                  </button>
+                  <span className="dv-pil-strana tnum">{pageNumber} / {pageCount || '—'}</span>
+                  <button
+                    type="button"
+                    className="dv-pil-btn dv-pil-btn-tichy"
+                    disabled={!pageCount || pageNumber >= pageCount}
+                    onClick={() => setPageNumber((value) => Math.min(pageCount, value + 1))}
+                    aria-label={`${t('detail.strana')} →`}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M9 6l6 6-6 6" /></svg>
+                  </button>
+                </>
+              )}
+
+              {(srcSections.length > 0 || fileUrl) && <span className="dv-pil-ciara" aria-hidden />}
+              {srcSections.length > 0 && (
+                // Popis vypadol spolu s lištou, takže titulok aj aria-pressed
+                // nesú celý význam prepínača.
+                <button
+                  type="button"
+                  className={`dv-pil-btn${srcOn ? ' dv-pil-btn-zap' : ''}`}
+                  aria-pressed={srcOn}
+                  title={t('detail.zvyraznitZdroj')}
+                  aria-label={t('detail.zvyraznitZdroj')}
+                  onClick={() => {
+                    const dalej = !srcOn;
+                    setSrcOn(dalej);
+                    setActiveSrc(undefined);
+                    localStorage.setItem(SRC_STORAGE_KEY, dalej ? '1' : '0');
+                  }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /></svg>
+                </button>
+              )}
+              {fileUrl && (
+                <a
+                  className="dv-pil-btn"
+                  href={fileUrl}
+                  download={draft.zdroj.povodnyNazovSuboru}
+                  title={t('detail.stiahnutSubor')}
+                  aria-label={t('detail.stiahnutSubor')}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" /></svg>
+                </a>
+              )}
+            </div>
+          )}
           </div>
         </section>
 

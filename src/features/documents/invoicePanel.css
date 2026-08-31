@@ -510,3 +510,57 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
   width: 5px; height: 5px; border-radius: 50%;
   background: #0284C7; box-shadow: 0 0 0 1.5px #fff;
 }
+
+/* Plávajúca pilulka náhľadu — maketa „Prehliadač dokladu 1a".
+   Lišta nad dokladom brala ~64 px pri každom otvorení a doklad je na výšku,
+   takže práve výšky bolo najmenej. Pilulka je mimo toku: v pokoji polopriehľadná,
+   nad náhľadom zosilnie. Šírka len taká, koľko treba. */
+.dv-pilulka {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 5px;
+  border-radius: 999px; border: 1px solid #E4E8E4;
+  background: rgba(255, 255, 255, .94); backdrop-filter: blur(10px);
+  box-shadow: 0 12px 32px -8px rgba(31, 41, 55, .24);
+  opacity: .55; transition: opacity .18s ease;
+  max-width: calc(100% - 32px); flex-wrap: wrap; justify-content: center;
+}
+/* Zosilnie nad celou oblasťou náhľadu, nie až nad sebou — inak by ju účtovník
+   musel najprv trafiť poloprázdnu. Klávesnica ju zviditeľní tiež. */
+.dv-nahlad { position: relative; }
+.dv-nahlad:hover > .dv-pilulka,
+.dv-pilulka:focus-within { opacity: 1; }
+
+.dv-pil-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex: none;
+  border: 0; border-radius: 999px; background: transparent;
+  color: #16201B; cursor: pointer; transition: background .12s ease, color .12s ease;
+}
+.dv-pil-btn:hover:not(:disabled) { background: #F0F2EF; }
+.dv-pil-btn:disabled { opacity: .35; cursor: not-allowed; }
+.dv-pil-btn-tichy { color: #8A928C; }
+.dv-pil-btn-zap { background: #E7F2ED; color: #0E7A5F; }
+.dv-pil-btn-zap:hover:not(:disabled) { background: #D8EBE2; }
+
+.dv-pil-zoom {
+  min-width: 52px; height: 30px; flex: none;
+  border: 0; border-radius: 999px; background: transparent;
+  font: inherit; font-size: 12.5px; font-weight: 500; color: #16201B;
+  cursor: pointer; transition: background .12s ease;
+}
+.dv-pil-zoom:hover:not(:disabled) { background: #F0F2EF; }
+.dv-pil-zoom:disabled { cursor: default; }
+
+.dv-pil-ciara { width: 1px; height: 18px; flex: none; background: #E4E8E4; margin: 0 3px; }
+.dv-pil-strana { flex: none; padding: 0 2px; font-size: 12.5px; color: #5A635D; }
+
+/* Formát dokladu je údaj, nie ovládanie — ale zmizol spolu s lištou a účtovník
+   musí vidieť, že pozerá na e-faktúru, nie na sken. */
+.dv-pilulka-format {
+  flex: none; margin-right: 2px; padding: 3px 9px; border-radius: 999px;
+  background: #E7F2ED; color: #0A6650; font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+
+/* Dotykové zariadenie hover nemá — tam je pilulka vidieť vždy. */
+@media (hover: none) { .dv-pilulka { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dv-pilulka { transition: none; } }
