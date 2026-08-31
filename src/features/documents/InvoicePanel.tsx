@@ -528,7 +528,19 @@ export function InvoicePanel({
   // prijatých faktúr. Už zvolený rad ostáva v ponuke, nech sa hodnota nestratí.
   const ponukaRadov = radyPreTyp(codeLists.ciselneRady, draft.typ);
   // POHODA má pre každú agendu vlastné predkontácie — na vydanú faktúru nepatrí nákupová.
-  const predkontacieProDoklad = predkontaciePreTyp(codeLists.predkontacie, draft.typ);
+  //
+  // Značka agendy z POHODY ale hovorí, kde bola predkontácia ZALOŽENÁ, nie kde
+  // sa smie použiť: „PHM" je označená ako internalDocument a firma ju má na 229
+  // prijatých faktúrach. Bez tejto výnimky návrh AI z ponuky vypadol, pole
+  // ukázalo „—" a účtovník ten účet nevedel vybrať ani ručne.
+  const predkontacieProDoklad = useMemo(() => {
+    const podlaAgendy = predkontaciePreTyp(codeLists.predkontacie, draft.typ);
+    const chybajuce = [suggestion?.predkontaciaId, ucto.predkontaciaId]
+      .filter((id): id is string => Boolean(id) && !podlaAgendy.some((item) => item.id === id))
+      .map((id) => codeLists.predkontacie.find((item) => item.id === id))
+      .filter((item): item is CodeListItem => Boolean(item));
+    return chybajuce.length > 0 ? [...chybajuce, ...podlaAgendy] : podlaAgendy;
+  }, [codeLists.predkontacie, draft.typ, suggestion?.predkontaciaId, ucto.predkontaciaId]);
   const radOpts = ponukaRadov.some((item) => item.id === ucto.ciselnyRadId) || !ucto.ciselnyRadId
     ? ponukaRadov
     : [...ponukaRadov, ...codeLists.ciselneRady.filter((item) => item.id === ucto.ciselnyRadId)];
