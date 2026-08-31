@@ -5,7 +5,7 @@
 // a draft.ucto. Panel „Prečo?" (pôvod zaúčtovania) ostáva pri poliach
 // predkontácie, členenia DPH a kontrolného výkazu.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AccountingSuggestion, DphAudit, DphZistenie, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
+import type { AccountingSuggestion, DocumentPodtyp, DphAudit, DphZistenie, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
 import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
 import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
@@ -63,7 +63,8 @@ interface InvoicePanelProps {
   cakajuceVRade?: number;
   /** Kód pokladne z predvolieb firmy — doplní sa pri prepnutí na pokladničný doklad. */
   predvolenaPokladna?: string;
-  setTyp: (typ: DocumentType) => void;
+  /** Druh dokladu vždy naraz: podtyp bez typu nemá zmysel a naopak. */
+  setTyp: (typ: DocumentType, podtyp: DocumentPodtyp) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
   /** Editovaná strana dokladu: dodávateľ (prijaté) alebo odberateľ (vydaná faktúra). */
@@ -71,12 +72,25 @@ interface InvoicePanelProps {
   updatePartyAddress: (strana: 'dodavatel' | 'odberatel', patch: { ulica?: string; psc?: string; obec?: string; krajina?: string }) => void;
 }
 
-/** Typ dokladu vrátane smeru pokladne — POHODA ich rozlišuje ako samostatné agendy. */
-export const TYP_OPTIONS: Array<{ value: string; label: string; typ: DocumentType; pokladnaTyp?: 'receipt' | 'expense' }> = [
+/**
+ * Typ dokladu vrátane smeru pokladne a druhu faktúry — POHODA ich rozlišuje
+ * ako samostatné agendy, resp. ako hodnoty poľa „Typ" v tom istom okne.
+ * Jeden zoznam, presne ako v POHODE: dobropis nie je druhé pole, je to iný typ.
+ */
+export const TYP_OPTIONS: Array<{
+  value: string; label: string; typ: DocumentType;
+  pokladnaTyp?: 'receipt' | 'expense'; podtyp?: DocumentPodtyp;
+}> = [
   { value: 'PD:expense', label: 'Výdajový pokladničný doklad', typ: 'PD', pokladnaTyp: 'expense' },
   { value: 'PD:receipt', label: 'Príjmový pokladničný doklad', typ: 'PD', pokladnaTyp: 'receipt' },
-  { value: 'FP', label: 'Faktúra prijatá', typ: 'FP' },
-  { value: 'FV', label: 'Faktúra vydaná', typ: 'FV' },
+  { value: 'FP', label: 'Faktúra prijatá', typ: 'FP', podtyp: 'bezna' },
+  { value: 'FP:dobropis', label: 'Dobropis prijatý', typ: 'FP', podtyp: 'dobropis' },
+  { value: 'FP:tarchopis', label: 'Ťarchopis prijatý', typ: 'FP', podtyp: 'tarchopis' },
+  { value: 'FP:zalohova', label: 'Zálohová faktúra prijatá', typ: 'FP', podtyp: 'zalohova' },
+  { value: 'FV', label: 'Faktúra vydaná', typ: 'FV', podtyp: 'bezna' },
+  { value: 'FV:dobropis', label: 'Dobropis vydaný', typ: 'FV', podtyp: 'dobropis' },
+  { value: 'FV:tarchopis', label: 'Ťarchopis vydaný', typ: 'FV', podtyp: 'tarchopis' },
+  { value: 'FV:zalohova', label: 'Zálohová faktúra vydaná', typ: 'FV', podtyp: 'zalohova' },
   { value: 'OZ', label: 'Ostatný záväzok', typ: 'OZ' },
   { value: 'MZDY', label: 'Interný doklad (INT)', typ: 'MZDY' },
   { value: 'BV', label: 'Bankový výpis', typ: 'BV' },
@@ -667,12 +681,16 @@ export function InvoicePanel({
   const removeVatRow = (index: number) => updateExtracted('rozpisDph', rozpis.filter((_, rowIndex) => rowIndex !== index));
 
   // ---- typ dokladu a režim zaúčtovania --------------------------------------
-  const typValue = draft.typ === 'PD' ? `PD:${ucto.pokladnaTyp ?? 'expense'}` : draft.typ;
+  const typValue = draft.typ === 'PD' ? `PD:${ucto.pokladnaTyp ?? 'expense'}`
+    : (draft.typ === 'FP' || draft.typ === 'FV') && draft.podtyp && draft.podtyp !== 'bezna'
+      ? `${draft.typ}:${draft.podtyp}` : draft.typ;
   const typLabel = TYP_OPTIONS.find((option) => option.value === typValue)?.label ?? draft.typ;
   const setTypValue = (value: string) => {
     const option = TYP_OPTIONS.find((item) => item.value === value);
     if (!option) return;
-    if (option.typ !== draft.typ) setTyp(option.typ);
+    if (option.typ !== draft.typ || (option.podtyp ?? 'bezna') !== (draft.podtyp ?? 'bezna')) {
+      setTyp(option.typ, option.podtyp ?? 'bezna');
+    }
     // Smer pokladne je vlastnosť dokladu, nie číselníka — pri inej agende ho
     // necháme tak, POHODA ho pre faktúry ignoruje.
     const patch: Partial<DocumentUcto> = {};

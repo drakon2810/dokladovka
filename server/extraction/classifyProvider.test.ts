@@ -42,6 +42,7 @@ describe('OpenAIDocumentClassifier', () => {
       parse: async () => ({
         output_parsed: {
           documentType: 'INY',
+          podtyp: 'bezna',
           jeUctovnyDoklad: false,
           dovod: 'Nadpis hovorí Contract application, nie faktúra.',
           obsahZvazku: '',
@@ -51,7 +52,7 @@ describe('OpenAIDocumentClassifier', () => {
       }),
     });
     const vysledok = await classifier.classify(vstup);
-    expect(vysledok).toMatchObject({ documentType: 'INY', jeUctovnyDoklad: false });
+    expect(vysledok).toMatchObject({ documentType: 'INY', podtyp: 'bezna', jeUctovnyDoklad: false });
   });
 
   it('signály z názvu sa modelu pribalia ako pomôcka, nie ako dôkaz', async () => {
@@ -59,7 +60,7 @@ describe('OpenAIDocumentClassifier', () => {
     const classifier = new OpenAIDocumentClassifier(config, {
       parse: async (body: any) => {
         odoslane = JSON.stringify(body.input);
-        return { output_parsed: { documentType: 'FP', jeUctovnyDoklad: true, dovod: 'x', istota: 0.5, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
+        return { output_parsed: { documentType: 'FP', podtyp: 'bezna', jeUctovnyDoklad: true, dovod: 'x', istota: 0.5, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
       },
     });
     await classifier.classify(vstup);
@@ -74,7 +75,7 @@ describe('OpenAIDocumentClassifier', () => {
     const classifier = new OpenAIDocumentClassifier(config, {
       parse: async (body: any) => {
         odoslane = JSON.stringify(body.input);
-        return { output_parsed: { documentType: 'FV', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
+        return { output_parsed: { documentType: 'FV', podtyp: 'bezna', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
       },
     });
     await classifier.classify({ ...vstup, organizacia: { nazov: 'RCI REAL CARGO', ico: '57251266' } });
@@ -92,6 +93,7 @@ describe('OpenAIDocumentClassifier', () => {
       parse: async () => ({
         output_parsed: {
           documentType: 'FP',
+          podtyp: 'bezna',
           jeUctovnyDoklad: true,
           dovod: 'Strana 3 obsahuje Invoice №2409.',
           istota: 0.93,

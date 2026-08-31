@@ -3,7 +3,7 @@
 // tu spáruje s tým, čo firma naozaj má v POHODE. Čo sa nespáruje, ostáva prázdne
 // a doplní ho účtovník; nikdy sa nehádže na najbližší kód.
 import type { Queryable } from '../db/database.js';
-import { platnyKvKod } from '../services/accountingSuggestionService.js';
+import { kvPreDruh, platnyKvKod } from '../services/accountingSuggestionService.js';
 import type { AdditionalDocumentResult, ExtractionResult } from './contract.js';
 
 export type CodeKind = 'predkontacie' | 'cleneniaDph' | 'ciselneRady';
@@ -75,7 +75,9 @@ export interface ZauctovanieZPravidla {
 export function zauctovanieZKodov(
   index: CodeIndex,
   zdroj: Pick<ExtractionResult, 'accountCode' | 'vatClassificationCode' | 'vatControlStatementCode' | 'numberSeriesCode'>
-    & { documentType?: string },
+    // Podtyp rozhoduje o prípustnej sekcii KV: dobropis patrí do C1/C2, nie
+    // medzi bežné A1/B1, a zálohová faktúra do výkazu nevstupuje vôbec.
+    & { documentType?: string; podtyp?: string },
 ): ZauctovanieZPravidla {
   // Sekcia KV má vlastné pole — doklad má bežne obidve naraz („UN" ako členenie
   // DPH a „KN" do kontrolného výkazu). Kým bolo pole jedno, KN sa nedalo poslať
@@ -89,7 +91,7 @@ export function zauctovanieZKodov(
     // Preveruje sa aj proti agende: sekcia opačnej strany (A1 na prijatej
     // faktúre) by odtiaľto putovala do návrhu ako „čo už na doklade je" a
     // prebila by aj model, aj kv_section zvoleného členenia.
-    ...(platnyKvKod(kv, zdroj.documentType) ? { clenenieKvKod: kv } : {}),
+    ...(kvPreDruh(kv, { typ: zdroj.documentType ?? '', podtyp: zdroj.podtyp }) ? { clenenieKvKod: kv } : {}),
   };
 }
 

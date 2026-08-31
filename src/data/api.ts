@@ -1371,7 +1371,11 @@ export function checkApprovable(
         || zlaBankovaAgenda(pohyb))) chybajuceUcto.push('bankPohyby');
   } else {
     if (!inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId)) chybajuceUcto.push('predkontacia');
-    if (!inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId)) chybajuceUcto.push('clenenieDph');
+    // Zálohová faktúra členenie DPH nemá — daňový moment nastane až pri úhrade
+    // alebo pri zúčtovacej faktúre a POHODA ju vedie s predkontáciou „Bez".
+    // Bez tejto výnimky sa taký doklad nedal schváliť vôbec.
+    if (doc.podtyp !== 'zalohova'
+      && !inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId)) chybajuceUcto.push('clenenieDph');
     if (!inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId)) chybajuceUcto.push('ciselnyRad');
     if (!!doc.ucto.strediskoId && !inOrg(codeLists.strediska, doc.ucto.strediskoId)) chybajuceUcto.push('stredisko');
     if (doc.typ === 'PD' && (!doc.ucto.pokladnaKod?.trim() || !doc.ucto.pokladnaTyp)) chybajuceUcto.push('pokladna');

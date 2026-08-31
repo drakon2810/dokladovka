@@ -226,10 +226,38 @@ const KV_KODY_PRE_TYP: Record<string, readonly string[]> = {
   OZ: ['B1', 'B2', 'B3', 'C2', 'KN'],
 };
 
-export function platnyKvKod(kod: string | undefined, documentType?: string): string | undefined {
+/** Je to vôbec zákonná sekcia kontrolného výkazu? Bez ohľadu na doklad. */
+export function platnyKvKod(kod: string | undefined): string | undefined {
   const upper = kod?.trim().toUpperCase();
-  if (!upper || !KV_KODY.has(upper)) return undefined;
-  const povolene = documentType ? KV_KODY_PRE_TYP[documentType] : undefined;
+  return upper && KV_KODY.has(upper) ? upper : undefined;
+}
+
+/**
+ * Sekcia KV prípustná pre TENTO doklad. Zámerne samostatná funkcia, nie ďalší
+ * nepovinný parameter: z trinástich volaní platnyKvKod ich druh dokladu
+ * potrebujú štyri a pri nepovinnom parametri by sa naň ticho zabudlo — presne
+ * ten spôsob, akým sa DDsl§69 dostalo na prijatú faktúru.
+ *
+ * Dobropis a ťarchopis sú oprava základu dane (§25a): patria do C1 (vydané)
+ * resp. C2 (prijaté), nie medzi bežné A1/B1. Zálohová faktúra do výkazu
+ * nevstupuje vôbec — daňový moment nastane až pri úhrade.
+ * Zhodné s src/data/pohoda/agendas.ts.
+ */
+export function kvPreDruh(
+  kod: string | undefined,
+  druh: { typ: string; podtyp?: string },
+): string | undefined {
+  const upper = platnyKvKod(kod);
+  if (!upper) return undefined;
+  const { typ, podtyp } = druh;
+  if (typ === 'FP' || typ === 'FV') {
+    if (podtyp === 'zalohova') return upper === 'KN' ? upper : undefined;
+    if (podtyp === 'dobropis' || podtyp === 'tarchopis') {
+      const oprava = typ === 'FV' ? 'C1' : 'C2';
+      return upper === oprava || upper === 'KN' ? upper : undefined;
+    }
+  }
+  const povolene = KV_KODY_PRE_TYP[typ];
   return !povolene || povolene.includes(upper) ? upper : undefined;
 }
 
@@ -466,8 +494,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   let kvKod: string | undefined;
   let ruleId: string | undefined;
 
-  const current = await tx.query<{ extracted: unknown; document_type?: string } & Record<string, unknown>>(
-    'SELECT extracted, document_type FROM documents WHERE id=$1 AND tenant_id=$2',
+  const current = await tx.query<{ extracted: unknown; document_type?: string; podtyp?: string } & Record<string, unknown>>(
+    'SELECT extracted, document_type, podtyp FROM documents WHERE id=$1 AND tenant_id=$2',
     [input.documentId, input.tenantId],
   );
   const lineText = normalizeLineText(current.rows[0]?.extracted);
@@ -659,9 +687,10 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // Sekcia sa preveruje aj proti agende dokladu: zdedená z pamäte či z pravidla
   // môže patriť opačnej strane (A1 na prijatej faktúre). Neplatná vypadne ešte
   // pred kvPreClenenie, aby sa stihol použiť kv_section zvoleného členenia.
-  kvKod = platnyKvKod(
-    await kvPreClenenie(tx, input.tenantId, candidate.clenenie_dph_id, platnyKvKod(kvKod, documentType)),
-    documentType,
+  const druhDokladu = { typ: documentType ?? '', podtyp: current.rows[0]?.podtyp };
+  kvKod = kvPreDruh(
+    await kvPreClenenie(tx, input.tenantId, candidate.clenenie_dph_id, kvPreDruh(kvKod, druhDokladu)),
+    druhDokladu,
   );
 
   await tx.query(
@@ -1093,6 +1122,8 @@ async function najdiKategorie(
 
 export interface AiSuggestionDocumentContext {
   documentType: string;
+  /** Dobropis, ťarchopis, zálohová — rozhoduje o sekcii KV aj o číselnom rade. */
+  podtyp?: string;
   supplierName?: string;
   supplierIco?: string;
   supplierIcDph?: string;
@@ -1439,18 +1470,19 @@ export async function maybeAiAccountingSuggestion(
   // („Dodanie tovaru a služby" na prijatej faktúre) a denník firmy môže niesť
   // sekciu opačnej strany. Neplatná vypadne a rozhodne ďalší zdroj v poradí.
   const typ = documentContext.documentType;
+  const druhDokladu = { typ, podtyp: documentContext.podtyp };
   const kvKod = validated.clenenie_dph_id
-    ? platnyKvKod(await kvPreClenenie(
+    ? kvPreDruh(await kvPreClenenie(
         database, input.tenantId, validated.clenenie_dph_id,
-        platnyKvKod(pravidlo.kvKod, typ) ?? platnyKvKod(naDoklade.clenenieKvKod, typ)
-          ?? platnyKvKod(parsed.clenenieKvKod ?? undefined, typ)
+        kvPreDruh(pravidlo.kvKod, druhDokladu) ?? kvPreDruh(naDoklade.clenenieKvKod, druhDokladu)
+          ?? kvPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu)
           // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do
           // kontrolného výkazu, a sémantického kandidáta viaže na doklad len
           // rovnosť predkontácie — tú istú nesie viac kategórií, takže by sem
           // sekciu doniesla kategória, ktorá s dokladom nemá spoločné slovo.
-          ?? platnyKvKod(
-            kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, typ),
-      ), typ)
+          ?? kvPreDruh(
+            kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu),
+      ), druhDokladu)
     : undefined;
 
   // Deterministická kontrola po AI: návrh, ktorý by DPH poradca pri schválení

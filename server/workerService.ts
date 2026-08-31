@@ -365,6 +365,16 @@ export function cisloVPohodeZDokladu(documentType: string, extracted: unknown): 
   return cislo ? cislo.slice(0, 32) : undefined;
 }
 
+/**
+ * Podtyp má zmysel len pri faktúrach. Pokladničný blok ani bankový výpis
+ * dobropis nemajú, a keby klasifikácia jeden vrátila, zmenila by im číselný
+ * rad aj sekciu KV.
+ */
+function podtypPreTyp(documentType: string, podtyp: string | undefined): string {
+  if (documentType !== 'FP' && documentType !== 'FV') return 'bezna';
+  return ['dobropis', 'tarchopis', 'zalohova'].includes(podtyp ?? '') ? podtyp! : 'bezna';
+}
+
 async function completeRun(
   database: Database,
   job: JobRow,
@@ -373,6 +383,12 @@ async function completeRun(
   outcome: Awaited<ReturnType<ServerDocumentExtractionProvider['extract']>>,
   startedAt: number,
   config: ServerConfig,
+  /**
+   * Druh faktúry z klasifikácie. Extrakcia ho nevyrába — tá číta polia, kým
+   * dobropis od faktúry odlišuje veta na papieri („Oprava základu dane").
+   * Rozhoduje o číselnom rade, sekcii KV aj o invoiceType pri exporte.
+   */
+  podtyp: string = 'bezna',
 ): Promise<(AiSuggestionDocumentContext & {
   status: string;
   /** Doklady, ktoré vznikli rozdelením súboru — AI ich analyzuje rovnako. */
@@ -483,7 +499,7 @@ async function completeRun(
       );
     } else {
       await tx.query(
-        `UPDATE documents SET document_type=$1,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
+        `UPDATE documents SET document_type=$1,podtyp=$16,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
                 accounting=accounting || $15::jsonb,
                 field_confidence=$4::jsonb,confidence=$5,total_amount=$6,currency=$7,
                 quarantine_reason=$8,duplicate_of_document_id=$9,applied_extraction_run_id=$10,
@@ -497,10 +513,13 @@ async function completeRun(
           sourceFormat(context.detected_mime_type, normalized.documentType),
           prepared.documentId, job.tenant_id, job.organization_id,
           JSON.stringify({
-            ...(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, result) : {}),
+            ...(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, { ...result, podtyp: podtypPreTyp(normalized.documentType, podtyp) }) : {}),
             ...(bankUcetKod ? { bankUcetKod } : {}),
             ...(cisloVPohode ? { cisloVPohode } : {}),
-          })],
+          }),
+          // $16 — pridané na KONIEC. Vložené pred $15 by posunulo zaúčtovanie
+          // do stĺpca podtyp a doklad by prestal mať predkontáciu.
+          podtypPreTyp(normalized.documentType, podtyp)],
       );
       // Partner sa založí/doplní z dodávateľa ešte pred návrhom zaúčtovania,
       // aby predvoľby partnera platili už pre tento doklad.
@@ -647,6 +666,9 @@ async function completeRun(
     status,
     ...strany,
     documentType: normalized.documentType,
+    // Druh faktúry ide do návrhu zaúčtovania: rozhoduje o sekcii KV aj o tom,
+    // ktoré členenia DPH sa modelu vôbec ponúknu.
+    podtyp: podtypPreTyp(normalized.documentType, podtyp),
     // Dátum vystavenia: firma môže mať mesačné číselné rady.
     datumVystavenia: datumZExtrakcie(normalized.extracted),
     totalAmount: normalized.totalAmount,
@@ -855,7 +877,8 @@ export async function processNextJob(
       });
       outcome.result.documentType = klasifikacia.documentType;
     }
-    const summary = await completeRun(database, job, context, prepared, outcome, startedAt, config);
+    const summary = await completeRun(
+      database, job, context, prepared, outcome, startedAt, config, klasifikacia?.podtyp);
     // Prepravný spis chodí ako zväzok: žiadosť o prepravu, faktúra dopravcu,
     // CMR, niekedy akt služieb. Zaúčtuje sa faktúra, ostatné strany sú jej
     // podklady — a účtovník o nich vie len vtedy, ak mu to niekto povie.

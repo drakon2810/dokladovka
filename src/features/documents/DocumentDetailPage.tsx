@@ -1472,7 +1472,7 @@ export function DocumentDetailPage() {
                       ? t('mostik.nepripojenyTooltip')
                       : undefined
               }
-              setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
+              setTyp={(typ, podtyp) => markDirty((current) => ({ ...current, typ, podtyp }))}
               updateUcto={updateUcto}
               updateExtracted={updateExtracted}
               predvolenaPokladna={(data.seriesDefaults ?? []).find(
@@ -1525,7 +1525,7 @@ export function DocumentDetailPage() {
                     ? t('mostik.nepripojenyTooltip')
                     : undefined
             }
-            setTyp={(typ) => markDirty((current) => ({ ...current, typ }))}
+            setTyp={(typ, podtyp) => markDirty((current) => ({ ...current, typ, podtyp }))}
             updateUcto={updateUcto}
             updateExtracted={updateExtracted}
             updateParty={updateParty}

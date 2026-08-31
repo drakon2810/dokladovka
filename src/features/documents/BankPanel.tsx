@@ -37,7 +37,8 @@ interface BankPanelProps {
   codeLists: BankCodeLists;
   onExport?: () => void;
   exportDisabledReason?: string;
-  setTyp: (typ: DocumentType) => void;
+  /** Podtyp bankový výpis nemá — posiela sa 'bezna', aby signatúra sedela. */
+  setTyp: (typ: DocumentType, podtyp: 'bezna') => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
   /** Predvolená pokladňa firmy — pri prepnutí na PD sa predvyplní ako v InvoicePanel. */
@@ -165,7 +166,7 @@ export function BankPanel({
                 if (option.pokladnaTyp && option.pokladnaTyp !== ucto.pokladnaTyp) patch.pokladnaTyp = option.pokladnaTyp;
                 if (option.typ === 'PD' && !ucto.pokladnaKod?.trim() && predvolenaPokladna) patch.pokladnaKod = predvolenaPokladna;
                 if (Object.keys(patch).length > 0) updateUcto(patch);
-                setTyp(option.typ);
+                setTyp(option.typ, 'bezna');
               }}
             />
 

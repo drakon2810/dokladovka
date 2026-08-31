@@ -15,6 +15,12 @@ import type { ServerConfig } from '../config.js';
 
 const klasifikaciaSchema = z.object({
   documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY', 'UNKNOWN']),
+  /**
+   * Druh faktúry. Rozhoduje o číselnom rade, sekcii KV aj o tom, čo POHODA
+   * dostane v invoiceType — dobropis zaúčtovaný ako bežná faktúra pristane
+   * v zlom rade a v zlej sekcii kontrolného výkazu.
+   */
+  podtyp: z.enum(['bezna', 'dobropis', 'tarchopis', 'zalohova']),
   /** false = papier, ktorý sa iba archivuje (zmluva, objednávka, proforma). */
   jeUctovnyDoklad: z.boolean(),
   /** Krátke zdôvodnenie po slovensky — ide do karantény, keď sa kroky nezhodnú. */
