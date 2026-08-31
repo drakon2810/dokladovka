@@ -516,7 +516,10 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
    takže práve výšky bolo najmenej. Pilulka je mimo toku: v pokoji polopriehľadná,
    nad náhľadom zosilnie. Šírka len taká, koľko treba. */
 .dv-pilulka {
-  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  /* 18 px nad lištou akcií, nie nad spodkom karty. Maketa mala spodok voľný,
+     appka nie: „Späť na doklady / Uložiť / Schváliť" je sticky bottom-0 a drží
+     sa dna okna, takže pilulka na 18 px zmizla presne za ňou. */
+  position: absolute; left: 50%; bottom: calc(3.5rem + 18px); transform: translateX(-50%);
   display: flex; align-items: center; gap: 4px; padding: 5px;
   border-radius: 999px; border: 1px solid #E4E8E4;
   background: rgba(255, 255, 255, .94); backdrop-filter: blur(10px);
