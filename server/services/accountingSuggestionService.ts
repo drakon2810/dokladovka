@@ -1211,7 +1211,13 @@ export async function maybeAiAccountingSuggestion(
     ...(doterajsi?.clenenie_dph_id ? [doterajsi.clenenie_dph_id] : []),
     ...(dphProfil?.clenenieBezOdpoctuId ? [dphProfil.clenenieBezOdpoctuId] : []),
   ]);
-  if (pouzitie.size > 0) {
+  // Zužuje sa LEN keď firma na tejto agende naozaj účtovala. Inak (napr. prvý
+  // ostatný záväzok firmy) má každý kód tu=0 a inde>0, takže by vypadli všetky
+  // okrem tých, ktoré firma nepoužila nikde — a ponuka by sa zmrštila na jediný
+  // nesprávny kód. Samotný počet záznamov v mape nestačí: tá je neprázdna, hneď
+  // ako má firma akúkoľvek históriu.
+  const mameHistoriuTu = [...pouzitie.values()].some((stat) => stat.tu > 0);
+  if (mameHistoriuTu) {
     const zuzene = cleneniaDph.filter((item) => {
       const kod = item.kod.trim();
       if (kodyDokazov.has(kod) || idDokazov.has(item.id)) return true;

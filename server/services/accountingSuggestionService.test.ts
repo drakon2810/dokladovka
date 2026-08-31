@@ -1367,6 +1367,63 @@ describe('AI nevyberá číselný rad', () => {
     expect(ponuka).toEqual(['PB']);
   }, 90_000);
 
+  // Simulacia na realnych datach: pri agende bez historie (prvy ostatny zavazok
+  // firmy) ma KAZDY kod tu=0 a inde>0. Bez tejto poistky by ponuka spadla na
+  // kody nepouzite nikde — teda na jediny nespravny.
+  it('agenda bez histórie sa nezužuje, hoci firma inde účtuje', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const pn = randomUUID();
+    const un = randomUUID();
+    const novy = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'OZ','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,200,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'Veritel' }, polozky: [{ popis: 'zavazok' }] })],
+    );
+    for (const [id, kind, code] of [
+      [pred, 'predkontacie', '379/321'], [pn, 'cleneniaDph', 'PN'],
+      [un, 'cleneniaDph', 'UN'], [novy, 'cleneniaDph', 'PNnikde'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    // História existuje, ale iba na FP a INT — na OZ ani riadok.
+    for (const [agenda, kod, dphId] of [
+      ['FP', 'PN', pn], ['INT', 'UN', un],
+    ] as const) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,source,riadok_hash)
+         VALUES ($1,$2,$3,$4,'nieco','379/321',$5,$6,$7,'mdb',$8)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, agenda, pred, kod, dphId, randomUUID()],
+      );
+    }
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: pn, clenenieKvKod: null, ciselnyRadId: null,
+        confidence: 0.7, reason: 'Ostatný záväzok',
+      })),
+    };
+    await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Veritel' },
+      { documentType: 'OZ', supplierName: 'Veritel', totalAmount: 200, currency: 'EUR', lineDescriptions: ['zavazok'] },
+      parser);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const ponuka = payload.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod);
+    // Nič sa neodobralo — účtovník má na výber všetko, čo firma má.
+    expect(ponuka).toEqual(expect.arrayContaining(['PN', 'UN', 'PNnikde']));
+  }, 90_000);
+
   it('bez histórie na tejto agende sa ponuka členení nezúži', async () => {
     const database = await createTestDatabase();
     databases.push(database);
