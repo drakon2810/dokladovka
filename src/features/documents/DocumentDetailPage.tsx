@@ -711,6 +711,13 @@ export function DocumentDetailPage() {
     }
   }, [srcMarks, srcOn, textLayerTick]);
 
+  // Odkiaľ prišlo zvýraznenie. Z formulára má doklad k značke doscrollovať —
+  // to je celý zmysel prepojenia. Zo samotného dokladu NIE: myš na značke už
+  // je, scroll by ju posunul spod kurzora, tým spustil ďalší mouseover, ten
+  // ďalší scroll — a doklad sa pod myšou rozbehol donekonečna. Zvonku to
+  // vyzeralo, že stránka so zapnutým zvýraznením zamrzla.
+  const zvyraznenieZDokladu = useRef(false);
+
   // Stav zvýraznenia sa prepína ručne — obdĺžniky nie sú React uzly a po
   // každom prekreslení vrstvy (strana, zoom) sa efekt spustí znova.
   useEffect(() => {
@@ -722,7 +729,7 @@ export function DocumentDetailPage() {
       mark.classList.toggle('dv-src-on', focused);
       mark.classList.toggle('dv-src-off', Boolean(activeSrc) && !focused);
     }
-    if (activeSrc && !activeSrc.startsWith('sec:')) {
+    if (activeSrc && !activeSrc.startsWith('sec:') && !zvyraznenieZDokladu.current) {
       root.querySelector<HTMLElement>(`mark[data-src="${CSS.escape(activeSrc)}"]`)
         ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
@@ -1245,7 +1252,10 @@ export function DocumentDetailPage() {
                 <span
                   key={section.n}
                   className={`dv-src-lgd dv-src-${section.n}`}
-                  onMouseEnter={() => setActiveSrc(`sec:${section.n}`)}
+                  onMouseEnter={() => {
+                    zvyraznenieZDokladu.current = false;
+                    setActiveSrc(`sec:${section.n}`);
+                  }}
                   onMouseLeave={() => setActiveSrc(undefined)}
                 >
                   <span className="dv-src-chip">{section.n}</span>
@@ -1269,6 +1279,7 @@ export function DocumentDetailPage() {
             className="preview-center flex h-[34rem] min-h-0 items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-auto xl:flex-1"
             onMouseOver={(event) => {
               const mark = (event.target as HTMLElement).closest?.('mark[data-src]');
+              zvyraznenieZDokladu.current = true;
               setActiveSrc(mark instanceof HTMLElement ? mark.dataset.src : undefined);
             }}
             onMouseLeave={() => setActiveSrc(undefined)}
@@ -1499,7 +1510,10 @@ export function DocumentDetailPage() {
             srcEdited={srcEdited}
             srcOn={srcOn}
             activeSrc={activeSrc}
-            onHoverSrc={setActiveSrc}
+            onHoverSrc={(anchor) => {
+              zvyraznenieZDokladu.current = false;
+              setActiveSrc(anchor);
+            }}
             onExport={() => setExportModalOpen(true)}
             onSplit={() => setSplitModalOpen(true)}
             exportDisabledReason={
