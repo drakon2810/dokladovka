@@ -702,6 +702,11 @@ export function InvoicePanel({
     }
     if (Object.keys(patch).length > 0) updateUcto(patch);
   };
+  // Zálohová faktúra sa neúčtuje: POHODA ju vedie s predkontáciou „Bez" a bez
+  // členenia DPH — daňový moment nastane až pri úhrade alebo pri zúčtovacej
+  // faktúre. Polia sú preto len na čítanie; vyplniť ich by znamenalo priznať
+  // daň dvakrát, raz zo zálohy a raz zo zúčtovania.
+  const zalohova = druhDokladu.podtyp === 'zalohova';
   const jePokladna = draft.typ === 'PD';
   const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);
   const rezim = `${typLabel}${vybranyRad?.kod ? ` (${vybranyRad.kod})` : ''}`;
@@ -860,16 +865,18 @@ export function InvoicePanel({
 
             <span className="dk-lbl">Predkontácia</span>
             {precoWrap('predkontacia',
-              <DcPick value={ucto.predkontaciaId} options={toOpts(predkontacieProDoklad)} disabled={readOnly} onMostikSync={syncMostik}
-                placeholder={navrhDo('predkontaciaId')}
+              <DcPick value={ucto.predkontaciaId} options={toOpts(predkontacieProDoklad)}
+                disabled={readOnly || zalohova} onMostikSync={syncMostik}
+                placeholder={zalohova ? 'Bez' : navrhDo('predkontaciaId')}
                 title={predkConfidence != null ? `Návrh AI · istota ${predkConfidence} %`
                   : navrhDo('predkontaciaId') ? 'Návrh AI — prevezmete ho tlačidlom Automatické účtovanie' : undefined}
                 onChange={(value) => updateUcto({ predkontaciaId: value })} />)}
 
             <span className="dk-lbl">Členenie DPH</span>
             {precoWrap('dph',
-              <DcPick value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)} disabled={readOnly} onMostikSync={syncMostik}
-                placeholder={navrhDo('clenenieDphId')}
+              <DcPick value={ucto.clenenieDphId} options={toOpts(codeLists.cleneniaDph)}
+                disabled={readOnly || zalohova} onMostikSync={syncMostik}
+                placeholder={zalohova ? 'Zálohová faktúra — bez členenia' : navrhDo('clenenieDphId')}
                 onChange={(value) => {
                   const picked = codeLists.cleneniaDph.find((item) => item.id === value);
                   updateUcto({ clenenieDphId: value, ...(picked?.kvSekcia && !ucto.clenenieKvKod ? { clenenieKvKod: picked.kvSekcia } : {}) });
@@ -887,7 +894,8 @@ export function InvoicePanel({
 
             <span className="dk-lbl">Členenie KV DPH</span>
             {precoWrap('kv',
-              <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly} placeholder={navrhDo('clenenieKvKod')}
+              <DcPick value={ucto.clenenieKvKod} options={kvOpts} disabled={readOnly || zalohova}
+                placeholder={zalohova ? 'Nevstupuje do KV' : navrhDo('clenenieKvKod')}
                 onChange={(value) => updateUcto({ clenenieKvKod: value })} />, Boolean(navrhKontroly?.kvSekcia && !navrhKontroly.rozhodnutie))}
 
             {navrhKontroly?.kvSekcia && riadokNavrhu('kv', navrhKontroly.kvSekcia,

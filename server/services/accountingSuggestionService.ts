@@ -329,6 +329,20 @@ const AGENDA_PRE_TYP: Record<string, string> = {
 };
 
 /**
+ * Agenda číselného radu podľa DRUHU dokladu. Zálohová faktúra má v POHODE
+ * vlastnú agendu a vlastný rad (2618 „Prijaté faktúry zálohové"); dobropis
+ * a ťarchopis nie — ich rady ležia medzi bežnými faktúrami.
+ * Zhodné s src/data/pohoda/agendas.ts.
+ */
+function agendaRadu(documentType: string | undefined, podtyp: string | undefined): string | undefined {
+  if (podtyp === 'zalohova') {
+    if (documentType === 'FP') return 'prijate_zalohove_faktury';
+    if (documentType === 'FV') return 'vydane_zalohove_faktury';
+  }
+  return documentType ? AGENDA_PRE_TYP[documentType] : undefined;
+}
+
+/**
  * Predvolený číselný rad firmy pre daný typ dokladu:
  * 1) čo účtovník nastavil v Nastaveniach, 2) inak rad, ktorý firma reálne
  * používa — najprv podľa počtu použití v pamäti rozhodnutí, potom podľa
@@ -358,6 +372,7 @@ async function resolveSeriesDefault(
   input: SuggestionInput,
   documentType: string | undefined,
   datumVystavenia?: string,
+  podtyp?: string,
 ): Promise<string | undefined> {
   const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
     `SELECT d.ciselny_rad_id
@@ -368,7 +383,7 @@ async function resolveSeriesDefault(
   );
   if (explicit.rows[0]) return explicit.rows[0].ciselny_rad_id;
 
-  const agenda = documentType ? AGENDA_PRE_TYP[documentType] : undefined;
+  const agenda = agendaRadu(documentType, podtyp);
   if (!agenda) return undefined;
 
   // Mesačné rady („Vydané faktúry jún", „…júl"): doklad patrí do radu SVOJHO
@@ -676,7 +691,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // história dodávateľa ho často nenesú (import histórie bez stĺpca), a vetva
   // predvolieb vyššie sa pýta len keď nenašlo NIČ. Preto sa dopĺňa samostatne:
   // inak ostane pole prázdne aj pri inak trafenom návrhu.
-  candidate.ciselny_rad_id ??= await resolveSeriesDefault(tx, input, documentType, datumVystavenia);
+  candidate.ciselny_rad_id ??= await resolveSeriesDefault(
+    tx, input, documentType, datumVystavenia, current.rows[0]?.podtyp);
 
   candidate = await onlyActiveIds(tx, input, candidate);
   if (!hasAccounting(candidate)) {
@@ -1395,7 +1411,16 @@ export async function maybeAiAccountingSuggestion(
               const stat = pouzitie.get(item.kod.trim());
               return stat ? { ...item, pouziteNaTomtoTypeDokladu: stat.tu } : item;
             }),
-            ciselneRady: byKind('ciselneRady'),
+            // Rad musí sedieť s druhom dokladu: zálohová faktúra má vlastnú
+            // agendu a modelu by inak ostala ponuka bežných faktúr — presne to
+            // dalo prijatej zálohovej rad „ZF260 Prijaté faktúry zahraničné".
+            ciselneRady: (() => {
+              const agenda = agendaRadu(documentContext.documentType, documentContext.podtyp);
+              const vhodne = agenda
+                ? byKind('ciselneRady').filter((rad) => !rad.agenda || rad.agenda === agenda)
+                : byKind('ciselneRady');
+              return vhodne.length > 0 ? vhodne : byKind('ciselneRady');
+            })(),
           },
         }),
       }],

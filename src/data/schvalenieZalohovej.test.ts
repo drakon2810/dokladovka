@@ -30,8 +30,19 @@ describe('schválenie a členenie DPH', () => {
     expect(checkApprovable(doklad('bezna'), codeLists).chybajuceUcto).toContain('clenenieDph');
   });
 
-  it('zálohová faktúra ho nepotrebuje', () => {
-    expect(checkApprovable(doklad('zalohova'), codeLists).chybajuceUcto).not.toContain('clenenieDph');
+  it('zálohová faktúra nepotrebuje členenie DPH ani predkontáciu', () => {
+    // POHODA ju vedie s predkontáciou „Bez" a bez členenia — daňový moment
+    // nastane až pri úhrade alebo pri zúčtovacej faktúre.
+    const kontrola = checkApprovable(
+      { ...doklad('zalohova'), ucto: { ciselnyRadId: 'r1' } } as never, codeLists);
+    expect(kontrola.chybajuceUcto).not.toContain('clenenieDph');
+    expect(kontrola.chybajuceUcto).not.toContain('predkontacia');
+  });
+
+  it('bežná faktúra predkontáciu potrebuje', () => {
+    const kontrola = checkApprovable(
+      { ...doklad('bezna'), ucto: { ciselnyRadId: 'r1' } } as never, codeLists);
+    expect(kontrola.chybajuceUcto).toContain('predkontacia');
   });
 
   it('dobropis ho potrebuje — oprava základu dane do výkazu vstupuje', () => {
