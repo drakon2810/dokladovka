@@ -1231,11 +1231,15 @@ export function DocumentDetailPage() {
         className="detail-split grid min-w-0 gap-4"
         style={{ '--detail-left': `${splitPercent}%` } as CSSProperties}
       >
-        <section className="card anim-in min-w-0 self-start overflow-hidden xl:sticky xl:top-4">
+        {/* Stĺpec s pevnou výškou, nie s pevnou výškou náhľadu: legenda zdrojov
+            sa zapína a vypína, a keď mala náhľad pevných 100vh-6rem, karta
+            legendou narástla nad okno a spodok — aj s ovládaním — odišiel pod
+            okraj. Náhľad si teraz berie, čo zvýši. */}
+        <section className="card anim-in flex min-w-0 flex-col self-start overflow-hidden xl:sticky xl:top-4 xl:h-[calc(100vh-2rem)]">
           {/* Legenda stojí nad dokladom — tam, kde treba farbu rozlúštiť; pravý
               stĺpec je popísaný nadpismi sekcií. */}
           {srcOn && srcSections.length > 0 && (
-            <div className="dv-src-legend">
+            <div className="dv-src-legend shrink-0">
               <span className="dv-src-legend-label">{t('detail.zdrojUdajov')}</span>
               {srcSections.map((section) => (
                 <span
@@ -1259,10 +1263,10 @@ export function DocumentDetailPage() {
           {/* Ovládanie náhľadu je plávajúca pilulka (maketa „Prehliadač dokladu
               1a"), preto obal s position:relative — kotví ju o oblasť náhľadu,
               nie o kartu, aby nezakrývala legendu zdrojov nad ňou. */}
-          <div className="dv-nahlad">
+          <div className="dv-nahlad flex min-h-0 flex-1 flex-col">
           <div
             ref={previewRef}
-            className="preview-center flex h-[34rem] items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-[calc(100vh-6rem)]"
+            className="preview-center flex h-[34rem] min-h-0 items-start overflow-auto overscroll-contain bg-[#EDF0EE] p-5 xl:h-auto xl:flex-1"
             onMouseOver={(event) => {
               const mark = (event.target as HTMLElement).closest?.('mark[data-src]');
               setActiveSrc(mark instanceof HTMLElement ? mark.dataset.src : undefined);
