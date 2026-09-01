@@ -41,6 +41,18 @@ export interface ServerConfig {
     pollIntervalSeconds: number;
     mailbox: string;
   };
+  /**
+   * Kľúč na šifrovanie secretov v databáze (base64, 32 bajtov). Zatiaľ ho
+   * používa len refresh token k SharePointu. Bez neho sa pripojenie nedá
+   * uložiť — radšej odmietnuť, ako token zapísať v čitateľnej podobe.
+   */
+  secretEncryptionKey?: string;
+  sharepoint: {
+    /** Registrácia aplikácie v Azure — jedna pre celú Dokladovku. */
+    clientId?: string;
+    clientSecret?: string;
+    pollIntervalSeconds: number;
+  };
   openai: {
     apiKey?: string;
     // Rozdelené role modelov: extrakcia (lacný, každý doklad), fallback
@@ -181,6 +193,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       password: env.IMAP_PASSWORD?.replace(/\s+/g, '') || undefined,
       pollIntervalSeconds: positiveInteger(env.IMAP_POLL_INTERVAL, 30),
       mailbox: env.IMAP_MAILBOX?.trim() || 'INBOX',
+    },
+    secretEncryptionKey: env.SECRET_ENCRYPTION_KEY?.trim() || undefined,
+    sharepoint: {
+      clientId: env.SHAREPOINT_CLIENT_ID?.trim() || undefined,
+      clientSecret: env.SHAREPOINT_CLIENT_SECRET?.trim() || undefined,
+      // Faktúra nie je chat — tri minúty oneskorenia nikoho nebolia a Graph
+      // nemá dôvod nás škrtiť.
+      pollIntervalSeconds: positiveInteger(env.SHAREPOINT_POLL_INTERVAL, 180),
     },
     // Fallback aj analýza defaultne bežia na overenom extrakčnom modeli
     // (gpt-5-mini) — silnejšie modely sú OPT-IN cez env, až keď účet potvrdí

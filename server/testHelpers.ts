@@ -22,6 +22,9 @@ export function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
       smtp: { host: undefined, port: 465, secure: true, user: undefined, password: undefined },
     },
     turnstile: { siteKey: undefined, secretKey: undefined },
+    // Testovací kľúč — šifrovanie sa musí dať overiť bez .env.
+    secretEncryptionKey: Buffer.alloc(32, 1).toString('base64'),
+    sharepoint: { clientId: undefined, clientSecret: undefined, pollIntervalSeconds: 180 },
     extractionProvider: 'mock',
     imap: {
       host: undefined,
