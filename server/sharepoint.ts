@@ -38,8 +38,8 @@ while (!stopping) {
     for (const [organizationId, vysledok] of vysledky) {
       // Ticho sa neloguje — inak by sa v pokojnom priečinku každé tri minúty
       // objavil riadok a skutočné udalosti by v ňom zanikli.
-      if (vysledok.prijate > 0 || vysledok.chybne > 0 || vysledok.chyba) {
-        log(`${organizationId}: prijaté=${vysledok.prijate}, chybné=${vysledok.chybne}` +
+      if (vysledok.prijate > 0 || vysledok.chybne > 0 || vysledok.presunute > 0 || vysledok.chyba) {
+        log(`${organizationId}: prijaté=${vysledok.prijate}, presunuté=${vysledok.presunute}, chybné=${vysledok.chybne}` +
           `, preskočené=${vysledok.preskocene}${vysledok.chyba ? `, chyba: ${vysledok.chyba}` : ''}`);
       }
     }

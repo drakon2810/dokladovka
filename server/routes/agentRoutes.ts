@@ -548,10 +548,14 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
         if (item.state === 'ok') {
           okCount += 1;
           await tx.query(
+            // Číslo z POHODY ide aj do vlastného stĺpca, nielen do vety
+            // histórie — z tej sa spoľahlivo prečítať nedá a potrebuje ho
+            // názov súboru presunutého do „spracované".
             `UPDATE documents SET status='exportovany', export_id=$1,
+                    pohoda_number=COALESCE($6, pohoda_number),
                     history=history || $2::jsonb, updated_at=now()
               WHERE id=$3 AND tenant_id=$4 AND organization_id=$5`,
-            [job.id, JSON.stringify([{ ts: new Date().toISOString(), user: 'POHODA', akcia: `Prenos potvrdený${item.pohodaNumber ? ` č. ${item.pohodaNumber}` : ''}` }]), item.documentId, agent.tenant_id, job.organization_id],
+            [job.id, JSON.stringify([{ ts: new Date().toISOString(), user: 'POHODA', akcia: `Prenos potvrdený${item.pohodaNumber ? ` č. ${item.pohodaNumber}` : ''}` }]), item.documentId, agent.tenant_id, job.organization_id, item.pohodaNumber ?? null],
           );
           // Skutočné číslo pridelila POHODA — posunie ním číselný rad dokladu.
           // Bez toho odhad „dostane číslo …" vychádzal z posledného stiahnutia

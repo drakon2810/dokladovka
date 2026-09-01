@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerConfig } from '../config.js';
 import type { Queryable } from '../db/database.js';
 import { ingestFiles } from '../inbound/ingestFiles.js';
+import { najdiNaPresun, presunVybavene } from './sharepointMoveService.js';
 import { decryptSecret, encryptSecret } from '../security.js';
 import type { ObjectStorage } from '../storage.js';
 import { SharePointError, type SharePointClient } from './sharepointService.js';
@@ -30,6 +31,8 @@ export interface PollResult {
   /** Už sme ich videli v predošlom behu — nesťahovali sa znova. */
   preskocene: number;
   chybne: number;
+  /** Vybavené doklady, ktorých súbor odišiel do „spracované". */
+  presunute: number;
   chyba?: string;
 }
 
@@ -60,7 +63,13 @@ export async function pollFolder(
   client: SharePointClient,
 ): Promise<PollResult> {
   const scope = { tenantId: folder.tenant_id, organizationId: folder.organization_id };
-  const vysledok: PollResult = { videne: 0, prijate: 0, preskocene: 0, chybne: 0 };
+  const vysledok: PollResult = { videne: 0, prijate: 0, preskocene: 0, chybne: 0, presunute: 0 };
+
+  // Najprv odchod, potom príchod. Zmiznutie prenesenej faktúry z „nespracované"
+  // je to, na čo klient pozerá — a keby sa robilo až po výpise, zdržal by ho
+  // ktorýkoľvek nový súbor.
+  const presun = await presunVybavene(deps.database, client, await najdiNaPresun(deps.database, scope));
+  vysledok.presunute = presun.presunute;
 
   let subory;
   try {
@@ -195,7 +204,7 @@ export async function pollAllFolders(
       }
     } catch (error) {
       const dovod = error instanceof Error ? error.message : String(error);
-      vysledky.set(row.organization_id, { videne: 0, prijate: 0, preskocene: 0, chybne: 0, chyba: dovod });
+      vysledky.set(row.organization_id, { videne: 0, prijate: 0, preskocene: 0, chybne: 0, presunute: 0, chyba: dovod });
       await zapisStav(deps.database, row.id, dovod);
     }
   }
