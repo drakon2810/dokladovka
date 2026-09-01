@@ -650,22 +650,31 @@ export function DocumentDetailPage() {
   // Konkrétne dôvody, prečo sa doklad ešte nedá schváliť — v poradí, v akom ich
   // účtovník vie opraviť: najprv zaúčtovanie, potom údaje z dokladu. Duplicitné
   // kódy (tá istá chyba na viacerých poliach) sa nezopakujú.
+  // IČO/DIČ/IČ DPH má doklad na oboch stranách — bez mena strany účtovník
+  // hľadal chybu u dodávateľa, hoci bola u odberateľa.
+  const vetaNalezu = useCallback((issue: { code: string; field?: string }) => {
+    const dovod = t(`schvalenie.chyba.${issue.code}` as SkKey);
+    const strana = issue.field?.startsWith('odberatel.')
+      ? t('schvalenie.strana.odberatel')
+      : issue.field?.startsWith('dodavatel.') ? t('schvalenie.strana.dodavatel') : '';
+    return `${dovod}${strana}`;
+  }, [t]);
+
   const dovodyBlokovania = useMemo(() => {
     if (!approval || approval.ok) return [];
     const dovody = [
       ...approval.chybajuceUcto.map((pole) => t(`schvalenie.chyba.${pole}`)),
-      // IČO/DIČ/IČ DPH má doklad na oboch stranách — bez mena strany účtovník
-      // hľadal chybu u dodávateľa, hoci bola u odberateľa.
-      ...approval.issues.map((issue) => {
-        const dovod = t(`schvalenie.chyba.${issue.code}`);
-        const strana = issue.field?.startsWith('odberatel.')
-          ? t('schvalenie.strana.odberatel')
-          : issue.field?.startsWith('dodavatel.') ? t('schvalenie.strana.dodavatel') : '';
-        return `${dovod}${strana}`;
-      }),
+      ...approval.issues.map(vetaNalezu),
     ];
     return [...new Set(dovody.filter(Boolean))];
-  }, [approval, t]);
+  }, [approval, t, vetaNalezu]);
+
+  // Nálezy, ktoré schválenie nezastavia — účtovník o nich má vedieť, ale
+  // rozhodne sa sám. Zobrazujú sa aj keď je doklad inak v poriadku.
+  const upozornenia = useMemo(
+    () => [...new Set((approval?.upozornenia ?? []).map(vetaNalezu).filter(Boolean))],
+    [approval, vetaNalezu],
+  );
 
   // ---- Zvýraznenie zdroja údajov -------------------------------------------
   // Mapa závisí len na behoch extrakcie, preto sa pri písaní do formulára
@@ -1739,6 +1748,14 @@ export function DocumentDetailPage() {
               <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-rose-600" aria-hidden />
               <span className="truncate" title={`${t('schvalenie.blokuje')} ${dovodyBlokovania.join(', ')}`}>
                 <strong className="font-semibold">{t('schvalenie.blokuje')}</strong> {dovodyBlokovania.join(', ')}
+              </span>
+            </span>
+          )}
+          {canApproveStatus && upozornenia.length > 0 && (
+            <span className="anim-in inline-flex min-w-0 items-center gap-1.5 text-xs text-amber-800">
+              <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-amber-600" aria-hidden />
+              <span className="truncate" title={`${t('schvalenie.upozornuje')} ${upozornenia.join(', ')}`}>
+                <strong className="font-semibold">{t('schvalenie.upozornuje')}</strong> {upozornenia.join(', ')}
               </span>
             </span>
           )}

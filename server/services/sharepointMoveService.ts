@@ -5,7 +5,7 @@
 // ďalší cyklus to dobehne. Fronta by k tomu pridala opakovania, mŕtve joby a
 // možnosť, že sa presun stratí medzi commitom transakcie a odoslaním.
 import type { Queryable } from '../db/database.js';
-import type { SharePointClient } from './sharepointService.js';
+import { SharePointError, type SharePointClient } from './sharepointService.js';
 
 /**
  * Stavy, po ktorých sa s dokladom už nič nestane. Všetko ostatné — vrátane
@@ -85,19 +85,22 @@ export async function najdiNaPresun(
 }
 
 /**
- * Názov, pod ktorým súbor pristane v „spracované".
+ * Názov, pod ktorým súbor pristane v „spracované": iba číslo, ktoré dokladu
+ * pridelila POHODA. Pod tým je doklad zaúčtovaný a pod tým sa hľadá — pôvodný
+ * názov od klienta („305 Faktury - dobropisy SPaP.pdf") už nič nehovorí.
  *
- * Dátum je to podstatné — v priečinku klienta je vidieť, kedy bol doklad
- * zaúčtovaný. Číslo z POHODY sa pridá, keď ho poznáme; pri viacerých dokladoch
- * z jedného PDF je to číslo prvého, lebo do názvu sa všetky rozumne nezmestia.
+ * Bez čísla sa názov nemení. To je duplicita, karanténa alebo ručný XML export,
+ * kde žiadne číslo z POHODY neexistuje a vymýšľať si náhradu by len klamalo.
+ *
+ * Pri viacerých dokladoch z jedného PDF je to číslo prvého — všetky sa do
+ * názvu rozumne nezmestia.
  */
-export function nazovPoPresune(povodny: string, den: Date | null, pohodaNumber: string | null): string {
-  if (!den) return povodny;
-  const datum = den.toISOString().slice(0, 10);
-  const cislo = pohodaNumber ? `${pohodaNumber.replace(/[\\/:*?"<>|]/g, '-')}_` : '';
-  // Predpona, nie prípona: názvy sa tak v priečinku zoradia podľa dátumu
-  // zaúčtovania a pôvodný názov ostáva čitateľný.
-  return `${datum}_${cislo}${povodny}`;
+export function nazovPoPresune(povodny: string, pohodaNumber: string | null): string {
+  if (!pohodaNumber) return povodny;
+  // Prípona musí zostať, inak SharePoint prestane súbor otvárať v prehliadači.
+  const bodka = povodny.lastIndexOf('.');
+  const pripona = bodka > 0 ? povodny.slice(bodka) : '';
+  return `${pohodaNumber.replace(/[\\/:*?"<>|]/g, '-')}${pripona}`;
 }
 
 export interface PresunResult {
@@ -129,7 +132,7 @@ export async function presunVybavene(
     try {
       await client.move(
         polozka.drive_id, polozka.item_id, ciel,
-        nazovPoPresune(polozka.original_file_name, polozka.preneseny_dna, polozka.pohoda_number),
+        nazovPoPresune(polozka.original_file_name, polozka.pohoda_number),
       );
       await database.query(
         'UPDATE inbound_attachments SET sharepoint_moved_at=now() WHERE id=$1',
@@ -137,6 +140,17 @@ export async function presunVybavene(
       );
       vysledok.presunute += 1;
     } catch (error) {
+      if (error instanceof SharePointError && error.code === 'not_found') {
+        // Súbor na tom mieste už nie je — niekto ho v SharePointe presunul
+        // alebo zmazal ručne. Presúvať nie je čo a nikdy nebude, takže sa
+        // označí za vybavený. Bez toho by sa to skúšalo každú minútu donekonečna
+        // a priečinok by natrvalo svietil chybou.
+        await database.query(
+          'UPDATE inbound_attachments SET sharepoint_moved_at=now() WHERE id=$1',
+          [polozka.attachment_id],
+        );
+        continue;
+      }
       // Značka sa nenastaví, takže to ďalší cyklus skúsi znova — presne preto
       // tu nie je fronta s obmedzeným počtom pokusov.
       vysledok.chyby += 1;

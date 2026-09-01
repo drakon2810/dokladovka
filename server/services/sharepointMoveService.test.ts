@@ -3,14 +3,15 @@ import { describe, expect, it } from 'vitest';
 import type { Database } from '../db/database.js';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
 import { najdiNaPresun, nazovPoPresune, presunVybavene } from './sharepointMoveService.js';
-import type { SharePointClient } from './sharepointService.js';
+import { SharePointError, type SharePointClient } from './sharepointService.js';
 
-function fakeClient(zlyhaj = false) {
+function fakeClient(zlyhaj: boolean | 'chyba' = false) {
   const presuny: Array<{ itemId: string; ciel: string; nazov: string }> = [];
   const client: SharePointClient = {
     list: async () => [],
     download: async () => Buffer.alloc(0),
     move: async (_d, itemId, ciel, nazov) => {
+      if (zlyhaj === 'chyba') throw new SharePointError('Položka neexistuje', 'not_found', 404);
       if (zlyhaj) throw new Error('Graph nedostupný');
       presuny.push({ itemId, ciel, nazov });
     },
@@ -84,23 +85,21 @@ async function pripravDb(): Promise<Prostredie> {
 }
 
 describe('názov po presune', () => {
-  it('dátum zaúčtovania vpredu, aby sa priečinok zoradil podľa neho', () => {
-    expect(nazovPoPresune('faktura.pdf', new Date('2026-09-01T10:00:00Z'), 'FP2600123'))
-      .toBe('2026-09-01_FP2600123_faktura.pdf');
+  it('iba číslo z POHODY — pod tým je doklad zaúčtovaný', () => {
+    expect(nazovPoPresune('305 Faktury - dobropisy SPaP.pdf', '2026363')).toBe('2026363.pdf');
   });
 
-  it('bez čísla z POHODY stačí dátum', () => {
-    expect(nazovPoPresune('faktura.pdf', new Date('2026-09-01T10:00:00Z'), null))
-      .toBe('2026-09-01_faktura.pdf');
+  it('prípona zostáva, inak SharePoint súbor neotvorí', () => {
+    expect(nazovPoPresune('sken.PDF', 'FP1')).toBe('FP1.PDF');
+    expect(nazovPoPresune('bez pripony', 'FP1')).toBe('FP1');
   });
 
-  it('bez dátumu (všetko zamietnuté) názov nemení', () => {
-    expect(nazovPoPresune('faktura.pdf', null, null)).toBe('faktura.pdf');
+  it('bez čísla názov nemení — vymyslená náhrada by klamala', () => {
+    expect(nazovPoPresune('faktura.pdf', null)).toBe('faktura.pdf');
   });
 
   it('lomky v čísle by rozbili názov súboru', () => {
-    expect(nazovPoPresune('f.pdf', new Date('2026-09-01T00:00:00Z'), 'FP/26/0012'))
-      .toBe('2026-09-01_FP-26-0012_f.pdf');
+    expect(nazovPoPresune('f.pdf', 'FP/26/0012')).toBe('FP-26-0012.pdf');
   });
 });
 
@@ -113,7 +112,7 @@ describe('výber súborov na presun', { timeout: 60_000 }, () => {
     const polozky = await najdiNaPresun(p.database, p.scope);
     expect(await presunVybavene(p.database, client, polozky)).toMatchObject({ presunute: 1 });
     expect(presuny[0].ciel).toBe('spracovane');
-    expect(presuny[0].nazov).toMatch(/^\d{4}-\d{2}-\d{2}_FP2600123_faktura\.pdf$/);
+    expect(presuny[0].nazov).toBe('FP2600123.pdf');
   });
 
   it('rozrobený doklad nechá súbor na mieste', async () => {
@@ -213,6 +212,18 @@ describe('výber súborov na presun', { timeout: 60_000 }, () => {
     const po = fakeClient();
     await presunVybavene(p.database, po.client, await najdiNaPresun(p.database, p.scope));
     expect(po.presuny[0]).toMatchObject({ ciel: 'chybne' });
+  });
+
+  it('zmiznutý súbor sa prestane skúšať — inak by priečinok svietil chybou navždy', async () => {
+    const p = await pripravDb();
+    await p.pridaj('exportovany');
+    // Niekto súbor v SharePointe medzitým presunul alebo zmazal ručne.
+    // Nepočíta sa ako chyba: nie je čo opraviť ani čo zopakovať.
+    const vysledok = await presunVybavene(
+      p.database, fakeClient('chyba').client, await najdiNaPresun(p.database, p.scope));
+    expect(vysledok).toMatchObject({ presunute: 0, chyby: 0 });
+    expect(vysledok.chyba).toBeUndefined();
+    expect(await najdiNaPresun(p.database, p.scope)).toHaveLength(0);
   });
 
   it('doklad z e-mailu sa nepresúva — nemá odkiaľ', async () => {

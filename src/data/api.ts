@@ -61,6 +61,7 @@ import { buildDataPack, buildExportFileName } from './xml/pohodaDataPack';
 import {
   validateDocument,
   type DocumentValidationIssue,
+  jeUpozornenie,
 } from './validation/documentValidation';
 import { normalizeExtractionResult } from './extraction/normalizeExtraction';
 import {
@@ -1324,7 +1325,10 @@ export interface ApprovalCheck {
   missingUcto: boolean;
   vatInconsistent: boolean;
   totalMismatch: boolean;
+  /** Nálezy, ktoré bránia schváleniu. */
   issues: DocumentValidationIssue[];
+  /** Nálezy, ktoré len upozornia — doklad sa schváliť dá. */
+  upozornenia: DocumentValidationIssue[];
   /** Chýbajúce polia zaúčtovania po jednom — editor z nich píše, čo ešte treba. */
   chybajuceUcto: ChybajucePole[];
 }
@@ -1387,13 +1391,15 @@ export function checkApprovable(
   const organization = organizations.find(
     (org) => org.id === doc.orgId && org.tenantId === doc.tenantId,
   );
-  const issues = validateDocument(doc, organization);
+  const najdene = validateDocument(doc, organization);
+  const issues = najdene.filter((issue) => !jeUpozornenie(issue.code));
   return {
     ok: !missingUcto && issues.length === 0,
     missingUcto,
     vatInconsistent,
     totalMismatch,
     issues,
+    upozornenia: najdene.filter((issue) => jeUpozornenie(issue.code)),
     chybajuceUcto,
   };
 }

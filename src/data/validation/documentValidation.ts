@@ -49,6 +49,21 @@ export interface DocumentValidationIssue {
 }
 
 /**
+ * Nálezy, ktoré na doklad upozornia, ale schválenie neblokujú.
+ *
+ * IBAN: do POHODY ide ako číslo účtu dodávateľa, ale zaúčtovanie ani daňové
+ * priznanie od neho nezávisia — chybný IBAN znamená nanajvýš zle vyplnený
+ * príkaz na úhradu. Blokovať kvôli nemu doklad, ktorý je inak v poriadku,
+ * znamenalo, že sa faktúra nedala schváliť pre preklep v čísle, ktoré účtovník
+ * aj tak prepisuje z výpisu.
+ */
+const UPOZORNENIA: ReadonlySet<DocumentValidationCode> = new Set(['invalid_iban']);
+
+export function jeUpozornenie(code: DocumentValidationCode): boolean {
+  return UPOZORNENIA.has(code);
+}
+
+/**
  * Zahraničný dodávateľ: IČ DPH alebo DIČ nesie 2-písmenový kód krajiny ≠ SK
  * (napr. rakúske „ATU…", nemecké „DE…"). Slovenské formáty IČO (8 číslic) a DIČ
  * (10 číslic) preň neplatia — zahraničné identifikátory by inak blokovali

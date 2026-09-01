@@ -497,6 +497,7 @@ export const sk = {
     'Vyplňte predkontáciu, členenie DPH, číselný rad a opravte rozpis DPH.',
   // Prečo sa doklad nedá schváliť — konkrétne, nie všeobecne. Bez toho účtovník
   // hľadal chybu po celom editore (typicky IBAN, ktorý AI prečítala o číslicu dlhší).
+  'schvalenie.upozornuje': 'Pozor:',
   'schvalenie.blokuje': 'Na schválenie ešte treba:',
   'schvalenie.strana.dodavatel': ' dodávateľa',
   'schvalenie.strana.odberatel': ' odberateľa',
