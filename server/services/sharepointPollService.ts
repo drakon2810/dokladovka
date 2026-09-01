@@ -31,6 +31,8 @@ export interface PollResult {
   /** Už sme ich videli v predošlom behu — nesťahovali sa znova. */
   preskocene: number;
   chybne: number;
+  /** Súbor, ktorý v systéme už je — prišiel skôr inou cestou. Nie je to chyba. */
+  duplicity: number;
   /** Vybavené doklady, ktorých súbor odišiel do „spracované". */
   presunute: number;
   chyba?: string;
@@ -63,7 +65,7 @@ export async function pollFolder(
   client: SharePointClient,
 ): Promise<PollResult> {
   const scope = { tenantId: folder.tenant_id, organizationId: folder.organization_id };
-  const vysledok: PollResult = { videne: 0, prijate: 0, preskocene: 0, chybne: 0, presunute: 0 };
+  const vysledok: PollResult = { videne: 0, prijate: 0, preskocene: 0, chybne: 0, duplicity: 0, presunute: 0 };
 
   // Najprv odchod, potom príchod. Zmiznutie prenesenej faktúry z „nespracované"
   // je to, na čo klient pozerá — a keby sa robilo až po výpise, zdržal by ho
@@ -105,8 +107,17 @@ export async function pollFolder(
         }],
       );
       const stav = prijem.results[0];
-      if (stav?.status === 'queued') vysledok.prijate += 1;
-      else {
+      if (stav?.status === 'queued') {
+        vysledok.prijate += 1;
+      } else if (stav?.status === 'duplicate') {
+        // Ten istý súbor už v systéme je — prišiel skôr e-mailom alebo ho
+        // niekto nahral ručne. Nie je to chyba, doklad je vybavený, len nie
+        // cez tento súbor. Do „chybné" nepatrí: klient by videl svoju úplne
+        // v poriadku faktúru medzi odpadom a nevedel by, čo s tým.
+        vysledok.duplicity += 1;
+        await client.move(folder.drive_id, subor.id, folder.spracovane_folder_id, subor.name)
+          .catch(() => undefined);
+      } else {
         vysledok.chybne += 1;
         // Fotka, .docx, poškodené PDF. Keby ostalo ležať v „nespracované",
         // klient sa nikdy nedozvie prečo sa nič nedeje — a priečinok, ktorý
@@ -204,7 +215,7 @@ export async function pollAllFolders(
       }
     } catch (error) {
       const dovod = error instanceof Error ? error.message : String(error);
-      vysledky.set(row.organization_id, { videne: 0, prijate: 0, preskocene: 0, chybne: 0, presunute: 0, chyba: dovod });
+      vysledky.set(row.organization_id, { videne: 0, prijate: 0, preskocene: 0, chybne: 0, duplicity: 0, presunute: 0, chyba: dovod });
       await zapisStav(deps.database, row.id, dovod);
     }
   }

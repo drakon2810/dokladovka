@@ -79,6 +79,21 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
     expect(druhy.stiahnute).toEqual([]);
   });
 
+  it('už známy doklad ide do „spracované", nie medzi chybné', async () => {
+    const { database, storage, folder } = await pripravDb();
+    // Ten istý obsah pod dvoma rôznymi položkami: klient poslal faktúru
+    // e-mailom a potom ju ešte hodil do priečinka.
+    await pollFolder({ database, storage, config }, folder,
+      fakeClient([{ id: 'prvy', name: 'faktura.pdf', size: PDF.length }]).client);
+    const druhy = fakeClient([{ id: 'druhy', name: 'faktura.pdf', size: PDF.length }]);
+
+    const vysledok = await pollFolder({ database, storage, config }, folder, druhy.client);
+    expect(vysledok).toMatchObject({ duplicity: 1, chybne: 0, prijate: 0 });
+    // Do „chybné" nepatrí — klient by videl svoju úplne v poriadku faktúru
+    // medzi odpadom a nevedel by, čo s tým.
+    expect(druhy.presuny).toEqual([{ itemId: 'druhy', ciel: 'spracovane', nazov: 'faktura.pdf' }]);
+  });
+
   it('nepoužiteľný súbor odsunie do „chybné"', async () => {
     const { database, storage, folder } = await pripravDb();
     const { client, presuny } = fakeClient(
