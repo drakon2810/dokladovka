@@ -14,6 +14,7 @@ function fakeClient(zlyhaj = false) {
       if (zlyhaj) throw new Error('Graph nedostupný');
       presuny.push({ itemId, ciel, nazov });
     },
+    resolveFolderUrl: async () => { throw new Error('presun priečinky nehľadá'); },
   };
   return { client, presuny };
 }

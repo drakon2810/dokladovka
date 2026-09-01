@@ -3125,3 +3125,68 @@ export async function deleteUctoKategoria(orgId: string, kategoriaId: string): P
     { method: 'DELETE' },
   );
 }
+
+// ---------------------------------------------------------------------------
+// SharePoint — príjem dokladov z priečinka firmy.
+// ---------------------------------------------------------------------------
+
+export interface SharePointFolderConfig {
+  organizationId: string;
+  organizationName: string;
+  driveId: string;
+  nespracovaneId: string;
+  spracovaneId: string;
+  chybneId: string | null;
+  active: boolean;
+  lastPollAt: string | null;
+  lastError: string | null;
+}
+
+export interface SharePointState {
+  /** Registrácia aplikácie v Azure — bez nej sa nedá ani začať. */
+  configured: boolean;
+  connection: {
+    accountEmail: string;
+    accountName: string | null;
+    connectedAt: string;
+    lastError: string | null;
+  } | null;
+  folders: SharePointFolderConfig[];
+}
+
+export async function loadSharePointState(): Promise<SharePointState> {
+  if (!REST_DATA_MODE) return { configured: false, connection: null, folders: [] };
+  return restRequest<SharePointState>('/api/sharepoint/connection');
+}
+
+/** Vráti adresu prihlásenia u Microsoftu; prehliadač na ňu odchádza. */
+export async function startSharePointLogin(): Promise<string> {
+  const { url } = await restRequest<{ url: string }>('/api/sharepoint/authorize', { method: 'POST' });
+  return url;
+}
+
+export async function disconnectSharePoint(): Promise<void> {
+  await restRequest('/api/sharepoint/connection', { method: 'DELETE' });
+}
+
+export interface SharePointFolderNames {
+  nespracovane: string;
+  spracovane: string;
+  chybne: string | null;
+}
+
+export async function saveSharePointFolders(input: {
+  organizationId: string;
+  nespracovaneUrl: string;
+  spracovaneUrl: string;
+  chybneUrl?: string;
+}): Promise<SharePointFolderNames> {
+  return restRequest<SharePointFolderNames>('/api/sharepoint/folders', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function removeSharePointFolders(organizationId: string): Promise<void> {
+  await restRequest(`/api/sharepoint/folders/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
+}

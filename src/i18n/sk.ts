@@ -704,6 +704,43 @@ export const sk = {
   'nast.tab.pouzivatelia': 'Používatelia',
   'nast.tab.schranky': 'E-mailové schránky',
   'nast.tab.mostik': 'Mostík',
+  'nast.tab.sharepoint': 'SharePoint',
+
+  // ===== SharePoint =====
+  'sp.popis':
+    'Klient hádže doklady do priečinka „nespracované" vo vašom SharePointe. Server ho každé tri minúty prezrie, nové súbory vezme a spracuje rovnako ako e-mailové prílohy. Po prenose do POHODY presunie súbor do priečinka „spracované" a doplní mu do názvu dátum zaúčtovania.',
+  'sp.nenakonfigurovane':
+    'SharePoint zatiaľ nie je pripravený na serveri — chýba registrácia aplikácie v Azure (SHAREPOINT_CLIENT_ID a SHAREPOINT_CLIENT_SECRET). Bez nej sa pripojiť nedá.',
+  'sp.pripojit': 'Pripojiť SharePoint',
+  'sp.pripojitPopis': 'Prihlásite sa svojím pracovným kontom Microsoft. Prístup dostaneme len k priečinkom, ktoré potom sami vyberiete.',
+  'sp.pripojeneAko': 'Pripojené ako',
+  'sp.pripojeneDna': 'Pripojené',
+  'sp.odpojit': 'Odpojiť',
+  'sp.odpojitOtazka': 'Odpojiť SharePoint?',
+  'sp.odpojitPopis': 'Zmiznú aj nastavené priečinky všetkých firiem. Doklady, ktoré sú už v systéme, zostávajú.',
+  'sp.pripojenieChyba': 'Pripojenie prestalo platiť — pripojte SharePoint znova.',
+  'sp.firmy': 'Priečinky firiem',
+  'sp.firma': 'Firma',
+  'sp.stav': 'Stav',
+  'sp.poslednyPrechod': 'Naposledy prezreté',
+  'sp.nikdy': 'zatiaľ nikdy',
+  'sp.nenastavene': 'nenastavené',
+  'sp.nastavit': 'Nastaviť',
+  'sp.upravit': 'Upraviť',
+  'sp.zrusit': 'Zrušiť priradenie',
+  'sp.zrusitOtazka': 'Zrušiť priradenie priečinkov?',
+  'sp.zrusitPopis': 'Doklady z tohto priečinka sa prestanú načítavať. Súbory v SharePointe zostávajú.',
+  'sp.dialogNazov': 'Priečinky firmy',
+  'sp.dialogPopis':
+    'Otvorte priečinok v SharePointe a skopírujte adresu z riadka prehliadača (alebo cez „Zdieľať → Kopírovať prepojenie"). Všetky tri priečinky musia byť v tej istej knižnici dokumentov.',
+  'sp.nespracovane': 'Priečinok „nespracované"',
+  'sp.spracovane': 'Priečinok „spracované"',
+  'sp.chybne': 'Priečinok „chybné" (nepovinné)',
+  'sp.chybnePopis':
+    'Sem odchádza, čo sa nedá spracovať — fotka, dokument Wordu, poškodené PDF. Bez tohto priečinka to ostane ležať medzi nespracovanými.',
+  'sp.overit': 'Overiť a uložiť',
+  'sp.overujem': 'Overujem priečinky…',
+  'sp.ulozene': 'Priečinky uložené',
   'nast.tab.trening': 'Tréning AI',
   'trening.popis':
     'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — alebo priamo databázu POHODA (.mdb): z nej systém vytiahne prijaté faktúry do pamäte dodávateľov a zároveň celú históriu dokladov (faktúry, pokladňu aj interné doklady; banku zatiaľ nie) do účtovného profilu. Nové faktúry rovnakých dodávateľov potom navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',

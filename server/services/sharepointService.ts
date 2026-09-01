@@ -13,12 +13,25 @@ export interface SharePointFile {
   size: number;
 }
 
+export interface SharePointFolderRef {
+  driveId: string;
+  itemId: string;
+  name: string;
+}
+
 export interface SharePointClient {
   /** Súbory v priečinku. Podpriečinky sa ignorujú — klient tam nemá čo triediť. */
   list(driveId: string, folderId: string): Promise<SharePointFile[]>;
   download(driveId: string, itemId: string): Promise<Buffer>;
   /** Presun a premenovanie naraz — Graph to zvládne jedným PATCH-om. */
   move(driveId: string, itemId: string, targetFolderId: string, newName: string): Promise<void>;
+  /**
+   * Adresa priečinka (skopírovaná z prehliadača alebo z „Zdieľať") na jeho
+   * identifikátory. Nahrádza celý prehliadač sitov a knižníc jedným vložením
+   * odkazu — vybrať priečinok myšou v SharePointe a skopírovať adresu vie
+   * účtovník aj bez toho, aby sme mu na to stavali strom.
+   */
+  resolveFolderUrl(url: string): Promise<SharePointFolderRef>;
 }
 
 export type SharePointErrorCode = 'auth_expired' | 'not_found' | 'throttled' | 'graph_error';
@@ -66,6 +79,93 @@ interface TokenResponse {
   error_description?: string;
 }
 
+/**
+ * Rozsahy, ktoré si pýtame. `offline_access` je ten, bez ktorého by sme
+ * nedostali refresh token a pripojenie by prežilo hodinu; `openid`/`email`
+ * sú kvôli id_tokenu, z ktorého vieme, kto sa to vlastne prihlásil.
+ */
+const SCOPE = 'offline_access openid email profile https://graph.microsoft.com/Files.ReadWrite.All';
+
+/**
+ * Adresa, na ktorú sa posiela účtovník, aby sa prihlásil.
+ *
+ * `/common` namiesto konkrétneho tenanta: SharePoint si zakladá každá
+ * kancelária vo svojom Microsofte, takže dopredu nevieme, do ktorého patrí.
+ */
+export function authorizeUrl(options: { clientId: string; redirectUri: string; state: string }): string {
+  const params = new URLSearchParams({
+    client_id: options.clientId,
+    response_type: 'code',
+    redirect_uri: options.redirectUri,
+    response_mode: 'query',
+    scope: SCOPE,
+    state: options.state,
+    // Vždy ukázať výber účtu — účtovník býva prihlásený súkromným kontom a bez
+    // toho by sa pripojilo to nesprávne bez jediného kliknutia.
+    prompt: 'select_account',
+  });
+  return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params}`;
+}
+
+export interface ExchangedTokens {
+  refreshToken: string;
+  msTenantId: string;
+  accountEmail: string;
+  accountName?: string;
+}
+
+/** Neoverený obsah id_tokenu. Prišiel priamo od Microsoftu cez TLS v našom
+ *  vlastnom volaní, takže na zobrazenie mena účtu podpis overovať netreba. */
+function citajIdToken(idToken: string): { tid?: string; preferred_username?: string; name?: string } {
+  const stred = idToken.split('.')[1];
+  if (!stred) return {};
+  try {
+    return JSON.parse(Buffer.from(stred, 'base64url').toString('utf8'));
+  } catch {
+    return {};
+  }
+}
+
+export async function exchangeCodeForTokens(options: {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  code: string;
+  fetchImpl?: typeof fetch;
+}): Promise<ExchangedTokens> {
+  const doFetch = options.fetchImpl ?? fetch;
+  const response = await doFetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: options.clientId,
+      client_secret: options.clientSecret,
+      grant_type: 'authorization_code',
+      code: options.code,
+      redirect_uri: options.redirectUri,
+      scope: SCOPE,
+    }),
+  });
+  const body = (await response.json().catch(() => ({}))) as TokenResponse & { id_token?: string };
+  if (!response.ok || !body.refresh_token) {
+    throw new SharePointError(
+      body.error_description || body.error || `Prihlásenie zlyhalo (${response.status})`,
+      'auth_expired', response.status,
+    );
+  }
+  const claims = citajIdToken(body.id_token ?? '');
+  if (!claims.tid) {
+    // Bez tenanta by sme nevedeli, kam posielať obnovenie tokenu.
+    throw new SharePointError('Microsoft neposlal identifikátor organizácie', 'graph_error');
+  }
+  return {
+    refreshToken: body.refresh_token,
+    msTenantId: claims.tid,
+    accountEmail: claims.preferred_username ?? 'neznámy účet',
+    accountName: claims.name,
+  };
+}
+
 export function graphClient(options: GraphClientOptions): SharePointClient {
   const doFetch = options.fetchImpl ?? fetch;
   let accessToken: string | undefined;
@@ -85,7 +185,7 @@ export function graphClient(options: GraphClientOptions): SharePointClient {
           client_secret: options.clientSecret,
           grant_type: 'refresh_token',
           refresh_token: refreshToken,
-          scope: 'offline_access https://graph.microsoft.com/Files.ReadWrite.All',
+          scope: SCOPE,
         }),
       },
     );
@@ -167,6 +267,26 @@ export function graphClient(options: GraphClientOptions): SharePointClient {
       const file = await doFetch(location);
       if (!file.ok) throw new SharePointError(`Stiahnutie zlyhalo (${file.status})`, 'graph_error', file.status);
       return Buffer.from(await file.arrayBuffer());
+    },
+
+    async resolveFolderUrl(url) {
+      // /shares/{u!base64url} prijme akúkoľvek adresu, ktorú SharePoint vydá —
+      // aj dlhý odkaz zo „Zdieľať", aj to, čo je v riadku prehliadača.
+      const zakodovana = `u!${Buffer.from(url.trim(), 'utf8').toString('base64')
+        .replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-')}`;
+      const body = (await (await graph(
+        `/shares/${zakodovana}/driveItem?$select=id,name,folder,parentReference`,
+      )).json()) as {
+        id?: string; name?: string; folder?: unknown;
+        parentReference?: { driveId?: string };
+      };
+      if (!body.folder) {
+        throw new SharePointError('Odkaz nevedie na priečinok, ale na súbor', 'graph_error');
+      }
+      if (!body.id || !body.parentReference?.driveId) {
+        throw new SharePointError('Z odkazu sa nepodarilo určiť priečinok', 'graph_error');
+      }
+      return { driveId: body.parentReference.driveId, itemId: body.id, name: body.name ?? '' };
     },
 
     async move(driveId, itemId, targetFolderId, newName) {

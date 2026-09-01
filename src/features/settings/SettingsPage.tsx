@@ -10,6 +10,7 @@ import { UsersTab } from './UsersTab';
 import { MailboxesTab } from './MailboxesTab';
 import { QueuesTab } from './QueuesTab';
 import { MostikTab } from './MostikTab';
+import { SharePointTab } from './SharePointTab';
 import { ApprovalRulesTab } from './ApprovalRulesTab';
 import { ClientProfileTab } from './ClientProfileTab';
 import { TemplatesTab } from './TemplatesTab';
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'sablony', label: 'nast.tab.sablony' },
   { id: 'schranky', label: 'nast.tab.schranky' },
   { id: 'mostik', label: 'nast.tab.mostik' },
+  { id: 'sharepoint', label: 'nast.tab.sharepoint' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -75,6 +77,7 @@ export function SettingsPage() {
       {tab === 'sablony' && <TemplatesTab />}
       {tab === 'schranky' && <MailboxesTab />}
       {tab === 'mostik' && <MostikTab />}
+      {tab === 'sharepoint' && <SharePointTab />}
 
       {confirmReset && (
         <ConfirmDialog

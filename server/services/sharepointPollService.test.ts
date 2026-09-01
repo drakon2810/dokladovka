@@ -18,6 +18,7 @@ function fakeClient(subory: SharePointFile[], prepis: Partial<SharePointClient> 
     list: async () => subory,
     download: async (_drive, itemId) => { stiahnute.push(itemId); return PDF; },
     move: async (_drive, itemId, ciel, nazov) => { presuny.push({ itemId, ciel, nazov }); },
+    resolveFolderUrl: async () => { throw new Error('poller priečinky nehľadá'); },
     ...prepis,
   };
   return { client, presuny, stiahnute };

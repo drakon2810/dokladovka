@@ -20,6 +20,7 @@ import { registerAiInstructionRoutes } from './routes/aiInstructionRoutes.js';
 import { registerUctoProfileRoutes } from './routes/uctoProfileRoutes.js';
 import { registerAssistantRoutes } from './routes/assistantRoutes.js';
 import { registerCompanyRegistryRoutes } from './routes/companyRegistryRoutes.js';
+import { registerSharePointRoutes, type SharePointClientFactory } from './routes/sharepointRoutes.js';
 import type { ObjectStorage } from './storage.js';
 import { createMailer, type Mailer } from './mailer.js';
 
@@ -32,6 +33,8 @@ export async function buildApp(input: {
   aiRulesParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown }> };
   uctoProfileParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown }> };
   assistantParser?: { parse(body: unknown): Promise<{ output_parsed?: unknown; usage?: { input_tokens?: number; output_tokens?: number } }> };
+  /** Kvôli testom — inak skutočný Microsoft Graph. */
+  sharePointClient?: SharePointClientFactory;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     logger: input.logger ?? input.config.nodeEnv !== 'test',
@@ -88,6 +91,7 @@ export async function buildApp(input: {
   registerAgentRoutes(app, input.database, input.storage, input.config);
   registerDataSnapshotRoutes(app, input.database);
   registerCodeListRoutes(app, input.database);
+  registerSharePointRoutes(app, input.database, input.config, input.sharePointClient);
   registerOrgDocumentRoutes(app, input.database, input.storage, input.config);
   registerPaymentRoutes(app, input.database);
   registerPartnerRoutes(app, input.database);
