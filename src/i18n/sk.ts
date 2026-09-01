@@ -741,6 +741,7 @@ export const sk = {
   'sp.overit': 'Overiť a uložiť',
   'sp.overujem': 'Overujem priečinky…',
   'sp.ulozene': 'Priečinky uložené',
+  'sp.pripojene': 'SharePoint pripojený',
   'nast.tab.trening': 'Tréning AI',
   'trening.popis':
     'Nahrajte Excel s historickými faktúrami a ich zaúčtovaním — alebo priamo databázu POHODA (.mdb): z nej systém vytiahne prijaté faktúry do pamäte dodávateľov a zároveň celú históriu dokladov (faktúry, pokladňu aj interné doklady; banku zatiaľ nie) do účtovného profilu. Nové faktúry rovnakých dodávateľov potom navrhne rovnako. Kódy musia sedieť s číselníkmi vybranej firmy.',

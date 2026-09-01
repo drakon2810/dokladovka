@@ -49,7 +49,7 @@ export function SharePointTab() {
     const params = new URLSearchParams(window.location.search);
     const vysledok = params.get('sharepoint');
     if (!vysledok) return;
-    showToast(vysledok === 'ok' ? t('sp.ulozene') : vysledok, { tone: vysledok === 'ok' ? 'success' : 'error' });
+    showToast(vysledok === 'ok' ? t('sp.pripojene') : vysledok, { tone: vysledok === 'ok' ? 'success' : 'error' });
     params.delete('sharepoint');
     window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
     void nacitaj();
