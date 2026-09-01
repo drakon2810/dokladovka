@@ -72,6 +72,9 @@ export async function pollFolder(
   // ktorýkoľvek nový súbor.
   const presun = await presunVybavene(deps.database, client, await najdiNaPresun(deps.database, scope));
   vysledok.presunute = presun.presunute;
+  // Zlyhaný presun sa opakuje donekonečna. Bez zápisu dôvodu by to bol súbor,
+  // ktorý ticho leží v „nespracované" a nikto nevie prečo.
+  if (presun.chyba) vysledok.chyba = presun.chyba;
 
   let subory;
   try {

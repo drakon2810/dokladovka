@@ -103,6 +103,9 @@ export function nazovPoPresune(povodny: string, den: Date | null, pohodaNumber: 
 export interface PresunResult {
   presunute: number;
   chyby: number;
+  /** Prečo posledný presun neprešiel. Bez toho je zlyhanie neviditeľné —
+   *  súbor len ticho zostáva ležať a nikto nevie, čo mu bráni. */
+  chyba?: string;
 }
 
 export async function presunVybavene(
@@ -133,10 +136,11 @@ export async function presunVybavene(
         [polozka.attachment_id],
       );
       vysledok.presunute += 1;
-    } catch {
+    } catch (error) {
       // Značka sa nenastaví, takže to ďalší cyklus skúsi znova — presne preto
       // tu nie je fronta s obmedzeným počtom pokusov.
       vysledok.chyby += 1;
+      vysledok.chyba = error instanceof Error ? error.message : String(error);
     }
   }
   return vysledok;
