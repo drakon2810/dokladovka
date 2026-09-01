@@ -13,14 +13,18 @@ import { graphClient } from './services/sharepointService.js';
 import { createObjectStorage } from './storage.js';
 
 const config = loadConfig();
-if (!config.sharepoint.clientId || !config.sharepoint.clientSecret) {
-  throw new Error('SHAREPOINT_CLIENT_ID a SHAREPOINT_CLIENT_SECRET sú povinné pre SharePoint poller (.env)');
-}
-if (!config.secretEncryptionKey) {
-  throw new Error('SECRET_ENCRYPTION_KEY je povinný — bez neho sa nedá prečítať uložené pripojenie');
-}
-
 const log = (message: string) => console.log(`[sharepoint ${new Date().toISOString()}] ${message}`);
+
+// Nenakonfigurované NIE JE chyba — funkciu si zapína až ten, kto ju chce.
+// Pád na štarte by pri `restart: unless-stopped` znamenal kontajner, ktorý sa
+// donekonečna reštartuje a zaplní log; cyklus bez registrácie aplikácie
+// jednoducho nič nerobí a rozbehne sa, keď premenné pribudnú.
+const nakonfigurovane = Boolean(
+  config.sharepoint.clientId && config.sharepoint.clientSecret && config.secretEncryptionKey,
+);
+if (!nakonfigurovane) {
+  log('SHAREPOINT_CLIENT_ID, SHAREPOINT_CLIENT_SECRET alebo SECRET_ENCRYPTION_KEY chýba — poller beží naprázdno');
+}
 
 const database = await createDatabase(config);
 await migrateDatabase(database);
@@ -34,7 +38,11 @@ process.on('SIGTERM', stop);
 log(`štart, interval ${config.sharepoint.pollIntervalSeconds}s`);
 while (!stopping) {
   try {
-    const vysledky = await pollAllFolders({ database, storage, config }, graphClient);
+    // pollAllFolders sa bez registrácie aplikácie vráti prázdny — kontrola je
+    // tu len preto, aby sa zbytočne nechodilo do databázy.
+    const vysledky = nakonfigurovane
+      ? await pollAllFolders({ database, storage, config }, graphClient)
+      : new Map();
     for (const [organizationId, vysledok] of vysledky) {
       // Ticho sa neloguje — inak by sa v pokojnom priečinku každé tri minúty
       // objavil riadok a skutočné udalosti by v ňom zanikli.
