@@ -19,6 +19,7 @@ import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
+import { ingestFiles } from '../inbound/ingestFiles.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -879,72 +880,21 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     }).strict().parse(request.body);
     await requireOrganizationAccess(database, auth, body.organizationId);
 
-    const emailId = randomUUID();
     const correlationId = request.id;
-    const maxAttempts = config.extractionProvider === 'openai' ? config.openai.maxRetries + 1 : 5;
-    await database.query(
-      `INSERT INTO inbound_emails
-        (id, tenant_id, organization_id, alias_id, provider, provider_message_id, envelope_recipients,
-         sender_email, sender_name, subject, received_at, status, attachment_count, correlation_id)
-       VALUES ($1,$2,$3,NULL,'manual-upload',$4,'[]'::jsonb,$5,$6,'Ručné nahratie',now(),'received',$7,$8)`,
-      [emailId, auth.tenantId, body.organizationId, randomUUID(), auth.email, auth.name,
-        body.files.length, correlationId],
+    const { emailId, queued, results } = await ingestFiles(
+      { database, storage, config },
+      { tenantId: auth.tenantId, organizationId: body.organizationId, correlationId },
+      {
+        provider: 'manual-upload', storagePrefix: 'upload', subject: 'Ručné nahratie',
+        senderEmail: auth.email, senderName: auth.name,
+      },
+      body.files.map((file) => ({
+        fileName: file.fileName,
+        declaredMimeType: file.mimeType,
+        bytes: Buffer.from(file.contentBase64, 'base64'),
+      })),
     );
 
-    const results: Array<{ fileName: string; status: string; reason?: string }> = [];
-    let queued = 0;
-    for (const file of body.files) {
-      const attachmentId = randomUUID();
-      const bytes = Buffer.from(file.contentBase64, 'base64');
-      // Magic-byte detekcia je autorita; deklarovaný MIME z prehliadača je len záznam.
-      const actualMime = detectedMimeType(bytes);
-      const hash = sha256(bytes);
-      let status: 'queued' | 'quarantine' | 'duplicate' = 'quarantine';
-      let reason: string | undefined;
-      let storageKey: string | undefined;
-
-      if (bytes.byteLength === 0) reason = 'empty_file';
-      if (!reason && bytes.byteLength > config.extractionMaxFileBytes) reason = 'attachment_too_large';
-      if (!reason && !actualMime) reason = 'unsupported_or_corrupted_file';
-      if (!reason && actualMime === 'application/xml' && classifyXml(bytes) === 'unknown_xml') reason = 'unsupported_xml';
-      if (!reason) {
-        const duplicate = await isTechnicalDuplicate(database, {
-          tenantId: auth.tenantId, organizationId: body.organizationId, sha256: hash,
-        });
-        if (duplicate) {
-          status = 'duplicate';
-          reason = 'technical_duplicate';
-        } else {
-          storageKey = `upload/${auth.tenantId}/${body.organizationId}/${emailId}/${attachmentId}/${safeName(file.fileName)}`;
-          await storage.put(storageKey, bytes, actualMime!);
-          status = 'queued';
-          queued += 1;
-        }
-      }
-
-      await database.query(
-        `INSERT INTO inbound_attachments
-          (id, tenant_id, inbound_email_id, organization_id, original_file_name, safe_file_name,
-           declared_mime_type, detected_mime_type, byte_size, sha256, storage_key, status, quarantine_reason)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [attachmentId, auth.tenantId, emailId, body.organizationId, file.fileName, safeName(file.fileName),
-          file.mimeType, actualMime ?? null, bytes.byteLength, hash, storageKey ?? null, status, reason ?? null],
-      );
-      if (status === 'queued') {
-        await database.query(
-          `INSERT INTO processing_jobs
-            (id, tenant_id, organization_id, attachment_id, kind, status, correlation_id, payload, max_attempts)
-           VALUES ($1,$2,$3,$4,'extract_document','queued',$5,'{}'::jsonb,$6)`,
-          [randomUUID(), auth.tenantId, body.organizationId, attachmentId, correlationId, maxAttempts],
-        );
-      }
-      results.push({ fileName: file.fileName, status, reason });
-    }
-
-    await database.query(
-      'UPDATE inbound_emails SET status=$1 WHERE id=$2',
-      [queued > 0 ? 'queued' : 'quarantine', emailId],
-    );
     await writeAudit(database, {
       tenantId: auth.tenantId,
       organizationId: body.organizationId,
@@ -956,7 +906,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       correlationId,
       metadata: { attachmentCount: body.files.length, queued },
     });
-    return reply.code(202).send({ emailId, queued, results });
+    return reply.code(202).send({
+      emailId, queued,
+      results: results.map(({ fileName, status, reason }) => ({ fileName, status, reason })),
+    });
   });
 
   app.get('/api/documents/:id/extraction-runs', async (request) => {
