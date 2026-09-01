@@ -21,13 +21,26 @@ export interface NaPresun {
   original_file_name: string;
   spracovane_folder_id: string;
   chybne_folder_id: string | null;
-  /** Dátum prenosu do POHODY; NULL, keď boli všetky doklady zamietnuté. */
+  /** Dátum prenosu do POHODY; NULL, keď doklad nevznikol alebo bol zamietnutý. */
   preneseny_dna: Date | null;
   pohoda_number: string | null;
+  /** Stav prílohy — rozhoduje pri súboroch, z ktorých doklad nikdy nevznikol. */
+  attachment_status: string;
 }
 
 /**
- * Súbory, ktorých doklady sú všetky vybavené a ktoré ešte nie sú presunuté.
+ * Všetko, čo už nemá čo robiť v priečinku „nespracované".
+ *
+ * Tri prípady naraz, lebo všetky tri sú tá istá otázka „je s tým súborom
+ * hotovo?":
+ *   * doklad prenesený do POHODY (alebo zamietnutý) — bežný koniec cesty;
+ *   * duplicita — ten istý súbor už v systéme je, prišiel skôr inou cestou;
+ *   * karanténa — fotka, .docx, poškodené PDF, doklad z toho nikdy nebude.
+ *
+ * Posledné dva sa kedysi presúvali hneď pri príjme, jedným pokusom. Keď ten
+ * zlyhal (alebo priečinok pre chybné nebol nastavený), súbor zostal ležať
+ * navždy: druhýkrát sa už nespracuje, lebo ho poznáme podľa item_id. Odvodený
+ * výber to rieši sám — kým značka nie je nastavená, ďalší cyklus to skúsi znova.
  *
  * `d.id = a.document_id OR d.split_from_document_id = a.document_id` pokrýva
  * aj rozdelenie: pri ňom pôvodný doklad zostáva a nové naň ukazujú, pričom
@@ -39,7 +52,8 @@ export async function najdiNaPresun(
 ): Promise<NaPresun[]> {
   const result = await database.query<NaPresun & Record<string, unknown>>(
     `SELECT a.id AS attachment_id, a.sharepoint_drive_id AS drive_id, a.sharepoint_item_id AS item_id,
-            a.original_file_name, f.spracovane_folder_id, f.chybne_folder_id,
+            a.original_file_name, a.status AS attachment_status,
+            f.spracovane_folder_id, f.chybne_folder_id,
             (SELECT max(d.updated_at) FROM documents d
               WHERE (d.id = a.document_id OR d.split_from_document_id = a.document_id)
                 AND d.status = 'exportovany') AS preneseny_dna,
@@ -52,12 +66,18 @@ export async function najdiNaPresun(
          ON f.organization_id = a.organization_id AND f.tenant_id = a.tenant_id AND f.active = true
       WHERE a.sharepoint_item_id IS NOT NULL
         AND a.sharepoint_moved_at IS NULL
-        AND a.document_id IS NOT NULL
         AND a.tenant_id = $2 AND a.organization_id = $3
-        AND NOT EXISTS (
-          SELECT 1 FROM documents d
-           WHERE (d.id = a.document_id OR d.split_from_document_id = a.document_id)
-             AND d.status <> ALL($1::text[])
+        AND (
+          -- Doklad nikdy nevznikol a ani nevznikne.
+          a.status IN ('duplicate', 'quarantine')
+          OR (
+            a.document_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM documents d
+               WHERE (d.id = a.document_id OR d.split_from_document_id = a.document_id)
+                 AND d.status <> ALL($1::text[])
+            )
+          )
         )`,
     [VYBAVENE, scope.tenantId, scope.organizationId],
   );
@@ -92,10 +112,16 @@ export async function presunVybavene(
 ): Promise<PresunResult> {
   const vysledok: PresunResult = { presunute: 0, chyby: 0 };
   for (const polozka of polozky) {
-    // Bez dátumu prenosu neexistuje prenesený doklad — všetky boli zamietnuté.
-    // Taký súbor nepatrí do „spracované", ale medzi chybné; a keď priečinok pre
-    // chybné nie je nastavený, nechá sa ležať a značka sa nenastaví.
-    const ciel = polozka.preneseny_dna ? polozka.spracovane_folder_id : polozka.chybne_folder_id;
+    // Kam súbor patrí:
+    //   * karanténa (fotka, .docx, poškodené PDF) → medzi chybné. Keď priečinok
+    //     pre chybné nie je nastavený, nechá sa ležať a značka sa nenastaví,
+    //     takže sa to skúsi znova, len čo ho účtovník doplní.
+    //   * duplicita → medzi spracované: doklad JE vybavený, len nie cez tento
+    //     súbor. V „chybné" by klient videl svoju úplne v poriadku faktúru.
+    //   * bez dátumu prenosu (všetky doklady zamietnuté) → medzi chybné.
+    const doChybnych = polozka.attachment_status === 'quarantine'
+      || (polozka.attachment_status !== 'duplicate' && !polozka.preneseny_dna);
+    const ciel = doChybnych ? polozka.chybne_folder_id : polozka.spracovane_folder_id;
     if (!ciel) continue;
     try {
       await client.move(

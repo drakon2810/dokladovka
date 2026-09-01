@@ -176,6 +176,45 @@ describe('výber súborov na presun', { timeout: 60_000 }, () => {
       .toMatchObject({ presunute: 1 });
   });
 
+  it('duplicita ide medzi spracované, karanténa medzi chybné', async () => {
+    const p = await pripravDb();
+    await p.pridaj('exportovany');
+    // Prílohy, z ktorých doklad nikdy nevznikol a ani nevznikne.
+    await p.database.query(
+      "UPDATE inbound_attachments SET status='duplicate', document_id=NULL WHERE original_file_name='faktura.pdf'",
+    );
+    const { client, presuny } = fakeClient();
+    await presunVybavene(p.database, client, await najdiNaPresun(p.database, p.scope));
+    expect(presuny[0]).toMatchObject({ ciel: 'spracovane', nazov: 'faktura.pdf' });
+
+    const q = await pripravDb();
+    await q.pridaj('exportovany');
+    await q.database.query(
+      "UPDATE inbound_attachments SET status='quarantine', document_id=NULL WHERE original_file_name='faktura.pdf'",
+    );
+    const druhy = fakeClient();
+    await presunVybavene(q.database, druhy.client, await najdiNaPresun(q.database, q.scope));
+    expect(druhy.presuny[0]).toMatchObject({ ciel: 'chybne', nazov: 'faktura.pdf' });
+  });
+
+  it('karanténa bez priečinka „chybné" sa skúsi znova, keď ho účtovník doplní', async () => {
+    const p = await pripravDb();
+    await p.pridaj('exportovany');
+    await p.database.query(
+      "UPDATE inbound_attachments SET status='quarantine', document_id=NULL WHERE original_file_name='faktura.pdf'",
+    );
+    await p.database.query('UPDATE sharepoint_folders SET chybne_folder_id=NULL');
+    const bez = fakeClient();
+    await presunVybavene(p.database, bez.client, await najdiNaPresun(p.database, p.scope));
+    expect(bez.presuny).toEqual([]);
+
+    // Značka sa nenastavila, takže po doplnení priečinka sa to dorieši samo.
+    await p.database.query("UPDATE sharepoint_folders SET chybne_folder_id='chybne'");
+    const po = fakeClient();
+    await presunVybavene(p.database, po.client, await najdiNaPresun(p.database, p.scope));
+    expect(po.presuny[0]).toMatchObject({ ciel: 'chybne' });
+  });
+
   it('doklad z e-mailu sa nepresúva — nemá odkiaľ', async () => {
     const p = await pripravDb();
     await p.pridaj('exportovany');

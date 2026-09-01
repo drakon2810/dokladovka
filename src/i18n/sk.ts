@@ -708,7 +708,7 @@ export const sk = {
 
   // ===== SharePoint =====
   'sp.popis':
-    'Klient hádže doklady do priečinka „nespracované" vo vašom SharePointe. Server ho každé tri minúty prezrie, nové súbory vezme a spracuje rovnako ako e-mailové prílohy. Po prenose do POHODY presunie súbor do priečinka „spracované" a doplní mu do názvu dátum zaúčtovania.',
+    'Klient hádže doklady do priečinka „nespracované" vo vašom SharePointe. Server ho každú minútu prezrie, nové súbory vezme a spracuje rovnako ako e-mailové prílohy. Po prenose do POHODY presunie súbor do priečinka „spracované" a doplní mu do názvu dátum zaúčtovania.',
   'sp.nenakonfigurovane':
     'SharePoint zatiaľ nie je pripravený na serveri — chýba registrácia aplikácie v Azure (SHAREPOINT_CLIENT_ID a SHAREPOINT_CLIENT_SECRET). Bez nej sa pripojiť nedá.',
   'sp.pripojit': 'Pripojiť SharePoint',

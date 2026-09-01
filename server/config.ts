@@ -198,9 +198,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     sharepoint: {
       clientId: env.SHAREPOINT_CLIENT_ID?.trim() || undefined,
       clientSecret: env.SHAREPOINT_CLIENT_SECRET?.trim() || undefined,
-      // Faktúra nie je chat — tri minúty oneskorenia nikoho nebolia a Graph
-      // nemá dôvod nás škrtiť.
-      pollIntervalSeconds: positiveInteger(env.SHAREPOINT_POLL_INTERVAL, 180),
+      // Minúta: pri hŕstke priečinkov Graph ani nezakňučí a účtovník nečaká
+      // pri obrazovke, kým sa doklad objaví.
+      pollIntervalSeconds: positiveInteger(env.SHAREPOINT_POLL_INTERVAL, 60),
     },
     // Fallback aj analýza defaultne bežia na overenom extrakčnom modeli
     // (gpt-5-mini) — silnejšie modely sú OPT-IN cez env, až keď účet potvrdí

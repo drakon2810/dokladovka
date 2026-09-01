@@ -106,27 +106,15 @@ export async function pollFolder(
           sharePoint: { driveId: folder.drive_id, itemId: subor.id },
         }],
       );
+      // Presun sa tu nerobí. Duplicity aj karanténu odnesie `presunVybavene`
+      // v ďalšom cykle — rovnakou cestou ako doklady po prenose do POHODY.
+      // Kým sa to nepodarí, značka nie je nastavená a skúsi sa znova; jeden
+      // pokus tu znamenal, že po zlyhaní súbor zostal ležať navždy, lebo
+      // druhýkrát sa už nespracuje.
       const stav = prijem.results[0];
-      if (stav?.status === 'queued') {
-        vysledok.prijate += 1;
-      } else if (stav?.status === 'duplicate') {
-        // Ten istý súbor už v systéme je — prišiel skôr e-mailom alebo ho
-        // niekto nahral ručne. Nie je to chyba, doklad je vybavený, len nie
-        // cez tento súbor. Do „chybné" nepatrí: klient by videl svoju úplne
-        // v poriadku faktúru medzi odpadom a nevedel by, čo s tým.
-        vysledok.duplicity += 1;
-        await client.move(folder.drive_id, subor.id, folder.spracovane_folder_id, subor.name)
-          .catch(() => undefined);
-      } else {
-        vysledok.chybne += 1;
-        // Fotka, .docx, poškodené PDF. Keby ostalo ležať v „nespracované",
-        // klient sa nikdy nedozvie prečo sa nič nedeje — a priečinok, ktorý
-        // má ukazovať nedokončenú prácu, by sa zaplnil trvalým odpadom.
-        if (folder.chybne_folder_id) {
-          await client.move(folder.drive_id, subor.id, folder.chybne_folder_id, subor.name)
-            .catch(() => undefined);
-        }
-      }
+      if (stav?.status === 'queued') vysledok.prijate += 1;
+      else if (stav?.status === 'duplicate') vysledok.duplicity += 1;
+      else vysledok.chybne += 1;
     } catch (error) {
       vysledok.chybne += 1;
       const dovod = error instanceof Error ? error.message : String(error);

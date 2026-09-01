@@ -87,11 +87,14 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
       fakeClient([{ id: 'prvy', name: 'faktura.pdf', size: PDF.length }]).client);
     const druhy = fakeClient([{ id: 'druhy', name: 'faktura.pdf', size: PDF.length }]);
 
-    const vysledok = await pollFolder({ database, storage, config }, folder, druhy.client);
-    expect(vysledok).toMatchObject({ duplicity: 1, chybne: 0, prijate: 0 });
-    // Do „chybné" nepatrí — klient by videl svoju úplne v poriadku faktúru
-    // medzi odpadom a nevedel by, čo s tým.
-    expect(druhy.presuny).toEqual([{ itemId: 'druhy', ciel: 'spracovane', nazov: 'faktura.pdf' }]);
+    expect(await pollFolder({ database, storage, config }, folder, druhy.client))
+      .toMatchObject({ duplicity: 1, chybne: 0, prijate: 0 });
+
+    // Presun rieši až ďalší cyklus — do „chybné" nepatrí, klient by videl svoju
+    // úplne v poriadku faktúru medzi odpadom.
+    const treti = fakeClient([]);
+    await pollFolder({ database, storage, config }, folder, treti.client);
+    expect(treti.presuny).toEqual([{ itemId: 'druhy', ciel: 'spracovane', nazov: 'faktura.pdf' }]);
   });
 
   it('nepoužiteľný súbor odsunie do „chybné"', async () => {
@@ -102,7 +105,10 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
     );
     expect(await pollFolder({ database, storage, config }, folder, client))
       .toMatchObject({ prijate: 0, chybne: 1 });
-    expect(presuny).toEqual([{ itemId: 'item-2', ciel: 'chybne', nazov: 'fotka.heic' }]);
+    // Odsun rieši ďalší cyklus, aby sa dal po zlyhaní zopakovať.
+    const dalsi = fakeClient([]);
+    await pollFolder({ database, storage, config }, folder, dalsi.client);
+    expect(dalsi.presuny).toEqual([{ itemId: 'item-2', ciel: 'chybne', nazov: 'fotka.heic' }]);
   });
 
   it('bez priečinka „chybné" súbor nechá ležať, ale nespadne', async () => {
@@ -111,8 +117,12 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
       [{ id: 'item-3', name: 'fotka.heic', size: 10 }],
       { download: async () => Buffer.from('nie je to doklad') },
     );
+    // Priečinok musí chýbať v databáze, nielen v odovzdanom objekte — cieľ
+    // presunu si `najdiNaPresun` číta z nej.
+    await database.query('UPDATE sharepoint_folders SET chybne_folder_id=NULL');
     const bezChybne = { ...folder, chybne_folder_id: null };
     expect(await pollFolder({ database, storage, config }, bezChybne, client)).toMatchObject({ chybne: 1 });
+    await pollFolder({ database, storage, config }, bezChybne, client);
     expect(presuny).toEqual([]);
   });
 
