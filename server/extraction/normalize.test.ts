@@ -3,6 +3,43 @@ import { normalizeExtractionResult, validateNormalizedExtraction } from './norma
 import { splitPostalAddress } from '../pohodaXml.js';
 
 describe('normalizácia SK/CZ faktúr', () => {
+  // Talianska faktúra B.R. Pneumatici tlačí celkovú sumu vo štyroch rámčekoch
+  // (Imponibile, Totale merce, TOTALE A PAGARE, TOTALE DOCUMENTO) a model
+  // spravil riadok rozpisu z každého. Základ vyšiel štvornásobne (5 342 €
+  // namiesto 1 335,50 €) a pole „Zaokrúhlenie" ukázalo −4 006,50 €.
+  it('zhodné riadky rozpisu DPH sú prepis tej istej sumy, nie štyri plnenia', () => {
+    const riadok = { vatRate: '0', base: '1335.50', vat: '0' };
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'B.R. Pneumatici S.p.A.', icDph: 'IT01800220244' },
+      buyer: { ico: '35761571' }, invoiceNumber: '13174/51', issueDate: '2026-08-31',
+      taxDate: '2026-08-31', dueDate: '2026-10-31', currency: 'EUR', lineItems: [],
+      vatBreakdown: [riadok, riadok, riadok, riadok],
+      totalAmount: '1335.50', fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-brp', '2026-08-31');
+    const rozpis = (normalized.extracted as any).rozpisDph;
+    expect(rozpis).toHaveLength(1);
+    expect(rozpis[0]).toMatchObject({ sadzba: 0, zaklad: 1335.5, dph: 0 });
+    // Súčet rozpisu teraz sedí s dokladom, takže sa dá schváliť.
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' }).map((i: any) => i.code))
+      .not.toContain('total_mismatch');
+  });
+
+  it('tá istá sadzba s RÔZNYM základom sú dve plnenia — tie sa nechávajú', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Dodávateľ SK', ico: '12345678', icDph: 'SK2020123456' },
+      buyer: { ico: '87654321' }, invoiceNumber: 'SK-2', issueDate: '2026-07-01',
+      taxDate: '2026-07-01', dueDate: '2026-07-15', currency: 'EUR', lineItems: [],
+      vatBreakdown: [
+        { vatRate: '23', base: '100', vat: '23' },
+        { vatRate: '23', base: '200', vat: '46' },
+      ],
+      totalAmount: '369', fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-dve', '2026-07-01');
+    expect((normalized.extracted as any).rozpisDph).toHaveLength(2);
+  });
+
   it('spracuje slovenské sadzby 23 %, 19 % a 5 % aj bez variabilného symbolu', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'Dodávateľ SK', ico: '12345678', icDph: 'SK2020123456' },

@@ -282,7 +282,7 @@ export function normalizeExtractionResult(
     };
   });
 
-  const rozpisZOdpovede = result.vatBreakdown.flatMap((row) => {
+  const rozpisSDuplicitami = result.vatBreakdown.flatMap((row) => {
     let sadzba = Number(row.vatRate.replace(',', '.'));
     const zaklad = parseDecimal(row.base);
     const dph = parseDecimal(row.vat);
@@ -294,6 +294,16 @@ export function normalizeExtractionResult(
       ? [{ sadzba, zaklad: round2(zaklad), dph: round2(dph) }]
       : [];
   });
+  // Úplne zhodný riadok rozpisu je vždy prepis tej istej sumy, nikdy nie dva
+  // rôzne plnenia: rozpis DPH má z definície jeden riadok na sadzbu. Talianska
+  // faktúra tlačí celkovú sumu vo štyroch rámčekoch (Imponibile, Totale merce,
+  // TOTALE A PAGARE, TOTALE DOCUMENTO) a model z každého spravil riadok —
+  // základ potom vyšiel štvornásobne a „zaokrúhlenie" ukázalo −4006,50.
+  //
+  // Zhodné riadky sa zahodia, rôzne (tá istá sadzba, iný základ) sa nechajú:
+  // tie sa legitímne sčítajú a kontrola súčtu ich overí.
+  const rozpisZOdpovede = rozpisSDuplicitami.filter((row, index) => index === rozpisSDuplicitami
+    .findIndex((iny) => iny.sadzba === row.sadzba && iny.zaklad === row.zaklad && iny.dph === row.dph));
   // Model občas rozpis DPH vôbec nevráti, hoci položky sadzbu aj daň nesú.
   // Prázdny rozpis blokuje schválenie a do POHODY by odišli nulové základy —
   // preto sa dopočíta z položiek. Vlastný rozpis z dokladu má vždy prednosť.
