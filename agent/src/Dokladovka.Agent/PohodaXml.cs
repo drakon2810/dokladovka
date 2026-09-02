@@ -114,14 +114,21 @@ public static class PohodaXml
 
     /// <summary>
     /// Účtovný profil: export VŠETKÝCH dokladových agend (faktúry prijaté aj
-    /// vydané, ostatné záväzky, pokladňa, interné doklady) — banka zatiaľ nie.
+    /// vydané vrátane dobropisov, ťarchopisov a zálohových, ostatné záväzky,
+    /// pokladňa, interné doklady) — banka zatiaľ nie.
     /// Číta históriu, v POHODE nič nemení. Na rozdiel od BuildInvoiceListRequest,
     /// ktorý plní pamäť dodávateľov a preto berie len prijaté faktúry.
     /// </summary>
     public static string BuildHistoryListRequest(string ico, string requestId)
     {
         var items = new List<string>();
-        foreach (var (type, _) in HistoryInvoiceTypes)
+        // Ostatné záväzky (commitment) nie sú v HistoryInvoiceTypes zámerne —
+        // tam ide o typy, ktoré majú vlastnú agendu korpusu. OZ vzniká až pri
+        // parsovaní ako zvyšok agendy FA, ale dopyt naň sa musí poslať zvlášť,
+        // inak POHODA žiadne nevráti. Presne to sa aj dialo: komentár sľuboval
+        // ostatné záväzky, korpus ich nemal ani jeden a analýza pre agendu OZ
+        // nenašla nič — nie preto, že by ich firma neúčtovala.
+        foreach (var (type, _) in HistoryInvoiceTypes.Append(("commitment", "OZ")))
         {
             items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listInvoiceRequest version="2.0" invoiceType="{type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest></dat:dataPackItem>""");
         }

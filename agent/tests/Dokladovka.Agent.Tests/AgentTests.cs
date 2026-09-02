@@ -282,6 +282,9 @@ public sealed class AgentTests
         {
             "receivedInvoice", "receivedCreditNotice", "receivedDebitNote", "receivedAdvanceInvoice",
             "issuedInvoice", "issuedCreditNotice", "issuedDebitNote", "issuedAdvanceInvoice",
+            // Ostatné záväzky sa nepýtali vôbec, hoci parser ich vie zaradiť —
+            // korpus ich preto nemal ani jeden a agenda OZ zostala prázdna.
+            "commitment",
         })
         {
             Assert.Contains($"invoiceType=\"{typ}\"", request);
