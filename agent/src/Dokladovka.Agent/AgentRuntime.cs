@@ -266,6 +266,25 @@ public sealed class AgentCycleRunner
                     throw;
                 }
             }
+            // Adresár ide spolu s číselníkmi: je to tiež to, čo účtovník do POHODY
+            // raz zadal, a mení sa rovnako zriedka. Zlyhanie adresára nesmie
+            // zhodiť číselníky — bez nich sa nedá zaúčtovať vôbec, bez adresára
+            // len chýbajú údaje o firme.
+            try
+            {
+                var adresarXml = PohodaXml.BuildAddressBookRequest(organization.Ico, $"adresar-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+                var adresarResponse = await _mServers[target.Endpoint.Id].PostXmlAsync(adresarXml, $"adresar-{organization.OrganizationId}", false, cancellationToken);
+                var adresar = PohodaXml.ParseAddressBookRows(adresarResponse);
+                if (adresar.Count > 0)
+                {
+                    var vysledok = await _backend.UploadAddressBookAsync(organization.OrganizationId, adresar, cancellationToken);
+                    _log.Info("address_book_synced", new { organization.OrganizationId, adresar.Count, vysledok.Vytvorene, vysledok.Aktualizovane });
+                }
+            }
+            catch (Exception error)
+            {
+                _log.Error("address_book_sync_failed", error, new { organization.OrganizationId });
+            }
             _state.LastCodeListSync[stateKey] = DateTimeOffset.UtcNow;
             _stateStore.Save(_state);
             _log.Info("code_lists_synced", new { organization.OrganizationId, durationMs = stopwatch.ElapsedMilliseconds, warnings = parsed.Warnings.Count });

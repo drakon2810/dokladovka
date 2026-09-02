@@ -784,4 +784,82 @@ public sealed class DocumentFolderTests
         var xml = PohodaXml.BuildCodeListRequest("35761571", "req-1");
         Assert.Equal("35761571", PohodaXml.ReadDataPackIco(xml));
     }
+
+    [Fact]
+    public void AdresarDaUdajeFirmy()
+    {
+        var response = """
+<?xml version="1.0" encoding="utf-8"?>
+<rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:adb="http://www.stormware.cz/schema/version_2/addressbook.xsd"
+  xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" state="ok">
+  <rsp:responsePackItem>
+    <lst:listAddressBook>
+      <lst:addressbook>
+        <adb:addressbookHeader>
+          <adb:identity>
+            <typ:address>
+              <typ:company>B.R. Pneumatici S.p.A.</typ:company>
+              <typ:city>Thiene</typ:city>
+              <typ:street>Via Gombe 5</typ:street>
+              <typ:zip>360 16</typ:zip>
+              <typ:icDph>IT01800220244</typ:icDph>
+              <typ:country><typ:ids>IT</typ:ids></typ:country>
+            </typ:address>
+          </adb:identity>
+        </adb:addressbookHeader>
+      </lst:addressbook>
+      <lst:addressbook>
+        <adb:addressbookHeader>
+          <adb:identity>
+            <typ:address>
+              <typ:company>Slovenská firma s.r.o.</typ:company>
+              <typ:ico>35761571</typ:ico>
+              <typ:dic>2020254170</typ:dic>
+              <typ:icDph>SK2020254170</typ:icDph>
+              <typ:city>Bratislava</typ:city>
+            </typ:address>
+          </adb:identity>
+        </adb:addressbookHeader>
+      </lst:addressbook>
+    </lst:listAddressBook>
+  </rsp:responsePackItem>
+</rsp:responsePack>
+""";
+        var rows = PohodaXml.ParseAddressBookRows(response);
+        Assert.Equal(2, rows.Count);
+        // Presne to, co sa z talianskeho blanketu nedalo vycitat.
+        Assert.Equal(new PohodaXml.AddressBookRow(
+            "B.R. Pneumatici S.p.A.", null, null, "IT01800220244", "Via Gombe 5", "Thiene", "360 16", "IT"), rows[0]);
+        Assert.Equal("35761571", rows[1].Ico);
+        Assert.Equal("Bratislava", rows[1].Mesto);
+    }
+
+    [Fact]
+    public void AdresarPreskociZaznamBezNazvu()
+    {
+        var response = """
+<?xml version="1.0" encoding="utf-8"?>
+<rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:adb="http://www.stormware.cz/schema/version_2/addressbook.xsd"
+  xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" state="ok">
+  <rsp:responsePackItem><lst:listAddressBook><lst:addressbook><adb:addressbookHeader><adb:identity>
+    <typ:address><typ:city>Bratislava</typ:city></typ:address>
+  </adb:identity></adb:addressbookHeader></lst:addressbook></lst:listAddressBook></rsp:responsePackItem>
+</rsp:responsePack>
+""";
+        // Bez nazvu sa firma nema ako sparovat s dodavatelom z faktury.
+        Assert.Empty(PohodaXml.ParseAddressBookRows(response));
+    }
+
+    [Fact]
+    public void PoziadavkaAdresaraJeSpravna()
+    {
+        var request = PohodaXml.BuildAddressBookRequest("35761571", "req-ab");
+        Assert.Contains("listAddressBookRequest", request);
+        Assert.Contains("requestAddressBook", request);
+        Assert.Contains("ico=\"35761571\"", request);
+    }
 }

@@ -158,3 +158,95 @@ export async function upsertPartnerZDokladu(
   );
   return created.rows[0] ? mapPartnerRow(created.rows[0]) : undefined;
 }
+
+/** Jeden riadok adresára POHODY tak, ako ho pošle Mostík. */
+export interface AdresarRiadok {
+  nazov: string;
+  ico?: string;
+  dic?: string;
+  icDph?: string;
+  ulica?: string;
+  mesto?: string;
+  psc?: string;
+  krajina?: string;
+}
+
+function adresaZRiadku(riadok: AdresarRiadok): string | undefined {
+  const casti = [riadok.ulica, [riadok.psc, riadok.mesto].filter(Boolean).join(' '), riadok.krajina]
+    .map((cast) => cast?.trim()).filter(Boolean);
+  return casti.length > 0 ? casti.join(', ') : undefined;
+}
+
+/**
+ * Adresár POHODY do kariet partnerov.
+ *
+ * Na rozdiel od `upsertPartnerZDokladu` sa tu údaje PREPISUJÚ, nie dopĺňajú:
+ * adresár je to, čo účtovník o firme sám zadal, a je autorita. Karta vzniknutá
+ * z extrakcie môže mať IČ DPH prečítané z nezvyklého blanketu nesprávne alebo
+ * (ako pri talianskej faktúre) vôbec.
+ *
+ * Predvoľby zaúčtovania sa netýkajú — tie patria Dokladovke, nie POHODE.
+ */
+export async function importujAdresar(
+  tx: Queryable,
+  scope: { tenantId: string; organizationId: string },
+  riadky: AdresarRiadok[],
+): Promise<{ vytvorene: number; aktualizovane: number; preskocene: number }> {
+  const vysledok = { vytvorene: 0, aktualizovane: 0, preskocene: 0 };
+  for (const riadok of riadky) {
+    const nazov = riadok.nazov?.trim();
+    if (!nazov) { vysledok.preskocene += 1; continue; }
+    const existujuci = await najdiPartnera(tx, scope.tenantId, scope.organizationId, {
+      nazov, ico: riadok.ico, icDph: riadok.icDph,
+    });
+    const hodnoty = [riadok.ico ?? null, riadok.dic ?? null, riadok.icDph ?? null, adresaZRiadku(riadok) ?? null];
+    if (existujuci) {
+      await tx.query(
+        `UPDATE partners SET
+           ico=COALESCE($1, ico), dic=COALESCE($2, dic), ic_dph=COALESCE($3, ic_dph),
+           address=COALESCE($4, address), updated_at=now()
+         WHERE id=$5 AND tenant_id=$6`,
+        [...hodnoty, existujuci.id, scope.tenantId],
+      );
+      vysledok.aktualizovane += 1;
+      continue;
+    }
+    await tx.query(
+      `INSERT INTO partners
+        (id, tenant_id, organization_id, name, name_normalized, ico, dic, ic_dph, address, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'auto')`,
+      [randomUUID(), scope.tenantId, scope.organizationId, nazov, normalizovanyNazov(nazov), ...hodnoty],
+    );
+    vysledok.vytvorene += 1;
+  }
+  return vysledok;
+}
+
+/**
+ * Doplní o dodávateľovi to, čo sa z dokladu nedalo prečítať.
+ *
+ * Karta partnera nesie údaje z adresára POHODY — teda to, čo účtovník o firme
+ * sám zadal. Talianska faktúra tlačí v poli „Partita IVA" číslo ODBERATEĽA
+ * a dodávateľovo má v drobnej hlavičke medzi Cap Soc. a REA; model radšej
+ * nechal prázdno, než by priradil cudzie. Hádať z blanketu netreba, keď je
+ * odpoveď v adresári.
+ *
+ * Dopĺňa sa LEN to, čo chýba: čo je na doklade, má prednosť — firma mohla
+ * medzitým zmeniť adresu a faktúra je novšia ako karta.
+ */
+export async function doplnZKartyPartnera(
+  tx: Queryable,
+  scope: { tenantId: string; organizationId: string },
+  dodavatel: { nazov?: string; ico?: string; dic?: string; icDph?: string; iban?: string; adresa?: string },
+): Promise<Partial<Record<'ico' | 'dic' | 'icDph' | 'adresa', string>> | undefined> {
+  if (!dodavatel.nazov?.trim()) return undefined;
+  if (dodavatel.ico && dodavatel.dic && dodavatel.icDph && dodavatel.adresa) return undefined;
+  const partner = await najdiPartnera(tx, scope.tenantId, scope.organizationId, dodavatel);
+  if (!partner) return undefined;
+  const doplnene: Partial<Record<'ico' | 'dic' | 'icDph' | 'adresa', string>> = {};
+  if (!dodavatel.ico && partner.ico) doplnene.ico = partner.ico;
+  if (!dodavatel.dic && partner.dic) doplnene.dic = partner.dic;
+  if (!dodavatel.icDph && partner.icDph) doplnene.icDph = partner.icDph;
+  if (!dodavatel.adresa && partner.adresa) doplnene.adresa = partner.adresa;
+  return Object.keys(doplnene).length > 0 ? doplnene : undefined;
+}

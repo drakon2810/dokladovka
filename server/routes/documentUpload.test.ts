@@ -23,6 +23,9 @@ async function upload(app: any, headers: any, organizationId: string, files: any
   return app.inject({ method: 'POST', url: '/api/documents/upload', headers, payload: { organizationId, files } });
 }
 
+// 60 s ako ostatné testy s databázou: každý si stavia vlastnú PGlite so
+// všetkými migráciami a pri plnom paralelnom behu sa do 30 s nezmestí. Súbor
+// samostatne prechádzal, v celej sade padal — a vyzeralo to ako regresia.
 describe('POST /api/documents/upload', () => {
   it('zaradí PDF do rovnakej extract_document pipeline ako e-mail', async () => {
     const database = await createTestDatabase();
@@ -47,7 +50,7 @@ describe('POST /api/documents/upload', () => {
 
     const job = await database.query("SELECT kind, status FROM processing_jobs WHERE organization_id=$1", [seeded.organizationId]);
     expect(job.rows[0]).toMatchObject({ kind: 'extract_document', status: 'queued' });
-  }, 30000);
+  }, 60000);
 
   it('prijme PEPPOL BIS XML, odmietne neznámy súbor, deteguje duplicitu', async () => {
     const database = await createTestDatabase();
@@ -71,7 +74,7 @@ describe('POST /api/documents/upload', () => {
     await upload(app, headers, seeded.organizationId, [{ fileName: 'a.pdf', mimeType: 'application/pdf', contentBase64: PDF }]);
     const again = await upload(app, headers, seeded.organizationId, [{ fileName: 'a.pdf', mimeType: 'application/pdf', contentBase64: PDF }]);
     expect(again.json().results[0]).toMatchObject({ status: 'duplicate', reason: 'technical_duplicate' });
-  }, 30000);
+  }, 60000);
 
   it('schvaľovateľ nesmie nahrávať doklady', async () => {
     const database = await createTestDatabase();
@@ -85,7 +88,7 @@ describe('POST /api/documents/upload', () => {
       { fileName: 'faktura.pdf', mimeType: 'application/pdf', contentBase64: PDF },
     ]);
     expect(response.statusCode).toBe(403);
-  }, 30000);
+  }, 60000);
 
   it('zamietnutý doklad sa dá nahrať znova (kôš neblokuje ten istý súbor navždy)', async () => {
     const database = await createTestDatabase();

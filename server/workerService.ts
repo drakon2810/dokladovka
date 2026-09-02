@@ -28,7 +28,7 @@ import {
 import { suggestBankMovementAccounting } from './services/bankSuggestionService.js';
 import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.js';
 import { matchStatementPayments } from './services/paymentService.js';
-import { upsertPartnerZDokladu } from './services/partnerService.js';
+import { doplnZKartyPartnera, upsertPartnerZDokladu } from './services/partnerService.js';
 import { opravSkDanoveCisla } from './services/skTaxIdsService.js';
 import type { ObjectStorage } from './storage.js';
 import { PDFDocument } from 'pdf-lib';
@@ -415,6 +415,19 @@ async function completeRun(
   // neplatné číslo, ktoré blokuje schválenie — a keby prešlo, išlo by tak do
   // kontrolného výkazu. Beží pred validáciou, aby opravený doklad už nemal
   // varovanie, a je best-effort: výpadok registra doklad nezhodí.
+  // Najprv karta partnera (adresár POHODY), až potom register: keď karta dodá
+  // IČO, register z neho vie doplniť aj DIČ.
+  try {
+    const dodavatel = (normalized.extracted as { dodavatel?: Record<string, unknown> }).dodavatel ?? {};
+    const zKarty = await doplnZKartyPartnera(
+      database, { tenantId: job.tenant_id, organizationId: job.organization_id }, dodavatel);
+    if (zKarty) {
+      Object.assign(dodavatel, zKarty);
+      Object.assign(result.supplier, zKarty);
+    }
+  } catch (cause) {
+    console.warn('[partner] kartu sa nepodarilo prečítať:', cause instanceof Error ? cause.message : cause);
+  }
   try {
     const dodavatel = (normalized.extracted as { dodavatel?: Record<string, unknown> }).dodavatel ?? {};
     const opravene = await opravSkDanoveCisla(config.fsOpenDataApiKey, dodavatel);

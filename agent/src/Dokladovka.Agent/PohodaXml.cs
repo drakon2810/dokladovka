@@ -164,6 +164,54 @@ public static class PohodaXml
     /// signál. Duplicity sa NEZLUČUJÚ: početnosť je pre analýzu hlavný signál
     /// a odtlačok riadka na serveri ich rozlíši podľa čísla dokladu.
     /// </summary>
+    /// <summary>Záznam adresára POHODY — to, čo účtovník o firme raz zadal.</summary>
+    public sealed record AddressBookRow(
+        string Nazov, string? Ico, string? Dic, string? IcDph,
+        string? Ulica, string? Mesto, string? Psc, string? Krajina);
+
+    /// <summary>
+    /// Dopyt na adresár. Údaje o firme (IČ DPH, adresa) sa dovtedy čítali iba
+    /// z PDF každej faktúry nanovo — a pri nezvyklom cudzom blankete sa
+    /// nenašli, hoci ich účtovník má v POHODE dávno zadané.
+    /// </summary>
+    public static string BuildAddressBookRequest(string ico, string requestId) => $"""
+<?xml version="1.0" encoding="Windows-1250"?>
+<dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export adresara"
+  xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd">
+  <dat:dataPackItem id="ab01" version="2.0"><lst:listAddressBookRequest version="2.0" addressBookVersion="2.0"><lst:requestAddressBook/></lst:listAddressBookRequest></dat:dataPackItem>
+</dat:dataPack>
+""";
+
+    public static IReadOnlyList<AddressBookRow> ParseAddressBookRows(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
+
+        var rows = new List<AddressBookRow>();
+        foreach (var header in document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "addressbookHeader"))
+        {
+            // Fakturačná adresa je v identity/address; company je názov firmy.
+            var address = header.Descendants().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "address");
+            if (address is null) continue;
+            var nazov = Trimmed(FindText(address, "company")) ?? Trimmed(FindText(address, "name"));
+            // Bez názvu sa firma nemá ako spárovať s dodávateľom z faktúry.
+            if (nazov is null) continue;
+            rows.Add(new AddressBookRow(
+                nazov,
+                Trimmed(FindText(address, "ico")),
+                Trimmed(FindText(address, "dic")),
+                Trimmed(FindText(address, "icDph")),
+                Trimmed(FindText(address, "street")),
+                Trimmed(FindText(address, "city")),
+                Trimmed(FindText(address, "zip")),
+                Trimmed(address.Descendants().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "country")?
+                    .Descendants().FirstOrDefault(item => item.Name.LocalName == "ids")?.Value)));
+        }
+        return rows;
+    }
+
     public static ParsedHistory ParseHistoryRows(string xml)
     {
         var document = XDocument.Parse(xml, LoadOptions.None);

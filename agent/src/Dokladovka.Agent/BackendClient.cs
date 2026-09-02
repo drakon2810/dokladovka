@@ -67,6 +67,7 @@ public sealed record TrainingImportResult(int Imported, int Duplicates, int Reje
 
 /// <summary>bezKodu = doklady bez predkontácie aj členenia; korpus ich nezoberie.</summary>
 public sealed record HistoryImportResult(int Imported, int Duplicates, int BezKodu);
+public sealed record AddressBookImportResult(int Vytvorene, int Aktualizovane, int Preskocene);
 
 public sealed class BackendApiException(HttpStatusCode statusCode, string message, bool transient = false) : Exception(message)
 {
@@ -134,6 +135,14 @@ public sealed class BackendClient
     // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
     public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, bool reset, CancellationToken cancellationToken) =>
         SendJsonAsync<TrainingImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/training-decisions", new { rows, done, reset }), cancellationToken);
+
+    /// <summary>
+    /// Adresár POHODY do kariet partnerov. Údaje o firme (IČ DPH, adresa) sa
+    /// dovtedy čítali iba z PDF každej faktúry nanovo — pri nezvyklom cudzom
+    /// blankete sa nenašli, hoci ich účtovník má v POHODE dávno zadané.
+    /// </summary>
+    public Task<AddressBookImportResult> UploadAddressBookAsync(string organizationId, IReadOnlyList<PohodaXml.AddressBookRow> rows, CancellationToken cancellationToken) =>
+        SendJsonAsync<AddressBookImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/address-book", new { rows }), cancellationToken);
 
     public Task<IReadOnlyList<AgentExportJob>> GetExportQueueAsync(string organizationId, CancellationToken cancellationToken) =>
         SendJsonAsync<IReadOnlyList<AgentExportJob>>(

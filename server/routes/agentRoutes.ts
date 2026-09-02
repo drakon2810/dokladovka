@@ -16,6 +16,7 @@ import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
 import { historyImportSchema, importUctoHistory } from '../services/uctoHistoryService.js';
+import { importujAdresar } from '../services/partnerService.js';
 
 interface AgentAuth extends Record<string, unknown> {
   id: string;
@@ -435,6 +436,36 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   // len prijaté faktúry. Bez toho musel účtovník nosiť .mdb ručne, hoci agent
   // databázu firmy vidí. Zdroj 'mdb' drží odtlačok riadkov zhodný s ručným
   // importom, takže obe cesty sa navzájom nezduplikujú.
+  // Adresár POHODY do kariet partnerov. Údaje o firme (IČ DPH, adresa) sa
+  // dovtedy čítali iba z PDF každej faktúry nanovo — a pri nezvyklom cudzom
+  // blankete sa nenašli, hoci ich účtovník má v POHODE dávno zadané. Talianska
+  // faktúra tlačí v poli „Partita IVA" číslo ODBERATEĽA a to dodávateľovo má
+  // v drobnej hlavičke; model radšej nechal prázdno, než by priradil cudzie.
+  app.put('/api/agent/organizations/:id/address-book', async (request) => {
+    const agent = await requireAgent(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      rows: z.array(z.object({
+        nazov: z.string().min(1).max(200),
+        ico: z.string().max(32).optional(),
+        dic: z.string().max(32).optional(),
+        icDph: z.string().max(32).optional(),
+        ulica: z.string().max(120).optional(),
+        mesto: z.string().max(90).optional(),
+        psc: z.string().max(20).optional(),
+        krajina: z.string().max(8).optional(),
+      }).strict()).max(5000),
+    }).strict().parse(request.body);
+    const organization = await database.query(
+      'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
+    if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+
+    const result = await database.transaction((tx) => importujAdresar(
+      tx, { tenantId: agent.tenant_id, organizationId: id }, body.rows));
+    await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
+    return result;
+  });
+
   app.put('/api/agent/organizations/:id/ucto-history', async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
