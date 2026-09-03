@@ -541,10 +541,30 @@ public sealed class AgentCycleRunner
             var cisla = skupina.Select(result => result.PohodaNumber!).Distinct(StringComparer.Ordinal).ToArray();
             var requestXml = PohodaXml.BuildDocumentFolderRequest(
                 PohodaXml.ReadDataPackIco(pending.Job.DataPackXml) ?? string.Empty, skupina.Key, cisla, $"priecinky-{pending.Job.ExportJobId}");
-            if (requestXml is null) continue;
-            var response = await pohoda.PostXmlAsync(requestXml, $"priecinky-{pending.Job.ExportJobId}", false, cancellationToken);
-            var priecinky = PohodaXml.ParseDocumentFolders(response)
-                .ToDictionary(folder => folder.Cislo, StringComparer.OrdinalIgnoreCase);
+            if (requestXml is null)
+            {
+                _log.Info("scan_folder_agenda_unknown", new { agenda = skupina.Key, cisla });
+                continue;
+            }
+            // Dopyt sa validuje ako každý iný — a hlavne: zlyhanie JEDNEJ agendy
+            // nesmie zhodiť celý cyklus. Predtým výnimka z odpovede vyletela až
+            // von a doklady ostatných agend toho istého prenosu prišli o sken.
+            Dictionary<string, PohodaXml.DocumentFolder> priecinky;
+            try
+            {
+                var errors = _validator.ValidateDataPack(requestXml);
+                if (errors.Count > 0) throw new InvalidOperationException($"Dopyt na priečinok nesedí so schémou: {string.Join("; ", errors)}");
+                var response = await pohoda.PostXmlAsync(requestXml, $"priecinky-{pending.Job.ExportJobId}", false, cancellationToken);
+                priecinky = new Dictionary<string, PohodaXml.DocumentFolder>(StringComparer.OrdinalIgnoreCase);
+                // Prvý priečinok vyhráva: rovnaké číslo dokladu vo dvoch agendách
+                // by pri ToDictionary zhodilo celú skupinu.
+                foreach (var folder in PohodaXml.ParseDocumentFolders(response)) priecinky.TryAdd(folder.Cislo, folder);
+            }
+            catch (Exception error)
+            {
+                _log.Error("scan_folder_query_failed", error, new { agenda = skupina.Key, cisla });
+                continue;
+            }
             foreach (var result in skupina)
             {
                 if (!priecinky.TryGetValue(result.PohodaNumber!, out var folder) || string.IsNullOrWhiteSpace(folder.CompanyFolder))
@@ -572,6 +592,18 @@ public sealed class AgentCycleRunner
         var target = string.IsNullOrEmpty(sub) || Path.IsPathRooted(sub)
             ? folder.CompanyFolder!
             : Path.Combine(folder.CompanyFolder!, sub);
+        // POHODA nie je hranica dôvery — podzložku jej poslal Mostík a tá vznikla
+        // z údajov prečítaných z cudzieho PDF. „..\..\" nie je ani prázdna, ani
+        // absolútna, takže cez podmienku vyššie prejde a Path.Combine ju poslušne
+        // vyvedie mimo stromu Dokumenty. Meno súboru sa čistí (SafeFileName),
+        // priečinok sa doteraz nekontroloval vôbec.
+        var koren = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder.CompanyFolder!)) + Path.DirectorySeparatorChar;
+        var plna = Path.TrimEndingDirectorySeparator(Path.GetFullPath(target)) + Path.DirectorySeparatorChar;
+        if (!plna.StartsWith(koren, StringComparison.OrdinalIgnoreCase))
+        {
+            _log.Info("scan_folder_outside_tree", new { result.DocumentId, sub });
+            return;
+        }
         var (bytes, headerName) = await _backend.DownloadScanAsync(result.DocumentId, cancellationToken);
         var fileName = SafeFileName(headerName, result.PohodaNumber!);
         Directory.CreateDirectory(target);

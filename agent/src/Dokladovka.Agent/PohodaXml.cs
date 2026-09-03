@@ -288,13 +288,24 @@ public static class PohodaXml
     /// <summary>Priečinok dokumentov jedného dokladu (záložka „Dokumenty").</summary>
     public sealed record DocumentFolder(string Cislo, string? CompanyFolder, string? SubFolder);
 
-    // Agenda dokladu → element zoznamu v POHODE. Priečinok pýtame len pre agendy,
-    // ktoré vôbec exportujeme (faktúry, pokladňa, interné doklady).
-    private static (string Request, string Item, string VersionAttribute)? FolderRequestShape(string documentType) => documentType switch
+    // Hodnoty invoiceType podľa invoice.xsd. Dobropis, ťarchopis ani zálohová
+    // faktúra nie sú „obyčajná faktúra": dopyt na priečinok filtrovaný cudzím
+    // invoiceType doklad nenájde a sken sa ticho zahodí (scan_folder_unknown).
+    private static readonly HashSet<string> InvoiceTypes = new(StringComparer.Ordinal)
     {
-        "FP" or "FV" or "OZ" => ("listInvoiceRequest", "requestInvoice", "invoiceVersion"),
-        "PD" => ("listVoucherRequest", "requestVoucher", "voucherVersion"),
-        "MZDY" => ("listIntDocRequest", "requestIntDoc", "intDocVersion"),
+        "receivedInvoice", "receivedCreditNotice", "receivedDebitNote", "receivedAdvanceInvoice",
+        "issuedInvoice", "issuedCreditNotice", "issuedDebitNote", "issuedAdvanceInvoice",
+        "commitment",
+    };
+
+    // Agenda dokladu → element zoznamu v POHODE. Kľúčom je typ tak, ako ho nesie
+    // sám dataPack (pri faktúrach priamo invoiceType) — nie preložená agenda,
+    // aby sa medzi čítaním packu a dopytom nemal kde stratiť podtyp dokladu.
+    private static (string Request, string Item, string VersionAttribute, string? InvoiceType)? FolderRequestShape(string documentType) => documentType switch
+    {
+        "voucher" => ("listVoucherRequest", "requestVoucher", "voucherVersion", null),
+        "intDoc" => ("listIntDocRequest", "requestIntDoc", "intDocVersion", null),
+        _ when InvoiceTypes.Contains(documentType) => ("listInvoiceRequest", "requestInvoice", "invoiceVersion", documentType),
         _ => null,
     };
 
@@ -308,9 +319,9 @@ public static class PohodaXml
         if (numbers.Count == 0) return null;
         var shape = FolderRequestShape(documentType);
         if (shape is null) return null;
-        // invoiceType je pri faktúrach povinný atribút dopytu.
-        var invoiceType = documentType switch { "FV" => "issuedInvoice", "OZ" => "commitment", _ => "receivedInvoice" };
-        var typeAttribute = shape.Value.Request == "listInvoiceRequest" ? $" invoiceType=\"{invoiceType}\"" : string.Empty;
+        // invoiceType je pri faktúrach povinný atribút dopytu; hodnota je z
+        // uzavretého zoznamu InvoiceTypes, takže do atribútu ide bezpečne.
+        var typeAttribute = shape.Value.InvoiceType is null ? string.Empty : $" invoiceType=\"{shape.Value.InvoiceType}\"";
         var selected = string.Join("\n", numbers.Select(number =>
             $"          <ftr:number><typ:numberRequested>{Escape(number)}</typ:numberRequested></ftr:number>"));
         return $"""
@@ -342,9 +353,12 @@ public static class PohodaXml
     public static string? ReadDataPackIco(string xml) =>
         Trimmed(XDocument.Parse(xml, LoadOptions.None).Root?.Attribute("ico")?.Value);
 
-    /// <summary>Typ dokladu každej položky dataPacku (id → FP/FV/OZ/PD/MZDY).
+    /// <summary>Typ dokladu každej položky dataPacku (id → voucher/intDoc/invoiceType).
     /// Agenda sa číta z tela položky, nie z cloudu — dopyt na priečinok musí
-    /// ísť do tej agendy, do ktorej doklad naozaj išiel.</summary>
+    /// ísť do tej agendy, do ktorej doklad naozaj išiel. Faktúra nesie priamo
+    /// svoj invoiceType: preklad na FP/FV/OZ predtým zlial VŠETKY podtypy do
+    /// „prijatej faktúry", takže dobropis, ťarchopis ani zálohová faktúra sa
+    /// pri spätnom dopyte nenašli a ich sken sa do POHODY nikdy nedostal.</summary>
     public static IReadOnlyDictionary<string, string> ReadDataPackItemTypes(string xml)
     {
         var document = XDocument.Parse(xml, LoadOptions.None);
@@ -356,14 +370,11 @@ public static class PohodaXml
             var body = item.Elements().FirstOrDefault(child => IsStormware(child));
             var typ = body?.Name.LocalName switch
             {
-                "voucher" => "PD",
-                "intDoc" => "MZDY",
-                "invoice" => FindText(body, "invoiceType") switch
-                {
-                    "issuedInvoice" => "FV",
-                    "commitment" => "OZ",
-                    _ => "FP",
-                },
+                "voucher" => "voucher",
+                "intDoc" => "intDoc",
+                // Neznámy invoiceType radšej vynecháme, než by mal ísť do dopytu:
+                // XSD pozná uzavretý zoznam a prázdny atribút zhodí celý dopyt.
+                "invoice" => Trimmed(FindText(body, "invoiceType")) is { } invoiceType && InvoiceTypes.Contains(invoiceType) ? invoiceType : null,
                 _ => null,
             };
             if (typ is not null) types[id] = typ;
@@ -506,12 +517,24 @@ public static class PohodaXml
         {
             var code = attributes ? item.Attribute("code")?.Value.Trim() : FindText(item, prefixCode ? "prefix" : "code");
             var name = attributes ? (item.Attribute("accounting")?.Value ?? item.Attribute("name")?.Value)?.Trim() : FindText(item, "name");
-            if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name) || values.ContainsKey(code)) continue;
+            var agenda = attributes ? item.Attribute("agenda")?.Value : FindText(item, "agenda");
+            // Číselné rady sa kľúčujú DVOJICOU prefix + agenda: POHODA ten istý
+            // prefix používa vo viacerých agendách — „26" je rad pokladne aj rad
+            // ostatných záväzkov — a kľúč zo samotného prefixu tie ďalšie ticho
+            // zahodil. ALPINA má v POHODE 18 radov ostatných záväzkov, do cloudu
+            // ich došlo 11 a chýbal medzi nimi 26OZ, ten najpoužívanejší.
+            //
+            // Pri ostatných číselníkoch to naopak platiť NESMIE: tá istá
+            // predkontácia je v exporte raz za každú agendu, kde sa smie použiť,
+            // a agenda by z jedného kódu spravila desať položiek v ponuke.
+            if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name)) continue;
+            var kluc = prefixCode ? $"{code}{agenda}" : code;
+            if (values.ContainsKey(kluc)) continue;
             // debit/credit = účty MD/DAL predkontácie (len itemAccounting ich má; inde vráti null).
             // topNumber = najvyššie číslo číselného radu (len numericalSeries; fallback number).
-            values.Add(code, new CodeListValue(code, name,
+            values.Add(kluc, new CodeListValue(code, name,
                 attributes ? item.Attribute("id")?.Value : FindText(item, "id"),
-                attributes ? item.Attribute("agenda")?.Value : FindText(item, "agenda"),
+                agenda,
                 attributes ? item.Attribute("year")?.Value : FindText(item, "year"),
                 attributes ? Trimmed(item.Attribute("debit")?.Value) : null,
                 attributes ? Trimmed(item.Attribute("credit")?.Value) : null,

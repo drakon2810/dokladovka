@@ -27,6 +27,37 @@ function identifier(value: unknown, maxLength: number): string {
   return String(value ?? '').replace(/\s+/g, '').slice(0, maxLength);
 }
 
+// Priečinok agendy v strome „Dokumenty firmy". POHODA cestu ukladá na doklad
+// a agent do nej odloží sken — bez nej doklad hlási „Priečinok nie je
+// definovaný" a PDF nemá kam ísť. Bankový výpis chýba zámerne: jeden výpis sa
+// do POHODY rozpadne na jeden doklad za KAŽDÝ pohyb, takže priečinok dokladu
+// pre celý sken neexistuje.
+//
+// ponytail: segment agendy píšeme aj do podzložky, rovnako ako doteraz vydaná
+// faktúra. Ak POHODA vracia agendu už v companyDocumentsFolder, cesta na disku
+// má agendu dvakrát — na funkciu to nemá vplyv (POHODA aj agent skladajú tú
+// istú dvojicu), len je škaredá. Overiť na pilotnom stroji, kam reálne
+// pristál sken jednej vydanej faktúry, a segment prípadne vypustiť.
+const AGENDA_PRIECINOK: Record<string, string> = {
+  FP: 'Fakturácia\\Prijaté faktúry',
+  FV: 'Fakturácia\\Vydané faktúry',
+  OZ: 'Fakturácia\\Ostatné záväzky',
+  PD: 'Podvojné účtovníctvo\\Pokladňa',
+  MZDY: 'Podvojné účtovníctvo\\Interné doklady',
+};
+
+/**
+ * Meno podpriečinka jedného dokladu. Musí byť jedinečné a bezpečné ako cesta:
+ * POHODA hodnotu iba uloží a vráti a agent ju vloží do Path.Combine, takže „/"
+ * z čísla faktúry by pridal úroveň a „.." by zapísal mimo stromu Dokumenty.
+ */
+function bezpecnaCast(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[^\p{L}\p{N}._-]/gu, '-')
+    .replace(/^[.\-]+|[.\-]+$/g, '')
+    .slice(0, 32);
+}
+
 /**
  * Dátumy sú v schéme xsd:date (RRRR-MM-DD). Prázdna hodnota (chýbajúca splatnosť
  * je pri schvaľovaní len upozornenie) alebo formát „30.06.2026" zhodí XSD validáciu
@@ -553,6 +584,25 @@ export function buildServerDataPack(input: {
     // Text zápisu si píše účtovník v karte „Text dokladu"; keď ho nechá prázdny,
     // POHODA dostane názov predkontácie a až potom číslo dokladu.
     const documentText = String(extracted.textPolozky ?? '').trim();
+    // Záložka „Dokumenty": kým doklad nemá určenú podzložku, POHODA píše
+    // „Priečinok nie je definovaný" a Mostík nemá kam sken uložiť. Cestu preto
+    // určíme sami — <Dokumenty firmy>\<agenda>\<rada>\<doklad> — a to pre KAŽDÚ
+    // agendu, nielen pre faktúry. Predtým sa skladala len z vlastného čísla
+    // dokladu, a to má z celého importu jedine vydaná faktúra: prijaté faktúry,
+    // ostatné záväzky, pokladňa aj interné doklady tak ostali bez PDF.
+    //
+    // Číslo od POHODY v tejto chvíli ešte neexistuje (prideľuje ho až pri
+    // importe z číselného radu), takže meno priečinka nesie začiatok id dokladu.
+    // Číslo od dodávateľa by sa nedalo použiť: nie je jedinečné — dvaja
+    // dodávatelia pokojne pošlú faktúru „1" a druhý sken by sa do spoločného
+    // priečinka už nezapísal (agent rovnaké meno súboru preskočí).
+    const podzlozka = AGENDA_PRIECINOK[snapshot.typ]
+      ? `${AGENDA_PRIECINOK[snapshot.typ]}\\${numberSeries}\\${bezpecnaCast(cisloVPohode) || id.slice(0, 12)}`
+      : '';
+    const dokumentyXml = (ns: string) => (podzlozka
+      ? `
+      <${ns}:attachments><typ:files><typ:subFolder>${escapeXml(clamp(podzlozka, 255))}</typ:subFolder></typ:files></${ns}:attachments>`
+      : '');
     if (snapshot.typ === 'PD') {
       const cashAccount = snapshot.ucto.pokladnaKod;
       const voucherType = snapshot.ucto.pokladnaTyp;
@@ -577,7 +627,7 @@ export function buildServerDataPack(input: {
       </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.voucher)}
       <vch:voucherSummary><vch:homeCurrency>
         ${currency}
-      </vch:homeCurrency></vch:voucherSummary>
+      </vch:homeCurrency></vch:voucherSummary>${dokumentyXml('vch')}
     </vch:voucher>
   </dat:dataPackItem>`;
     }
@@ -607,7 +657,7 @@ export function buildServerDataPack(input: {
       </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.intDoc)}
       <int:intDocSummary><int:homeCurrency>
         ${mzdyCurrency}
-      </int:homeCurrency></int:intDocSummary>
+      </int:homeCurrency></int:intDocSummary>${dokumentyXml('int')}
     </int:intDoc>
   </dat:dataPackItem>`;
     }
@@ -616,18 +666,6 @@ export function buildServerDataPack(input: {
     // ktorý má zaplatiť zákazník — berie sa zo skratky číselníka bankových účtov.
     const paymentAccount = vydana ? undefined : skIbanAccount(supplier.iban);
     const vlastnyUcet = vydana ? clamp(snapshot.ucto.bankUcetKod, 19) : '';
-    // Záložka „Dokumenty": kým doklad nemá určenú podzložku, POHODA píše
-    // „Priečinok nie je definovaný" a Mostík nemá kam sken uložiť — tak ostali
-    // prijaté aj vydané faktúry bez priloženého PDF. Cestu preto určíme sami a
-    // rovnakú, akú ponúka sama POHODA: <Dokumenty firmy>Fakturácia<agenda>    // <rada><číslo>. Zložiť ju vieme len s vlastným číslom dokladu; inak číslo
-    // pridelí POHODA až pri importe a podzložka by nebola jedinečná.
-    const podzlozka = cisloVPohode && numberSeries
-      ? `Fakturácia\\${vydana ? 'Vydané faktúry' : 'Prijaté faktúry'}\\${numberSeries}\\${cisloVPohode}`
-      : '';
-    const dokumentyXml = podzlozka
-      ? `
-      <inv:attachments><typ:files><typ:subFolder>${escapeXml(clamp(podzlozka, 255))}</typ:subFolder></typ:files></inv:attachments>`
-      : '';
     const formaUhrady = vydana ? clamp(snapshot.ucto.formaUhrady, 20) : '';
     // Text dokladu = názov vybranej predkontácie (účtovník ho vidí v POHODE
     // namiesto predvoleného „Import FA z XML"); fallback na číslo faktúry.
@@ -662,7 +700,7 @@ export function buildServerDataPack(input: {
       </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.invoice)}
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}
-      </inv:homeCurrency></inv:invoiceSummary>${dokumentyXml}
+      </inv:homeCurrency></inv:invoiceSummary>${dokumentyXml('inv')}
     </inv:invoice>
   </dat:dataPackItem>`;
   }).join('\n');

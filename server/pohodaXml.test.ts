@@ -320,9 +320,78 @@ describe('buildServerDataPack — partner a hlavička pre POHODU', () => {
       // porovnáva escapovaný tvar cesty.
       '<inv:attachments><typ:files><typ:subFolder>Faktur&#225;cia\\Prijat&#233; fakt&#250;ry\\26FP\\260704300120</typ:subFolder></typ:files></inv:attachments>',
     );
-    // Bez vlastného čísla podzložku zložiť nevieme (číslo pridelí POHODA až pri importe).
-    expect(bezCisla).not.toContain('attachments');
+    // Bez vlastného čísla podzložku POHODA nepridelí sama — meno nesie začiatok
+    // id dokladu, inak by prijaté faktúry ostali bez priloženého PDF.
+    expect(bezCisla).toContain(
+      '<inv:attachments><typ:files><typ:subFolder>Faktur&#225;cia\\Prijat&#233; fakt&#250;ry\\26FP\\doc-1</typ:subFolder></typ:files></inv:attachments>',
+    );
     assertOrder(emittedChildren(sCislom, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
+  });
+});
+
+// Sken sa do POHODY dostane len cez podzložku uloženú na doklade. Kým ju vedela
+// zložiť iba vydaná faktúra (jediná s vlastným číslom), ostatné agendy hlásili
+// „Priečinok nie je definovaný" a PDF ostalo v cloude.
+describe('buildServerDataPack — priečinok dokumentov každej agendy', () => {
+  const agendaCodeLists: PohodaCodeLookup = {
+    ...codeLists,
+    ciselneRady: new Map([['r1', '26FP'], ['rp', '26HP'], ['ri', '26INT'], ['ro', '26OZ']]),
+  };
+
+  /** Podzložka späť v čitateľnej podobe — escapeXml diakritiku kóduje na entity. */
+  function subFolder(xml: string): string {
+    const raw = /<typ:subFolder>([^<]*)<\/typ:subFolder>/.exec(xml)?.[1];
+    expect(raw, 'doklad nedostal podzložku pre záložku Dokumenty').toBeDefined();
+    return raw!.replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
+  }
+
+  it('pokladničný doklad dostane podzložku agendy Pokladňa', () => {
+    const doc = invoiceDocument({});
+    doc.snapshot.typ = 'PD';
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, ciselnyRadId: 'rp', pokladnaKod: '26HP', pokladnaTyp: 'expense' };
+    const xml = buildServerDataPack({ id: 'pack-pd', ico: '35761571', documents: [doc], codeLists: agendaCodeLists });
+    expect(subFolder(xml)).toBe('Podvojné účtovníctvo\\Pokladňa\\26HP\\doc-1');
+    // attachments patrí do TELA dokladu až za súhrn (voucher.xsd), nie do hlavičky.
+    expect(xml).toContain('</vch:voucherSummary>\n      <vch:attachments>');
+  });
+
+  it('mzdová páska dostane podzložku agendy Interné doklady', () => {
+    const doc = invoiceDocument({});
+    doc.snapshot.typ = 'MZDY';
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, ciselnyRadId: 'ri' };
+    const xml = buildServerDataPack({ id: 'pack-int', ico: '35761571', documents: [doc], codeLists: agendaCodeLists });
+    expect(subFolder(xml)).toBe('Podvojné účtovníctvo\\Interné doklady\\26INT\\doc-1');
+    expect(xml).toContain('</int:intDocSummary>\n      <int:attachments>');
+  });
+
+  it('ostatný záväzok ide do svojej agendy, nie medzi prijaté faktúry', () => {
+    const doc = invoiceDocument({});
+    doc.snapshot.typ = 'OZ';
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, ciselnyRadId: 'ro' };
+    const xml = buildServerDataPack({ id: 'pack-oz', ico: '35761571', documents: [doc], codeLists: agendaCodeLists });
+    expect(subFolder(xml)).toBe('Fakturácia\\Ostatné záväzky\\26OZ\\doc-1');
+  });
+
+  it('nepriateľské číslo dokladu nesmie pridať úroveň cesty ani vyjsť zo stromu', () => {
+    // cisloVPohode je nakoniec text z PDF: „/" by pridalo priečinok a „.." by
+    // sken zapísalo mimo Dokumentov (agent podzložku dostane späť od POHODY).
+    const doc = invoiceDocument({});
+    doc.snapshot.ucto = { ...doc.snapshot.ucto, cisloVPohode: '..\\..\\Windows/2026' };
+    const xml = buildServerDataPack({ id: 'pack-zly', ico: '35761571', documents: [doc], codeLists: agendaCodeLists });
+    const cesta = subFolder(xml);
+    expect(cesta.split('\\').at(-1)).toBe('Windows-2026');
+    expect(cesta).not.toContain('..');
+  });
+
+  it('dva doklady s rovnakým číslom od dodávateľa nesmú zdieľať priečinok', () => {
+    // Číslo faktúry jedinečné nie je (dvaja dodávatelia pošlú „1"), preto meno
+    // priečinka nesie id dokladu — inak by druhý sken prepadol ako duplicita.
+    const a = invoiceDocument({ cisloFaktury: '1' });
+    const b = { ...invoiceDocument({ cisloFaktury: '1' }), id: 'doc-2' };
+    const xml = buildServerDataPack({ id: 'pack-dup', ico: '35761571', documents: [a, b], codeLists: agendaCodeLists });
+    const cesty = [...xml.matchAll(/<typ:subFolder>([^<]*)<\/typ:subFolder>/g)].map((match) => match[1]);
+    expect(cesty).toHaveLength(2);
+    expect(cesty[0]).not.toBe(cesty[1]);
   });
 });
 
@@ -560,10 +629,16 @@ function xsdSequence(file: string, complexType: string): string[] {
 
 /** Priame deti jedného elementu v poradí, v akom ich generátor vypísal. */
 function emittedChildren(xml: string, prefix: string, wrapper: string): string[] {
-  const start = xml.indexOf(`<${prefix}:${wrapper}>`);
+  // Obal má atribúty (`<vch:voucher version="2.0">`), preto sa hľadá cez regulár
+  // — hľadanie presného `<vch:voucher>` by nenašlo nič a kontrola by prešla naprázdno.
+  const open = new RegExp(`<${prefix}:${wrapper}[\\s>]`).exec(xml);
+  if (!open) throw new Error(`element ${prefix}:${wrapper} sa v XML nenašiel`);
+  const start = open.index + open[0].length;
   const end = xml.indexOf(`</${prefix}:${wrapper}>`, start);
-  const body = xml.slice(start + wrapper.length + prefix.length + 3, end);
-  return [...body.matchAll(new RegExp(`<${prefix}:([A-Za-z0-9]+)[\s>]`, 'g'))].map((match) => match[1]);
+  const body = xml.slice(start, end);
+  // Trieda musí byť `[\\s>]`: v šablónovom reťazci sa `\s` zmenilo na obyčajné
+  // „s" a elementy s atribútom sa do zoznamu nikdy nedostali.
+  return [...body.matchAll(new RegExp(`<${prefix}:([A-Za-z0-9]+)[\\s>]`, 'g'))].map((match) => match[1]);
 }
 
 function assertOrder(emitted: string[], sequence: string[]): void {

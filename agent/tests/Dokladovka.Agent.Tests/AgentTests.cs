@@ -379,12 +379,16 @@ public sealed class AgentTests
     [Fact]
     public void ConfirmedInvoiceAndVoucherMappingsConformToOfficialSchema()
     {
+        // Vrátane priečinka dokumentov: attachments je v XSD až za súhrnom dokladu
+        // a jediný element mimo poradia odmietne CELÝ dataPack — teda aj bezchybné
+        // doklady tej istej dávky. Miesto sa preto overuje proti oficiálnej schéme.
         const string xml = """
             <?xml version="1.0" encoding="Windows-1250"?>
             <dat:dataPack version="2.0" id="schema-test" ico="12345678" application="Dokladovka" note="Schema test"
               xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
               xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd"
               xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd"
+              xmlns:int="http://www.stormware.cz/schema/version_2/intDoc.xsd"
               xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
               <dat:dataPackItem id="11111111-1111-4111-8111-111111111111" version="2.0">
                 <inv:invoice version="2.0"><inv:invoiceHeader>
@@ -394,7 +398,8 @@ public sealed class AgentTests
                   <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting><inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
                   <inv:partnerIdentity><typ:address><typ:company>Test s.r.o.</typ:company><typ:ico>87654321</typ:ico></typ:address></inv:partnerIdentity>
                   <inv:paymentAccount><typ:accountNo>1234567890</typ:accountNo><typ:bankCode>1100</typ:bankCode></inv:paymentAccount>
-                </inv:invoiceHeader><inv:invoiceSummary><inv:homeCurrency><typ:price3>100.00</typ:price3><typ:price3VAT>5.00</typ:price3VAT></inv:homeCurrency></inv:invoiceSummary></inv:invoice>
+                </inv:invoiceHeader><inv:invoiceSummary><inv:homeCurrency><typ:price3>100.00</typ:price3><typ:price3VAT>5.00</typ:price3VAT></inv:homeCurrency></inv:invoiceSummary>
+                <inv:attachments><typ:files><typ:subFolder>Fakturácia\Ostatné záväzky\26OZ\1f2e3d4c5b6a</typ:subFolder></typ:files></inv:attachments></inv:invoice>
               </dat:dataPackItem>
               <dat:dataPackItem id="22222222-2222-4222-8222-222222222222" version="2.0">
                 <vch:voucher version="2.0"><vch:voucherHeader>
@@ -403,7 +408,16 @@ public sealed class AgentTests
                   <vch:date>2026-07-14</vch:date><vch:dateTax>2026-07-14</vch:dateTax>
                   <vch:accounting><typ:ids>501/211</typ:ids></vch:accounting><vch:classificationVAT><typ:ids>PD</typ:ids></vch:classificationVAT>
                   <vch:text>Pokladničný doklad</vch:text><vch:partnerIdentity><typ:address><typ:company>Test s.r.o.</typ:company></typ:address></vch:partnerIdentity>
-                </vch:voucherHeader><vch:voucherSummary><vch:homeCurrency><typ:priceHigh>100.00</typ:priceHigh><typ:priceHighVAT>23.00</typ:priceHighVAT></vch:homeCurrency></vch:voucherSummary></vch:voucher>
+                </vch:voucherHeader><vch:voucherSummary><vch:homeCurrency><typ:priceHigh>100.00</typ:priceHigh><typ:priceHighVAT>23.00</typ:priceHighVAT></vch:homeCurrency></vch:voucherSummary>
+                <vch:attachments><typ:files><typ:subFolder>Podvojné účtovníctvo\Pokladňa\26HP\22222222-222</typ:subFolder></typ:files></vch:attachments></vch:voucher>
+              </dat:dataPackItem>
+              <dat:dataPackItem id="33333333-3333-4333-8333-333333333333" version="2.0">
+                <int:intDoc version="2.0"><int:intDocHeader>
+                  <int:number><typ:ids>INT</typ:ids></int:number><int:date>2026-07-14</int:date>
+                  <int:accounting><typ:ids>331/221</typ:ids></int:accounting><int:classificationVAT><typ:ids>PN</typ:ids></int:classificationVAT>
+                  <int:text>Mzdová páska</int:text>
+                </int:intDocHeader><int:intDocSummary><int:homeCurrency><typ:priceNone>4120.74</typ:priceNone></int:homeCurrency></int:intDocSummary>
+                <int:attachments><typ:files><typ:subFolder>Podvojné účtovníctvo\Interné doklady\26INT\33333333-333</typ:subFolder></typ:files></int:attachments></int:intDoc>
               </dat:dataPackItem>
             </dat:dataPack>
             """;
@@ -720,9 +734,13 @@ public sealed class AgentTests
 public sealed class DocumentFolderTests
 {
     [Theory]
-    [InlineData("FP")]
-    [InlineData("PD")]
-    [InlineData("MZDY")]
+    [InlineData("receivedInvoice")]
+    [InlineData("receivedCreditNotice")]
+    [InlineData("issuedInvoice")]
+    [InlineData("issuedCreditNotice")]
+    [InlineData("commitment")]
+    [InlineData("voucher")]
+    [InlineData("intDoc")]
     public void FolderRequestConformsToBundledOfficialSchema(string documentType)
     {
         var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
@@ -730,7 +748,45 @@ public sealed class DocumentFolderTests
         Assert.NotNull(xml);
         Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml!));
     }
-    
+
+    [Fact]
+    public void NeznamaAgendaDopytNepostavi()
+    {
+        // Radšej žiadny dopyt než dopyt s prázdnym invoiceType: XSD pozná uzavretý
+        // zoznam a chybný atribút by zhodil celú skupinu dokladov.
+        Assert.Null(PohodaXml.BuildDocumentFolderRequest("12345678", "bank", ["26HP026"], "folders-test"));
+        Assert.Null(PohodaXml.BuildDocumentFolderRequest("12345678", "FP", ["26HP026"], "folders-test"));
+    }
+
+    [Fact]
+    public void TypPolozkyPackuNesiePodtypFaktury()
+    {
+        // Dobropis vydanej faktúry sa predtým čítal ako „prijatá faktúra" a spätný
+        // dopyt na priečinok ho v POHODE nenašiel — sken sa ticho stratil.
+        var pack = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <dat:dataPack version="2.0" id="p1" ico="12345678"
+              xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+              xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd"
+              xmlns:vch="http://www.stormware.cz/schema/version_2/voucher.xsd"
+              xmlns:int="http://www.stormware.cz/schema/version_2/intDoc.xsd">
+              <dat:dataPackItem id="d1" version="2.0"><inv:invoice version="2.0"><inv:invoiceHeader>
+                <inv:invoiceType>issuedCreditNotice</inv:invoiceType></inv:invoiceHeader></inv:invoice></dat:dataPackItem>
+              <dat:dataPackItem id="d2" version="2.0"><inv:invoice version="2.0"><inv:invoiceHeader>
+                <inv:invoiceType>commitment</inv:invoiceType></inv:invoiceHeader></inv:invoice></dat:dataPackItem>
+              <dat:dataPackItem id="d3" version="2.0"><vch:voucher version="2.0"><vch:voucherHeader/></vch:voucher></dat:dataPackItem>
+              <dat:dataPackItem id="d4" version="2.0"><int:intDoc version="2.0"><int:intDocHeader/></int:intDoc></dat:dataPackItem>
+            </dat:dataPack>
+            """;
+        var typy = PohodaXml.ReadDataPackItemTypes(pack);
+        Assert.Equal("issuedCreditNotice", typy["d1"]);
+        Assert.Equal("commitment", typy["d2"]);
+        Assert.Equal("voucher", typy["d3"]);
+        Assert.Equal("intDoc", typy["d4"]);
+        // A dopyt zloží presne pre ten podtyp, s ktorým doklad vznikol.
+        Assert.Contains("invoiceType=\"issuedCreditNotice\"", PohodaXml.BuildDocumentFolderRequest("12345678", typy["d1"], ["26FV001"], "req")!);
+    }
+
     [Fact]
     public void SafeFileName_ocisti_meno_z_hlavicky()
     {
