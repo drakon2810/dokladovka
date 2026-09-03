@@ -43,8 +43,11 @@ interface ExportJobRow extends Record<string, unknown> {
 }
 
 const codeListKind = z.enum(['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'bankoveUcty']);
-// Telemetria (agent_sync_runs) pozná okrem číselníkov aj tréningovú synchronizáciu.
-const syncRunKind = z.enum([...codeListKind.options, 'treningAi']);
+// Telemetria (agent_sync_runs) pozná okrem číselníkov aj tréningovú
+// synchronizáciu a adresár. Adresár tam pribudol preto, že jeho zlyhanie sa
+// dovtedy zapísalo iba do lokálneho logu agenta — na serveri to vyzeralo
+// rovnako ako „prebehlo a nič tam nebolo".
+const syncRunKind = z.enum([...codeListKind.options, 'treningAi', 'adresar']);
 const codeListItem = z.object({
   kod: z.string().trim().min(1).max(100),
   nazov: z.string().trim().min(1).max(300),

@@ -862,4 +862,16 @@ public sealed class DocumentFolderTests
         Assert.Contains("requestAddressBook", request);
         Assert.Contains("ico=\"35761571\"", request);
     }
+
+    // Prva verzia pouzila prefix `lst:` (list.xsd), lenze listAddressBookRequest
+    // je vo vlastnom list_addBook.xsd. POHODA cely dataPackItem odmietla a
+    // adresar sa ticho nestiahol — schema to zachyti okamzite.
+    [Fact]
+    public void AddressBookRequestConformsToBundledOfficialSchema()
+    {
+        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
+        Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
+        var xml = PohodaXml.BuildAddressBookRequest("12345678", "test-request");
+        Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
+    }
 }

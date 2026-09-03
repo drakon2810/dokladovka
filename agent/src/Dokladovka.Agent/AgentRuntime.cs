@@ -270,19 +270,27 @@ public sealed class AgentCycleRunner
             // raz zadal, a mení sa rovnako zriedka. Zlyhanie adresára nesmie
             // zhodiť číselníky — bez nich sa nedá zaúčtovať vôbec, bez adresára
             // len chýbajú údaje o firme.
+            var adresarStopwatch = Stopwatch.StartNew();
             try
             {
                 var adresarXml = PohodaXml.BuildAddressBookRequest(organization.Ico, $"adresar-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+                // Validácia ako pri ostatných dopytoch. Prvá verzia ju nemala a
+                // zlý menný priestor tak prešiel až k POHODE, ktorá odpoveď
+                // odmietla — a to sa dalo zistiť iba z logu na počítači účtovníka.
+                var adresarErrors = _validator.ValidateDataPack(adresarXml);
+                if (adresarErrors.Count > 0) throw new InvalidOperationException("XSD validácia dopytu adresára zlyhala: " + string.Join("; ", adresarErrors.Take(5)));
                 var adresarResponse = await _mServers[target.Endpoint.Id].PostXmlAsync(adresarXml, $"adresar-{organization.OrganizationId}", false, cancellationToken);
                 var adresar = PohodaXml.ParseAddressBookRows(adresarResponse);
-                if (adresar.Count > 0)
-                {
-                    var vysledok = await _backend.UploadAddressBookAsync(organization.OrganizationId, adresar, cancellationToken);
-                    _log.Info("address_book_synced", new { organization.OrganizationId, adresar.Count, vysledok.Vytvorene, vysledok.Aktualizovane });
-                }
+                if (adresar.Count > 0) await _backend.UploadAddressBookAsync(organization.OrganizationId, adresar, cancellationToken);
+                // Výsledok ide aj na server. Prvý ostrý beh skončil na nule a v
+                // cloude to vyzeralo rovnako ako „adresár je prázdny" — dôvod
+                // ležal len v logu na počítači účtovníka.
+                await TrySendSyncResultAsync(new AgentSyncResult(organization.OrganizationId, "adresar", "ok", adresar.Count, (int)adresarStopwatch.ElapsedMilliseconds), cancellationToken);
+                _log.Info("address_book_synced", new { organization.OrganizationId, adresar.Count });
             }
             catch (Exception error)
             {
+                await TrySendSyncResultAsync(new AgentSyncResult(organization.OrganizationId, "adresar", "error", 0, (int)adresarStopwatch.ElapsedMilliseconds, error.GetType().Name), cancellationToken);
                 _log.Error("address_book_sync_failed", error, new { organization.OrganizationId });
             }
             _state.LastCodeListSync[stateKey] = DateTimeOffset.UtcNow;

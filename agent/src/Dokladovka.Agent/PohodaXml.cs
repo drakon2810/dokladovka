@@ -173,13 +173,17 @@ public static class PohodaXml
     /// Dopyt na adresár. Údaje o firme (IČ DPH, adresa) sa dovtedy čítali iba
     /// z PDF každej faktúry nanovo — a pri nezvyklom cudzom blankete sa
     /// nenašli, hoci ich účtovník má v POHODE dávno zadané.
+    ///
+    /// POZOR na menný priestor: listAddressBookRequest NIE JE v list.xsd ako
+    /// ostatné zoznamy, ale vo vlastnom list_addBook.xsd. S prefixom `lst:`
+    /// POHODA celý dataPackItem odmietne a adresár sa ticho nestiahne.
     /// </summary>
     public static string BuildAddressBookRequest(string ico, string requestId) => $"""
 <?xml version="1.0" encoding="Windows-1250"?>
 <dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export adresara"
   xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
-  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd">
-  <dat:dataPackItem id="ab01" version="2.0"><lst:listAddressBookRequest version="2.0" addressBookVersion="2.0"><lst:requestAddressBook/></lst:listAddressBookRequest></dat:dataPackItem>
+  xmlns:lAdb="http://www.stormware.cz/schema/version_2/list_addBook.xsd">
+  <dat:dataPackItem id="ab01" version="2.0"><lAdb:listAddressBookRequest version="2.0" addressBookVersion="2.0"><lAdb:requestAddressBook/></lAdb:listAddressBookRequest></dat:dataPackItem>
 </dat:dataPack>
 """;
 
