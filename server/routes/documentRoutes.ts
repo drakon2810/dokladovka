@@ -20,6 +20,7 @@ import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileServic
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 import { ingestFiles } from '../inbound/ingestFiles.js';
+import { zapisOpravuTypu } from '../services/firemnyProfilService.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -195,6 +196,23 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         id, auth.tenantId, body.expectedVersion],
     );
     if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    // Prepnutie typu je oprava kroku „čo je to za papier". Doteraz sa nikam
+    // nezapisovala a ďalší rovnaký doklad spravil tú istú chybu — pamäť
+    // rozhodnutí drží iba zaúčtovanie, teda krok PO určení typu.
+    if (body.documentType && body.documentType !== document.document_type) {
+      const extracted = (body.extracted ?? document.extracted) as
+        { dodavatel?: { nazov?: string }; textPolozky?: string } | undefined;
+      await zapisOpravuTypu(database, {
+        tenantId: auth.tenantId,
+        organizationId: document.organization_id,
+        documentId: id,
+        povodnyTyp: String(document.document_type),
+        novyTyp: body.documentType,
+        userId: auth.userId,
+        dodavatel: extracted?.dodavatel?.nazov,
+        text: extracted?.textPolozky,
+      });
+    }
     // Úprava schváleného dokladu ruší potvrdenie — rozhodnutie sa vyradí z pamäte.
     if (approvedChanged) await forgetUctoDecision(database, auth.tenantId, id);
     return result.rows[0];

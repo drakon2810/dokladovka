@@ -54,6 +54,8 @@ jeUctovnyDoklad = false exactly when documentType is INY.
 
 INY covers: contracts and contract applications (zmluva, kontrakt, "contract application"), orders and order confirmations (objednávka, order), transport orders and freight forwarding orders, delivery notes without prices, proforma invoices and quotations (proforma, cenová ponuka, quotation), letters and decisions from authorities that demand NO payment (oznámenie, potvrdenie, a decision that only grants or refuses something), certificates, ID scans and general correspondence.
 
+When the client's own history is supplied below, USE IT. It lists what this firm actually books and into which agenda, with the wording it uses. A paper whose subject matches one of those lines belongs to that agenda — the firm has booked such papers before, so it is a bookkeeping document for them even if the general rules above would send it to INY. The history says nothing about a paper that bills or does not bill, so it never overrides FP versus FV; it decides whether the paper is something this firm books at all, and into which agenda.
+
 An authority's letter that DOES name a sum to pay is OZ, not INY. A speeding fine, a parking penalty, a toll demand or a customs penalty is a liability the client owes and books — the letterhead of a ministry or police force does not change that. Decide it the same way you decide FP: does this paper demand money? If yes and it is not an invoice, it is OZ. Only a letter with nothing to pay is INY.
 
 A PRICE DOES NOT MAKE IT AN INVOICE. Transport orders, contracts and proformas routinely state an agreed amount, payment terms and both parties' details — that is the deal, not the billing. What makes a document an invoice is that it BILLS: it calls itself faktúra / invoice / daňový doklad, carries its own invoice number and a tax point, and demands payment for work already delivered. When the heading says "contract", "application", "order", "objednávka", "zmluva" or "proforma" and no separate invoice heading appears, answer INY even though an amount is printed.
@@ -84,6 +86,14 @@ export interface KlasifikaciaVstup {
   fileName: string;
   /** Účtovný klient — bez neho sa FP a FV rozlíšiť nedá. */
   organizacia?: { nazov?: string; ico?: string; icDph?: string };
+  /**
+   * Čo táto firma bežne účtuje a do ktorej agendy — riadky
+   * „OZ, VPD | pokuty a úroky z omeškania | pokuta, verb, upomienka".
+   *
+   * Bez neho klasifikácia rozhodovala podľa pravidiel rovnakých pre všetkých,
+   * hoci odpoveď ležala v histórii firmy.
+   */
+  profilFirmy?: string;
 }
 
 /**
@@ -143,9 +153,18 @@ export class OpenAIDocumentClassifier {
           filePart,
           {
             type: 'input_text',
-            text: signaly.length > 0
-              ? `Účtovný klient, pre ktorého sa doklad spracúva: ${klient}. Pomocné signály (nie sú dôkaz, rozhodni z obsahu): ${signaly.join('; ')}.`
-              : `Účtovný klient, pre ktorého sa doklad spracúva: ${klient}. Žiadne pomocné signály.`,
+            text: [
+              `Účtovný klient, pre ktorého sa doklad spracúva: ${klient}.`,
+              signaly.length > 0
+                ? `Pomocné signály (nie sú dôkaz, rozhodni z obsahu): ${signaly.join('; ')}.`
+                : 'Žiadne pomocné signály.',
+              input.profilFirmy
+                ? `
+
+Čo táto firma bežne účtuje (z jej vlastnej histórie v POHODE) — formát „agendy | kategória | typické frázy":
+${input.profilFirmy}`
+                : '',
+            ].filter(Boolean).join(' '),
           },
         ],
       }],

@@ -29,6 +29,7 @@ import { suggestBankMovementAccounting } from './services/bankSuggestionService.
 import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.js';
 import { matchStatementPayments } from './services/paymentService.js';
 import { doplnZKartyPartnera, upsertPartnerZDokladu } from './services/partnerService.js';
+import { profilPreKlasifikaciu } from './services/firemnyProfilService.js';
 import { opravSkDanoveCisla } from './services/skTaxIdsService.js';
 import type { ObjectStorage } from './storage.js';
 import { PDFDocument } from 'pdf-lib';
@@ -854,6 +855,12 @@ export async function processNextJob(
             ico: context.organization_ico,
             icDph: context.organization_ic_dph,
           },
+          // Čo firma bežne účtuje. Bez toho rozhodovala klasifikácia podľa
+          // pravidiel rovnakých pre všetkých — a taliansku pokutu zahodila ako
+          // „iný doklad", hoci firma má na pokuty vlastnú kategóriu.
+          profilFirmy: await profilPreKlasifikaciu(database, {
+            tenantId: job.tenant_id, organizationId: job.organization_id,
+          }),
         });
       } catch {
         klasifikacia = undefined;
