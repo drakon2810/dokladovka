@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Database } from '../db/database.js';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
@@ -50,6 +51,31 @@ describe('adresár POHODY do kariet partnerov', { timeout: 60_000 }, () => {
     await importujAdresar(database, scope, [BRP]);
     const partner = await database.query<{ ic_dph: string | null }>('SELECT ic_dph FROM partners');
     expect(partner.rows[0].ic_dph).toBe('IT01800220244');
+  });
+
+  it('jedna medzera navyše nesmie založiť druhú kartu', async () => {
+    const { database, scope } = await pripravDb();
+    // POHODA má „B.R.Pneumatici S.p.A.", faktúra „B.R. Pneumatici S.p.A." —
+    // rozdiel je jediná medzera za bodkou. Prísne porovnanie vyrobilo dve
+    // karty: prázdnu z extrakcie a plnú z adresára.
+    await importujAdresar(database, scope, [{ nazov: 'B.R. Pneumatici S.p.A.' }]);
+    expect(await importujAdresar(database, scope, [{ ...BRP, nazov: 'B.R.Pneumatici S.p.A.' }]))
+      .toMatchObject({ vytvorene: 0, aktualizovane: 1 });
+    expect((await database.query('SELECT 1 FROM partners')).rowCount).toBe(1);
+  });
+
+  it('pri dvoch kartách vyhrá vyplnenejšia', async () => {
+    const { database, scope } = await pripravDb();
+    await importujAdresar(database, scope, [BRP]);
+    // Prázdny duplikát, ktorý sa do databázy dostal skôr, než sa párovanie
+    // opravilo — nesmie prebiť kartu s údajmi.
+    await database.query(
+      `INSERT INTO partners (id,tenant_id,organization_id,name,name_normalized,source)
+       VALUES ($1,$2,$3,'B.R. Pneumatici S.p.A.','b.r. pneumatici s.p.a.','auto')`,
+      [randomUUID(), scope.tenantId, scope.organizationId],
+    );
+    expect(await doplnZKartyPartnera(database, scope, { nazov: 'B.R. Pneumatici S.p.A.' }))
+      .toMatchObject({ icDph: 'IT01800220244' });
   });
 
   it('záznam bez názvu preskočí — nemá sa ako spárovať', async () => {

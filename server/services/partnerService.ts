@@ -40,6 +40,27 @@ export function normalizovanyNazov(value: string | undefined): string {
   return value?.trim().toLocaleLowerCase('sk').replace(/\s+/g, ' ') ?? '';
 }
 
+/**
+ * Názov na porovnanie: bez medzier a interpunkcie.
+ *
+ * POHODA má v adresári „B.R.Pneumatici S.p.A.", na faktúre je „B.R. Pneumatici
+ * S.p.A." — jediná medzera za bodkou. Prísne porovnanie ich nespojilo a
+ * vznikli dve karty: stará prázdna z extrakcie a nová z adresára s IČ DPH.
+ * Ďalšia faktúra by trafila tú prázdnu a nedoplnilo by sa nič.
+ *
+ * Dve firmy, ktoré sa líšia len interpunkciou, prakticky neexistujú; dve
+ * karty tej istej firmy vznikajú stále.
+ */
+function kluceNazvu(value: string | undefined): string {
+  return normalizovanyNazov(value).replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+/** Koľko údajov karta nesie — pri zhode mien vyhráva vyplnenejšia. */
+function vyplnenost(partner: PartnerZaznam): number {
+  return [partner.ico, partner.dic, partner.icDph, partner.iban, partner.adresa]
+    .filter((hodnota) => Boolean(hodnota?.trim())).length;
+}
+
 function cistyKod(value: string | undefined): string {
   return value?.replace(/\s+/g, '').toUpperCase() ?? '';
 }
@@ -102,7 +123,7 @@ export async function najdiPartnera(
   const zoznam = partneri.rows.map(mapPartnerRow);
   const priorita = await prioritaParovania(tx, tenantId, organizationId);
   for (const kriterium of priorita) {
-    const match = zoznam.find((partner) => {
+    const zhody = zoznam.filter((partner) => {
       switch (kriterium) {
         case 'ico':
           return Boolean(cisteIco(dodavatel.ico)) && cisteIco(partner.ico) === cisteIco(dodavatel.ico);
@@ -111,13 +132,16 @@ export async function najdiPartnera(
         case 'iban':
           return Boolean(cistyKod(dodavatel.iban)) && cistyKod(partner.iban) === cistyKod(dodavatel.iban);
         case 'nazov':
-          return Boolean(normalizovanyNazov(dodavatel.nazov))
-            && normalizovanyNazov(partner.nazov) === normalizovanyNazov(dodavatel.nazov);
+          return Boolean(kluceNazvu(dodavatel.nazov)) && kluceNazvu(partner.nazov) === kluceNazvu(dodavatel.nazov);
         default:
           return false;
       }
     });
-    if (match) return match;
+    // Keď sedí viac kariet, vyhráva vyplnenejšia — prázdny duplikát z
+    // extrakcie by inak prebil kartu z adresára a nedoplnilo by sa nič.
+    if (zhody.length > 0) {
+      return zhody.reduce((najlepsi, partner) => vyplnenost(partner) > vyplnenost(najlepsi) ? partner : najlepsi);
+    }
   }
   return undefined;
 }
