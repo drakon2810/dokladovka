@@ -389,7 +389,9 @@ public sealed class AgentCycleRunner
         var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
             requestXml, $"historia-{organization.OrganizationId}", false, cancellationToken);
         var parsed = PohodaXml.ParseHistoryRows(response);
-        if (parsed.Rows.Count == 0)
+        // Aj prenos bez použiteľných riadkov korpusu môže niesť číselné rady —
+        // rad z dokladu je jediná cesta k radom, ktoré POHODA do číselníka nedá.
+        if (parsed.Rows.Count == 0 && parsed.Series.Count == 0)
         {
             _log.Info("ucto_history_empty", new { organization.OrganizationId, warnings = parsed.Warnings.Count });
             return;
@@ -399,12 +401,17 @@ public sealed class AgentCycleRunner
         // Dávky po 2 000 riadkov — server berie najviac 20 000 na požiadavku
         // a bodyLimit je 30 MB; história býva rádovo väčšia než pamäť.
         var prvaDavka = true;
-        foreach (var batch in parsed.Rows.Chunk(2000))
+        // Bez riadkov korpusu treba aj tak jednu dávku — nesie číselné rady.
+        var davky = parsed.Rows.Count > 0
+            ? parsed.Rows.Chunk(2000)
+            : new[] { Array.Empty<PohodaXml.HistoryRow>() };
+        foreach (var batch in davky)
         {
             // Prvá dávka nesie reset — server korpus zahodí a postaví z tohto
-            // prenosu. Až potom sa dávky pripájajú.
+            // prenosu. Až potom sa dávky pripájajú. Rady idú tiež len s ňou.
             var result = await _backend.UploadUctoHistoryAsync(
-                organization.OrganizationId, batch, prvaDavka, cancellationToken);
+                organization.OrganizationId, batch, prvaDavka,
+                prvaDavka ? parsed.Series : Array.Empty<PohodaXml.SeriesRow>(), cancellationToken);
             prvaDavka = false;
             imported += result.Imported;
             duplicates += result.Duplicates;

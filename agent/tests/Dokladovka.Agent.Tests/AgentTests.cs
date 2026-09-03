@@ -319,6 +319,75 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void CiselnyRadSaCitaAjZDokladu()
+    {
+        // POHODA rad bez vyplneného Obdobia do číselníka nedá — jej schéma
+        // vyžaduje element „period". Doklad ten istý rad nesie: typ:id je
+        // identifikátor, typ:ids prefix. Bez toho by rad 26OZ, na ktorom má
+        // ALPINA vyše 370 dokladov, v ponuke nebol nikdy.
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>commitment</inv:invoiceType>
+                      <inv:number><typ:id>575</typ:id><typ:ids>26OZ</typ:ids><typ:numberRequested>26OZ370</typ:numberRequested></inv:number>
+                      <inv:text>Pokuta</inv:text>
+                      <inv:accounting><typ:ids>545/325100</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>commitment</inv:invoiceType>
+                      <inv:number><typ:id>575</typ:id><typ:ids>26OZ</typ:ids><typ:numberRequested>26OZ371</typ:numberRequested></inv:number>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var parsed = PohodaXml.ParseHistoryRows(response);
+        var rad = Assert.Single(parsed.Series);
+        Assert.Equal("575", rad.ExternalId);
+        Assert.Equal("26OZ", rad.Kod);
+        // Agenda musí sedieť so slovníkom číselníka POHODY — v ponuke sa rad
+        // filtruje presnou zhodou, „OZ" by nenašlo nič.
+        Assert.Equal("ostatni_zavazky", rad.Agenda);
+        // Druhý doklad je pre korpus bezcenný (bez textu aj predkontácie), ale
+        // svoj rad má rovnako platný — a nesie vyššie číslo.
+        Assert.Equal("26OZ371", rad.PosledneCislo);
+        Assert.Single(parsed.Rows);
+    }
+
+    [Theory]
+    [InlineData("receivedInvoice", "prijate_faktury")]
+    [InlineData("receivedCreditNotice", "prijate_faktury")]
+    [InlineData("issuedInvoice", "vydane_faktury")]
+    [InlineData("issuedAdvanceInvoice", "vydane_zalohove_faktury")]
+    [InlineData("commitment", "ostatni_zavazky")]
+    public void AgendaRaduZDokladuSediSoSlovnikomPohody(string invoiceType, string agenda)
+    {
+        var response = $"""
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>{invoiceType}</inv:invoiceType>
+                      <inv:number><typ:id>1</typ:id><typ:ids>RAD</typ:ids></inv:number>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        Assert.Equal(agenda, Assert.Single(PohodaXml.ParseHistoryRows(response).Series).Agenda);
+    }
+
+    [Fact]
     public void PohodaErrorMessageComesFromNoteAttributesNotForeignElements()
     {
         // POHODA posiela popis chyby ako ATRIBÚT note (element „note" v response.xsd

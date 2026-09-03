@@ -129,8 +129,10 @@ public sealed class BackendClient
     /// bez toho by v ňom ostávali riadky zmazané v POHODE a po zmene agendy
     /// (dobropis FP → FP-D) by sa doklady zdvojili pod oboma agendami.
     /// </summary>
-    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, bool reset, CancellationToken cancellationToken) =>
-        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset }), cancellationToken);
+    // Číselné rady idú len s prvou dávkou — sú to desiatky riadkov na celý
+    // prenos, opakovať ich pri každej dávke histórie by nemalo zmysel.
+    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, bool reset, IReadOnlyList<PohodaXml.SeriesRow> series, CancellationToken cancellationToken) =>
+        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset, series }), cancellationToken);
 
     // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
     public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, bool reset, CancellationToken cancellationToken) =>

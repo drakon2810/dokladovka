@@ -459,4 +459,77 @@ describe('agent backend contour', () => {
 
     await app.close();
   }, 90_000);
+
+  // POHODA rad bez vyplneného Obdobia do číselníka vôbec nedá — jej schéma má
+  // element „period" povinný. Jediná cesta k takému radu vedie cez doklady,
+  // ktoré ho nesú v <typ:id>/<typ:ids>.
+  it('doplní číselný rad z dokladov a číselník neprepíše', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const browserHeaders = { cookie: String(login.headers['set-cookie']).split(';')[0], 'x-csrf-token': login.json().csrfToken as string };
+    await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
+    const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders, payload: { organizationId: seeded.organizationId } });
+    const paired = await app.inject({
+      method: 'POST', url: '/api/agent/pair',
+      payload: { pairingCode: pairing.json().code as string, hostname: 'POHODA-SRV', agentVersion: '1.0.0', companyIco: '12345678' },
+    });
+    const agentHeaders = { authorization: `Bearer ${paired.json().agentToken as string}` };
+
+    // Číselník POHODY prinesie 26PK; 26OZ v ňom nie je a nikdy nebude.
+    const ciselnik = await app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`, headers: agentHeaders,
+      payload: { kind: 'ciselneRady', items: [{ kod: '26PK', nazov: 'Ostatné záväzky-Platba Kartou', agenda: 'ostatni_zavazky', posledneCislo: '26PK474' }] },
+    });
+    expect(ciselnik.statusCode, ciselnik.body).toBe(200);
+
+    const historia = await app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/ucto-history`, headers: agentHeaders,
+      payload: {
+        rows: [], reset: true,
+        series: [
+          { externalId: '575', kod: '26OZ', agenda: 'ostatni_zavazky', posledneCislo: '26OZ371' },
+          // Rad, ktorý číselník už má — z dokladu sa nesmie prepísať.
+          { externalId: '635', kod: '26PK', agenda: 'ostatni_zavazky', posledneCislo: '26PK400' },
+        ],
+      },
+    });
+    expect(historia.statusCode, historia.body).toBe(200);
+    expect(historia.json().rady).toEqual({ nove: 1, aktualizovane: 0 });
+
+    const rady = await database.query<{ code: string; name: string; source: string; agenda: string; last_number: string; active: boolean } & Record<string, unknown>>(
+      `SELECT code, name, source, agenda, last_number, active FROM code_list_items
+        WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' ORDER BY code`,
+      [seeded.tenantId, seeded.organizationId],
+    );
+    expect(rady.rows).toEqual([
+      expect.objectContaining({ code: '26OZ', name: '26OZ', source: 'pohoda_doklad', agenda: 'ostatni_zavazky', last_number: '26OZ371', active: true }),
+      // Číselník má prednosť: názov aj posledné číslo ostali jeho.
+      expect.objectContaining({ code: '26PK', name: 'Ostatné záväzky-Platba Kartou', source: 'pohoda', last_number: '26PK474' }),
+    ]);
+
+    // Ďalší prenos posunie posledné číslo, ale nezaloží druhý rad.
+    const znova = await app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/ucto-history`, headers: agentHeaders,
+      payload: { rows: [], series: [{ externalId: '575', kod: '26OZ', agenda: 'ostatni_zavazky', posledneCislo: '26OZ372' }] },
+    });
+    expect(znova.json().rady).toEqual({ nove: 0, aktualizovane: 1 });
+
+    // A hodinová synchronizácia číselníka ho nesmie zhasnúť — čistí len 'pohoda'.
+    await app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`, headers: agentHeaders,
+      payload: { kind: 'ciselneRady', items: [{ kod: '26PK', nazov: 'Ostatné záväzky-Platba Kartou', agenda: 'ostatni_zavazky' }] },
+    });
+    const poSynchronizacii = await database.query<{ last_number: string; active: boolean } & Record<string, unknown>>(
+      `SELECT last_number, active FROM code_list_items
+        WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND code='26OZ'`,
+      [seeded.tenantId, seeded.organizationId],
+    );
+    expect(poSynchronizacii.rows[0]).toEqual(expect.objectContaining({ last_number: '26OZ372', active: true }));
+
+    await app.close();
+  }, 90_000);
 });

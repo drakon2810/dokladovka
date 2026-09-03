@@ -64,6 +64,18 @@ export const historyImportSchema = z.object({
    * import, aby sa navzájom neduplikovali.
    */
   reset: z.boolean().optional(),
+  /**
+   * Číselné rady prečítané z dokladov. POHODA rad bez vyplneného Obdobia do
+   * číselníka nedá — v jej schéme je element „period" povinný, takže taký
+   * záznam nevie zapísať a ticho ho vynechá. Doklad ten istý rad nesie bez
+   * problémov, tak sa berie odtiaľ; inak by účtovník rad v ponuke nikdy nemal.
+   */
+  series: z.array(z.object({
+    externalId: z.string().min(1).max(50),
+    kod: z.string().min(1).max(50),
+    agenda: z.string().min(1).max(50),
+    posledneCislo: z.string().max(50).nullish(),
+  })).max(2_000).optional(),
 }).strict();
 
 interface ResolvedRow {
@@ -313,4 +325,50 @@ export async function historyStats(
     dodavatelov: Number(ostatne.rows[0]?.dodavatelov ?? 0),
     roznychTextov: Number(ostatne.rows[0]?.textov ?? 0),
   };
+}
+
+/**
+ * Číselné rady prečítané z dokladov. Doplní iba tie, ktoré v číselníku nie sú —
+ * rad z číselníka je vždy presnejší (má názov aj vlastné posledné číslo), takže
+ * sa neprepisuje. Vlastný zdroj 'pohoda_doklad' ich chráni pred hodinovou
+ * deaktiváciou, ktorá čistí len rady so source='pohoda'.
+ */
+export async function ulozRadyZDokladov(
+  database: Database,
+  input: { tenantId: string; organizationId: string; series: readonly {
+    externalId: string; kod: string; agenda: string; posledneCislo?: string | null;
+  }[] },
+): Promise<{ nove: number; aktualizovane: number }> {
+  if (input.series.length === 0) return { nove: 0, aktualizovane: 0 };
+  // Ten istý kód môže prísť z dvoch agend (rad „26" je v pokladni aj v ostatných
+  // záväzkoch). Kľúč tabuľky je zatiaľ samotný kód, tak sa berie prvý — druhý by
+  // pri vkladaní len zbytočne narazil na konflikt.
+  const podlaKodu = new Map<string, typeof input.series[number]>();
+  for (const rad of input.series) if (!podlaKodu.has(rad.kod)) podlaKodu.set(rad.kod, rad);
+  let nove = 0;
+  let aktualizovane = 0;
+  await database.transaction(async (tx) => {
+    for (const rad of podlaKodu.values()) {
+      // Názov z dokladu nezistíme — POHODA v ňom posiela len identifikátor
+      // a prefix. V ponuke sa tak rad ukáže pod vlastným kódom.
+      const result = await tx.query(
+        `INSERT INTO code_list_items
+           (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, last_number, synced_at)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$4,'pohoda_doklad',true,$5,$6,$7,now())
+         ON CONFLICT (tenant_id, organization_id, kind, code) DO UPDATE
+            SET last_number=coalesce(excluded.last_number, code_list_items.last_number),
+                agenda=excluded.agenda, external_id=excluded.external_id,
+                active=true, synced_at=now(), updated_at=now()
+          WHERE code_list_items.source='pohoda_doklad'
+         RETURNING (xmax = 0) AS vlozeny`,
+        [randomUUID(), input.tenantId, input.organizationId, rad.kod,
+          rad.externalId, rad.agenda, rad.posledneCislo ?? null],
+      );
+      // Rad, ktorý už v číselníku je, WHERE odfiltruje — nevráti sa nič a je to
+      // v poriadku: číselník má prednosť.
+      if (result.rowCount === 0) continue;
+      if (result.rows[0]?.vlozeny) nove += 1; else aktualizovane += 1;
+    }
+  });
+  return { nove, aktualizovane };
 }

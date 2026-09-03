@@ -15,7 +15,7 @@ import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from 
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
-import { historyImportSchema, importUctoHistory } from '../services/uctoHistoryService.js';
+import { historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
 import { importujAdresar } from '../services/partnerService.js';
 
 interface AgentAuth extends Record<string, unknown> {
@@ -490,8 +490,20 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
           tenantId: agent.tenant_id, organizationId: id, rows: body.rows, source: 'mdb',
         })
       : { imported: 0, duplicates: 0, bezKodu: 0 };
+    // Číselné rady z dokladov: jediná cesta k radom, ktoré POHODA do číselníka
+    // nedá (bez vyplneného Obdobia ich jej vlastná schéma nevie zapísať).
+    const rady = await ulozRadyZDokladov(database, {
+      tenantId: agent.tenant_id, organizationId: id, series: body.series ?? [],
+    });
+    if (rady.nove > 0) {
+      await writeAudit(database, {
+        tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
+        action: 'agent.series_from_documents', entityType: 'organization', entityId: id,
+        correlationId: request.id, metadata: rady,
+      });
+    }
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
-    return result;
+    return { ...result, rady };
   });
 
   // Originálny sken dokladu pre agenta — po úspešnom prenose ho uloží do
