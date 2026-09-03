@@ -113,4 +113,37 @@ describe('OpenAIDocumentClassifier', () => {
     const classifier = new OpenAIDocumentClassifier(config, { parse: async () => ({}) });
     expect(await classifier.classify(vstup)).toBeUndefined();
   });
+
+  // Typ z extrakcie sa vzápätí prepíše klasifikáciou. Kým pravidlá chodili iba
+  // do extrakcie, účtovníkovo „Verb je pokuta, účtuj ako OZ" ticho neplatilo:
+  // extrakcia ho poslúchla a klasifikácia typ hneď prepísala.
+  it('pravidlá účtovníka a profil firmy idú aj do klasifikácie', async () => {
+    let odoslane = '';
+    const classifier = new OpenAIDocumentClassifier(config, {
+      parse: async (body: any) => {
+        odoslane = JSON.stringify(body.input);
+        return { output_parsed: { documentType: 'OZ', podtyp: 'bezna', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
+      },
+    });
+    await classifier.classify({
+      ...vstup,
+      pokyny: 'ÚČTOVNÉ PRAVIDLÁ — Verb je pokuta, účtuj ako OZ.',
+      profilFirmy: 'FP, OZ, VPD | pokuty a úroky z omeškania | pokuta, verb',
+    });
+    expect(odoslane).toContain('Verb je pokuta');
+    expect(odoslane).toContain('pokuty a úroky z omeškania');
+  });
+
+  it('bez pravidiel a profilu sa nič navyše neposiela', async () => {
+    let odoslane = '';
+    const classifier = new OpenAIDocumentClassifier(config, {
+      parse: async (body: any) => {
+        odoslane = JSON.stringify(body.input);
+        return { output_parsed: { documentType: 'FP', podtyp: 'bezna', jeUctovnyDoklad: true, dovod: 'x', istota: 0.9, obsahZvazku: '', pocetFakturaciiVSubore: 1 } };
+      },
+    });
+    await classifier.classify(vstup);
+    expect(odoslane).not.toContain('ÚČTOVNÉ PRAVIDLÁ');
+    expect(odoslane).not.toContain('bežne účtuje');
+  });
 });

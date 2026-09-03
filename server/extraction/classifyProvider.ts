@@ -94,6 +94,12 @@ export interface KlasifikaciaVstup {
    * hoci odpoveď ležala v histórii firmy.
    */
   profilFirmy?: string;
+  /**
+   * Účtovné pravidlá firmy. Doteraz chodili iba do extrakcie — lenže typ z
+   * extrakcie sa vzápätí prepíše klasifikáciou, takže pravidlo „Verb je OZ"
+   * ticho neplatilo. Účtovník ho napísal a nič sa nezmenilo.
+   */
+  pokyny?: string;
 }
 
 /**
@@ -164,6 +170,9 @@ export class OpenAIDocumentClassifier {
 Čo táto firma bežne účtuje (z jej vlastnej histórie v POHODE) — formát „agendy | kategória | typické frázy":
 ${input.profilFirmy}`
                 : '',
+              input.pokyny ? `
+
+${input.pokyny}` : '',
             ].filter(Boolean).join(' '),
           },
         ],

@@ -861,6 +861,10 @@ export async function processNextJob(
           profilFirmy: await profilPreKlasifikaciu(database, {
             tenantId: job.tenant_id, organizationId: job.organization_id,
           }),
+          // Tie isté pravidlá, aké dostáva extrakcia. Bez nich pravidlo o type
+          // dokladu neplatilo: extrakcia ho poslúchla a klasifikácia typ hneď
+          // prepísala, lebo pravidlá nevidela.
+          pokyny,
         });
       } catch {
         klasifikacia = undefined;
