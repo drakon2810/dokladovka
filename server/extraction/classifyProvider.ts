@@ -46,13 +46,15 @@ FV = invoice issued by the accounting client
 PD = cash register receipt (bloček, pokladničný doklad, till slip)
 MZDY = payslip (mzdová páska, výplatná páska)
 BV = bank statement
-OZ = other liability that is still a bookkeeping document with an amount to pay
+OZ = other liability that is still a bookkeeping document with an amount to pay — typically a fine or penalty (pokuta, sankcia, verbale di contravvenzione, Bussgeld, amende), a toll or road-charge demand, or any authority's demand naming a sum the client must pay
 INY = anything that is NOT a bookkeeping document
 UNKNOWN = you genuinely cannot tell
 
 jeUctovnyDoklad = false exactly when documentType is INY.
 
-INY covers: contracts and contract applications (zmluva, kontrakt, "contract application"), orders and order confirmations (objednávka, order), transport orders and freight forwarding orders, delivery notes without prices, proforma invoices and quotations (proforma, cenová ponuka, quotation), letters and decisions from authorities (rozhodnutie, oznámenie, výzva, potvrdenie), certificates, ID scans and general correspondence.
+INY covers: contracts and contract applications (zmluva, kontrakt, "contract application"), orders and order confirmations (objednávka, order), transport orders and freight forwarding orders, delivery notes without prices, proforma invoices and quotations (proforma, cenová ponuka, quotation), letters and decisions from authorities that demand NO payment (oznámenie, potvrdenie, a decision that only grants or refuses something), certificates, ID scans and general correspondence.
+
+An authority's letter that DOES name a sum to pay is OZ, not INY. A speeding fine, a parking penalty, a toll demand or a customs penalty is a liability the client owes and books — the letterhead of a ministry or police force does not change that. Decide it the same way you decide FP: does this paper demand money? If yes and it is not an invoice, it is OZ. Only a letter with nothing to pay is INY.
 
 A PRICE DOES NOT MAKE IT AN INVOICE. Transport orders, contracts and proformas routinely state an agreed amount, payment terms and both parties' details — that is the deal, not the billing. What makes a document an invoice is that it BILLS: it calls itself faktúra / invoice / daňový doklad, carries its own invoice number and a tax point, and demands payment for work already delivered. When the heading says "contract", "application", "order", "objednávka", "zmluva" or "proforma" and no separate invoice heading appears, answer INY even though an amount is printed.
 
