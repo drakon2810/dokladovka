@@ -101,11 +101,14 @@ describe('validateDocument — DIČ s prefixom neblokuje schválenie', () => {
     expect(validateDocument(prijataFaktura({}), organization)).toEqual([]);
   });
 
-  it('naozaj pokazené DIČ ostáva chybou', () => {
+  // Nález ostáva; od opravy „identifikátory odberateľa neblokujú prijatý doklad"
+  // nesie kód invalid_buyer_dic, ktorý je v UPOZORNENIACH — účtovník sa o zlom
+  // skene dozvie, ale schválenie mu to nezastaví.
+  it('naozaj pokazené DIČ sa stále nájde', () => {
     expect(validateDocument(
       prijataFaktura({ odberatel: { nazov: 'AGS Bratislava', dic: 'xx' } }),
       organization,
-    )).toContainEqual({ code: 'invalid_dic', field: 'odberatel.dic' });
+    )).toContainEqual({ code: 'invalid_buyer_dic', field: 'odberatel.dic' });
   });
 });
 

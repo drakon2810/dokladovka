@@ -23,6 +23,9 @@ export type DocumentValidationCode =
   | 'invalid_ico'
   | 'invalid_dic'
   | 'invalid_ic_dph'
+  | 'invalid_buyer_ico'
+  | 'invalid_buyer_dic'
+  | 'invalid_buyer_vat_id'
   | 'invalid_iban'
   | 'invalid_issue_date'
   | 'invalid_tax_date'
@@ -57,7 +60,21 @@ export interface DocumentValidationIssue {
  * znamenalo, že sa faktúra nedala schváliť pre preklep v čísle, ktoré účtovník
  * aj tak prepisuje z výpisu.
  */
-const UPOZORNENIA: ReadonlySet<DocumentValidationCode> = new Set(['invalid_iban']);
+const UPOZORNENIA: ReadonlySet<DocumentValidationCode> = new Set([
+  'invalid_iban',
+  // Identifikátory odberateľa na PRIJATOM doklade: odberateľom sme my a naše
+  // IČO/DIČ/IČ DPH máme v profile firmy — číslo zle prečítané z cudzej faktúry
+  // je šum, nie prekážka. Server to tak vyhodnocuje už dlhšie (buyerSeverity
+  // v server/extraction/normalize.ts); klient nie, takže doklad hlásil
+  // „na schválenie ešte treba opraviť IČ DPH odberateľa" a Schváliť ostalo
+  // zamknuté na chybe, ktorá do POHODY ani nejde.
+  //
+  // Na VYDANEJ faktúre je odberateľ zákazník a jeho čísla sú podstatné —
+  // tam sa preto tieto kódy vôbec nepoužijú (validateDocument nižšie).
+  'invalid_buyer_ico',
+  'invalid_buyer_dic',
+  'invalid_buyer_vat_id',
+]);
 
 export function jeUpozornenie(code: DocumentValidationCode): boolean {
   return UPOZORNENIA.has(code);
@@ -263,14 +280,18 @@ export function validateDocument(
   // formátové kontroly by mu blokovali schválenie rovnako, ako to už roky
   // neplatí pre zahraničného dodávateľa.
   const foreignBuyer = jeZahranicnaStrana(buyer);
+  // Na vydanej faktúre je odberateľ zákazník — jeho identifikátory idú do KV DPH
+  // a chyba v nich blokuje. Inde je odberateľom naša vlastná firma: nález ostáva
+  // (účtovník má vedieť, že sken je zlý), ale schválenie nezastaví.
+  const vydana = doc.typ === 'FV';
   if (!foreignBuyer && buyer?.ico && !validateICO(buyer.ico)) {
-    issues.push({ code: 'invalid_ico', field: 'odberatel.ico' });
+    issues.push({ code: vydana ? 'invalid_ico' : 'invalid_buyer_ico', field: 'odberatel.ico' });
   }
   if (!foreignBuyer && buyer?.dic && !validateDic(buyer.dic)) {
-    issues.push({ code: 'invalid_dic', field: 'odberatel.dic' });
+    issues.push({ code: vydana ? 'invalid_dic' : 'invalid_buyer_dic', field: 'odberatel.dic' });
   }
   if (chybneIcDph(buyer)) {
-    issues.push({ code: 'invalid_ic_dph', field: 'odberatel.icDph' });
+    issues.push({ code: vydana ? 'invalid_ic_dph' : 'invalid_buyer_vat_id', field: 'odberatel.icDph' });
   }
   // Na vydanej faktúre je odberateľom zákazník — iné IČO ako naše je normálne.
   if (
