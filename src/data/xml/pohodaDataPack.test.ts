@@ -63,6 +63,29 @@ function mkDoc(overrides: Partial<DocumentItem> = {}): DocumentItem {
   } as DocumentItem;
 }
 
+// Zhoda so serverom (server/pohodaXml.test.ts, „položka len s celkovou sumou").
+// Pokuta nemá ani sadzbu, ani základ — položka nesie len popis a sumaSpolu.
+// Základ sa bral ako `eff.bezDph ?? 0`, takže do XML odišlo price 0,00
+// a doklad sa v POHODE zaúčtoval nulový (POHODA berie cenu z price + priceVAT,
+// priceSum je len kontrolný súčet).
+describe('buildDataPack — položka len s celkovou sumou', () => {
+  it('celá suma ide do ceny, nie do nuly', () => {
+    const doc = mkDoc({
+      typ: 'OZ',
+      extracted: {
+        ...mkDoc().extracted,
+        rozpisDph: [{ sadzba: 0, zaklad: 62.65, dph: 0 }],
+        sumaSpolu: 62.65,
+        polozky: [{ id: 'li-0', popis: 'Verb 4E00009718 Nedelcu (Tir europa) a.e.', sumaSpolu: 62.65 }],
+      },
+    } as Partial<DocumentItem>);
+    const xml = buildDataPack(ORG, [doc], CODE_LISTS);
+    expect(xml).toContain('<typ:price>62.65</typ:price>');
+    expect(xml).toContain('<typ:priceSum>62.65</typ:priceSum>');
+    expect(xml).not.toContain('<typ:price>0.00</typ:price>');
+  });
+});
+
 describe('escapeXml', () => {
   it('escapuje XML špeciálne znaky', () => {
     expect(escapeXml('<a & "b" \'c\'>')).toBe('&lt;a &amp; &quot;b&quot; &apos;c&apos;&gt;');

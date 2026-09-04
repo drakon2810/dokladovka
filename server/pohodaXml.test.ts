@@ -35,6 +35,56 @@ function invoiceDocument(extra: Record<string, unknown>) {
   };
 }
 
+// Ostrý prípad 26OZ377: talianska pokuta prišla do POHODY za 0,00 €.
+// Položka niesla len popis a sumaSpolu — pokuta nemá ani sadzbu, ani základ.
+// Základ sa bral ako `sumaBezDph ?? 0`, takže do XML odišlo price 0,00
+// a priceVAT 0,00; správnych 62,65 niesol len priceSum, ktorý je pre POHODU
+// iba kontrolný súčet. Doklad sa tak zaúčtoval nulový.
+describe('buildServerDataPack — položka len s celkovou sumou', () => {
+  const pokuta = {
+    typ: 'OZ',
+    rozpisDph: [{ sadzba: 0, zaklad: 62.65, dph: 0 }],
+    sumaSpolu: 62.65,
+    polozky: [{ id: 'li-0', popis: 'Verb 4E00009718 Nedelcu (Tir europa) a.e.', sumaSpolu: 62.65 }],
+  };
+
+  it('celá suma ide do ceny, nie do nuly', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-pokuta', ico: '35761571', documents: [invoiceDocument(pokuta)], codeLists,
+    });
+    expect(xml).toContain('<typ:price>62.65</typ:price>');
+    expect(xml).toContain('<typ:priceVAT>0.00</typ:priceVAT>');
+    expect(xml).toContain('<typ:priceSum>62.65</typ:priceSum>');
+    expect(xml).toContain('<typ:unitPrice>62.65</typ:unitPrice>');
+  });
+
+  it('so sadzbou sa suma rozpadne na základ a daň', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-brutto', ico: '35761571',
+      documents: [invoiceDocument({
+        ...pokuta, typ: 'FP',
+        rozpisDph: [{ sadzba: 23, zaklad: 100, dph: 23 }], sumaSpolu: 123,
+        polozky: [{ id: 'li-0', popis: 'Služba', sadzbaDph: 23, sumaSpolu: 123 }],
+      })],
+      codeLists,
+    });
+    expect(xml).toContain('<typ:price>100.00</typ:price>');
+    expect(xml).toContain('<typ:priceVAT>23.00</typ:priceVAT>');
+  });
+
+  it('vyplnený základ sa nedopočítava — doklad má prednosť', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-zaklad', ico: '35761571',
+      documents: [invoiceDocument({
+        polozky: [{ id: 'li-0', popis: 'Služba', sadzbaDph: 23, sumaBezDph: 70, sumaDph: 16.1, sumaSpolu: 86.1 }],
+      })],
+      codeLists,
+    });
+    expect(xml).toContain('<typ:price>70.00</typ:price>');
+    expect(xml).toContain('<typ:priceVAT>16.10</typ:priceVAT>');
+  });
+});
+
 describe('buildServerDataPack — variabilný symbol', () => {
   it('prázdny VS z AI extrakcie sa nahradí číslicami z čísla faktúry', () => {
     const xml = buildServerDataPack({

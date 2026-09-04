@@ -1,7 +1,7 @@
 // Generovanie XML POHODA dataPack — SPEC §7. Produkčný agent vykoná fail-closed XSD validáciu.
 import type { CodeListItem, DocumentItem, DocumentLineItem, Organization, VatBreakdownRow } from '../types';
 import { slugifyOrganizationName } from '../alias/aliasGenerator';
-import { lineItemEffective } from '../../lib/validate';
+import { lineItemEffective, round2 } from '../../lib/validate';
 
 /**
  * Escapovanie XML špeciálnych znakov + všetky ne-ASCII znaky ako numerické
@@ -333,7 +333,13 @@ function invoiceDetailLines(
     // preto ide do ceny bez dane, rovnako ako v súhrne dokladu a na serveri.
     const cudziaDan = vatRateName(item.sadzbaDph) === 'none' && (eff.dph ?? 0) !== 0;
     const mnozstvo = Number(item.mnozstvo) || 1;
-    const bezDph = cudziaDan ? (eff.spolu ?? 0) : (eff.bezDph ?? 0);
+    // Položka, ktorá nesie LEN celkovú sumu (pokuta — ani sadzba, ani základ),
+    // mala základ 0 a do POHODY odišla za 0,00 €: POHODA počíta cenu položky
+    // z price + priceVAT, priceSum je len kontrolný súčet. Rovnaký dopočet
+    // robí server (lineItemAmounts v server/pohodaXml.ts) — tento export nesmie
+    // poslať iné čísla ako ten.
+    const zaklad = eff.bezDph ?? round2((eff.spolu ?? 0) - (eff.dph ?? 0));
+    const bezDph = cudziaDan ? (eff.spolu ?? 0) : zaklad;
     const unitPrice = cudziaDan
       ? Math.round(((eff.spolu ?? 0) / mnozstvo) * 100) / 100
       : item.jednotkovaCenaBezDph ?? bezDph;

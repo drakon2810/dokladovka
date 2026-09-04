@@ -138,11 +138,23 @@ function vatRateName(sadzba: unknown): 'high' | 'low' | 'third' | 'none' {
 
 /** Efektívne sumy položky — prázdna DPH pri vyplnenej sadzbe sa dopočíta zo základu (zhoda s normalize.ts). */
 function lineItemAmounts(item: any): { bezDph: number; dph: number; spolu: number; unitPrice: number } {
-  const bezDph = Number(item.sumaBezDph ?? 0);
   let dph = item.sumaDph !== undefined ? Number(item.sumaDph) : undefined;
   let spolu = item.sumaSpolu !== undefined ? Number(item.sumaSpolu) : undefined;
-  if (dph === undefined && item.sadzbaDph !== undefined && item.sumaBezDph !== undefined) {
-    dph = round2((bezDph * Number(item.sadzbaDph)) / 100);
+  const sadzba = item.sadzbaDph !== undefined ? Number(item.sadzbaDph) : undefined;
+  // Základ, ktorý položka neuvádza, sa dopočíta z celkovej sumy. Doteraz bol
+  // v takom prípade nula — a položka, ktorá nesie LEN celkovú sumu (pokuta:
+  // ani sadzba, ani základ), odišla do POHODY za 0,00 €. priceSum pritom
+  // odchádzal správny, lenže POHODA počíta cenu položky z price + priceVAT
+  // a priceSum je jej len kontrolný súčet. Doklad 26OZ377 tak prišiel nulový.
+  let bezDph = Number(item.sumaBezDph ?? 0);
+  if (item.sumaBezDph === undefined && spolu !== undefined) {
+    // So sadzbou je to rozpad brutto → netto, ten istý ako v rozpisZPoloziek
+    // (normalize.ts). Bez sadzby (a teda bez dane) je základom celá suma.
+    bezDph = sadzba ? round2(spolu / (1 + sadzba / 100)) : round2(spolu - (dph ?? 0));
+    dph = dph ?? round2(spolu - bezDph);
+  }
+  if (dph === undefined && sadzba !== undefined && item.sumaBezDph !== undefined) {
+    dph = round2((bezDph * sadzba) / 100);
     if (spolu === undefined || Math.abs(spolu - bezDph) <= 0.02) spolu = round2(bezDph + dph);
   }
   dph = dph ?? 0;
