@@ -637,4 +637,28 @@ describe('oslobodené plnenie bez vytlačenej sadzby', () => {
     expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 140, dph: 0 }]);
     expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
   });
+
+  // Ostrý prípad: OCR zhltlo jednu nulu z jedenástich a z 24-znakového
+  // SK2509000000000011608513 spravilo 23-znakový SK250900000000011608513.
+  // Nález je správny, ale schválenie blokovať nesmie: klient ho už dlhšie
+  // ukazuje ako oranžové upozornenie, kým server ho posielal ako 'error' a
+  // schvaľovacia trasa (documentRoutes filtruje severity==='error') vracala 409.
+  // Doklad tak vyzeral schvaľovateľne a tlačidlo padalo.
+  it('nesprávny IBAN dodávateľa je varovanie, nie chyba — schválenie neblokuje', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Milan Repka', ico: '11685166', dic: '1025512400', iban: 'SK250900000000011608513' },
+      buyer: { ico: '35761571' }, invoiceNumber: '1282026',
+      issueDate: '2026-08-31', taxDate: '2026-08-31', dueDate: '2026-09-15',
+      currency: 'EUR',
+      lineItems: [{ description: 'Mesiac august 2026', amountWithoutVat: '80', vatAmount: '0', amountTotal: '80' }],
+      vatBreakdown: [],
+      totalWithoutVat: '80', totalVat: '0', totalAmount: '80',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-repka', '2026-08-31');
+    const issues = validateNormalizedExtraction(normalized, { ico: '35761571' });
+    const iban = issues.find((issue) => issue.code === 'invalid_iban');
+    expect(iban?.severity).toBe('warning');
+    expect(issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+  });
 });

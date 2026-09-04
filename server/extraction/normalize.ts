@@ -528,11 +528,14 @@ export function validateNormalizedExtraction(
     || (krajinaStrany(supplier) ?? 'SK') !== 'SK';
   if (supplier.ico && !/^\d{8}$/.test(normalizedIdentifier(supplier.ico))) issues.push({ code: 'invalid_supplier_ico', field: 'dodavatel.ico', severity: supplierForeign ? 'warning' : 'error', message: 'IČO dodávateľa nemá 8 číslic' });
   if (supplier.dic && !validDic(supplier.dic)) issues.push({ code: 'invalid_supplier_dic', field: 'dodavatel.dic', severity: supplierForeign ? 'warning' : 'error', message: 'DIČ dodávateľa nemá platný formát' });
-  // Na VYDANEJ faktúre je „dodávateľom" vlastná firma a jej IBAN sa do POHODY
-  // neposiela (paymentAccount patrí záväzkom) — chyba v ňom preto len upozorní.
-  // Blokovať by znamenalo neopraviteľný stav: editor vydanej faktúry pole IBAN
-  // dodávateľa vôbec nezobrazuje.
-  if (supplier.iban && !validIban(supplier.iban)) issues.push({ code: 'invalid_iban', field: 'dodavatel.iban', severity: normalized.documentType === 'FV' ? 'warning' : 'error', message: 'IBAN dodávateľa nie je platný' });
+  // Chybný IBAN je UPOZORNENIE, nie prekážka — na žiadnom type dokladu.
+  // Zaúčtovanie ani daňové priznanie od neho nezávisia; nesprávny IBAN znamená
+  // nanajvýš zle vyplnený príkaz na úhradu, ktorý účtovník aj tak prepisuje
+  // z výpisu. Klient to tak vyhodnocuje už dlhšie (UPOZORNENIA v
+  // src/data/validation/documentValidation.ts), server nie — doklad sa preto
+  // tváril schvaľovateľný, oranžovo upozornil a Schváliť spadlo na 409.
+  // Ten istý nález nesmie byť v jednej vrstve varovanie a v druhej chyba.
+  if (supplier.iban && !validIban(supplier.iban)) issues.push({ code: 'invalid_iban', field: 'dodavatel.iban', severity: 'warning', message: 'IBAN dodávateľa nie je platný' });
   const buyerIco = normalizedIdentifier(buyer.ico);
   const orgIco = normalizedIdentifier(organization.ico);
   // Na VYDANEJ faktúre je odberateľom zákazník — iné IČO je normálny stav, nie
