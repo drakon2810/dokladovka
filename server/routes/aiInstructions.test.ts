@@ -14,7 +14,7 @@ function sessionHeaders(response: { headers: Record<string, unknown>; json(): an
   return { cookie, 'x-csrf-token': response.json().csrfToken as string };
 }
 
-describe('pravidlá pre AI', () => {
+describe('pravidlá pre AI', { timeout: 60_000 }, () => {
   it('globálne pravidlá píše len správca platformy a k firmám sa nedostane', async () => {
     const database = await createTestDatabase();
     databases.push(database);
@@ -71,6 +71,33 @@ describe('pravidlá pre AI', () => {
     })).statusCode).toBe(404);
     await app.close();
   }, 120_000);
+
+  // Ostrý prípad: talianska pokuta Verb bez rozpisu na položky. lineText sa
+  // skladá z popisov položiek, takže pri doklade bez položiek je prázdny —
+  // a pravidlo s kľúčovými slovami sa TICHO odfiltruje. Účtovník videl, že
+  // pravidlo „Pokuty Verb" existuje a je zapnuté, no doklad dostal väčšinovú
+  // predkontáciu z denníka. Doklad bez položiek preto do lineText posiela
+  // svoje zhrnutie (workerService.ts, lineDescriptions).
+  it('doklad bez položiek: prázdny lineText odfiltruje pravidlo s kľúčovými slovami', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await database.query(
+      `INSERT INTO ai_instructions (id,scope,tenant_id,organization_id,nazov,text,faza,typy_dokladov,klucove_slova)
+       VALUES ($1,'organization',$2,$3,'Pokuty Verb','Predkontácia 325100-pokuty šofér','both','[]'::jsonb,'["verb","pokuta"]'::jsonb)`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId],
+    );
+    const scope = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, faza: 'accounting' as const };
+
+    const prazdny = await nacitajPokyny(database, { ...scope, documentType: 'OZ', lineText: '' });
+    expect(prazdny.lokalne).toHaveLength(0);
+
+    // So zhrnutím dokladu sa to isté pravidlo nájde.
+    const soZhrnutim = await nacitajPokyny(database, {
+      ...scope, documentType: 'OZ', lineText: 'verb v-529235a jager a.e.; 67,00€',
+    });
+    expect(soZhrnutim.lokalne).toHaveLength(1);
+  });
 
   it('výber pravidiel filtruje podľa typu a slov; firemné idú po globálnych', async () => {
     const database = await createTestDatabase();

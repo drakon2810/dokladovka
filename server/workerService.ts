@@ -687,7 +687,17 @@ async function completeRun(
     datumVystavenia: datumZExtrakcie(normalized.extracted),
     totalAmount: normalized.totalAmount,
     currency: normalized.currency,
-    lineDescriptions: popisy(result.lineItems),
+    // Doklad BEZ položiek (pokuta, poplatok, odvod) nemá z čoho poskladať
+    // lineText — a ten je vstupom hneď troch vecí: filtra pravidiel podľa
+    // kľúčových slov (sediKlucoveSlovo v aiInstructionsService.ts) a retrievalu
+    // príkladov, kategórií aj denníka. S prázdnym reťazcom sa pravidlo účtovníka
+    // TICHO odfiltruje a model rozhoduje len podľa typu a sumy: talianska pokuta
+    // tak namiesto „325100-pokuty šofér" dostala väčšinový nedaňový OZ z denníka.
+    // Jediný text, ktorý taký doklad odlíši, je jeho zhrnutie — presne tak to
+    // o pár riadkov nižšie už rieši doklad z rozdelenia.
+    lineDescriptions: popisy(result.lineItems).length > 0
+      ? popisy(result.lineItems)
+      : [result.documentSummary].filter((text): text is string => Boolean(text)),
     polozky: polozkyPreModel(result.lineItems),
     dalsie: dalsieDoklady.map((dalsi) => ({
       documentId: dalsi.id,
