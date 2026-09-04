@@ -307,7 +307,24 @@ export function normalizeExtractionResult(
   // Model občas rozpis DPH vôbec nevráti, hoci položky sadzbu aj daň nesú.
   // Prázdny rozpis blokuje schválenie a do POHODY by odišli nulové základy —
   // preto sa dopočíta z položiek. Vlastný rozpis z dokladu má vždy prednosť.
-  const rozpisPrepocitany = rozpisZOdpovede.length > 0 ? rozpisZOdpovede : rozpisZPoloziek(polozky);
+  const rozpisZaklad = rozpisZOdpovede.length > 0 ? rozpisZOdpovede : rozpisZPoloziek(polozky);
+  // Doklad bez DPH, ktorý nemá ani položky: pokuta, poplatok, odvod. Rozpis
+  // nemá z čoho vzniknúť a prázdny je zle dvakrát — schválenie blokuje
+  // („doplniť rozpis DPH") a keby sa schválil, do POHODY odíde nulový doklad,
+  // lebo invoiceSummary sa počíta z riadkov rozpisu. Celá suma je teda jeden
+  // riadok so sadzbou 0 %, presne ako to pri mzdách dorába až export
+  // (pohodaXml.ts). Talianska pokuta 62,65 € tak konečne prejde sama.
+  //
+  // Len OZ a MZDY: tie DPH z podstaty nemajú. Na prijatej faktúre je chýbajúci
+  // rozpis zlyhanie čítania a zastaviť sa oplatí — dopočítaná nula by tam
+  // vyzerala vierohodne a odpočet by ticho zmizol.
+  const bezDane = ['OZ', 'MZDY'].includes(result.documentType)
+    && rozpisZaklad.length === 0 && polozky.length === 0
+    && round2(parseDecimal(result.totalVat) ?? 0) === 0
+    && totalAmount !== 0;
+  const rozpisPrepocitany = bezDane
+    ? [{ sadzba: 0, zaklad: totalAmount, dph: 0 }]
+    : rozpisZaklad;
   const dodavatel = { ...opravIdentifikatory(result.supplier), nazov: result.supplier.nazov ?? '' };
   // Cudzia daň sa nerozpisuje na základ a DPH — celá suma je nezdaniteľná.
   const sumy = jeCudziDodavatel(dodavatel)

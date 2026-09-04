@@ -638,6 +638,40 @@ describe('oslobodené plnenie bez vytlačenej sadzby', () => {
     expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
   });
 
+  // Ostrý prípad: talianska pokuta Verb 4E00009718 — jedna suma 62,65 €, žiadna
+  // DPH, žiadne položky. Model nemal čo do rozpisu dať, rozpis ostal prázdny a
+  // doklad sa nedal schváliť („doplniť rozpis DPH, zosúladiť celkovú sumu").
+  // Keby sa schválil, do POHODY odíde nulový: invoiceSummary sa počíta z riadkov.
+  it('pokuta bez DPH a bez položiek dostane jeden riadok 0 %', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'OZ',
+      supplier: { nazov: 'Corpo di Polizia Locale Valsugana e Tesino' },
+      buyer: { ico: '35761571' }, invoiceNumber: '4E00009718',
+      issueDate: '2026-08-10', taxDate: '2026-08-10', dueDate: '2026-08-10',
+      currency: 'EUR', lineItems: [], vatBreakdown: [],
+      totalWithoutVat: undefined, totalVat: undefined, totalAmount: '62.65',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-verb', '2026-08-10');
+    expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 62.65, dph: 0 }]);
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
+  });
+
+  // Poistka: na PRIJATEJ faktúre je prázdny rozpis zlyhanie čítania, nie doklad
+  // bez dane. Dopočítaná nula by tam vyzerala vierohodne a odpočet by ticho
+  // zmizol — preto sa tam nedopĺňa nič a doklad zastane na kontrole.
+  it('prijatá faktúra bez rozpisu sa nedopĺňa — nula by zakryla zlyhanie čítania', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Dodávateľ s.r.o.', ico: '12345678' },
+      buyer: { ico: '35761571' }, invoiceNumber: 'FA-9',
+      issueDate: '2026-08-10', taxDate: '2026-08-10', dueDate: '2026-08-10',
+      currency: 'EUR', lineItems: [], vatBreakdown: [],
+      totalWithoutVat: undefined, totalVat: undefined, totalAmount: '1230',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-fp', '2026-08-10');
+    expect((normalized.extracted as any).rozpisDph).toEqual([]);
+  });
+
   // Ostrý prípad: OCR zhltlo jednu nulu z jedenástich a z 24-znakového
   // SK2509000000000011608513 spravilo 23-znakový SK250900000000011608513.
   // Nález je správny, ale schválenie blokovať nesmie: klient ho už dlhšie
