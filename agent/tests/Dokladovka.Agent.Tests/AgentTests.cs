@@ -224,7 +224,7 @@ public sealed class AgentTests
         var parsed = PohodaXml.ParseHistoryRows(response);
         Assert.Equal(5, parsed.Rows.Count);
         // Vydaná faktúra patrí do korpusu (na rozdiel od pamäte dodávateľov).
-        Assert.Equal(new PohodaXml.HistoryRow("FV", "26FV001", "2026-03-05", "99998888", "Odberateľ a.s.", "Predaj tovaru", "311/604", "UD", null), parsed.Rows[0]);
+        Assert.Equal(new PohodaXml.HistoryRow("FV", "26FV001", "2026-03-05", "99998888", "Odberateľ a.s.", "Predaj tovaru", "311/604", "UD", null, 0), parsed.Rows[0]);
         // Zvyšok agendy FA = ostatné záväzky, nie spoločné „INE".
         Assert.Equal("OZ", parsed.Rows[1].Agenda);
         // Smer pokladne rozdeľuje výdaj a príjem — tie isté slová sa v nich účtujú opačne.
@@ -998,5 +998,65 @@ public sealed class DocumentFolderTests
         Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
         var xml = PohodaXml.BuildAddressBookRequest("12345678", "test-request");
         Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
+    }
+    // Rozúčtovanie PHM na daňovú a nedaňovú časť je vidieť LEN v položkách.
+    // Hlavička faktúry nesie „PHM / PHM-501200 / PD" a v účtovnom denníku po
+    // nej ostanú štyri proviozky s textom „PHM" — ani z jedného sa nedá zistiť,
+    // že delený bol iba Natural 95 a že nedaňová časť ide na PHM-Nadspotreba
+    // s členením PN. Korpus preto musí položky s vlastným zaúčtovaním vidieť.
+    [Fact]
+    public void ParseHistoryRows_BerieAjPolozkySVlastnymZauctovanim()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:number><typ:numberRequested>DF260181</typ:numberRequested></inv:number>
+                      <inv:date>2026-07-31</inv:date>
+                      <inv:partnerIdentity><typ:address><typ:company>Up Déjeuner, s. r. o.</typ:company><typ:ico>53528654</typ:ico></typ:address></inv:partnerIdentity>
+                      <inv:text>PHM</inv:text>
+                      <inv:accounting><typ:ids>PHM-501200</typ:ids></inv:accounting>
+                      <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                      <inv:classificationKVDPH><typ:ids>B2</typ:ids></inv:classificationKVDPH>
+                    </inv:invoiceHeader>
+                    <inv:invoiceDetail>
+                      <inv:invoiceItem>
+                        <inv:text>Nafta</inv:text>
+                        <inv:homeCurrency><typ:price>100.09</typ:price></inv:homeCurrency>
+                      </inv:invoiceItem>
+                      <inv:invoiceItem>
+                        <inv:text>Natural 95 (daňová časť 80 %)</inv:text>
+                        <inv:homeCurrency><typ:price>52.68</typ:price></inv:homeCurrency>
+                        <inv:accounting><typ:ids>PHM-501200</typ:ids></inv:accounting>
+                        <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                      </inv:invoiceItem>
+                      <inv:invoiceItem>
+                        <inv:text>Natural 95 (nedaňová časť 20 %)</inv:text>
+                        <inv:homeCurrency><typ:price>13.17</typ:price></inv:homeCurrency>
+                        <inv:accounting><typ:ids>PHM-Nadspotreba</typ:ids></inv:accounting>
+                        <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT>
+                      </inv:invoiceItem>
+                    </inv:invoiceDetail>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var rows = PohodaXml.ParseHistoryRows(response).Rows;
+        // Hlavička + jediná položka, ktorá sa účtuje INAK. „Nafta" nemá vlastné
+        // zaúčtovanie a daňová časť má to isté ako hlavička — obe by korpus len
+        // zopakovali.
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(new PohodaXml.HistoryRow(
+            "FP", "DF260181", "2026-07-31", "53528654", "Up Déjeuner, s. r. o.",
+            "PHM", "PHM-501200", "PD", "B2", 0), rows[0]);
+        // Sekcia KV sa dedí z hlavičky, keď ju položka nemá vlastnú.
+        Assert.Equal(new PohodaXml.HistoryRow(
+            "FP", "DF260181", "2026-07-31", "53528654", "Up Déjeuner, s. r. o.",
+            "Natural 95 (nedaňová časť 20 %)", "PHM-Nadspotreba", "PN", "B2", 3), rows[1]);
     }
 }

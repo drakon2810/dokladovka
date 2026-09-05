@@ -74,8 +74,8 @@ public static class PohodaXml
             var partner = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "partnerIdentity");
             var supplierIco = Trimmed(partner is null ? null : FindText(partner, "ico"));
             var supplierName = Trimmed(partner is null ? null : FindText(partner, "company"));
-            var predkontacia = HeaderRefIds(header, "accounting");
-            var clenenieDph = HeaderRefIds(header, "classificationVAT");
+            var predkontacia = RefIds(header, "accounting");
+            var clenenieDph = RefIds(header, "classificationVAT");
             if ((supplierIco is null && supplierName is null) || (predkontacia is null && clenenieDph is null)) continue;
             var row = new TrainingDecision(
                 PodtypZTypu(type),
@@ -84,7 +84,7 @@ public static class PohodaXml
                 Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value),
                 predkontacia,
                 clenenieDph,
-                ZakladnaKvSekcia(HeaderRefIds(header, "classificationKVDPH")));
+                ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")));
             // Opakované identické doklady sa zlúčia — server aj tak deduplikuje.
             var key = string.Join("\u0001", row.SupplierIco, row.SupplierName, row.LineText, row.PredkontaciaKod, row.ClenenieDphKod, row.ClenenieKvKod);
             if (seen.Add(key)) rows.Add(row);
@@ -154,7 +154,11 @@ public static class PohodaXml
         string LineText,
         string? PredkontaciaKod,
         string? ClenenieDphKod,
-        string? ClenenieKvKod);
+        string? ClenenieKvKod,
+        /// <summary>0 = hlavička dokladu, 1..n jeho položky. Ide do odtlačku
+        /// riadka na serveri; bez neho by položka dostala poradie podľa pozície
+        /// v dávke a pri prvom doklade by kolidovala s vlastnou hlavičkou.</summary>
+        int? RiadokIndex = null);
 
     /// <summary>
     /// Číselný rad prečítaný z DOKLADU, nie z číselníka. POHODA rad, ktorý nemá
@@ -243,20 +247,50 @@ public static class PohodaXml
             // rad má rovnako platný ako každý iný.
             ZozbierajRad(series, header, headerName);
             var lineText = Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value);
-            var predkontacia = HeaderRefIds(header, "accounting");
-            var clenenieDph = HeaderRefIds(header, "classificationVAT");
+            var predkontacia = RefIds(header, "accounting");
+            var clenenieDph = RefIds(header, "classificationVAT");
             if (lineText is null || (predkontacia is null && clenenieDph is null)) continue;
             var partner = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "partnerIdentity");
+            var dokladCislo = Trimmed(FindText(header, "numberRequested") ?? FindText(header, "number"));
+            var datum = IsoDate(FindText(header, "date"));
+            var partnerIco = Trimmed(partner is null ? null : FindText(partner, "ico"));
+            var partnerNazov = Trimmed(partner is null ? null : FindText(partner, "company"));
+            var agendaDokladu = agenda(header);
             rows.Add(new HistoryRow(
-                agenda(header),
-                Trimmed(FindText(header, "numberRequested") ?? FindText(header, "number")),
-                IsoDate(FindText(header, "date")),
-                Trimmed(partner is null ? null : FindText(partner, "ico")),
-                Trimmed(partner is null ? null : FindText(partner, "company")),
-                lineText,
-                predkontacia,
-                clenenieDph,
-                ZakladnaKvSekcia(HeaderRefIds(header, "classificationKVDPH"))));
+                agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, lineText,
+                predkontacia, clenenieDph,
+                ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")), 0));
+
+            // Položky dokladu. POHODA ich v odpovedi posiela celé (invoiceItem
+            // má text, accounting aj classificationVAT), korpus z nich doteraz
+            // nevidel nič — čítala sa iba hlavička. Pritom práve v nich je to,
+            // čo z hlavičky ani z účtovného denníka vyčítať NEJDE: faktúra za
+            // PHM má hlavičku „PHM / PHM-501200 / PD" a v denníku po nej ostanú
+            // štyri proviozky s textom „PHM", zatiaľ čo rozúčtovanie je až
+            // v položkách — „Natural 95 (nedaňová časť 20 %)" s predkontáciou
+            // PHM-Nadspotreba a členením PN.
+            //
+            // Berú sa LEN položky s VLASTNÝM zaúčtovaním, teda tie, kde sa
+            // účtovník rozhodol inak než na hlavičke. Položka, ktorá hlavičku
+            // dedí, by korpus iba zopakovala.
+            // ponytail: keby textová zhoda potrebovala aj bežné položky
+            //   („Nafta" sedí na doklad lepšie než hlavičkové „PHM"), pustiť
+            //   sem všetky — korpus tým ale narastie rádovo.
+            foreach (var (item, poradie) in DetailItems(element, headerName))
+            {
+                var itemText = Trimmed(item.Elements()
+                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value);
+                var itemPredkontacia = RefIds(item, "accounting");
+                var itemClenenie = RefIds(item, "classificationVAT");
+                if (itemText is null || (itemPredkontacia is null && itemClenenie is null)) continue;
+                if (itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
+                rows.Add(new HistoryRow(
+                    agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, itemText,
+                    itemPredkontacia ?? predkontacia, itemClenenie ?? clenenieDph,
+                    ZakladnaKvSekcia(RefIds(item, "classificationKVDPH"))
+                        ?? ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")),
+                    poradie));
+            }
         }
 
         var warnings = document.Descendants()
@@ -337,6 +371,31 @@ public static class PohodaXml
                     yield return (element, "intDocHeader", _ => "INT");
                     break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Položky dokladu aj s poradím od 1 — nula patrí hlavičke. Názvy elementov
+    /// sú tie isté, aké export do POHODY zapisuje (pohodaXml.ts, DETAIL_TAGS).
+    /// </summary>
+    private static IEnumerable<(XElement Item, int Poradie)> DetailItems(XElement document, string headerName)
+    {
+        var (detailName, itemName) = headerName switch
+        {
+            "invoiceHeader" => ("invoiceDetail", "invoiceItem"),
+            "voucherHeader" => ("voucherDetail", "voucherItem"),
+            "intDocHeader" => ("intDocDetail", "intDocItem"),
+            _ => (null, null),
+        };
+        if (detailName is null || itemName is null) yield break;
+        var detail = document.Elements()
+            .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == detailName);
+        if (detail is null) yield break;
+        var poradie = 0;
+        foreach (var item in detail.Elements().Where(node => IsStormware(node) && node.Name.LocalName == itemName))
+        {
+            poradie += 1;
+            yield return (item, poradie);
         }
     }
 
@@ -488,8 +547,10 @@ public static class PohodaXml
         return destructive.Concat(transformations).Distinct(StringComparer.Ordinal).ToArray();
     }
 
-    // Kód referencie (typ:ids) priamo pod elementom hlavičky — nezachádza do položiek.
-    private static string? HeaderRefIds(XElement header, string localName)
+    // Kód referencie (typ:ids) priamo pod daným elementom — hlavičkou aj položkou.
+    // Pozerá len na priamych potomkov, takže z hlavičky nikdy nevytiahne
+    // zaúčtovanie položky (invoiceDetail je súrodenec hlavičky, nie jej dieťa).
+    private static string? RefIds(XElement header, string localName)
     {
         var element = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == localName);
         return element is null ? null : Trimmed(FindText(element, "ids"));
