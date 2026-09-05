@@ -767,6 +767,10 @@ export const sk = {
   'trening.ziadneRiadky': 'Súbor neobsahuje použiteľné riadky.',
   'trening.hotovo': 'Import hotový',
   'trening.analyzovat': 'Analyzovať pamäť (AI)',
+  'trening.stiahnutDennikRequest': 'Stiahnuť request na denník',
+  'trening.nahratDennik': 'Nahrať účtovný denník (XML)',
+  'trening.dennikNahraty': 'Účtovný denník nahratý — proviozok:',
+  'trening.dennikSPredkontaciou': 'z toho s jednoznačnou predkontáciou',
   'trening.navrhy': 'Návrhy pravidiel od AI',
   'trening.navrhyPopis':
     'AI našla v pamäti opakujúce sa vzory. Zaškrtnite pravidlá, ktoré majú platiť — navrhovať začnú až po potvrdení.',

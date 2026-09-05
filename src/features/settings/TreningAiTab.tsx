@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   activateAiRule, analyzeAiTraining, confirmAiRules, deleteAiRule,
   excludeAiTrainingSupplier, getAiTrainingStats, importAiTraining,
-  importUctoHistoryRows, listAiRules, listAiTrainingSuppliers,
+  importUctoDennik, importUctoHistoryRows, listAiRules, listAiTrainingSuppliers,
   type AiRule, type AiRuleProposal, type AiTrainingSupplier,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
@@ -17,6 +17,8 @@ import type { CodeListKind } from '../../data/types';
 import { parseTrainingRows, validateTrainingRows, type ParsedTrainingRow, type TrainingKody } from './treningImport';
 import { extractPohodaDecisions, extractPohodaHistory } from './pohodaMdbImport';
 import { requestMostikTrainingSync } from '../../data/mostik/mostikService';
+import { buildDennikRequestFileName, buildDennikRequestXml } from '../../data/pohoda/requestTemplates';
+import { decodePohodaXml } from '../../data/pohoda/encoding';
 import { UctovnyProfil } from './UctovnyProfil';
 
 export function TreningAiTab() {
@@ -34,6 +36,7 @@ export function TreningAiTab() {
   // Po importe histórie z .mdb sa profil (štatistiky korpusu) načíta nanovo.
   const [profilVerzia, setProfilVerzia] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dennikInputRef = useRef<HTMLInputElement>(null);
 
   const organizations = data?.organizations.filter((org) => !org.archived) ?? [];
 
@@ -194,6 +197,35 @@ export function TreningAiTab() {
     }
   }
 
+  // Účtovný denník: request si účtovník stiahne, prežene v POHODE a odpoveď
+  // nahrá späť. Je to jediný zdroj, z ktorého vidno rozdelené doklady —
+  // hlavičková história po rozdelení nezachová nič.
+  function stiahniDennikRequest() {
+    const organizacia = data?.organizations.find((item) => item.id === orgId);
+    if (!organizacia) return;
+    const rok = new Date().getFullYear();
+    const blob = new Blob([buildDennikRequestXml(organizacia, rok)], { type: 'application/xml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = buildDennikRequestFileName(organizacia, rok);
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function nahrajDennik(file: File) {
+    if (!orgId) return;
+    setBusy(true);
+    try {
+      const vysledok = await importUctoDennik(orgId, decodePohodaXml(await file.arrayBuffer()));
+      showToast(`${t('trening.dennikNahraty')} ${vysledok.ulozenych} · ${t('trening.dennikSPredkontaciou')}: ${vysledok.sJednouPredkontaciou}`);
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function analyze() {
     if (!orgId) return;
     setBusy(true);
@@ -284,6 +316,33 @@ export function TreningAiTab() {
         >
           {t('trening.analyzovat')}
         </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !orgId}
+          onClick={stiahniDennikRequest}
+        >
+          {t('trening.stiahnutDennikRequest')}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !orgId}
+          onClick={() => dennikInputRef.current?.click()}
+        >
+          {t('trening.nahratDennik')}
+        </button>
+        <input
+          ref={dennikInputRef}
+          type="file"
+          accept=".xml,application/xml,text/xml"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (file) void nahrajDennik(file);
+          }}
+        />
         <input
           ref={fileInputRef}
           type="file"

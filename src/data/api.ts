@@ -2048,6 +2048,27 @@ export async function deleteCodeListItem(kind: CodeListKind, id: string): Promis
   return deactivateCodeListItem(kind, id);
 }
 
+export interface DennikImportResult {
+  ulozenych: number;
+  sJednouPredkontaciou: number;
+  sViacerymi: number;
+  bezPredkontacie: number;
+  preskocene: number;
+}
+
+/**
+ * Nahratie účtovného denníka z POHODY. Zatiaľ ručne: účtovník si stiahne
+ * request, prežene ho v POHODE a odpoveď nahrá sem. Agent to raz prevezme —
+ * je to len automatizácia tohto kroku.
+ */
+export async function importUctoDennik(orgId: string, xml: string): Promise<DennikImportResult> {
+  if (!REST_DATA_MODE) throw new Error('Účtovný denník sa dá nahrať iba v serverovom režime');
+  return restRequest<DennikImportResult>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-dennik`,
+    { method: 'PUT', body: JSON.stringify({ xml }) },
+  );
+}
+
 export async function importPohodaCodeLists(
   orgId: string,
   preview: CodeListImportPreview,
