@@ -14,7 +14,7 @@ function wireResult() {
     buyer: { nazov: 'Test s.r.o.', ico: '87654321', dic: null, icDph: null, adresa: null, ulica: null, psc: null, obec: null, krajina: 'SK' },
     invoiceNumber: '2026-001', orderNumber: null, deliveryNoteNumber: null,
     variableSymbol: null, constantSymbol: null, specificSymbol: null,
-    issueDate: '2026-07-14', taxDate: '2026-07-14', dueDate: '2026-07-28', currency: 'CZK',
+    issueDate: '2026-07-14', taxDate: '2026-07-14', servicePeriodEnd: null, dueDate: '2026-07-28', currency: 'CZK',
     statementNumber: null,
     documentSummary: 'Konzultačné služby',
     lineItems: [],

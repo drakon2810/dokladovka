@@ -36,7 +36,7 @@ function rekapitulaciaWire() {
     buyer: { nazov: null, ico: null, dic: null, icDph: null, adresa: null, ulica: null, psc: null, obec: null, krajina: null },
     invoiceNumber: 'MZDY-04/2026', orderNumber: null, deliveryNoteNumber: null,
     variableSymbol: '202612', constantSymbol: null, specificSymbol: null,
-    issueDate: '2026-04-30', taxDate: '2026-04-30', dueDate: null, currency: 'EUR',
+    issueDate: '2026-04-30', taxDate: '2026-04-30', servicePeriodEnd: null, dueDate: null, currency: 'EUR',
     statementNumber: null,
     documentSummary: 'mzdy za 2026/04',
     // Mzdy idú do POHODY ako „UN" + sekcia KV „KN" — obidve naraz, každá vo svojom poli.
@@ -54,7 +54,7 @@ function rekapitulaciaWire() {
         documentSummary: 'mzdy-tvorba SF 04/2026',
         variableSymbol: '202510',
         accountCode: 'SF', vatClassificationCode: null, vatControlStatementCode: 'KN', numberSeriesCode: '26MZD',
-        issueDate: '2026-04-30', taxDate: '2026-04-30',
+        issueDate: '2026-04-30', taxDate: '2026-04-30', servicePeriodEnd: null,
         totalAmount: '51.88',
         lineItems: [],
         vatBreakdown: [{ vatRate: '0', base: '51.88', vat: '0', total: '51.88' }],
@@ -65,7 +65,7 @@ function rekapitulaciaWire() {
         variableSymbol: '202507',
         // Kód s medzerami okolo lomky — musí sa spárovať s '331 / 335200'.
         accountCode: '331/335200', vatClassificationCode: null, vatControlStatementCode: null, numberSeriesCode: 'NEEXISTUJE',
-        issueDate: '2026-04-30', taxDate: null,
+        issueDate: '2026-04-30', taxDate: null, servicePeriodEnd: null,
         totalAmount: '162.00',
         lineItems: [],
         vatBreakdown: [{ vatRate: '0', base: '162.00', vat: '0', total: '162.00' }],

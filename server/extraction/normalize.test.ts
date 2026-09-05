@@ -165,6 +165,38 @@ describe('normalizácia SK/CZ faktúr', () => {
     expect((normalized.extracted as any).dodavatel.icDph).toBe('12345678');
   });
 
+  // E.M.C. CONSULTI SRL, faktúra 762: august sa fakturuje 1. septembra a doklad
+  // dátum zdaniteľného plnenia netlačí vôbec — obdobie je len v texte položiek
+  // („TARIF LUNAR PENTRU AUGUST 2026"). Podľa dátumu vystavenia by doklad spadol
+  // do septembra a účtovníčka ho prepisovala ručne.
+  it('dátum dodania berie z fakturovaného obdobia, keď doklad nemá dátum plnenia', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'E.M.C. CONSULTI SRL', icDph: 'RO36885647', adresa: 'BUCURESTI', krajina: 'RO' },
+      buyer: { ico: '36283410' }, invoiceNumber: '762',
+      issueDate: '2026-09-01', taxDate: undefined, servicePeriodEnd: '2026-08-31', dueDate: '2026-09-10',
+      currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '7510.47', vat: '0' }], totalAmount: '7510.47',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-emc', '2026-09-01');
+    expect((normalized.extracted as any).datumDodania).toBe('2026-08-31');
+    expect((normalized.extracted as any).datumVystavenia).toBe('2026-09-01');
+  });
+
+  it('vytlačený dátum zdaniteľného plnenia má prednosť pred obdobím', () => {
+    // Zákonný dátum na papieri vždy vyhráva; obdobie je len náhrada, keď chýba.
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Dodávateľ', ico: '12345678', icDph: 'SK2020123456' },
+      buyer: { ico: '36283410' }, invoiceNumber: '9',
+      issueDate: '2026-09-01', taxDate: '2026-09-01', servicePeriodEnd: '2026-08-31', dueDate: '2026-09-15',
+      currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '10', vat: '0' }], totalAmount: '10',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-duzp', '2026-09-01');
+    expect((normalized.extracted as any).datumDodania).toBe('2026-09-01');
+  });
+
   it('zachová platný SK DIČ (nie je kópia IČ DPH)', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'SK Dodávateľ', dic: '2020254170', icDph: 'SK2020254170' },

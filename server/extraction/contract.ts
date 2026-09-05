@@ -86,6 +86,13 @@ const additionalDocumentWireSchema = z.object({
   numberSeriesCode: nullableShortText,
   issueDate: nullableIsoDate,
   taxDate: nullableIsoDate,
+  /**
+   * Posledný deň obdobia, za ktoré je plnenie fakturované. Mesačné faktúry
+   * za služby dátum zdaniteľného plnenia často netlačia vôbec a obdobie píšu
+   * len v texte („TARIF LUNAR PENTRU AUGUST 2026", „Mesiac august 2026") —
+   * účtovníčka potom dátum dodania zadáva ručne, lebo ten určuje obdobie DPH.
+   */
+  servicePeriodEnd: nullableIsoDate,
   totalAmount: nullableDecimal,
   lineItems: z.array(lineItemWireSchema).max(100),
   vatBreakdown: z.array(vatRowWireSchema).max(20),
@@ -122,6 +129,13 @@ export const extractionWireSchema = z.object({
   specificSymbol: nullableShortText,
   issueDate: nullableIsoDate,
   taxDate: nullableIsoDate,
+  /**
+   * Posledný deň obdobia, za ktoré je plnenie fakturované. Mesačné faktúry
+   * za služby dátum zdaniteľného plnenia často netlačia vôbec a obdobie píšu
+   * len v texte („TARIF LUNAR PENTRU AUGUST 2026", „Mesiac august 2026") —
+   * účtovníčka potom dátum dodania zadáva ručne, lebo ten určuje obdobie DPH.
+   */
+  servicePeriodEnd: nullableIsoDate,
   dueDate: nullableIsoDate,
   currency: nullableShortText,
   // Bankový výpis: krátke číslo výpisu (POHODA dovolí max 10 znakov).
@@ -161,6 +175,8 @@ export interface ExtractionResult {
   specificSymbol?: string;
   issueDate?: string;
   taxDate?: string;
+  /** Posledný deň fakturovaného obdobia (pozri servicePeriodEnd v schéme). */
+  servicePeriodEnd?: string;
   dueDate?: string;
   currency?: string;
   /** Bankový výpis: krátke číslo výpisu (POHODA statementNumber, max 10 znakov). */
@@ -215,6 +231,8 @@ export interface AdditionalDocumentResult {
   numberSeriesCode?: string;
   issueDate?: string;
   taxDate?: string;
+  /** Posledný deň fakturovaného obdobia (pozri servicePeriodEnd v schéme). */
+  servicePeriodEnd?: string;
   totalAmount?: string;
   lineItems: ExtractionResult['lineItems'];
   vatBreakdown: ExtractionResult['vatBreakdown'];
@@ -260,6 +278,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
       specificSymbol: parsed.specificSymbol,
       issueDate: parsed.issueDate,
       taxDate: parsed.taxDate,
+      servicePeriodEnd: parsed.servicePeriodEnd,
       dueDate: parsed.dueDate,
       currency: parsed.currency,
       statementNumber: parsed.statementNumber,
@@ -285,6 +304,7 @@ export function fromWireResult(value: unknown): ExtractionResult {
         numberSeriesCode: doklad.numberSeriesCode,
         issueDate: doklad.issueDate,
         taxDate: doklad.taxDate,
+        servicePeriodEnd: doklad.servicePeriodEnd,
         totalAmount: doklad.totalAmount,
       }),
       lineItems: doklad.lineItems.map((item) => withoutNulls(item)),
@@ -320,7 +340,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   invoiceNumber: z.string().optional(), orderNumber: z.string().optional(),
   deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),
   constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
-  issueDate: z.string().optional(), taxDate: z.string().optional(), dueDate: z.string().optional(),
+  issueDate: z.string().optional(), taxDate: z.string().optional(), servicePeriodEnd: z.string().optional(), dueDate: z.string().optional(),
   currency: z.string().optional(), statementNumber: z.string().optional(), documentSummary: z.string().optional(),
   accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
   vatControlStatementCode: z.string().optional(),
@@ -342,7 +362,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
     accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
     vatControlStatementCode: z.string().optional(),
     numberSeriesCode: z.string().optional(),
-    issueDate: z.string().optional(), taxDate: z.string().optional(), totalAmount: z.string().optional(),
+    issueDate: z.string().optional(), taxDate: z.string().optional(), servicePeriodEnd: z.string().optional(), totalAmount: z.string().optional(),
     lineItems: z.array(z.object({
       description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
       accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),

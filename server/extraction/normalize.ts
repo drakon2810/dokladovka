@@ -371,7 +371,15 @@ export function normalizeExtractionResult(
       // DUZP: keď ho faktúra neuvádza (bežné pri zahraničných službách), odvodí
       // sa z dátumu vystavenia — rovnako ako to robí dphAdvisor. Inak by správny
       // návrh zaúčtovania blokovala validácia „chýba dátum dodania".
-      datumDodania: result.taxDate ?? result.issueDate ?? fallbackDate,
+      // Dátum dodania určuje obdobie DPH. Keď doklad dátum zdaniteľného plnenia
+      // netlačí — mesačné faktúry za služby ho spravidla nemajú a obdobie píšu
+      // len v texte („TARIF LUNAR PENTRU AUGUST 2026") — rozhoduje koniec toho
+      // obdobia, nie dátum vystavenia. E.M.C. CONSULTI fakturuje august
+      // 1. septembra, takže podľa vystavenia by doklad spadol do zlého obdobia
+      // a účtovníčka ho prepisovala ručne (ALPINA má audit).
+      // Vytlačený dátum zdaniteľného plnenia má vždy prednosť: je to zákonný
+      // dátum, obdobie v texte je len náhrada, keď chýba.
+      datumDodania: result.taxDate ?? result.servicePeriodEnd ?? result.issueDate ?? fallbackDate,
       mena: currency,
       // AI zhrnutie plnenia — predvyplní „Text dokladu", ktorý ide do POHODY
       // ako text účtovného zápisu; účtovník ho môže prepísať.
