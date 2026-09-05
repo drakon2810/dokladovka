@@ -1073,4 +1073,59 @@ public sealed class DocumentFolderTests
         Assert.Contains("<ftr:dateTill>2026-12-31</ftr:dateTill>", xml);
         Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
     }
+    // Faktúra Print-Office DF260169 z reálneho exportu ALPINY: dve z troch
+    // položiek nemajú text vôbec — a práve na jednej z nich je „repre / PN /
+    // KN", teda plnenie mimo priznania aj mimo kontrolného výkazu. Podmienka
+    // „bez textu preskoč" o ten dôkaz pripravila korpus úplne. Na celom exporte
+    // je bez textu 18 zo 68 rozúčtovaných položiek.
+    [Fact]
+    public void ParseHistoryRows_BerieAjPolozkuBezTextu()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:number><typ:numberRequested>DF260169</typ:numberRequested></inv:number>
+                      <inv:date>2026-07-16</inv:date>
+                      <inv:partnerIdentity><typ:address><typ:company>Print-Office s.r.o.</typ:company><typ:ico>54085292</typ:ico></typ:address></inv:partnerIdentity>
+                      <inv:text>spese di rappres./repre</inv:text>
+                      <inv:accounting><typ:ids>repre</typ:ids></inv:accounting>
+                      <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                      <inv:classificationKVDPH><typ:ids>B2</typ:ids></inv:classificationKVDPH>
+                    </inv:invoiceHeader>
+                    <inv:invoiceDetail>
+                      <inv:invoiceItem>
+                        <inv:homeCurrency><typ:price>49.70</typ:price></inv:homeCurrency>
+                        <inv:accounting><typ:ids>kancelár.potreby</typ:ids></inv:accounting>
+                        <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                        <inv:classificationKVDPH><typ:ids>B2</typ:ids></inv:classificationKVDPH>
+                      </inv:invoiceItem>
+                      <inv:invoiceItem>
+                        <inv:homeCurrency><typ:price>165.44</typ:price></inv:homeCurrency>
+                        <inv:accounting><typ:ids>repre</typ:ids></inv:accounting>
+                        <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT>
+                        <inv:classificationKVDPH><typ:ids>KN</typ:ids></inv:classificationKVDPH>
+                      </inv:invoiceItem>
+                    </inv:invoiceDetail>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var rows = PohodaXml.ParseHistoryRows(response).Rows;
+        // Hlavička + obe položky. Bez textu si berú text hlavičky — ten účtovník
+        // pri položke aj tak vidí.
+        Assert.Equal(3, rows.Count);
+        Assert.Equal(new PohodaXml.HistoryRow(
+            "FP", "DF260169", "2026-07-16", "54085292", "Print-Office s.r.o.",
+            "spese di rappres./repre", "kancelár.potreby", "PD", "B2", 1), rows[1]);
+        // Tá istá predkontácia ako hlavička, ale mimo priznania aj mimo výkazu.
+        Assert.Equal(new PohodaXml.HistoryRow(
+            "FP", "DF260169", "2026-07-16", "54085292", "Print-Office s.r.o.",
+            "spese di rappres./repre", "repre", "PN", "KN", 2), rows[2]);
+    }
 }

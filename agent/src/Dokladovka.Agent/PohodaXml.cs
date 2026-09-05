@@ -308,12 +308,20 @@ public static class PohodaXml
             //   sem všetky — korpus tým ale narastie rádovo.
             foreach (var (item, poradie) in DetailItems(element, headerName))
             {
-                var itemText = Trimmed(item.Elements()
-                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value);
                 var itemPredkontacia = RefIds(item, "accounting");
                 var itemClenenie = RefIds(item, "classificationVAT");
-                if (itemText is null || (itemPredkontacia is null && itemClenenie is null)) continue;
+                if (itemPredkontacia is null && itemClenenie is null) continue;
                 if (itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
+                // Text položky smie chýbať. Na reálnom exporte ALPINY je bez textu
+                // 18 zo 68 rozúčtovaných položiek — a sú medzi nimi tie
+                // najvýrečnejšie: faktúra Print-Office má prázdny text presne na
+                // riadku, ktorý ide na „repre / PN / KN", teda mimo priznania aj
+                // mimo kontrolného výkazu. Preskočiť ich znamená prísť práve
+                // o dôkaz rozúčtovania. Namiesto toho sa berie text hlavičky —
+                // ten účtovník pri položke aj tak vidí.
+                var itemText = Trimmed(item.Elements()
+                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value)
+                    ?? lineText;
                 rows.Add(new HistoryRow(
                     agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, itemText,
                     itemPredkontacia ?? predkontacia, itemClenenie ?? clenenieDph,
