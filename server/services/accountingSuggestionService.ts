@@ -817,6 +817,60 @@ function polozkyUctoJson(extracted: unknown): string | null {
 
 /** Zápis do pamäte rozhodnutí pri schválení dokladu (spätná väzba = učenie).
  *  Kľúčom je protistrana: pri FV odberateľ, inak dodávateľ. */
+/** Polia zaúčtovania, ktoré účtovník na doklade rozhoduje a systém navrhuje. */
+const POLIA_ZAUCTOVANIA = ['predkontaciaId', 'clenenieDphId', 'clenenieKvKod', 'ciselnyRadId', 'strediskoId'] as const;
+
+/**
+ * Zaznamená, čo účtovník oproti návrhu zmenil. Jediný učiaci signál, ktorý
+ * v POHODE neexistuje — tam je len výsledok, nie návrh, ktorý mu predchádzal.
+ *
+ * Beží pri schválení a nikdy nesmie schválenie zhodiť: keď zápis zlyhá,
+ * doklad je už schválený a strata jedného merania je menšia škoda než chyba
+ * účtovníkovi na obrazovke.
+ */
+export async function zaznamenajOpravu(tx: Queryable, input: {
+  tenantId: string;
+  organizationId: string;
+  documentId: string;
+  documentType?: string;
+  podtyp?: string;
+  extracted: unknown;
+  accounting: Record<string, string | undefined>;
+}): Promise<void> {
+  const navrh = await tx.query<{
+    predkontacia_id?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
+    ciselny_rad_id?: string; stredisko_id?: string; source: string; confidence: string;
+  } & Record<string, unknown>>(
+    `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, stredisko_id, source, confidence
+       FROM accounting_suggestions WHERE document_id=$1 AND tenant_id=$2`,
+    [input.documentId, input.tenantId],
+  );
+  const row = navrh.rows[0];
+  // Bez návrhu sa tiež zapisuje: „účtovník vyplnil bez toho, aby systém niečo
+  // ponúkol" je rovnako dôležité meranie ako oprava.
+  const navrhnute: Record<string, string | undefined> = {
+    predkontaciaId: row?.predkontacia_id ?? undefined,
+    clenenieDphId: row?.clenenie_dph_id ?? undefined,
+    clenenieKvKod: row?.clenenie_kv_kod ?? undefined,
+    ciselnyRadId: row?.ciselny_rad_id ?? undefined,
+    strediskoId: row?.stredisko_id ?? undefined,
+  };
+  const schvalene = Object.fromEntries(POLIA_ZAUCTOVANIA.map((pole) => [pole, input.accounting[pole] ?? undefined]));
+  const zmenene = POLIA_ZAUCTOVANIA.filter((pole) => (navrhnute[pole] ?? null) !== (schvalene[pole] ?? null));
+  const strana = protistranaDokladu(input.documentType, input.extracted);
+  await tx.query(
+    `INSERT INTO ucto_opravy
+      (id,tenant_id,organization_id,document_id,document_type,podtyp,supplier_ico,supplier_name,
+       navrhnute,schvalene,zmenene,navrh_zdroj,navrh_confidence)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::text[],$12,$13)`,
+    [randomUUID(), input.tenantId, input.organizationId, input.documentId,
+      input.documentType ?? null, input.podtyp ?? null,
+      String(strana.ico ?? '').replace(/\D/g, '') || null, normalizeName(strana.nazov) || null,
+      JSON.stringify(navrhnute), JSON.stringify(schvalene), zmenene,
+      row?.source ?? null, row?.confidence ?? null],
+  );
+}
+
 export async function recordUctoDecision(tx: Queryable, input: {
   tenantId: string;
   organizationId: string;

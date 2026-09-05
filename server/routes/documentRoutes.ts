@@ -14,7 +14,7 @@ import { classifyXml } from '../inbound/xmlClassifier.js';
 import { detectedMimeType, safeName } from '../inbound/attachmentMime.js';
 import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
-import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback } from '../services/accountingSuggestionService.js';
+import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
 import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
@@ -383,6 +383,21 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     });
     // Samokontrola pravidiel: zhoda so schváleným = potvrdenie, rozdiel = oprava.
     await updateRuleFeedback(database, { tenantId: auth.tenantId, documentId: id, accounting: document.accounting });
+    // Čo účtovník oproti návrhu zmenil — meranie kvality návrhov aj podklad na
+    // učenie. Zlyhanie zápisu nesmie zhodiť už schválený doklad.
+    try {
+      await zaznamenajOpravu(database, {
+        tenantId: auth.tenantId,
+        organizationId: document.organization_id,
+        documentId: id,
+        documentType: String(document.document_type ?? '') || undefined,
+        podtyp: String(document.podtyp ?? 'bezna'),
+        extracted: document.extracted,
+        accounting: document.accounting,
+      });
+    } catch (cause) {
+      console.warn(`[ucto-opravy] ${id}: záznam opravy zlyhal`, cause);
+    }
     await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
     return result.rows[0];
   });
