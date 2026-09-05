@@ -16,7 +16,7 @@ import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
-import { ItemsSection, fmtMoney, parseNum, parseOpt, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
+import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
 import './invoicePanel.css';
 import './sourceHighlight.css';
@@ -764,6 +764,18 @@ export function InvoicePanel({
     setAiApplied(true);
   };
 
+  /**
+   * Návrh rozpisu po riadkoch ako bledá predloha v prázdnych bunkách. Rozdelený
+   * doklad sa zámerne nepredvyplňuje sám (istota ostáva pod 0,9), takže bez
+   * tohto sa o návrhu nedalo zistiť vôbec nič, kým naň účtovník neklikol —
+   * ani to, či AI rozdelenie vôbec navrhla.
+   */
+  const navrhRiadkov = useMemo(
+    () => (!suggestion || suggestion.source === 'none'
+      ? {} : navrhPreRiadky(suggestion.riadky, polozky, codeLists)),
+    [suggestion, polozky, codeLists],
+  );
+
   const itemsCodeLists = useMemo<ItemsCodeLists>(() => ({
     predkontacie: predkontacieProDoklad,
     cleneniaDph: codeLists.cleneniaDph,
@@ -1037,6 +1049,7 @@ export function InvoicePanel({
         enabled={itemsOn}
         onToggle={toggleItems}
         codeLists={itemsCodeLists}
+        navrhRiadkov={navrhRiadkov}
         headerUcto={{
           predkontacia: codeLists.predkontacie.find((item) => item.id === ucto.predkontaciaId)?.kod,
           clenenieDph: codeLists.cleneniaDph.find((item) => item.id === ucto.clenenieDphId)?.kod,
