@@ -10,12 +10,16 @@ import { parseDennik, ulozDennik } from '../services/uctoDennikService.js';
 // automatizácia tohto kroku — bez neho by sa nedalo začať skôr, než bude nová
 // verzia agenta na pilotnom počítači.
 const dennikSchema = z.object({
-  // Celý ročný denník ALPINY má 4,9 MB; bodyLimit servera je 30 MB.
   xml: z.string().min(1).max(28_000_000),
 }).strict();
 
 export function registerUctoDennikRoutes(app: FastifyInstance, database: Database): void {
-  app.put('/api/organizations/:id/ucto-dennik', async (request) => {
+  app.put('/api/organizations/:id/ucto-dennik', {
+    // Predvolený bodyLimit Fastify je 1 MB a nastavuje sa PRE KAŽDÚ CESTU
+    // zvlášť — nie globálne. Ročný denník ALPINY má 4,9 MB, takže bez tohto
+    // riadka končí nahratie na 413 „Request body is too large".
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request) => {
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
     requireRole(auth, ['admin', 'uctovnik']);
