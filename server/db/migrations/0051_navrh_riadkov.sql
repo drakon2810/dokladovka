@@ -1,0 +1,18 @@
+-- Návrh zaúčtovania po RIADKOCH, nielen na hlavičke dokladu.
+--
+-- Rozdelenie dokladu je v systéme už celé hotové — okrem návrhu. Účtovník vie
+-- v položkovom rozpise nastaviť predkontáciu aj členenie DPH na každý riadok
+-- (ItemsSection) a export ich do POHODY posiela (documentDetailXml berie
+-- item.ucto pred hlavičkou). Chýbalo len to, že AI ich nikdy nevyplnila:
+-- accounting_suggestions drží jednu predkontáciu na celý doklad.
+--
+-- Denník ALPINY 2026 ukázal, koľko to stojí: 628 rozdelených dokladov a 20
+-- protistrán s ustáleným rozpadom. Print-Office ide 8 z 9 na 501400 + 513100 +
+-- 548002, pričom 513100 je reprezentácia — tá NEMÁ nárok na odpočet DPH, takže
+-- riadok potrebuje aj vlastné členenie. Preto sa v návrhu drží dvojica, nie
+-- samotná predkontácia.
+--
+-- Tvar: [{ "index": 0, "popis": "…", "predkontaciaId": "…", "clenenieDphId": "…" }]
+-- „popis" je poistka pri prevzatí: keď účtovník medzitým položky zmenil,
+-- návrh sa na taký riadok nepoužije a radšej ostane prázdny.
+ALTER TABLE accounting_suggestions ADD COLUMN riadky jsonb;

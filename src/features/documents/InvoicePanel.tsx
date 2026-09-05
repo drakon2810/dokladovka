@@ -741,6 +741,26 @@ export function InvoicePanel({
       strediskoId: suggestion.strediskoId,
       clenenieKvKod: kvKod,
     });
+    // Rozpis po položkách — doklad, ktorý firma podľa účtovného denníka
+    // spravidla delí (napr. reprezentácia na vlastný účet, bez nároku na
+    // odpočet). Prepisuje sa len prázdne pole a len riadok, ktorého popis
+    // stále sedí: účtovník mohol položky medzitým zmeniť a návrh by potom
+    // ukazoval na inú položku, než pre ktorú vznikol.
+    const navrhyRiadkov = suggestion.riadky ?? [];
+    if (navrhyRiadkov.length > 0 && polozky.length > 0) {
+      updateExtracted('polozky', polozky.map((polozka, index) => {
+        const navrh = navrhyRiadkov.find((riadok) => riadok.index === index
+          && riadok.popis === (polozka.popis ?? ''));
+        if (!navrh) return polozka;
+        const doplnene = {
+          ...(polozka.ucto?.predkontaciaId ? {} : { predkontaciaId: navrh.predkontaciaId }),
+          ...(navrh.clenenieDphId && !polozka.ucto?.clenenieDphId
+            ? { clenenieDphId: navrh.clenenieDphId } : {}),
+        };
+        return Object.keys(doplnene).length === 0
+          ? polozka : { ...polozka, ucto: { ...polozka.ucto, ...doplnene } };
+      }));
+    }
     setAiApplied(true);
   };
 

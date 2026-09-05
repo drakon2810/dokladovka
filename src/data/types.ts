@@ -905,6 +905,19 @@ export interface DphAudit {
   rozhodnutie?: 'prijate' | 'ponechane';
 }
 
+/**
+ * Návrh zaúčtovania pre JEDNU položku dokladu. Vzniká len tam, kde denník
+ * firmy ukazuje, že doklady tejto protistrany idú na viac účtov — inak celý
+ * doklad nesie hlavičkové zaúčtovanie. „popis" je poistka pri prevzatí: keď
+ * účtovník položky medzitým zmenil, na taký riadok sa návrh nepoužije.
+ */
+export interface NavrhRiadku {
+  index: number;
+  popis: string;
+  predkontaciaId: string;
+  clenenieDphId?: string;
+}
+
 export interface AccountingSuggestion {
   tenantId: string;
   organizationId: string;
@@ -914,6 +927,8 @@ export interface AccountingSuggestion {
   ciselnyRadId?: string;
   strediskoId?: string;
   clenenieKvKod?: string;
+  /** Rozpis po položkách — doklad, ktorý firma spravidla delí. */
+  riadky?: NavrhRiadku[];
   source: SuggestionSource;
   confidence: number;
   reason: string;

@@ -1528,3 +1528,108 @@ describe('AI nevyberá číselný rad', () => {
   }, 90_000);
 
 });
+
+// Rozdelený doklad. Účtovník ho vie rozpísať v položkách a export ho do POHODY
+// prenesie už dávno — chýbalo len to, že AI riadky nikdy nevyplnila. Podklad je
+// účtovný denník: doklady Print-Office idú u ALPINY 8 z 9 na 501400 + 513100 +
+// 548002, pričom 513100 je reprezentácia BEZ nároku na odpočet DPH.
+describe('návrh rozpisu po riadkoch', () => {
+  it('dá modelu účty rozpadu, uloží overené riadky a zvyšok zahodí', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const predk = new Map<string, string>();
+    for (const [kod, ucet] of [['501/321', '501400'], ['513/321', '513100'], ['548/321', '548002']] as const) {
+      const id = randomUUID();
+      predk.set(kod, id);
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    const dphPlny = randomUUID();
+    const dphBezOdpoctu = randomUUID();
+    for (const [id, kod] of [[dphPlny, 'PD'], [dphBezOdpoctu, 'UNodp']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
+        [id, ...kde, kod],
+      );
+    }
+
+    // Tri doklady rovnako rozpísané — to je prah, od ktorého sa rozpad považuje
+    // za prax firmy, nie za jednorazové rozúčtovanie.
+    for (const cislo of ['26FP001', '26FP002', '26FP003']) {
+      for (const ucet of ['501400', '513100', '548002', '343100']) {
+        await database.query(
+          `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,doklad_cislo,
+             ucet_md,ucet_dal,partner_nazov)
+           VALUES ($1,$2,$3,$4,'Prijaté faktúry',$5,$6,'321100','Print-Office s.r.o.')`,
+          [randomUUID(), ...kde, `${cislo}-${ucet}`, cislo, ucet],
+        );
+      }
+    }
+
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,240,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predk.get('501/321'), clenenieDphId: dphPlny,
+        clenenieKvKod: 'B2', ciselnyRadId: null, confidence: 0.95,
+        reason: 'Kancelárske potreby s reprezentáciou',
+        riadky: [
+          // Jediný platný: iný účet než hlavička, oba kódy z ponuky.
+          { index: 1, predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu },
+          // Zhodné s hlavičkou — prázdny riadok znamená „ako doklad".
+          { index: 0, predkontaciaId: predk.get('501/321'), clenenieDphId: null },
+          // Položka s takým indexom na doklade nie je.
+          { index: 9, predkontaciaId: predk.get('548/321'), clenenieDphId: null },
+          // Druhý návrh na ten istý riadok.
+          { index: 1, predkontaciaId: predk.get('548/321'), clenenieDphId: null },
+          // Predkontácia, ktorú model nedostal v ponuke.
+          { index: 2, predkontaciaId: randomUUID(), clenenieDphId: null },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Print-Office s.r.o.', totalAmount: 240, currency: 'EUR',
+      lineDescriptions: ['Toner do tlačiarne', 'Káva pre klientov', 'Poštovné'],
+      polozky: [
+        { popis: 'Toner do tlačiarne', sadzbaDph: 23, suma: 120 },
+        { popis: 'Káva pre klientov', sadzbaDph: 23, suma: 60 },
+        { popis: 'Poštovné', sadzbaDph: 23, suma: 60 },
+      ],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    // Model nevie účtovať na účet — ku každému účtu rozpadu musí dostať
+    // predkontácie, ktoré naň účtujú, inak nemá z čoho vybrať.
+    expect(payload.rozdelenie).toMatchObject({ pocet: 3, spolu: 3 });
+    expect(payload.rozdelenie.ucty.map((polozka: any) => polozka.ucet)).toEqual(['501400', '513100', '548002']);
+    expect(payload.rozdelenie.ucty[1].predkontacie[0]).toMatchObject({ kod: '513/321' });
+    // Index ide do promptu explicitne — podľa neho sa odpoveď priraďuje späť.
+    expect(payload.dokument.polozky.map((polozka: any) => polozka.index)).toEqual([0, 1, 2]);
+
+    const suggestion = (await database.query<Record<string, any>>(
+      'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    expect(suggestion.riadky).toEqual([{
+      index: 1, popis: 'Káva pre klientov',
+      predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu,
+    }]);
+    // Rozdelený doklad sa nepredvyplní sám — istota ostáva pod hranicou 0,9.
+    expect(Number(suggestion.confidence)).toBeLessThan(0.9);
+    expect(suggestion.reason).toContain('spravidla delí');
+    expect(suggestion.reason).toContain('501400 + 513100 + 548002');
+  }, 90_000);
+});
