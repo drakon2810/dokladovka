@@ -23,11 +23,14 @@ const HEADER_OPTION: DcOption = { value: '', label: '— ako doklad' };
  * rozhodnutia.
  */
 export function navrhPreRiadky(
-  riadky: Array<{ index: number; popis: string; predkontaciaId: string; clenenieDphId?: string }> | undefined,
+  riadky: Array<{
+    index: number; popis: string; predkontaciaId: string;
+    clenenieDphId?: string; clenenieKvKod?: string;
+  }> | undefined,
   polozky: DocumentLineItem[],
   codeLists: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[] },
-): Record<number, { predkontacia?: string; clenenieDph?: string }> {
-  const mapa: Record<number, { predkontacia?: string; clenenieDph?: string }> = {};
+): Record<number, { predkontacia?: string; clenenieDph?: string; clenenieKv?: string }> {
+  const mapa: Record<number, { predkontacia?: string; clenenieDph?: string; clenenieKv?: string }> = {};
   for (const riadok of riadky ?? []) {
     const polozka = polozky[riadok.index];
     if (!polozka || riadok.popis !== (polozka.popis ?? '')) continue;
@@ -36,6 +39,8 @@ export function navrhPreRiadky(
         ? undefined : codeLists.predkontacie.find((item) => item.id === riadok.predkontaciaId)?.kod,
       clenenieDph: polozka.ucto?.clenenieDphId || !riadok.clenenieDphId
         ? undefined : codeLists.cleneniaDph.find((item) => item.id === riadok.clenenieDphId)?.kod,
+      // Sekcia KV je kód, nie id — ide do predlohy tak, ako prišla.
+      clenenieKv: polozka.ucto?.clenenieKvKod ? undefined : riadok.clenenieKvKod,
     };
   }
   return mapa;
@@ -83,7 +88,7 @@ interface ItemsSectionProps {
    * firma spravidla delí, sa zámerne nepredvyplňuje sám — bez tejto predlohy sa
    * teda o návrhu nedalo zistiť nič, kým naň účtovník neklikol „Použiť návrh".
    */
-  navrhRiadkov?: Record<number, { predkontacia?: string; clenenieDph?: string }>;
+  navrhRiadkov?: Record<number, { predkontacia?: string; clenenieDph?: string; clenenieKv?: string }>;
   /** Číslo sekcie pri zvýraznení zdroja údajov, inak nezafarbené. */
   srcSection?: number;
   onHoverSrc?: (anchor?: string) => void;
@@ -197,7 +202,7 @@ export function ItemsSection({
    * z hlavičky, ktorý položka pri exporte zdedí. Návrh má prednosť — hovorí, že
    * doklad sa má rozdeliť, kým hlavička hovorí opak.
    */
-  const predloha = (index: number, pole: 'predkontacia' | 'clenenieDph') => {
+  const predloha = (index: number, pole: 'predkontacia' | 'clenenieDph' | 'clenenieKv') => {
     const navrh = navrhRiadkov?.[index]?.[pole];
     return navrh ? `${navrh} · návrh` : (headerUcto?.[pole] ?? '—');
   };
@@ -381,7 +386,7 @@ export function ItemsSection({
                 {/* title je zároveň prístupný názov — bez neho je pri hodnote „—" tlačidlo bezmenné.
                     Prázdna položka ukazuje našedo kód z hlavičky — ten pri exporte zdedí. */}
                 <DcPick title={zdedene('Členenie DPH', index, headerUcto?.clenenieDph, navrhRiadkov?.[index]?.clenenieDph)} placeholder={predloha(index, 'clenenieDph')} value={item.ucto?.clenenieDphId} options={dphOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieDphId: value })} />
-                <DcPick title={zdedene('Kontrolný výkaz', index, headerUcto?.clenenieKv)} placeholder={headerUcto?.clenenieKv ?? '—'} value={item.ucto?.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieKvKod: value })} />
+                <DcPick title={zdedene('Kontrolný výkaz', index, headerUcto?.clenenieKv, navrhRiadkov?.[index]?.clenenieKv)} placeholder={predloha(index, 'clenenieKv')} value={item.ucto?.clenenieKvKod} options={kvOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { clenenieKvKod: value })} />
                 <DcPick title={zdedene('Predkontácia', index, headerUcto?.predkontacia, navrhRiadkov?.[index]?.predkontacia)} placeholder={predloha(index, 'predkontacia')} value={item.ucto?.predkontaciaId} options={predkOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { predkontaciaId: value })} />
                 <button
                   type="button"

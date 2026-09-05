@@ -1587,15 +1587,15 @@ describe('návrh rozpisu po riadkoch', () => {
         reason: 'Kancelárske potreby s reprezentáciou',
         riadky: [
           // Jediný platný: iný účet než hlavička, oba kódy z ponuky.
-          { index: 1, predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu },
-          // Zhodné s hlavičkou — prázdny riadok znamená „ako doklad".
-          { index: 0, predkontaciaId: predk.get('501/321'), clenenieDphId: null },
+          { index: 1, predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'KN' },
+          // Zhodné s hlavičkou vo VŠETKOM — prázdny riadok znamená „ako doklad".
+          { index: 0, predkontaciaId: predk.get('501/321'), clenenieDphId: null, clenenieKvKod: null },
           // Položka s takým indexom na doklade nie je.
-          { index: 9, predkontaciaId: predk.get('548/321'), clenenieDphId: null },
+          { index: 9, predkontaciaId: predk.get('548/321'), clenenieDphId: null, clenenieKvKod: null },
           // Druhý návrh na ten istý riadok.
-          { index: 1, predkontaciaId: predk.get('548/321'), clenenieDphId: null },
+          { index: 1, predkontaciaId: predk.get('548/321'), clenenieDphId: null, clenenieKvKod: null },
           // Predkontácia, ktorú model nedostal v ponuke.
-          { index: 2, predkontaciaId: randomUUID(), clenenieDphId: null },
+          { index: 2, predkontaciaId: randomUUID(), clenenieDphId: null, clenenieKvKod: null },
         ],
       })),
     };
@@ -1625,11 +1625,92 @@ describe('návrh rozpisu po riadkoch', () => {
     )).rows[0];
     expect(suggestion.riadky).toEqual([{
       index: 1, popis: 'Káva pre klientov',
-      predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu,
+      predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'KN',
     }]);
     // Rozdelený doklad sa nepredvyplní sám — istota ostáva pod hranicou 0,9.
     expect(Number(suggestion.confidence)).toBeLessThan(0.9);
     expect(suggestion.reason).toContain('spravidla delí');
     expect(suggestion.reason).toContain('501400 + 513100 + 548002');
+  }, 90_000);
+});
+
+// Faktúra Print-Office DF260169: hlavička „repre / PD / B2", tri položky —
+// kancelárske potreby (501400, PD, B2), reprezentácia (513100, PN, KN)
+// a vratný obal (548002, PN, KN). Reprezentácia má TÚ ISTÚ predkontáciu ako
+// hlavička a líši sa len daňovým režimom. Kým sa riadok zahadzoval podľa
+// zhodnej predkontácie, práve táto položka vypadla — a s ňou aj to, že do
+// priznania ani do kontrolného výkazu nepatrí.
+describe('riadok, ktorý sa od hlavičky líši len režimom DPH', () => {
+  it('ostane v návrhu aj pri zhodnej predkontácii', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const repre = randomUUID();
+    const kancelarske = randomUUID();
+    for (const [id, kod, ucet] of [[repre, 'repre', '513100'], [kancelarske, 'kancelár.potreby', '501400']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    const dphPd = randomUUID();
+    const dphPn = randomUUID();
+    for (const [id, kod] of [[dphPd, 'PD'], [dphPn, 'PN']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
+        [id, ...kde, kod],
+      );
+    }
+    for (const cislo of ['26FP101', '26FP102', '26FP103']) {
+      for (const ucet of ['501400', '513100', '343100']) {
+        await database.query(
+          `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,doklad_cislo,
+             ucet_md,ucet_dal,partner_nazov)
+           VALUES ($1,$2,$3,$4,'Prijaté faktúry',$5,$6,'321100','Print-Office s.r.o.')`,
+          [randomUUID(), ...kde, `${cislo}-${ucet}`, cislo, ucet],
+        );
+      }
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,242.77,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Reprezentácia s kancelárskymi potrebami',
+        riadky: [
+          { index: 0, predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2' },
+          // Tá istá predkontácia ako hlavička, ale mimo priznania.
+          { index: 1, predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN' },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Print-Office s.r.o.', totalAmount: 242.77, currency: 'EUR',
+      lineDescriptions: ['kancelárske potreby', 'spese di rappresentanza'],
+      polozky: [
+        { popis: 'kancelárske potreby', sadzbaDph: 23, suma: 61.13 },
+        { popis: 'spese di rappresentanza', sadzbaDph: 0, suma: 165.44 },
+      ],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const riadky = (await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky as Array<Record<string, unknown>>;
+    expect(riadky).toHaveLength(2);
+    expect(riadky[1]).toEqual({
+      index: 1, popis: 'spese di rappresentanza',
+      predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN',
+    });
   }, 90_000);
 });

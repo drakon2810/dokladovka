@@ -756,6 +756,10 @@ export function InvoicePanel({
           ...(polozka.ucto?.predkontaciaId ? {} : { predkontaciaId: navrh.predkontaciaId }),
           ...(navrh.clenenieDphId && !polozka.ucto?.clenenieDphId
             ? { clenenieDphId: navrh.clenenieDphId } : {}),
+          // Sekcia KV riadku sa z hlavičky odvodiť nedá: plnenie mimo priznania
+          // má KN, kým hlavička nesie B2 — a to by riadok do výkazu vrátilo.
+          ...(navrh.clenenieKvKod && !polozka.ucto?.clenenieKvKod
+            ? { clenenieKvKod: navrh.clenenieKvKod } : {}),
         };
         return Object.keys(doplnene).length === 0
           ? polozka : { ...polozka, ucto: { ...polozka.ucto, ...doplnene } };

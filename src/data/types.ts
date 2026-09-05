@@ -916,6 +916,8 @@ export interface NavrhRiadku {
   popis: string;
   predkontaciaId: string;
   clenenieDphId?: string;
+  /** Sekcia KV riadku — riadok mimo priznania (KN) ju z hlavicky nezdedi. */
+  clenenieKvKod?: string;
 }
 
 export interface AccountingSuggestion {
