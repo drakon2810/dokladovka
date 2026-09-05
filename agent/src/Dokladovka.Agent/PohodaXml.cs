@@ -144,6 +144,36 @@ public static class PohodaXml
 """;
     }
 
+    /// <summary>
+    /// Účtovný denník za jeden rok. Nesie to, čo hlavička ani položky neukážu:
+    /// výsledné proviozky s účtami MD/DAL, teda aj to, na koľko účtov doklad
+    /// nakoniec padol. Odpoveď sa neparsuje tu — posiela sa serveru surová,
+    /// aby jeden formát nemal dva parsery (parseDennik už na serveri je).
+    ///
+    /// Limit 10 000 je strop schémy (filter.xsd limitType); rok 2026 ALPINY má
+    /// 7 389 proviozok, takže sa doň zmestí.
+    /// ponytail: väčšia firma sa doň nezmestí — vtedy stránkovať cez idFrom.
+    /// </summary>
+    public static string BuildDennikRequest(string ico, string requestId, int rok) => $"""
+<?xml version="1.0" encoding="Windows-1250"?>
+<dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export uctovneho dennika"
+  xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:ftr="http://www.stormware.cz/schema/version_2/filter.xsd">
+  <dat:dataPackItem id="dennik" version="2.0">
+    <lst:listAccountancyRequest version="2.0" accountancyVersion="2.0">
+      <lst:limit><ftr:count>10000</ftr:count></lst:limit>
+      <lst:requestAccountancy>
+        <ftr:filter>
+          <ftr:dateFrom>{rok:D4}-01-01</ftr:dateFrom>
+          <ftr:dateTill>{rok:D4}-12-31</ftr:dateTill>
+        </ftr:filter>
+      </lst:requestAccountancy>
+    </lst:listAccountancyRequest>
+  </dat:dataPackItem>
+</dat:dataPack>
+""";
+
     /// <summary>Riadok korpusu histórie — musí sedieť s historyRowSchema na serveri.</summary>
     public sealed record HistoryRow(
         string Agenda,

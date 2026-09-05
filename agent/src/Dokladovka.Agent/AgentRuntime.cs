@@ -353,6 +353,12 @@ public sealed class AgentCycleRunner
             try { await SyncUctoHistoryAsync(organization, target, cancellationToken); }
             catch (Exception error) { _log.Error("ucto_history_sync_failed", error, new { organization.OrganizationId }); }
 
+            // Denník je tretí pohľad na tie isté doklady: hlavička hovorí, ako
+            // sa doklad zaúčtoval, položky ako sa rozúčtoval, denník na aké
+            // účty to nakoniec padlo. Zlyhanie ho nesmie zhodiť zvyšok.
+            try { await SyncUctoDennikAsync(organization, target, cancellationToken); }
+            catch (Exception error) { _log.Error("ucto_dennik_sync_failed", error, new { organization.OrganizationId }); }
+
             _trainingSyncAttempts.Remove(organization.OrganizationId);
             // Nič neprešlo a všetko odmietnuté = pravdepodobne chýbajú číselníky —
             // do telemetrie ide error, nech to nevyzerá ako úspešná synchronizácia.
@@ -368,6 +374,38 @@ public sealed class AgentCycleRunner
             _log.Error("training_sync_failed", error, new { organization.OrganizationId, target.Endpoint.Id, durationMs = stopwatch.ElapsedMilliseconds });
             await HandleTrainingSyncFailureAsync(organization.OrganizationId, error.GetType().Name, (int)stopwatch.ElapsedMilliseconds, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Účtovný denník za účtovný rok pripojenej databázy. Doteraz ho účtovník
+    /// nosil ručne (Nastavenia → Tréning AI): stiahol request, prehnal ho
+    /// v POHODE a odpoveď nahral. Tá cesta ostáva pre firmy bez agenta.
+    /// </summary>
+    private async Task SyncUctoDennikAsync(
+        AgentOrganization organization,
+        (MServerEndpointSettings Endpoint, MServerCompany Company) target,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        // Rok berie pripojená databáza — POHODA má na účtovný rok vlastný súbor,
+        // takže filter na iný rok by z nej nevrátil nič.
+        var rok = int.TryParse(target.Company.Year, out var zDatabazy) && zDatabazy > 1990
+            ? zDatabazy : DateTimeOffset.UtcNow.Year;
+        var requestXml = PohodaXml.BuildDennikRequest(
+            organization.Ico, $"dennik-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}", rok);
+        var errors = _validator.ValidateDataPack(requestXml);
+        if (errors.Count > 0) throw new InvalidOperationException("XSD validácia požiadavky denníka zlyhala: " + string.Join("; ", errors.Take(5)));
+        var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
+            requestXml, $"dennik-{organization.OrganizationId}", false, cancellationToken);
+        var result = await _backend.UploadUctoDennikAsync(organization.OrganizationId, response, cancellationToken);
+        await TrySendSyncResultAsync(new AgentSyncResult(
+            organization.OrganizationId, "uctovnyDennik", "ok",
+            result.Ulozenych, (int)stopwatch.ElapsedMilliseconds, null), cancellationToken);
+        _log.Info("ucto_dennik_synced", new
+        {
+            organization.OrganizationId, rok, result.Ulozenych, result.SJednouPredkontaciou,
+            result.SViacerymi, result.BezPredkontacie, durationMs = stopwatch.ElapsedMilliseconds,
+        });
     }
 
     /// <summary>

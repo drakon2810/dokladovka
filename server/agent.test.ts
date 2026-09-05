@@ -533,3 +533,84 @@ describe('agent backend contour', () => {
     await app.close();
   }, 90_000);
 });
+
+// Denník sa dovtedy nahrával iba ručne cez prehliadač. Agent posiela surové
+// XML — parser je jeden, na serveri. Test drží aj to, kvôli čomu už raz vznikla
+// migrácia 0046: kind telemetrie musí prejsť zod schémou AJ CHECK-om tabuľky,
+// inak sa synchronizácia zapíše len do lokálneho logu agenta.
+describe('agent nahráva účtovný denník', () => {
+  it('prijme denník a telemetriu s kindom uctovnyDennik', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const browserHeaders = {
+      cookie: String(login.headers['set-cookie']).split(';')[0],
+      'x-csrf-token': login.json().csrfToken as string,
+    };
+    await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
+    const pairing = await app.inject({
+      method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders,
+      payload: { organizationId: seeded.organizationId },
+    });
+    const paired = await app.inject({
+      method: 'POST', url: '/api/agent/pair',
+      payload: { pairingCode: pairing.json().code as string, hostname: 'POHODA-SRV', agentVersion: '0.14.0', companyIco: '12345678' },
+    });
+    const agentHeaders = { authorization: `Bearer ${paired.json().agentToken as string}` };
+
+    const xml = `<?xml version="1.0" encoding="Windows-1250"?>
+<rsp:responsePack version="2.0" state="ok"
+  xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:act="http://www.stormware.cz/schema/version_2/accountancy.xsd"
+  xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd">
+  <rsp:responsePackItem version="2.0" state="ok"><lst:listAccountancy version="2.0"><lst:accountancy version="2.0">
+    <act:accountingItem>
+      <act:id>9001</act:id><act:source>Prijaté faktúry</act:source>
+      <act:number><typ:numberRequested>DF260181</typ:numberRequested></act:number>
+      <act:text>PHM</act:text>
+      <act:homeCurrency><typ:priceSum>151.60</typ:priceSum></act:homeCurrency>
+      <act:accounting><act:credit>501200</act:credit><act:debit>321100</act:debit></act:accounting>
+      <act:date>2026-07-31</act:date>
+    </act:accountingItem>
+    <act:accountingItem>
+      <act:id>9002</act:id><act:source>Prijaté faktúry</act:source>
+      <act:number><typ:numberRequested>DF260181</typ:numberRequested></act:number>
+      <act:text>PHM</act:text>
+      <act:homeCurrency><typ:priceSum>13.17</typ:priceSum></act:homeCurrency>
+      <act:accounting><act:credit>501201</act:credit><act:debit>321100</act:debit></act:accounting>
+      <act:date>2026-07-31</act:date>
+    </act:accountingItem>
+  </lst:accountancy></lst:listAccountancy></rsp:responsePackItem>
+</rsp:responsePack>`;
+    const nahrate = await app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/ucto-dennik`,
+      headers: agentHeaders, payload: { xml },
+    });
+    expect(nahrate.statusCode, nahrate.body.slice(0, 200)).toBe(200);
+    expect(nahrate.json().ulozenych).toBe(2);
+
+    // Telemetria: kind musí prejsť aj CHECK-om tabuľky, nielen zod schémou.
+    const telemetria = await app.inject({
+      method: 'POST', url: '/api/agent/sync-results', headers: agentHeaders,
+      payload: { organizationId: seeded.organizationId, kind: 'uctovnyDennik', state: 'ok', itemCount: 2, durationMs: 120 },
+    });
+    expect(telemetria.statusCode, telemetria.body.slice(0, 200)).toBe(202);
+    // Ten istý kind posiela korpus histórie — dovtedy padal na 400 a na serveri
+    // po synchronizácii nebolo ani stopy.
+    const profil = await app.inject({
+      method: 'POST', url: '/api/agent/sync-results', headers: agentHeaders,
+      payload: { organizationId: seeded.organizationId, kind: 'uctovnyProfil', state: 'ok', itemCount: 5, durationMs: 90 },
+    });
+    expect(profil.statusCode, profil.body.slice(0, 200)).toBe(202);
+
+    const behy = await database.query<{ kind: string } & Record<string, unknown>>(
+      'SELECT kind FROM agent_sync_runs ORDER BY kind', [],
+    );
+    expect(behy.rows.map((row) => row.kind)).toEqual(['uctovnyDennik', 'uctovnyProfil']);
+
+    await app.close();
+  }, 90_000);
+});

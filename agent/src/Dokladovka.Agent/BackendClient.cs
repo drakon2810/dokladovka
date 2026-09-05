@@ -67,6 +67,7 @@ public sealed record TrainingImportResult(int Imported, int Duplicates, int Reje
 
 /// <summary>bezKodu = doklady bez predkontácie aj členenia; korpus ich nezoberie.</summary>
 public sealed record HistoryImportResult(int Imported, int Duplicates, int BezKodu);
+public sealed record DennikImportResult(int Ulozenych, int SJednouPredkontaciou, int SViacerymi, int BezPredkontacie, int Preskocene);
 public sealed record AddressBookImportResult(int Vytvorene, int Aktualizovane, int Preskocene);
 
 public sealed class BackendApiException(HttpStatusCode statusCode, string message, bool transient = false) : Exception(message)
@@ -133,6 +134,14 @@ public sealed class BackendClient
     // prenos, opakovať ich pri každej dávke histórie by nemalo zmysel.
     public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, bool reset, IReadOnlyList<PohodaXml.SeriesRow> series, CancellationToken cancellationToken) =>
         SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset, series }), cancellationToken);
+
+    /// <summary>
+    /// Účtovný denník — surová odpoveď POHODY. Rozoberá ju server (parseDennik),
+    /// aby jeden formát nemal dva parsery. Ročný denník má megabajty, cesta má
+    /// preto vlastný bodyLimit.
+    /// </summary>
+    public Task<DennikImportResult> UploadUctoDennikAsync(string organizationId, string xml, CancellationToken cancellationToken) =>
+        SendJsonAsync<DennikImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-dennik", new { xml }), cancellationToken);
 
     // done=true až pri poslednej dávke — server vtedy zmaže žiadosť o sync.
     public Task<TrainingImportResult> UploadTrainingDecisionsAsync(string organizationId, IReadOnlyList<TrainingDecision> rows, bool done, bool reset, CancellationToken cancellationToken) =>

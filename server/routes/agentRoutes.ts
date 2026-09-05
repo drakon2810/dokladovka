@@ -17,6 +17,7 @@ import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
 import { historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
 import { importujAdresar } from '../services/partnerService.js';
+import { parseDennik, ulozDennik } from '../services/uctoDennikService.js';
 
 interface AgentAuth extends Record<string, unknown> {
   id: string;
@@ -47,7 +48,7 @@ const codeListKind = z.enum(['predkontacie', 'cleneniaDph', 'ciselneRady', 'stre
 // synchronizáciu a adresár. Adresár tam pribudol preto, že jeho zlyhanie sa
 // dovtedy zapísalo iba do lokálneho logu agenta — na serveri to vyzeralo
 // rovnako ako „prebehlo a nič tam nebolo".
-const syncRunKind = z.enum([...codeListKind.options, 'treningAi', 'adresar']);
+const syncRunKind = z.enum([...codeListKind.options, 'treningAi', 'adresar', 'uctovnyProfil', 'uctovnyDennik']);
 const codeListItem = z.object({
   kod: z.string().trim().min(1).max(100),
   nazov: z.string().trim().min(1).max(300),
@@ -335,7 +336,12 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     return reply.code(202).send({ accepted: true });
   });
 
-  app.put('/api/agent/organizations/:id/code-lists', async (request) => {
+  app.put('/api/agent/organizations/:id/code-lists', {
+    // Predvoleny bodyLimit Fastify je 1 MB a nastavuje sa PRE KAZDU CESTU.
+    // Davky agenta ho prekrocia hned, ako maju polozky dlhsie texty — riadok
+    // korpusu smie mat 2000 znakov, takze davka 2000 riadkov je az 4 MB.
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ kind: codeListKind, items: z.array(codeListItem).max(20_000) }).strict().parse(request.body);
@@ -392,7 +398,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   // Prázdne rows sú platné: aj „žiadne faktúry" musí zmazať žiadosť o sync.
   // Agent nahráva po dávkach — žiadosť sa zmaže až pri done=true (posledná
   // dávka), inak by výpadok uprostred potichu stratil zvyšok riadkov.
-  app.put('/api/agent/organizations/:id/training-decisions', async (request) => {
+  app.put('/api/agent/organizations/:id/training-decisions', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
@@ -444,7 +450,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   // blankete sa nenašli, hoci ich účtovník má v POHODE dávno zadané. Talianska
   // faktúra tlačí v poli „Partita IVA" číslo ODBERATEĽA a to dodávateľovo má
   // v drobnej hlavičke; model radšej nechal prázdno, než by priradil cudzie.
-  app.put('/api/agent/organizations/:id/address-book', async (request) => {
+  app.put('/api/agent/organizations/:id/address-book', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
@@ -469,7 +475,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     return result;
   });
 
-  app.put('/api/agent/organizations/:id/ucto-history', async (request) => {
+  app.put('/api/agent/organizations/:id/ucto-history', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = historyImportSchema.parse(request.body);
@@ -504,6 +510,30 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     }
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
     return { ...result, rady };
+  });
+
+  // Účtovný denník. Agent posiela surovú odpoveď POHODY, nie rozobrané riadky:
+  // parseDennik na serveri už existuje aj s testami a duplikovať ho v C# by
+  // znamenalo dva parsery jedného formátu. Doterajšia ručná cesta (Nastavenia →
+  // Tréning AI) ostáva — účtovník bez nainštalovaného agenta ju potrebuje.
+  app.put('/api/agent/organizations/:id/ucto-dennik', {
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request) => {
+    const agent = await requireAgent(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { xml } = z.object({ xml: z.string().min(1).max(28_000_000) }).strict().parse(request.body);
+    const organization = await database.query(
+      'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
+    if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const { riadky, preskocene } = parseDennik(xml);
+    const vysledok = await ulozDennik(database, { tenantId: agent.tenant_id, organizationId: id, riadky });
+    await writeAudit(database, {
+      tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
+      action: 'ucto_dennik.imported', entityType: 'organization', entityId: id,
+      correlationId: request.id, metadata: { ...vysledok, preskocene },
+    });
+    await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
+    return { ...vysledok, preskocene };
   });
 
   // Originálny sken dokladu pre agenta — po úspešnom prenose ho uloží do

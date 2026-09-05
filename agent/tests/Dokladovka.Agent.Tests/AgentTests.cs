@@ -1059,4 +1059,18 @@ public sealed class DocumentFolderTests
             "FP", "DF260181", "2026-07-31", "53528654", "Up Déjeuner, s. r. o.",
             "Natural 95 (nedaňová časť 20 %)", "PHM-Nadspotreba", "PN", "B2", 3), rows[1]);
     }
+    // Denník sa dovtedy sťahoval iba ručne. Request je jediné, čo agent pre
+    // neho skladá — odpoveď rozoberá server —, takže schéma je jediná kontrola,
+    // ktorú tu vieme mať. A stojí za ňu: listNumericSeriesRequest (bez „al")
+    // POHODA odmietla ako neznámu žiadosť a ticho nevrátila nič.
+    [Fact]
+    public void DennikRequestConformsToBundledOfficialSchema()
+    {
+        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
+        Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
+        var xml = PohodaXml.BuildDennikRequest("12345678", "dennik-test", 2026);
+        Assert.Contains("<ftr:dateFrom>2026-01-01</ftr:dateFrom>", xml);
+        Assert.Contains("<ftr:dateTill>2026-12-31</ftr:dateTill>", xml);
+        Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
+    }
 }
