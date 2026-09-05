@@ -133,6 +133,18 @@ function opravIdentifikatory<T extends {
     dic ??= icDph;
     icDph = `SK${icDph}`;
   }
+  // To isté zrkadlovo pre zahraničie. Cudzí dodávateľ svoje IČ DPH bežne píše
+  // bez kódu krajiny — talianska faktúra má „P.I. e C.F. 00145020244" — a
+  // účtovníčka kód dopĺňa ručne podľa adresy dodávateľa. Bez neho nie je z čoho
+  // určiť krajinu plnenia: vatCountryIds v exporte číta práve prvé dve písmená,
+  // takže do POHODY odíde doklad bez krajiny a formát blokuje schválenie.
+  //
+  // Podmienkou je PREUKÁZANÁ krajina a to, že výsledok sedí s formátom IČ DPH
+  // danej krajiny. Inak by sa z čísla, ktoré je v skutočnosti registračné alebo
+  // daňové, vyrobilo neexistujúce IČ DPH — a to je horšie než žiadne.
+  if (zahranicna && icDph && /^\d+$/.test(icDph) && checkVatId(`${krajina}${icDph}`) === 'valid') {
+    icDph = `${krajina}${icDph}`;
+  }
   // Časti adresy od modelu majú prednosť pred rozkladom voľného textu; keď
   // niektorú nevráti, doplní ju rozklad (a účtovník ju vie prepísať).
   const zRozkladu = splitPostalAddress(entity.adresa);

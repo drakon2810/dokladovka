@@ -131,6 +131,40 @@ describe('normalizácia SK/CZ faktúr', () => {
       .not.toContain('invalid_dic');
   });
 
+  // LORO F.lli S.p.A., faktúra 39226: talianska faktúra píše „P.I. e C.F.
+  // 00145020244" bez kódu krajiny a do cloudu prišlo IČ DPH ako holé číslo.
+  // Účtovníčka ho potom dopĺňala ručne podľa adresy dodávateľa.
+  it('doplní kód krajiny do zahraničného IČ DPH podľa adresy dodávateľa', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: {
+        nazov: 'LORO F.lli S.p.A.', icDph: '00145020244',
+        adresa: 'Via Circonvallazione, 95\n36045 LONIGO (VI)', krajina: 'IT',
+      },
+      buyer: { ico: '36283410' }, invoiceNumber: '39226', issueDate: '2026-08-31', taxDate: '2026-08-31',
+      dueDate: '2026-10-15', currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '323.50', vat: '0' }], totalAmount: '323.50',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-loro', '2026-08-31');
+    expect((normalized.extracted as any).dodavatel.icDph).toBe('IT00145020244');
+    expect(validateNormalizedExtraction(normalized, { ico: '36283410' }).map((issue) => issue.code))
+      .not.toContain('invalid_supplier_vat_id');
+  });
+
+  it('nedoplní kód krajiny, keď výsledok nesedí s formátom tej krajiny', () => {
+    // Osem číslic nie je talianske IČ DPH (IT + 11 číslic). Radšej nechať tak,
+    // ako vyrobiť číslo, ktoré prejde kontrolou a do POHODY odíde ako platné.
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Cudzí dodávateľ', icDph: '12345678', adresa: 'Roma', krajina: 'IT' },
+      buyer: { ico: '36283410' }, invoiceNumber: '5', issueDate: '2026-08-31', taxDate: '2026-08-31',
+      dueDate: '2026-09-15', currency: 'EUR', lineItems: [],
+      vatBreakdown: [{ vatRate: '0', base: '10', vat: '0' }], totalAmount: '10',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-it-zle', '2026-08-31');
+    expect((normalized.extracted as any).dodavatel.icDph).toBe('12345678');
+  });
+
   it('zachová platný SK DIČ (nie je kópia IČ DPH)', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'SK Dodávateľ', dic: '2020254170', icDph: 'SK2020254170' },
