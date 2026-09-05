@@ -9,6 +9,7 @@ import { dphPokynyPreAi, posudDph } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
+import { najdiRozdelenie } from './uctoDennikService.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -1306,10 +1307,13 @@ export async function maybeAiAccountingSuggestion(
   const kategorie = await najdiKategorie(
     database, config, input, lineText, documentContext.documentType, injectedEmbedder);
   // Protistrana dokladu: na vydanej faktúre odberateľ, inak dodávateľ.
-  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType,
-    documentContext.documentType === 'FV'
-      ? { nazov: documentContext.odberatel?.nazov, ico: documentContext.odberatel?.ico }
-      : { nazov: documentContext.supplierName, ico: documentContext.supplierIco });
+  const protistranaKontextu = documentContext.documentType === 'FV'
+    ? { nazov: documentContext.odberatel?.nazov, ico: documentContext.odberatel?.ico }
+    : { nazov: documentContext.supplierName, ico: documentContext.supplierIco };
+  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType, protistranaKontextu);
+  // Účtovný denník vidí to, čo hlavičkový korpus stratil: že doklady tejto
+  // protistrany firma spravidla rozpisuje na viac nákladových účtov.
+  const rozdelenie = await najdiRozdelenie(database, input, protistranaKontextu);
   const predkontacie = zuzPonukuPredkontacii(
     vsetkyPredkontacie, lineText, priklady,
     [...kategorie.map((kategoria) => kategoria.predkontacia_id),
@@ -1625,8 +1629,19 @@ export async function maybeAiAccountingSuggestion(
   const prikladZhoda = priklady.find((priklad) => priklad.podobnost >= 0.9
     && priklad.predkontaciaId === validated.predkontacia_id
     && (!priklad.clenenieDphId || priklad.clenenieDphId === validated.clenenie_dph_id));
-  const strop = overenaKategoria || dennikZhoda || prikladZhoda ? 0.95 : 0.8;
-  const dovod = pravidlo.ruleId
+  // Doklad, ktorý firma spravidla delí, sa NESMIE predvyplniť jednou
+  // predkontáciou. Práve to sa dialo: hlavičkový korpus z rozdeleného dokladu
+  // vidí len prvý riadok, takže Print-Office trafil dennikZhoda, dostal 0.95
+  // a predvyplnil sa jedinou predkontáciou — hoci 8 z 9 takých faktúr účtovník
+  // rozpísal na 501400 + 513100 + 548002. Istota preto ostáva pod hranicou
+  // predvyplnenia a účtovník doklad otvorí sám.
+  const strop = rozdelenie ? 0.8 : (overenaKategoria || dennikZhoda || prikladZhoda ? 0.95 : 0.8);
+  const varovanie = rozdelenie
+    ? `Pozor: doklady tejto protistrany firma spravidla delí (${rozdelenie.pocet} z ${rozdelenie.spolu}`
+      + ` na účty ${rozdelenie.ucty.join(' + ')}${rozdelenie.priklad ? `, napr. ${rozdelenie.priklad}` : ''})`
+      + ' — jedna predkontácia nemusí stačiť. '
+    : '';
+  const dovod = varovanie + (pravidlo.ruleId
     ? `Pravidlo účtovníka doplnené AI analýzou: ${parsed.reason}`
     : dennikZhoda
       ? `Podľa denníka firmy (${dennikZhoda.pocet}× rovnako): ${parsed.reason}`
@@ -1638,7 +1653,7 @@ export async function maybeAiAccountingSuggestion(
           : `Významovo zaradené do kategórie „${kategoriaZhoda.nazov}" (slovník ju netrafil): ${parsed.reason}`
         : prikladZhoda
           ? `Zhodné s potvrdeným zaúčtovaním v pamäti: ${parsed.reason}`
-          : `AI analýza dokladu: ${parsed.reason}`;
+          : `AI analýza dokladu: ${parsed.reason}`);
 
   await database.query(
     `INSERT INTO accounting_suggestions

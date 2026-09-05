@@ -161,3 +161,65 @@ export async function ulozDennik(
   });
   return { ulozenych: input.riadky.length, sJednouPredkontaciou: sJednou, sViacerymi, bezPredkontacie: bez };
 }
+
+/** Ustálený rozpad dokladov jednej protistrany, tak ako ho denník ukazuje. */
+export interface RozdelenieVzor {
+  /** Nákladové účty, na ktoré doklad spravidla ide (bez DPH účtov). */
+  ucty: string[];
+  /** Koľko dokladov protistrany má presne tento rozpad. */
+  pocet: number;
+  /** Koľko dokladov protistrany denník vôbec pozná. */
+  spolu: number;
+  /** Číslo jedného z nich — účtovník si vie overiť, o čom je reč. */
+  priklad?: string;
+}
+
+// Prah 3 doklady a 70 % je z merania na denníku ALPINY 2026: pri nich vyjde
+// 20 protistrán s ustáleným rozpadom (Print-Office 8 z 9, Up Déjeuner 11 z 12,
+// LORO 8 z 8). Nižší prah začne hlásiť jednorazové rozúčtovania ako pravidlo.
+const ROZDELENIE_MIN_DOKLADOV = 3;
+const ROZDELENIE_MIN_PODIEL = 0.7;
+
+/**
+ * Delí táto firma doklady od danej protistrany? Odpoveď je LEN v denníku:
+ * hlavičkový korpus (ucto_historia) drží jeden riadok na doklad, takže
+ * rozdelenie z neho nevidno vôbec a doklad, ktorý účtovník rozpisuje na tri
+ * účty, sa tvári ako bežný s jedinou predkontáciou.
+ *
+ * Berú sa LEN agendy, kde sa doklad zaúčtuje. Bez toho vyhral pri Print-Office
+ * vzor {321100} z deviatich bankových úhrad tej istej faktúry — banka účtuje
+ * záväzok, nie náklad, a rozpad by z toho vyšiel opačný.
+ */
+const ROZDELENIE_AGENDY = ['Prijaté faktúry', 'Ostatné záväzky', 'Pokladňa', 'Interné doklady', 'Vydané faktúry'];
+export async function najdiRozdelenie(
+  database: Database,
+  input: { tenantId: string; organizationId: string },
+  protistrana: { nazov?: string; ico?: string },
+): Promise<RozdelenieVzor | undefined> {
+  const ico = String(protistrana.ico ?? '').replace(/\D/g, '');
+  // Zhoda mena musí sedieť s normalizeName() (trim + lowercase + zúžené medzery).
+  const nazov = (protistrana.nazov ?? '').trim().toLocaleLowerCase('sk').replace(/\s+/g, ' ');
+  if (!ico && !nazov) return undefined;
+  const rows = (await database.query<{ ucty: string[]; pocet: string; spolu: string; priklad?: string } & Record<string, unknown>>(
+    `WITH doklad AS (
+       SELECT doklad_cislo,
+              array_agg(DISTINCT ucet_md ORDER BY ucet_md)
+                FILTER (WHERE ucet_md NOT LIKE '343%') AS ucty
+         FROM ucto_dennik
+        WHERE tenant_id=$1 AND organization_id=$2 AND doklad_cislo IS NOT NULL
+          AND agenda=ANY($5::text[])
+          AND (($3::text <> '' AND partner_ico=$3)
+            OR ($4::text <> '' AND lower(btrim(regexp_replace(partner_nazov,'[[:space:]]+',' ','g')))=$4))
+        GROUP BY agenda, doklad_cislo)
+     SELECT ucty, count(*) AS pocet, sum(count(*)) OVER () AS spolu, min(doklad_cislo) AS priklad
+       FROM doklad WHERE ucty IS NOT NULL
+      GROUP BY ucty ORDER BY count(*) DESC LIMIT 1`,
+    [input.tenantId, input.organizationId, ico, nazov, ROZDELENIE_AGENDY],
+  )).rows;
+  const vzor = rows[0];
+  if (!vzor || vzor.ucty.length < 2) return undefined;
+  const pocet = Number(vzor.pocet);
+  const spolu = Number(vzor.spolu);
+  if (pocet < ROZDELENIE_MIN_DOKLADOV || pocet / spolu < ROZDELENIE_MIN_PODIEL) return undefined;
+  return { ucty: vzor.ucty, pocet, spolu, priklad: vzor.priklad ?? undefined };
+}

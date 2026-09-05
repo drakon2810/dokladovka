@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
-import { parseDennik, ulozDennik } from './uctoDennikService.js';
+import { najdiRozdelenie, parseDennik, ulozDennik } from './uctoDennikService.js';
 
 // Účtovný denník je jediný zdroj, z ktorého vidno, že doklad bol rozdelený:
 // hlavičkový korpus po rozdelení nezachová nič. Meranie na reálnom denníku
@@ -119,5 +119,55 @@ describe('účtovný denník z POHODY', () => {
     await ulozDennik(database, { tenantId: seeded.tenantId, organizationId: seeded.organizationId, riadky });
     const poDruhom = await database.query('SELECT count(*) AS n FROM ucto_dennik WHERE organization_id=$1', [seeded.organizationId]);
     expect(Number((poDruhom.rows[0] as { n: string }).n)).toBe(3);
+  }, 60_000);
+});
+
+describe('ustálený rozpad dokladov protistrany', () => {
+  /** Doklad protistrany: nákladové účty + DPH, tak ako ho denník nesie. */
+  async function doklad(
+    database: Awaited<ReturnType<typeof createTestDatabase>>,
+    seeded: Awaited<ReturnType<typeof seedTestUser>>,
+    cislo: string, partner: string, ucty: readonly string[], agenda = 'Prijaté faktúry',
+  ): Promise<void> {
+    for (const ucet of [...ucty, '343100']) {
+      await database.query(
+        `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,doklad_cislo,
+           text,ucet_md,ucet_dal,partner_nazov) VALUES ($1,$2,$3,$4,$9,$5,$6,$7,'321100',$8)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, `${cislo}-${ucet}`, cislo, ucet, ucet, partner, agenda],
+      );
+    }
+  }
+
+  it('nájde rozpad, keď je ustálený, a mlčí pri jednoúčtovom dodávateľovi', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = { tenantId: seeded.tenantId, organizationId: seeded.organizationId };
+    // Print-Office: 3 zo 4 dokladov rozpísané rovnako — to je prax firmy.
+    for (const cislo of ['26FP001', '26FP002', '26FP003']) {
+      await doklad(database, seeded, cislo, 'Print-Office s.r.o.', ['501400', '513100', '548002']);
+    }
+    await doklad(database, seeded, '26FP004', 'Print-Office s.r.o.', ['501400']);
+    // Úhrady tých istých faktúr. Banka účtuje MD 321100 (záväzok), nie náklad —
+    // na reálnom denníku ALPINY práve tieto riadky vzor prehlasovali a
+    // Print-Office vyšiel ako {321100}, teda opak toho, čo účtovník robí.
+    for (const cislo of ['26B001', '26B002', '26B003', '26B004', '26B005']) {
+      await doklad(database, seeded, cislo, 'Print-Office s.r.o.', ['321100'], 'Banka');
+    }
+    // Telekom: vždy jeden účet — varovanie by tu bolo len šum.
+    for (const cislo of ['26FP010', '26FP011', '26FP012']) {
+      await doklad(database, seeded, cislo, 'Telekom a.s.', ['518100']);
+    }
+
+    // Meno sa páruje cez normalizeName (trim + lowercase + zúžené medzery),
+    // lebo IČO má v reálnom denníku len štvrtina proviozok.
+    const vzor = await najdiRozdelenie(database, kde, { nazov: '  PRINT-OFFICE   s.r.o. ' });
+    expect(vzor).toMatchObject({ ucty: ['501400', '513100', '548002'], pocet: 3, spolu: 4 });
+    // DPH účet do rozpadu nepatrí — rozklad na základ a DPH robí predkontácia sama.
+    expect(vzor?.ucty).not.toContain('343100');
+
+    expect(await najdiRozdelenie(database, kde, { nazov: 'Telekom a.s.' })).toBeUndefined();
+    expect(await najdiRozdelenie(database, kde, { nazov: 'Nikdy nevidená s.r.o.' })).toBeUndefined();
+    expect(await najdiRozdelenie(database, kde, {})).toBeUndefined();
   }, 60_000);
 });
