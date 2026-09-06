@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { navrhPreRiadky, rozrezPolozku } from './ItemsSection';
 import type { CodeListItem, DocumentLineItem } from '../../data/types';
+import { round2 } from '../../lib/validate';
 
 // Rozdelený doklad sa zámerne nepredvyplňuje sám (istota ostáva pod 0,9), takže
 // predloha v prázdnej bunke je JEDINÉ miesto, kde účtovník uvidí, že AI
@@ -87,6 +88,30 @@ describe('rozrezanie položky na daňovú a nedaňovú časť', () => {
     // Množstvo 1 a jednotková cena = základ časti: validácia kontroluje ich súčin.
     expect(casti.map((cast) => [cast.mnozstvo, cast.jednotkovaCenaBezDph])).toEqual([[1, 52.68], [1, 13.17]]);
     expect(casti[1].ucto).toEqual({ predkontaciaId: 'p-513', clenenieDphId: 'd-un', clenenieKvKod: 'KN' });
+  });
+
+  // Faktúra 4226036911 (v POHODE DF260177) nesie jediné palivo a k nemu zľavu.
+  // Účtovník ju rozrezal CELÚ: 59,99 − 0,44 = 59,55 a až to delil 80/20, takže
+  // 501200 dostalo 47,64 a 501201 11,91. Keby zľava ostala celá vo vratnej
+  // časti, vyšlo by 47,55 a 12,00 — o deväť halierov vedľa. Rez preto musí
+  // prejsť aj cez zápornú položku.
+  it('rozreže aj zľavu, takže súčty sedia s POHODOU do haliera', () => {
+    const pomer = [
+      { podiel: 0.8, podielDph: 0.5, predkontaciaId: 'p-501' },
+      { podiel: 0.2, podielDph: 0.5, predkontaciaId: 'p-513', clenenieDphId: 'd-un' },
+    ];
+    const palivo = rozrezPolozku(
+      { ...natural, sumaBezDph: 59.99, sumaDph: 13.8, sumaSpolu: 73.79 }, pomer,
+    );
+    const zlava = rozrezPolozku(
+      { id: 'li-3', popis: 'Zľava PH', mnozstvo: 1, sadzbaDph: 23,
+        sumaBezDph: -0.44, sumaDph: -0.1, sumaSpolu: -0.54 } as DocumentLineItem,
+      pomer,
+    );
+    const naUcte = (index: number, pole: 'sumaBezDph' | 'sumaDph') =>
+      round2((palivo[index][pole] ?? 0) + (zlava[index][pole] ?? 0));
+    expect([naUcte(0, 'sumaBezDph'), naUcte(1, 'sumaBezDph')]).toEqual([47.64, 11.91]);
+    expect([naUcte(0, 'sumaDph'), naUcte(1, 'sumaDph')]).toEqual([6.85, 6.85]);
   });
 
   it('zvyšok berie posledná časť — tretina by inak o halier ušla', () => {
