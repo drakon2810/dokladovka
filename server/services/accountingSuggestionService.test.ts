@@ -1600,17 +1600,22 @@ describe('návrh rozpisu po riadkoch', () => {
           // bralo ako časť rezu, riadok vypadol — na tom padlo VŠETKÝCH 16
           // rozpisov v meraní ALPINY.
           { index: 2, predkontaciaId: predk.get('548/321'), clenenieDphId: null, clenenieKvKod: null, podiel: 1 },
+          // A nula znamená to isté. Model použil obe — najprv jednotku, po jej
+          // oprave nulu — takže sa neoveruje hodnota, ale trieda: rez je podiel
+          // striktne medzi 0 a 1.
+          { index: 3, predkontaciaId: predk.get('513/321'), clenenieDphId: null, clenenieKvKod: null, podiel: 0 },
         ],
       })),
     };
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
     const context = {
       documentType: 'FP', supplierName: 'Print-Office s.r.o.', totalAmount: 240, currency: 'EUR',
-      lineDescriptions: ['Toner do tlačiarne', 'Káva pre klientov', 'Poštovné'],
+      lineDescriptions: ['Toner do tlačiarne', 'Káva pre klientov', 'Poštovné', 'Voda pre vodičov'],
       polozky: [
         { popis: 'Toner do tlačiarne', sadzbaDph: 23, suma: 120 },
         { popis: 'Káva pre klientov', sadzbaDph: 23, suma: 60 },
         { popis: 'Poštovné', sadzbaDph: 23, suma: 60 },
+        { popis: 'Voda pre vodičov', sadzbaDph: 23, suma: 20 },
       ],
     };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
@@ -1622,15 +1627,16 @@ describe('návrh rozpisu po riadkoch', () => {
     expect(payload.rozdelenie.ucty.map((polozka: any) => polozka.ucet)).toEqual(['501400', '513100', '548002']);
     expect(payload.rozdelenie.ucty[1].predkontacie[0]).toMatchObject({ kod: '513/321' });
     // Index ide do promptu explicitne — podľa neho sa odpoveď priraďuje späť.
-    expect(payload.dokument.polozky.map((polozka: any) => polozka.index)).toEqual([0, 1, 2]);
+    expect(payload.dokument.polozky.map((polozka: any) => polozka.index)).toEqual([0, 1, 2, 3]);
 
     const suggestion = (await database.query<Record<string, any>>(
       'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0];
     expect(suggestion.riadky).toEqual([
       { index: 1, popis: 'Káva pre klientov', predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'KN' },
-      // Riadok s podielom 1 prejde ako celá položka, nie ako neúplný rez.
+      // Podiel 1 aj 0 prejdú ako celá položka, nie ako neúplný rez.
       { index: 2, popis: 'Poštovné', predkontaciaId: predk.get('548/321') },
+      { index: 3, popis: 'Voda pre vodičov', predkontaciaId: predk.get('513/321') },
     ]);
     // Rozdelený doklad sa nepredvyplní sám — istota ostáva pod hranicou 0,9.
     expect(Number(suggestion.confidence)).toBeLessThan(0.9);
