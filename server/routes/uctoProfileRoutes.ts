@@ -72,6 +72,20 @@ export function registerUctoProfileRoutes(
     return { ...vysledok, dokladov: rows.filter((row) => row.riadokIndex === 0).length, warnings };
   });
 
+  // Pravidlá protistrán — odvodenina korpusu, nie samostatný záznam. Počítajú
+  // sa pri analýze profilu; toto je len čítanie pre obrazovku.
+  app.get('/api/organizations/:id/ucto-pravidla', async (request) => {
+    const { auth, organizationId } = await pristup(request, false);
+    const pravidla = await database.query<Record<string, any>>(
+      `SELECT agenda, protistrana, dokladov, zhoda, predkontacia_kod, clenenie_dph_kod,
+              clenenie_kv_kod, rozpis
+         FROM ucto_pravidla WHERE tenant_id=$1 AND organization_id=$2
+        ORDER BY dokladov DESC LIMIT 300`,
+      [auth.tenantId, organizationId],
+    );
+    return { pravidla: pravidla.rows };
+  });
+
   // Meranie presnosti: čo by AI navrhla na dokladoch, ktoré účtovník už
   // zaúčtoval. Beží synchrónne a dlho — sto dokladov je sto volaní modelu.
   // ponytail: pri väčších vzorkách presunúť do processing_jobs ako extrakciu.

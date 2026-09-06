@@ -7,6 +7,7 @@ import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
+import { prepocitajPravidla } from './uctoPravidlaService.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -108,6 +109,9 @@ export interface AnalyzaVysledok {
   /** Dávky, ktoré model nestihol (120 s strop) alebo odmietol. */
   zlyhanychDavok: number;
   pokrytieRiadkov: number;
+  /** Pravidlá protistrán — počítajú sa z toho istého korpusu, ale bez modelu. */
+  pravidiel?: number;
+  sRozpisom?: number;
 }
 
 /**
@@ -288,12 +292,17 @@ export async function analyzujUctovnyProfil(
     }
   }
 
+  // Pravidlá protistrán sa počítajú z toho istého korpusu, len bez modelu.
+  // Bežia tu, nie na vlastnom tlačidle: účtovník má stlačiť jedno.
+  const pravidla = await prepocitajPravidla(database, input);
+
   return {
     kategorii: kategorie.size,
     textov: texty.length,
     davok,
     zlyhanychDavok,
     pokrytieRiadkov: texty.reduce((sum, item) => sum + item.pocet, 0),
+    ...pravidla,
   };
 }
 

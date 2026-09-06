@@ -10,6 +10,7 @@ import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddin
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
+import { najdiPravidlo } from './uctoPravidlaService.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -1029,6 +1030,7 @@ CONSISTENCY CHECK — do this before you answer, it outranks how often something
 - Empty or all zero: no tax was charged — do not pick a domestic taxable classification.
 The journal usually holds several variants of the same service (domestic, abroad, reverse charge, exempt); the VAT on this document decides which one applies, never the count. When the journal rows carry "sadzbaDph", prefer rows whose rate matches this document.
 If "profilKlienta" is present, follow its "pokyny" strictly — they are the accountant's VAT rules for this client.
+"pravidlo" — what this firm does with documents from THIS counterparty, counted from its whole history without a model: the header codes it settled on, in how many of how many documents, and "rozpis", the settled shape of the lines. A line there carrying "podiel" means the firm divides that line in a fixed ratio every time. This is the summary; when it is present, follow it unless the document in front of you plainly contradicts it, and say in the reason which part you followed.
 HOW THIS COUNTERPARTY'S DOCUMENTS GET POSTED — "rozuctovanie". These are the lines of the last documents this firm received from THIS counterparty, exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. When this block is present it is not a hint, it is the record of a decision the firm has already made repeatedly. Read the shape of it and reproduce that shape on the document in front of you. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
 An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification and the KN section even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction and puts them in the control statement.
@@ -1461,6 +1463,10 @@ export async function maybeAiAccountingSuggestion(
   // Ako táto protistrana naposledy rozúčtovaná bola — s číslami, nie len s kódmi.
   const rozuctovanie = await najdiRozuctovanie(
     database, input, protistranaKontextu, documentContext.documentType, documentContext.historiaDoDatumu);
+  // Pravidlo protistrany: to isté, čo je v rozúčtovaní, ale zhrnuté cez všetky
+  // doklady a spočítané bez modelu. Účtovník si ho vie prečítať a opraviť.
+  const pravidloProtistrany = await najdiPravidlo(
+    database, input, HISTORIA_AGENDY[documentContext.documentType] ?? [], protistranaKontextu);
   // Model nevie účtovať na účet — vyberá predkontáciu. Ku každému účtu rozpadu
   // preto idú predkontácie, ktoré na tento účet účtujú; bez nich by mu ostalo
   // len číslo účtu, ktoré v číselníku nemá čo vybrať.
@@ -1593,6 +1599,14 @@ export async function maybeAiAccountingSuggestion(
             // rozhodovalo zaúčtovanie.
             polozky: polozkyPreModel.map((polozka, index) => ({ index, ...polozka })),
           },
+          // Pravidlo protistrany — zhrnutie praxe cez všetky jej doklady.
+          pravidlo: pravidloProtistrany ? {
+            dokladov: pravidloProtistrany.dokladov, zhoda: pravidloProtistrany.zhoda,
+            predkontaciaKod: pravidloProtistrany.predkontaciaKod,
+            clenenieDphKod: pravidloProtistrany.clenenieDphKod,
+            clenenieKvKod: pravidloProtistrany.clenenieKvKod,
+            rozpis: pravidloProtistrany.rozpis,
+          } : undefined,
           // Položky posledných rozúčtovaných dokladov tejto protistrany, s číslami.
           // Pomer základu aj krátenie dane sú z nich priamo vidieť.
           rozuctovanie: rozuctovanie.length > 0 ? rozuctovanie : undefined,
