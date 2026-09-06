@@ -969,9 +969,9 @@ const aiRiadokSchema = z.object({
    *  keď je riadok mimo priznania: KN sa z hlavičkového B2 odvodiť nedá. */
   clenenieKvKod: z.string().nullable(),
   /**
-   * Podiel položky, ktorý na tento riadok pripadá. Bez neho ide celá položka.
-   * S ním sa položka ROZREŽE: rovnaký index sa zopakuje toľkokrát, na koľko
-   * častí sa delí, a podiely musia dať dokopy 1.
+   * Podiel položky, ktorý na tento riadok pripadá. Celá položka = null alebo 1.
+   * Rez sa zapíše tak, že sa rovnaký index zopakuje toľkokrát, na koľko častí
+   * sa delí, a každá časť nesie podiel MENŠÍ než 1; dokopy musia dať 1.
    */
   podiel: z.number().nullable(),
   /**
@@ -1032,7 +1032,7 @@ If "profilKlienta" is present, follow its "pokyny" strictly — they are the acc
 HOW THIS COUNTERPARTY'S DOCUMENTS GET POSTED — "rozuctovanie". These are the lines of the last documents this firm received from THIS counterparty, exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. When this block is present it is not a hint, it is the record of a decision the firm has already made repeatedly. Read the shape of it and reproduce that shape on the document in front of you. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
 An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification and the KN section even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction and puts them in the control statement.
-CUTTING ONE ITEM IN TWO. Sometimes the firm does not move a whole item elsewhere but divides the item itself, and the second line does not exist on the invoice — the accountant creates it. In "rozuctovanie" this shows as two lines whose texts name parts of one supply (a percentage, or a word for the deductible and the non-deductible half) on different predkontácie. To propose one, return several "riadky" entries with the SAME index, each carrying "podiel", the fraction of that item it takes. The fractions must add up to 1 and there must be at least two of them; anything else is dropped whole, because a partial cut would lose money from the document.
+CUTTING ONE ITEM IN TWO. Sometimes the firm does not move a whole item elsewhere but divides the item itself, and the second line does not exist on the invoice — the accountant creates it. In "rozuctovanie" this shows as two lines whose texts name parts of one supply (a percentage, or a word for the deductible and the non-deductible half) on different predkontácie. To propose one, return several "riadky" entries with the SAME index, each carrying "podiel", the fraction of that item it takes — every fraction smaller than 1. An item that goes somewhere WHOLE carries "podiel": null; never describe a whole item as a cut of one part. The fractions must add up to 1 and there must be at least two of them; anything else is dropped whole, because a partial cut would lose money from the document.
 "podielDph" is the fraction of that item's VAT, for when the tax does not follow the base. Compute "podiel" from the sums of the parts and "podielDph" from their VAT, each on its own — one does not follow from the other and in practice they differ, because a deduction can be capped by law while the cost is divided by use. Leave "podielDph" out when the tax follows the base.
 Do not wait for the document to announce any of this. An invoice never says which part is non-deductible, and its silence is not evidence against the split — the evidence is what the firm did before.
 Guard rails, in this order. Only a line of the SAME kind gets the same treatment: when the history divides one kind of supply and leaves a neighbouring one whole, do that and leave the rest, discounts included, alone. Take the account and the ratio from "rozuctovanie" or "dennik", never from a rule you assume applies. Use only ids that are in the code lists. And when this document plainly holds a single kind of supply and the history shows no split for it, return "riadky": null.
@@ -1858,8 +1858,15 @@ export async function maybeAiAccountingSuggestion(
   // v (0,1) a súčet 1. Inak by z dokladu zmizli alebo pribudli peniaze.
   const PRESNOST_PODIELU = 0.005;
   const skupiny = new Map<number, typeof parsed.riadky extends null ? never : NonNullable<typeof parsed.riadky>>();
+  // Podiel 1 znamená „celá položka", nie rez. Model ho tak aj používa —
+  // v poli, ktoré structured outputs vynucujú, je jednotka prirodzený zápis
+  // pre „celé". Brať ju ako časť rezu znamená zahodiť riadok, lebo skupina
+  // z jedinej stopercentnej časti neprejde kontrolou súčtu. Presne na tom
+  // padlo VŠETKÝCH 16 rozpisov v meraní.
+  const jeRez = (podiel: number | null | undefined): podiel is number =>
+    podiel != null && podiel < 1;
   for (const riadok of parsed.riadky ?? []) {
-    if (riadok.podiel === null || riadok.podiel === undefined) continue;
+    if (!jeRez(riadok.podiel)) continue;
     const doterajsie = skupiny.get(riadok.index) ?? [];
     doterajsie.push(riadok);
     skupiny.set(riadok.index, doterajsie);
@@ -1878,7 +1885,7 @@ export async function maybeAiAccountingSuggestion(
   const pouziteIndexy = new Set<number>();
   const riadky = (parsed.riadky ?? []).flatMap((riadok) => {
     const polozka = polozkyPreModel[riadok.index];
-    const jeCast = riadok.podiel !== null && riadok.podiel !== undefined;
+    const jeCast = jeRez(riadok.podiel);
     // Rozrezanie sa berie iba celé. Jedna časť bez svojich súrodencov by
     // z dokladu odkrojila kus sumy a zvyšok by sa stratil.
     if (jeCast && !platneSkupiny.has(riadok.index)) return [];

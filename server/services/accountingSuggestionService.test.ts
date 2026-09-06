@@ -1596,6 +1596,10 @@ describe('návrh rozpisu po riadkoch', () => {
           { index: 1, predkontaciaId: predk.get('548/321'), clenenieDphId: null, clenenieKvKod: null },
           // Predkontácia, ktorú model nedostal v ponuke.
           { index: 2, predkontaciaId: randomUUID(), clenenieDphId: null, clenenieKvKod: null },
+          // Podiel 1 = celá položka, nie rez. Model to tak píše, a kým sa to
+          // bralo ako časť rezu, riadok vypadol — na tom padlo VŠETKÝCH 16
+          // rozpisov v meraní ALPINY.
+          { index: 2, predkontaciaId: predk.get('548/321'), clenenieDphId: null, clenenieKvKod: null, podiel: 1 },
         ],
       })),
     };
@@ -1623,10 +1627,11 @@ describe('návrh rozpisu po riadkoch', () => {
     const suggestion = (await database.query<Record<string, any>>(
       'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0];
-    expect(suggestion.riadky).toEqual([{
-      index: 1, popis: 'Káva pre klientov',
-      predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'KN',
-    }]);
+    expect(suggestion.riadky).toEqual([
+      { index: 1, popis: 'Káva pre klientov', predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'KN' },
+      // Riadok s podielom 1 prejde ako celá položka, nie ako neúplný rez.
+      { index: 2, popis: 'Poštovné', predkontaciaId: predk.get('548/321') },
+    ]);
     // Rozdelený doklad sa nepredvyplní sám — istota ostáva pod hranicou 0,9.
     expect(Number(suggestion.confidence)).toBeLessThan(0.9);
     expect(suggestion.reason).toContain('spravidla delí');
