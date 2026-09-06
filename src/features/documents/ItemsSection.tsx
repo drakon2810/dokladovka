@@ -108,6 +108,44 @@ export function rozrezPolozku(
   });
 }
 
+/**
+ * Prenesie návrh rozpisu do položiek dokladu. Používa to tlačidlo „Použiť
+ * návrh" aj automatické predvyplnenie — inak by každé robilo niečo iné a
+ * účtovník by nevedel, čo vlastne dostal.
+ *
+ * Prepisuje sa len prázdne pole a len riadok, ktorého popis stále sedí:
+ * účtovník mohol položky medzitým zmeniť a návrh by potom ukazoval na inú
+ * položku, než pre ktorú vznikol.
+ */
+export function pouziNavrhNaPolozky(
+  polozky: DocumentLineItem[],
+  riadky: ReadonlyArray<{
+    index: number; popis: string; predkontaciaId: string;
+    clenenieDphId?: string; clenenieKvKod?: string; podiel?: number; podielDph?: number;
+  }>,
+): DocumentLineItem[] {
+  if (riadky.length === 0 || polozky.length === 0) return polozky;
+  return polozky.flatMap((polozka, index) => {
+    const preRiadok = riadky.filter((riadok) => riadok.index === index
+      && riadok.popis === (polozka.popis ?? ''));
+    if (preRiadok.length === 0) return [polozka];
+    // Rozrezanie položky: druhý riadok na doklade nie je, vzniká tu.
+    if (preRiadok.some((riadok) => riadok.podiel != null)) return rozrezPolozku(polozka, preRiadok);
+    const navrh = preRiadok[0];
+    const doplnene = {
+      ...(polozka.ucto?.predkontaciaId ? {} : { predkontaciaId: navrh.predkontaciaId }),
+      ...(navrh.clenenieDphId && !polozka.ucto?.clenenieDphId
+        ? { clenenieDphId: navrh.clenenieDphId } : {}),
+      // Sekcia KV riadku sa z hlavičky odvodiť nedá: plnenie mimo priznania má
+      // KN, kým hlavička nesie B2 — a to by riadok do výkazu vrátilo.
+      ...(navrh.clenenieKvKod && !polozka.ucto?.clenenieKvKod
+        ? { clenenieKvKod: navrh.clenenieKvKod } : {}),
+    };
+    return [Object.keys(doplnene).length === 0
+      ? polozka : { ...polozka, ucto: { ...polozka.ucto, ...doplnene } }];
+  });
+}
+
 export const parseNum = (value: string): number => {
   const parsed = Number(String(value).replace(/\s/g, '').replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : 0;

@@ -79,6 +79,7 @@ import {
 } from './sourceHighlight';
 import './sourceHighlight.css';
 import { AssistantPanel } from '../assistant/AssistantPanel';
+import { pouziNavrhNaPolozky } from './ItemsSection';
 import {
   createMostikExportJob,
   getOrganizationMostikStatus,
@@ -451,9 +452,20 @@ export function DocumentDetailPage() {
       ...(suggestion.strediskoId && !draft.ucto.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
       ...(kvKod && !draft.ucto.clenenieKvKod ? { clenenieKvKod: kvKod } : {}),
     };
+    // Rozpis po položkách sa predvyplní spolu s hlavičkou. Dovtedy sa doklad
+    // rozdelený podľa ustáleného pravidla protistrany zastavil na istote 0,8
+    // a účtovník musel kliknúť — hoci meranie ukazuje, že rozpis sedí v 93 %
+    // a hlavička v 94 %. Istotu nad 0,9 dostane len návrh, ktorý sa zhoduje
+    // s pravidlom protistrany, takže sem sa rozpis dostane iba vtedy.
+    const polozky = draft.extracted.polozky ?? [];
+    const sRozpisom = pouziNavrhNaPolozky(polozky, suggestion.riadky ?? []);
     autoFilledFor.current = draft.id;
-    if (Object.keys(doplnene).length === 0) return;
-    setDraft((current) => current && { ...current, ucto: { ...current.ucto, ...doplnene } });
+    if (Object.keys(doplnene).length === 0 && sRozpisom === polozky) return;
+    setDraft((current) => current && {
+      ...current,
+      ucto: { ...current.ucto, ...doplnene },
+      ...(sRozpisom === polozky ? {} : { extracted: { ...current.extracted, polozky: sRozpisom } }),
+    });
     setDirty(true);
     setAutoFilled(true);
   }, [data, draft, dirty, role, suggestion]);

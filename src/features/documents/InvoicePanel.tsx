@@ -16,7 +16,7 @@ import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
-import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, rozpisZPoloziek, rozrezPolozku, type ItemsCodeLists } from './ItemsSection';
+import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, pouziNavrhNaPolozky, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
 import './invoicePanel.css';
 import './sourceHighlight.css';
@@ -746,33 +746,10 @@ export function InvoicePanel({
     // odpočet). Prepisuje sa len prázdne pole a len riadok, ktorého popis
     // stále sedí: účtovník mohol položky medzitým zmeniť a návrh by potom
     // ukazoval na inú položku, než pre ktorú vznikol.
-    const navrhyRiadkov = suggestion.riadky ?? [];
-    if (navrhyRiadkov.length > 0 && polozky.length > 0) {
-      updateExtracted('polozky', polozky.flatMap((polozka, index) => {
-        const preRiadok = navrhyRiadkov.filter((riadok) => riadok.index === index
-          && riadok.popis === (polozka.popis ?? ''));
-        if (preRiadok.length === 0) return [polozka];
-        // Rozrezanie položky: druhý riadok na doklade nie je, vzniká tu. Faktúra
-        // za PHM má jediné „Natural 95" a účtovník z neho robí daňovú časť 80 %
-        // a nedaňovú 20 %; daň sa pritom delí polovicou (§ 49 ods. 5), nie
-        // v pomere základu — preto vlastný podielDph.
-        if (preRiadok.some((riadok) => riadok.podiel != null)) {
-          return rozrezPolozku(polozka, preRiadok);
-        }
-        const navrh = preRiadok[0];
-        const doplnene = {
-          ...(polozka.ucto?.predkontaciaId ? {} : { predkontaciaId: navrh.predkontaciaId }),
-          ...(navrh.clenenieDphId && !polozka.ucto?.clenenieDphId
-            ? { clenenieDphId: navrh.clenenieDphId } : {}),
-          // Sekcia KV riadku sa z hlavičky odvodiť nedá: plnenie mimo priznania
-          // má KN, kým hlavička nesie B2 — a to by riadok do výkazu vrátilo.
-          ...(navrh.clenenieKvKod && !polozka.ucto?.clenenieKvKod
-            ? { clenenieKvKod: navrh.clenenieKvKod } : {}),
-        };
-        return [Object.keys(doplnene).length === 0
-          ? polozka : { ...polozka, ucto: { ...polozka.ucto, ...doplnene } }];
-      }));
-    }
+    // Rozpis po položkách. To isté robí aj automatické predvyplnenie —
+    // spoločná funkcia, aby účtovník dostal v oboch prípadoch rovnaký výsledok.
+    const sRozpisom = pouziNavrhNaPolozky(polozky, suggestion.riadky ?? []);
+    if (sRozpisom !== polozky) updateExtracted('polozky', sRozpisom);
     setAiApplied(true);
   };
 

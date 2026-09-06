@@ -1835,13 +1835,28 @@ export async function maybeAiAccountingSuggestion(
   // a predvyplnil sa jedinou predkontáciou — hoci 8 z 9 takých faktúr účtovník
   // rozpísal na 501400 + 513100 + 548002. Istota preto ostáva pod hranicou
   // predvyplnenia a účtovník doklad otvorí sám.
-  const strop = rozdelenie ? 0.8 : (overenaKategoria || dennikZhoda || prikladZhoda ? 0.95 : 0.8);
+  // Výnimka: ustálené pravidlo protistrany, s ktorým sa návrh zhoduje. Kým
+  // takého pravidla nebolo, bola opatrnosť jediná možnosť. Teraz sa dá povedať
+  // presne, v koľkých dokladoch z koľkých to platí — a keď firma robí to isté
+  // v deviatich z desiatich, nechať účtovníka klikať pri každom doklade je
+  // opatrnosť, ktorá už nič nechráni. Rozpis sa vtedy predvyplní s hlavičkou.
+  const kodPredkontacie = codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code?.trim();
+  const silnePravidlo = pravidloProtistrany
+    && pravidloProtistrany.dokladov >= 10
+    && pravidloProtistrany.zhoda / pravidloProtistrany.dokladov >= 0.9
+    && Boolean(kodPredkontacie)
+    && kodPredkontacie === pravidloProtistrany.predkontaciaKod;
+  const strop = silnePravidlo
+    ? 0.95
+    : (rozdelenie ? 0.8 : (overenaKategoria || dennikZhoda || prikladZhoda ? 0.95 : 0.8));
   const varovanie = rozdelenie
     ? `Pozor: doklady tejto protistrany firma spravidla delí (${rozdelenie.pocet} z ${rozdelenie.spolu}`
       + ` na účty ${rozdelenie.ucty.join(' + ')}${rozdelenie.priklad ? `, napr. ${rozdelenie.priklad}` : ''})`
       + ' — jedna predkontácia nemusí stačiť. '
     : '';
-  const dovod = varovanie + (pravidlo.ruleId
+  const dovod = varovanie + (silnePravidlo
+    ? `Podľa ustáleného pravidla protistrany (${pravidloProtistrany!.zhoda} z ${pravidloProtistrany!.dokladov} dokladov): ${parsed.reason}`
+    : pravidlo.ruleId
     ? `Pravidlo účtovníka doplnené AI analýzou: ${parsed.reason}`
     : dennikZhoda
       ? `Podľa denníka firmy (${dennikZhoda.pocet}× rovnako): ${parsed.reason}`

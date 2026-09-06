@@ -1951,3 +1951,63 @@ describe('rozúčtovanie protistrany ide do promptu aj bez denníka', () => {
     ]);
   }, 90_000);
 });
+
+// Ustálené pravidlo protistrany dvíha istotu nad hranicu predvyplnenia. Kým
+// takého pravidla nebolo, bola opatrnosť jediná možnosť a rozdelený doklad
+// zostal na 0,8 — účtovník musel klikať pri každom. Keď firma robí to isté
+// v deviatich dokladoch z desiatich, chráni to už len pred pohodlím.
+describe('istota pri ustálenom pravidle protistrany', () => {
+  async function priprava(dokladov: number, zhoda: number) {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const predkontacia = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`,
+      [predkontacia, ...kde],
+    );
+    await database.query(
+      `INSERT INTO ucto_pravidla
+        (id,tenant_id,organization_id,agenda,protistrana,dokladov,zhoda,predkontacia_kod,rozpis)
+       VALUES ($1,$2,$3,'FP','preprava s.r.o.',$4,$5,'518/321','[]'::jsonb)`,
+      [randomUUID(), ...kde, dokladov, zhoda],
+    );
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, ...kde],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predkontacia, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.99, reason: 'Preprava',
+      })),
+    };
+    await maybeAiAccountingSuggestion(
+      database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Preprava s.r.o.' },
+      {
+        documentType: 'FP', supplierName: 'Preprava s.r.o.', totalAmount: 100, currency: 'EUR',
+        lineDescriptions: ['preprava tovaru'], polozky: [{ popis: 'preprava tovaru', suma: 100 }],
+      },
+      parser,
+    );
+    return (await database.query<Record<string, any>>(
+      'SELECT confidence, reason FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+  }
+
+  it('pri 58 zo 60 pustí návrh nad hranicu a povie prečo', async () => {
+    const navrh = await priprava(60, 58);
+    expect(Number(navrh.confidence)).toBeGreaterThanOrEqual(0.9);
+    expect(navrh.reason).toContain('58 z 60');
+  }, 90_000);
+
+  it('pri 6 z 10 ostáva pod hranicou — to je zvyk, nie pravidlo', async () => {
+    const navrh = await priprava(10, 6);
+    expect(Number(navrh.confidence)).toBeLessThan(0.9);
+  }, 90_000);
+});
