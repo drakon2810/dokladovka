@@ -195,6 +195,8 @@ export async function najdiRozdelenie(
   database: Database,
   input: { tenantId: string; organizationId: string },
   protistrana: { nazov?: string; ico?: string },
+  /** Meranie presnosti drží denník k dátumu — inak doklad uvidí sám seba. */
+  doDatumu?: string,
 ): Promise<RozdelenieVzor | undefined> {
   const ico = String(protistrana.ico ?? '').replace(/\D/g, '');
   // Zhoda mena musí sedieť s normalizeName() (trim + lowercase + zúžené medzery).
@@ -208,13 +210,14 @@ export async function najdiRozdelenie(
          FROM ucto_dennik
         WHERE tenant_id=$1 AND organization_id=$2 AND doklad_cislo IS NOT NULL
           AND agenda=ANY($5::text[])
+          AND ($6::date IS NULL OR datum < $6::date)
           AND (($3::text <> '' AND partner_ico=$3)
             OR ($4::text <> '' AND lower(btrim(regexp_replace(partner_nazov,'[[:space:]]+',' ','g')))=$4))
         GROUP BY agenda, doklad_cislo)
      SELECT ucty, count(*) AS pocet, sum(count(*)) OVER () AS spolu, min(doklad_cislo) AS priklad
        FROM doklad WHERE ucty IS NOT NULL
       GROUP BY ucty ORDER BY count(*) DESC LIMIT 1`,
-    [input.tenantId, input.organizationId, ico, nazov, ROZDELENIE_AGENDY],
+    [input.tenantId, input.organizationId, ico, nazov, ROZDELENIE_AGENDY, doDatumu ?? null],
   )).rows;
   const vzor = rows[0];
   if (!vzor || vzor.ucty.length < 2) return undefined;

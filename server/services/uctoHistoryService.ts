@@ -89,6 +89,7 @@ interface ResolvedRow {
   lineText: string;
   suma: number | null;
   sumaDph: number | null;
+  riadokIndex: number | null;
   sadzbaDph: number | null;
   predkontaciaKod: string | null;
   predkontaciaId: string | null;
@@ -165,6 +166,7 @@ export async function importUctoHistory(
       lineText,
       suma: row.suma ?? null,
       sumaDph: row.sumaDph ?? null,
+      riadokIndex: row.riadokIndex ?? null,
       sadzbaDph: row.sadzbaDph ?? null,
       // „BEZ…" nie je účet, ale doklad bez zaúčtovania — do korpusu sa nedostane
       // ani ako kód, inak by z neho analýza spravila kategóriu s účtom BEZ321100.
@@ -191,8 +193,8 @@ export async function importUctoHistory(
       `INSERT INTO ucto_historia
         (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_ico,supplier_name_normalized,
          line_text_normalized,suma,suma_dph,sadzba_dph,predkontacia_kod,predkontacia_id,clenenie_dph_kod,
-         clenenie_dph_id,clenenie_kv_kod,stredisko_kod,stredisko_id,source,riadok_hash)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+         clenenie_dph_id,clenenie_kv_kod,stredisko_kod,stredisko_id,source,riadok_hash,riadok_index)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        -- Prepis, nie DO NOTHING: korpus je zrkadlo POHODY a import, ktorý
        -- prinesie viac (sumy pribudli neskôr), musí riadok doplniť. xmax=0
        -- rozlíši skutočný vklad od prepisu, inak by boli duplicity vždy nula.
@@ -200,12 +202,12 @@ export async function importUctoHistory(
          suma=excluded.suma, suma_dph=excluded.suma_dph, sadzba_dph=excluded.sadzba_dph,
          predkontacia_kod=excluded.predkontacia_kod, predkontacia_id=excluded.predkontacia_id,
          clenenie_dph_kod=excluded.clenenie_dph_kod, clenenie_dph_id=excluded.clenenie_dph_id,
-         clenenie_kv_kod=excluded.clenenie_kv_kod
+         clenenie_kv_kod=excluded.clenenie_kv_kod, riadok_index=excluded.riadok_index
        RETURNING (xmax = 0) AS vlozeny`,
       [randomUUID(), tenantId, organizationId, row.agenda, row.dokladCislo, row.datum,
         row.supplierIco, row.supplierName, row.lineText, row.suma, row.sumaDph, row.sadzbaDph,
         row.predkontaciaKod, row.predkontaciaId, row.clenenieDphKod, row.clenenieDphId,
-        row.clenenieKvKod, row.strediskoKod, row.strediskoId, input.source, row.hash],
+        row.clenenieKvKod, row.strediskoKod, row.strediskoId, input.source, row.hash, row.riadokIndex],
     );
     if ((result.rows[0] as { vlozeny?: boolean } | undefined)?.vlozeny) imported += 1;
   }
@@ -274,6 +276,7 @@ export async function backfillHistoryFromDecisions(
       lineText: row.line_text_normalized,
       suma: null,
       sumaDph: null,
+      riadokIndex: 0,
       sadzbaDph: null,
       predkontaciaKod: jeBezPredkontacia(row.predkontacia_kod) ? null : row.predkontacia_kod ?? null,
       predkontaciaId: jeBezPredkontacia(row.predkontacia_kod) ? null : row.predkontacia_id ?? null,

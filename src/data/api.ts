@@ -3239,3 +3239,38 @@ export async function saveSharePointFolders(input: {
 export async function removeSharePointFolders(organizationId: string): Promise<void> {
   await restRequest(`/api/sharepoint/folders/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
 }
+
+export interface PresnostBeh {
+  id: string;
+  delici_datum: string;
+  vzorka: number;
+  vysledok: Record<string, {
+    dokladov: number; predkontacia: number; clenenieDph: number;
+    kv: number; rad: number; rozpisanych: number; rozpis: number;
+  }>;
+  rozdiely: Array<Record<string, unknown>>;
+  trvanie_ms?: number;
+  created_at?: string;
+}
+
+/**
+ * Meranie presnosti: koľko z toho, čo účtovník zaúčtoval, by AI navrhla sama.
+ * Beží dlho — jeden doklad je jedno volanie modelu. Výsledok sa ukladá pred
+ * odpoveďou, takže aj keď spojenie medzitým vyprší, beh sa nestratí a načíta
+ * sa cez listPresnost().
+ */
+export async function zmeratPresnost(orgId: string, vzorka: number): Promise<PresnostBeh> {
+  if (!REST_DATA_MODE) throw new Error('Meranie presnosti beží iba v serverovom režime');
+  return restRequest<PresnostBeh>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-presnost`,
+    { method: 'POST', body: JSON.stringify({ vzorka }) },
+  );
+}
+
+export async function listPresnost(orgId: string): Promise<PresnostBeh[]> {
+  if (!REST_DATA_MODE) return [];
+  const odpoved = await restRequest<{ behy: PresnostBeh[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-presnost`,
+  );
+  return odpoved.behy;
+}

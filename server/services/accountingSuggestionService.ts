@@ -375,6 +375,7 @@ async function resolveSeriesDefault(
   datumVystavenia?: string,
   podtyp?: string,
   protistrana?: { nazov?: string; ico?: string },
+  doDatumu?: string,
 ): Promise<string | undefined> {
   const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
     `SELECT d.ciselny_rad_id
@@ -425,11 +426,12 @@ async function resolveSeriesDefault(
         WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
           AND c.active=true AND c.agenda=$3
           AND (($4::text <> '' AND h.supplier_ico=$4) OR ($5::text <> '' AND h.supplier_name_normalized=$5))
+          AND ($6::date IS NULL OR h.datum < $6::date)
         GROUP BY c.id, c.code
        HAVING count(*) >= 3
         ORDER BY count(*) DESC, length(c.code) DESC, c.code
         LIMIT 1`,
-      [input.tenantId, input.organizationId, agenda, ico, nazov],
+      [input.tenantId, input.organizationId, agenda, ico, nazov, doDatumu ?? null],
     );
     if (podlaProtistrany.rows[0]) return podlaProtistrany.rows[0].id;
   }
@@ -1146,6 +1148,9 @@ async function najdiDennik(
   lineText: string,
   documentType: string,
   protistrana?: { nazov?: string; ico?: string },
+  /** Meranie presnosti drží históriu k dátumu — doklad nesmie vidieť seba ani
+   *  nič, čo vzniklo po ňom, inak si odpoveď jednoducho odpíše. */
+  doDatumu?: string,
 ): Promise<DennikRiadok[]> {
   const agendy = HISTORIA_AGENDY[documentType] ?? [];
   if (agendy.length === 0) return [];
@@ -1161,13 +1166,14 @@ async function najdiDennik(
               clenenie_dph_kod, clenenie_dph_id, clenenie_kv_kod, sadzba_dph, count(*) AS pocet
          FROM ucto_historia
         WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+          AND ($7::date IS NULL OR datum < $7::date)
           AND ($4::boolean = false
                OR ($5::text <> '' AND supplier_name_normalized=$5)
                OR ($6::text <> '' AND supplier_ico=$6))
         GROUP BY 1,2,3,4,5,6,7
         ORDER BY count(*) DESC
         LIMIT 2000`,
-      [input.tenantId, input.organizationId, agendy, lenProtistrany, nazov, ico],
+      [input.tenantId, input.organizationId, agendy, lenProtistrany, nazov, ico, doDatumu ?? null],
     )).rows;
     return rows
       .map((row) => ({
@@ -1212,6 +1218,7 @@ async function najdiRozuctovanie(
   input: SuggestionInput,
   protistrana: { nazov?: string; ico?: string },
   documentType: string,
+  doDatumu?: string,
 ): Promise<Array<Record<string, unknown>>> {
   const agendy = HISTORIA_AGENDY[documentType] ?? [];
   const ico = String(protistrana.ico ?? '').replace(/\D/g, '');
@@ -1222,6 +1229,7 @@ async function najdiRozuctovanie(
        SELECT doklad_cislo, max(datum) AS datum
          FROM ucto_historia
         WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[]) AND doklad_cislo IS NOT NULL
+          AND ($6::date IS NULL OR datum < $6::date)
           AND (($4::text <> '' AND supplier_ico=$4) OR ($5::text <> '' AND supplier_name_normalized=$5))
         GROUP BY doklad_cislo
        HAVING count(DISTINCT predkontacia_kod) > 1
@@ -1231,10 +1239,11 @@ async function najdiRozuctovanie(
             h.predkontacia_kod, h.predkontacia_id, h.clenenie_dph_kod, h.clenenie_kv_kod
        FROM ucto_historia h JOIN doklady d ON d.doklad_cislo=h.doklad_cislo
       WHERE h.tenant_id=$1 AND h.organization_id=$2 AND h.agenda=ANY($3::text[])
+        AND ($6::date IS NULL OR h.datum < $6::date)
         AND (($4::text <> '' AND h.supplier_ico=$4) OR ($5::text <> '' AND h.supplier_name_normalized=$5))
       ORDER BY h.doklad_cislo, h.suma DESC NULLS LAST
       LIMIT 24`,
-    [input.tenantId, input.organizationId, agendy, ico, nazov],
+    [input.tenantId, input.organizationId, agendy, ico, nazov, doDatumu ?? null],
   );
   return rows.rows.map((row) => ({
     doklad: row.doklad_cislo,
@@ -1341,6 +1350,12 @@ export interface AiSuggestionDocumentContext {
   lineDescriptions: string[];
   /** Položky so sadzbou DPH — sadzba na doklade je pre model dôkaz o režime. */
   polozky?: Array<{ popis?: string; sadzbaDph?: number; suma?: number }>;
+  /**
+   * Len pre meranie presnosti: história sa drží k tomuto dátumu. Doklad tak
+   * nevidí seba ani nič, čo vzniklo po ňom — bez toho by si odpoveď odpísal
+   * z vlastného záznamu a meranie by ukázalo 100 % o ničom.
+   */
+  historiaDoDatumu?: string;
 }
 
 interface AiSuggestionParser {
@@ -1419,7 +1434,7 @@ export async function maybeAiAccountingSuggestion(
   // z korpusu, inak reálne používaný rad).
   const radPreTyp = await resolveSeriesDefault(
     database, input, documentContext.documentType, documentContext.datumVystavenia,
-    documentContext.podtyp, protistranaKontextu);
+    documentContext.podtyp, protistranaKontextu, documentContext.historiaDoDatumu);
   // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];
@@ -1435,13 +1450,14 @@ export async function maybeAiAccountingSuggestion(
   );
   const kategorie = await najdiKategorie(
     database, config, input, lineText, documentContext.documentType, injectedEmbedder);
-  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType, protistranaKontextu);
+  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType,
+    protistranaKontextu, documentContext.historiaDoDatumu);
   // Účtovný denník vidí to, čo hlavičkový korpus stratil: že doklady tejto
   // protistrany firma spravidla rozpisuje na viac nákladových účtov.
-  const rozdelenie = await najdiRozdelenie(database, input, protistranaKontextu);
+  const rozdelenie = await najdiRozdelenie(database, input, protistranaKontextu, documentContext.historiaDoDatumu);
   // Ako táto protistrana naposledy rozúčtovaná bola — s číslami, nie len s kódmi.
   const rozuctovanie = await najdiRozuctovanie(
-    database, input, protistranaKontextu, documentContext.documentType);
+    database, input, protistranaKontextu, documentContext.documentType, documentContext.historiaDoDatumu);
   // Model nevie účtovať na účet — vyberá predkontáciu. Ku každému účtu rozpadu
   // preto idú predkontácie, ktoré na tento účet účtujú; bez nich by mu ostalo
   // len číslo účtu, ktoré v číselníku nemá čo vybrať.

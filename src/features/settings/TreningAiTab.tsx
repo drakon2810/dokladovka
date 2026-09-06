@@ -7,6 +7,7 @@ import {
   activateAiRule, analyzeAiTraining, confirmAiRules, deleteAiRule,
   excludeAiTrainingSupplier, getAiTrainingStats, importAiTraining,
   importUctoDennik, importUctoHistoriaXml, importUctoHistoryRows, listAiRules, listAiTrainingSuppliers,
+  listPresnost, zmeratPresnost, type PresnostBeh,
   type AiRule, type AiRuleProposal, type AiTrainingSupplier,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
@@ -38,6 +39,7 @@ export function TreningAiTab() {
   const [suppliers, setSuppliers] = useState<AiTrainingSupplier[]>([]);
   // Po importe histórie z .mdb sa profil (štatistiky korpusu) načíta nanovo.
   const [profilVerzia, setProfilVerzia] = useState(0);
+  const [presnost, setPresnost] = useState<PresnostBeh>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dennikInputRef = useRef<HTMLInputElement>(null);
   const polozkyInputRef = useRef<HTMLInputElement>(null);
@@ -75,6 +77,11 @@ export function TreningAiTab() {
     void listAiRules(orgId)
       .then((next) => {
         if (active) setRules(next);
+      })
+      .catch(() => undefined);
+    void listPresnost(orgId)
+      .then((behy) => {
+        if (active) setPresnost(behy[0]);
       })
       .catch(() => undefined);
     void listAiTrainingSuppliers(orgId)
@@ -257,6 +264,24 @@ export function TreningAiTab() {
     }
   }
 
+  // Meranie presnosti. Beh sa ukladá na serveri PRED odpoveďou, takže aj keď
+  // spojenie medzitým vyprší, výsledok sa nestratí — načíta sa pri obnovení.
+  async function meraj() {
+    if (!orgId) return;
+    setBusy(true);
+    showToast(t('trening.presnostBezi'));
+    try {
+      const beh = await zmeratPresnost(orgId, 40);
+      setPresnost(beh);
+      showToast(`${t('trening.presnostHotova')} ${beh.vzorka}`);
+    } catch (cause) {
+      showToast(cause instanceof Error && cause.message ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
+      void listPresnost(orgId).then((behy) => setPresnost(behy[0])).catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function analyze() {
     if (!orgId) return;
     setBusy(true);
@@ -390,6 +415,14 @@ export function TreningAiTab() {
         >
           {t('trening.nahratPolozky')}
         </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || !orgId}
+          onClick={() => void meraj()}
+        >
+          {t('trening.zmeratPresnost')}
+        </button>
         <input
           ref={polozkyInputRef}
           type="file"
@@ -421,6 +454,57 @@ export function TreningAiTab() {
       )}
 
       <p className="max-w-3xl text-xs text-ink-soft">{t('trening.stlpce')}</p>
+
+      {/* Presnosť po agendách, nie jedno súhrnné číslo: 99 % na predkontácii
+          a 20 % na rozpise dá „priemer 87 %", ktorý nepovie, kde je práca. */}
+      <section className="card p-4">
+        <h3 className="text-sm font-semibold">{t('trening.presnostNadpis')}</h3>
+        <p className="mt-1 max-w-3xl text-xs text-ink-soft">{t('trening.presnostPopis')}</p>
+        {!presnost ? (
+          <p className="mt-3 text-sm text-ink-soft">{t('trening.presnostZiadne')}</p>
+        ) : (
+          <>
+            <p className="mt-3 text-xs text-ink-soft">
+              {presnost.vzorka} dokladov · od {presnost.delici_datum}
+              {presnost.trvanie_ms ? ` · ${Math.round(presnost.trvanie_ms / 1000)} s` : ''}
+            </p>
+            <table className="mt-2 w-full max-w-3xl text-sm">
+              <thead className="text-xs text-ink-soft">
+                <tr className="text-left">
+                  <th className="py-1">{t('trening.presnostAgenda')}</th>
+                  <th className="py-1 text-right">{t('trening.presnostDokladov')}</th>
+                  <th className="py-1 text-right">{t('trening.presnostPredkontacia')}</th>
+                  <th className="py-1 text-right">{t('trening.presnostDph')}</th>
+                  <th className="py-1 text-right">{t('trening.presnostKv')}</th>
+                  <th className="py-1 text-right">{t('trening.presnostRozpis')}</th>
+                </tr>
+              </thead>
+              <tbody className="tnum">
+                {Object.entries(presnost.vysledok).map(([agenda, skore]) => {
+                  const podiel = (kolko: number, z: number) => (z > 0 ? `${Math.round((kolko / z) * 100)} %` : '—');
+                  return (
+                    <tr key={agenda} className="border-t border-line">
+                      <td className="py-1">{agenda}</td>
+                      <td className="py-1 text-right">{skore.dokladov}</td>
+                      <td className="py-1 text-right">{podiel(skore.predkontacia, skore.dokladov)}</td>
+                      <td className="py-1 text-right">{podiel(skore.clenenieDph, skore.dokladov)}</td>
+                      <td className="py-1 text-right">{podiel(skore.kv, skore.dokladov)}</td>
+                      {/* Rozpis sa počíta len z dokladov, ktoré účtovník naozaj
+                          rozpísal — inde nie je čo merať. */}
+                      <td className="py-1 text-right">{podiel(skore.rozpis, skore.rozpisanych)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {presnost.rozdiely.length > 0 && (
+              <p className="mt-2 text-xs text-ink-soft">
+                Rozdielov: <strong className="tnum text-ink">{presnost.rozdiely.length}</strong>
+              </p>
+            )}
+          </>
+        )}
+      </section>
 
       {rows.length > 0 && (
         <section className="card p-4">
