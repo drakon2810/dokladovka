@@ -49,6 +49,8 @@ interface Skutocnost {
   predkontaciaId?: string;
   clenenieDphId?: string;
   clenenieKvKod?: string;
+  /** Text dokladu z hlavičky — pri doklade bez položiek je to jediné, čo model dostane. */
+  hlavickaText?: string;
   polozky: Array<{ popis: string; suma?: number; sumaDph?: number; predkontaciaId?: string }>;
   /** Doklad, ktorý účtovník rozpísal na viac predkontácií. */
   rozpisany: boolean;
@@ -105,6 +107,7 @@ async function nacitajDoklady(
         predkontaciaId: row.predkontacia_id ?? undefined,
         clenenieDphId: row.clenenie_dph_id ?? undefined,
         clenenieKvKod: row.clenenie_kv_kod ?? undefined,
+        hlavickaText: row.line_text_normalized ?? undefined,
         polozky: [],
         rozpisany: false,
       });
@@ -120,7 +123,18 @@ async function nacitajDoklady(
     });
     if (row.predkontacia_id && row.predkontacia_id !== doklad.predkontaciaId) doklad.rozpisany = true;
   }
-  return [...podlaDokladu.values()].filter((doklad) => DRUH_PODLA_AGENDY[doklad.agenda]);
+  // Doklad bez položiek (staršie importy niesli len hlavičku) dostane text
+  // hlavičky ako jedinú položku. Inak by model dostal doklad BEZ AKÉHOKOĽVEK
+  // popisu a nemal by sa z čoho rozhodnúť — meranie by netrestalo jeho úsudok,
+  // ale prázdny vstup. Presne to sa aj stalo: leasingové splátky ČSOB prišli
+  // bez textu a model na ne nevrátil predkontáciu vôbec.
+  for (const doklad of podlaDokladu.values()) {
+    if (doklad.polozky.length === 0 && doklad.hlavickaText) {
+      doklad.polozky.push({ popis: doklad.hlavickaText });
+    }
+  }
+  return [...podlaDokladu.values()]
+    .filter((doklad) => DRUH_PODLA_AGENDY[doklad.agenda] && doklad.polozky.length > 0);
 }
 
 /** Vzorka podľa agend v pomere, v akom firma doklady naozaj má. */
@@ -191,11 +205,16 @@ export async function zmerajPresnost(
   }
   const zaciatok = Date.now();
   const vzorka = Math.min(Math.max(moznosti.vzorka ?? 100, 1), 500);
-  // Predvolene posledné tri mesiace histórie — dosť dokladov na meranie a dosť
-  // histórie pred nimi na to, aby sa z čoho učilo.
+  // Deliaci dátum je 80. percentil dátumov DOKLADOV: posledná pätina sa meria,
+  // predošlé štyri sa učia. Nie „max mínus tri mesiace" — leasingové splátky
+  // a rezervy sú zaúčtované dopredu, takže max bol 31. 12., delítko spadlo na
+  // 30. 9. a za ním ostalo 42 dokladov, medzi nimi ani jedna prijatá faktúra.
+  // Percentil sa o pár dokladov v budúcnosti neopiera.
   const deliciDatum = moznosti.deliciDatum ?? (await database.query<{ d: string } & Record<string, unknown>>(
-    `SELECT (max(datum) - interval '3 months')::date::text AS d FROM ucto_historia
-      WHERE tenant_id=$1 AND organization_id=$2`,
+    `SELECT percentile_disc(0.80) WITHIN GROUP (ORDER BY datum)::text AS d
+       FROM (SELECT DISTINCT agenda, doklad_cislo, datum FROM ucto_historia
+              WHERE tenant_id=$1 AND organization_id=$2
+                AND doklad_cislo IS NOT NULL AND datum IS NOT NULL) t`,
     [input.tenantId, input.organizationId],
   )).rows[0]?.d;
   if (!deliciDatum) throw new HttpError(409, 'not_enough_data', 'V korpuse nie sú doklady s dátumom.');

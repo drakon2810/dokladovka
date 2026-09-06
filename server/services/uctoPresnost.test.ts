@@ -103,3 +103,50 @@ describe('meranie presnosti zaúčtovania', () => {
     )).rejects.toThrow(/doklady/);
   }, 60_000);
 });
+
+// Prvé ostré meranie ALPINY malo vzorku bez jedinej prijatej faktúry: pár
+// leasingových splátok a rezerv je zaúčtovaných dopredu (31. 12.), takže
+// „max mínus tri mesiace" dalo delítko 30. 9. a za ním ostalo 42 dokladov,
+// všetko OZ a INT. Percentil sa o takéto výbežky neopiera.
+describe('deliaci dátum', () => {
+  it('nenechá sa strhnúť dokladmi zaúčtovanými dopredu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const predkontacia = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`,
+      [predkontacia, seeded.tenantId, seeded.organizationId],
+    );
+    const doklad = async (cislo: string, datum: string, agenda: string) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,predkontacia_id,riadok_index,source,riadok_hash)
+       VALUES ($1,$2,$3,$4,$5,$6::date,'dodavatel','sluzba',$7,0,'mdb',$8)`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, agenda, cislo, datum, predkontacia, randomUUID()],
+    );
+    // 20 bežných faktúr od januára do augusta.
+    for (let index = 1; index <= 20; index += 1) {
+      await doklad(`26FP${index}`, `2026-0${Math.ceil(index / 3)}-10`, 'FP');
+    }
+    // A dve leasingové splátky zaúčtované na koniec roka.
+    await doklad('26OZ001', '2026-12-31', 'OZ');
+    await doklad('26OZ002', '2026-12-30', 'OZ');
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predkontacia, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Služba',
+      })),
+    };
+    const vysledok = await zmerajPresnost(
+      database, testConfig(), { tenantId: seeded.tenantId, organizationId: seeded.organizationId },
+      { vzorka: 10 }, parser as never,
+    );
+    // „max − 3 mesiace" by dalo 30. 9. a vzorku z dvoch decembrových OZ.
+    // Percentil necháva merateľné aj faktúry.
+    expect(vysledok.deliciDatum < '2026-09-01').toBe(true);
+    expect(Object.keys(vysledok.vysledok)).toContain('FP');
+  }, 90_000);
+});
