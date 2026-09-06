@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { navrhPreRiadky, rozrezPolozku } from './ItemsSection';
+import { navrhPreRiadky, pouziNavrhNaPolozky, rozrezPolozku } from './ItemsSection';
 import type { CodeListItem, DocumentLineItem } from '../../data/types';
 import { round2 } from '../../lib/validate';
 
@@ -112,6 +112,19 @@ describe('rozrezanie položky na daňovú a nedaňovú časť', () => {
       round2((palivo[index][pole] ?? 0) + (zlava[index][pole] ?? 0));
     expect([naUcte(0, 'sumaBezDph'), naUcte(1, 'sumaBezDph')]).toEqual([47.64, 11.91]);
     expect([naUcte(0, 'sumaDph'), naUcte(1, 'sumaDph')]).toEqual([6.85, 6.85]);
+  });
+
+  // Druhé stlačenie „Automatické účtovanie" doklad nafukovalo: časti z prvého
+  // rezu mali stále ten istý popis, tak sa rozrezali znova a z Natural 95 sa
+  // stali tri riadky. Rez preto platí len na položke, ktorá účet ešte nemá.
+  it('druhé použitie návrhu položku nerozreže znova', () => {
+    const riadky = [
+      { index: 0, popis: 'Natural 95', predkontaciaId: 'p-501', podiel: 0.8, podielDph: 0.5 },
+      { index: 0, popis: 'Natural 95', predkontaciaId: 'p-513', podiel: 0.2, podielDph: 0.5 },
+    ];
+    const prve = pouziNavrhNaPolozky([natural], riadky);
+    expect(prve.map((cast) => cast.sumaBezDph)).toEqual([52.68, 13.17]);
+    expect(pouziNavrhNaPolozky(prve, riadky)).toEqual(prve);
   });
 
   it('zvyšok berie posledná časť — tretina by inak o halier ušla', () => {

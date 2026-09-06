@@ -130,7 +130,13 @@ export function pouziNavrhNaPolozky(
       && riadok.popis === (polozka.popis ?? ''));
     if (preRiadok.length === 0) return [polozka];
     // Rozrezanie položky: druhý riadok na doklade nie je, vzniká tu.
-    if (preRiadok.some((riadok) => riadok.podiel != null)) return rozrezPolozku(polozka, preRiadok);
+    // Len na položke, o ktorej ešte nikto nerozhodol. Časti z predchádzajúceho
+    // rezu už predkontáciu nesú a bez tejto podmienky ich každé ďalšie
+    // stlačenie rozrezalo znova — doklad rástol 4 → 5 → 6 položiek. Platí tu
+    // to isté pravidlo ako nižšie: vyplniť prázdne, rozhodnuté nechať tak.
+    if (preRiadok.some((riadok) => riadok.podiel != null)) {
+      return polozka.ucto?.predkontaciaId ? [polozka] : rozrezPolozku(polozka, preRiadok);
+    }
     const navrh = preRiadok[0];
     const doplnene = {
       ...(polozka.ucto?.predkontaciaId ? {} : { predkontaciaId: navrh.predkontaciaId }),
