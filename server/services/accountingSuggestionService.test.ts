@@ -1791,3 +1791,68 @@ describe('návrh rozrezania položky', () => {
     expect(riadky[1].predkontaciaId).toBe(nadspotreba);
   }, 90_000);
 });
+
+// Číselný rad podľa protistrany. ALPINA má tuzemský rad DF260 a zahraničný
+// ZF260 a rozhoduje o nich dodávateľ. Automatika ich rozsudzovala podľa
+// posledného čísla, takže slovenskej faktúre od Up Déjeuner dávala ZF260
+// (posledné 395) namiesto DF260 (202) — a doklad by v POHODE dostal číslo
+// z radu zahraničných faktúr.
+describe('číselný rad sa berie podľa protistrany', () => {
+  it('vyberie rad, ktorý firma tejto protistrane naozaj dáva', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const rady = new Map<string, string>();
+    for (const [kod, nazov, posledne] of [
+      ['DF260', 'Prijaté faktúry SK', 'DF260202'],
+      ['ZF260', 'Prijaté faktúry zahraničné', 'ZF260395'],
+    ] as const) {
+      const id = randomUUID();
+      rady.set(kod, id);
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,last_number)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$5,'pohoda','prijate_faktury',$6)`,
+        [id, ...kde, kod, nazov, posledne],
+      );
+    }
+    // Korpus: tuzemský dodávateľ chodí v DF260, zahraničný v ZF260.
+    const doKorpusu = async (dodavatel: string, prefix: string, pocet: number) => {
+      for (let poradie = 1; poradie <= pocet; poradie += 1) {
+        await database.query(
+          `INSERT INTO ucto_historia
+            (id,tenant_id,organization_id,agenda,doklad_cislo,supplier_name_normalized,
+             line_text_normalized,predkontacia_kod,source,riadok_hash)
+           VALUES ($1,$2,$3,'FP',$4,$5,'sluzba','518/321','mdb',$6)`,
+          [randomUUID(), ...kde, `${prefix}${100 + poradie}`, dodavatel, randomUUID()],
+        );
+      }
+    };
+    await doKorpusu('up déjeuner, s. r. o.', 'DF260', 5);
+    await doKorpusu('q8truck international', 'ZF260', 9);
+
+    const rad = async (dodavatel: string) => {
+      const documentId = randomUUID();
+      await database.query(
+        `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+         VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+        [documentId, ...kde, JSON.stringify({ dodavatel: { nazov: dodavatel } })],
+      );
+      await database.transaction(async (tx) => rebuildAccountingSuggestion(tx, {
+        tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: dodavatel,
+      }));
+      const row = (await database.query<Record<string, any>>(
+        `SELECT c.code FROM accounting_suggestions s
+           LEFT JOIN code_list_items c ON c.id=s.ciselny_rad_id
+          WHERE s.document_id=$1`, [documentId],
+      )).rows[0];
+      return row?.code as string | undefined;
+    };
+
+    expect(await rad('Up Déjeuner, s. r. o.')).toBe('DF260');
+    expect(await rad('Q8Truck International')).toBe('ZF260');
+    // Neznámy dodávateľ korpus nemá — ostáva pôvodná automatika podľa čísla.
+    expect(await rad('Nikdy nevidená s.r.o.')).toBe('ZF260');
+  }, 90_000);
+});
