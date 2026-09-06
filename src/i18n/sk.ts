@@ -776,6 +776,7 @@ export const sk = {
   'trening.polozkyNahrate': 'Doklady s položkami nahraté — dokladov:',
   'trening.polozkyRiadkov': 'nových riadkov korpusu',
   'trening.zmeratPresnost': 'Zmerať presnosť (AI)',
+  'trening.presnostVzorka': 'dokladov',
   'trening.presnostBezi': 'Meranie beží — jeden doklad je jedno volanie modelu, potrvá to minúty.',
   'trening.presnostHotova': 'Meranie hotové — dokladov:',
   'trening.presnostNadpis': 'Presnosť zaúčtovania',

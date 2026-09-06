@@ -40,6 +40,9 @@ export function TreningAiTab() {
   // Po importe histórie z .mdb sa profil (štatistiky korpusu) načíta nanovo.
   const [profilVerzia, setProfilVerzia] = useState(0);
   const [presnost, setPresnost] = useState<PresnostBeh>();
+  // Vzorka: 40 stačí vidieť pohyb, pri jemných rozdieloch treba viac. 150
+  // dokladov je asi desať minút a rovnaký počet volaní modelu.
+  const [vzorka, setVzorka] = useState(150);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dennikInputRef = useRef<HTMLInputElement>(null);
   const polozkyInputRef = useRef<HTMLInputElement>(null);
@@ -271,7 +274,7 @@ export function TreningAiTab() {
     setBusy(true);
     showToast(t('trening.presnostBezi'));
     try {
-      const beh = await zmeratPresnost(orgId, 40);
+      const beh = await zmeratPresnost(orgId, vzorka);
       setPresnost(beh);
       showToast(`${t('trening.presnostHotova')} ${beh.vzorka}`);
     } catch (cause) {
@@ -423,6 +426,18 @@ export function TreningAiTab() {
         >
           {t('trening.zmeratPresnost')}
         </button>
+        <label className="flex items-center gap-1 text-xs text-ink-soft">
+          {t('trening.presnostVzorka')}
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={vzorka}
+            disabled={busy}
+            onChange={(event) => setVzorka(Math.min(500, Math.max(1, Number(event.target.value) || 1)))}
+            className="input tnum w-20 px-2 py-1 text-[13px]"
+          />
+        </label>
         <input
           ref={polozkyInputRef}
           type="file"
