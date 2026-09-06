@@ -1856,3 +1856,74 @@ describe('číselný rad sa berie podľa protistrany', () => {
     expect(await rad('Nikdy nevidená s.r.o.')).toBe('ZF260');
   }, 90_000);
 });
+
+// Meranie na ALPINE ukázalo rozpis 0 zo 16: model nerozdelil ani jeden doklad,
+// ktorý účtovník rozdelil. Vetva rozdeľovania sa totiž viazala na „rozdelenie"
+// z účtovného denníka, kým dôkaz o tomto type rozpisu je inde — v položkách
+// predošlých dokladov tej istej protistrany. Typický prípad: DPH z cudzieho
+// diaľničného poplatku ide na vlastný nedaňový účet, a v denníku to ako vzor
+// vidieť nie je.
+describe('rozúčtovanie protistrany ide do promptu aj bez denníka', () => {
+  it('pošle položky predošlých dokladov so sumami a v poradí', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const poplatok = randomUUID();
+    const nedanove = randomUUID();
+    for (const [id, code] of [[poplatok, '379700-auto popl.'], [nedanove, '379700-PK-nedaňové']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
+        [id, ...kde, code],
+      );
+    }
+    // Korpus drží kód aj id — dopyt na rozúčtovanie počíta rôzne KÓDY.
+    const riadok = async (index: number, text: string, suma: number, dph: number, predkontacia: [string, string]) =>
+      database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+           line_text_normalized,suma,suma_dph,predkontacia_id,predkontacia_kod,riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'FP','26FP300','2026-05-10','f.a.i. service',$4,$5,$6,$7,$8,$9,'mdb',$10)`,
+        [randomUUID(), ...kde, text, suma, dph, predkontacia[0], predkontacia[1], index, randomUUID()],
+      );
+    const POPLATOK = [poplatok, '379700-auto popl.'] as [string, string];
+    const NEDANOVE = [nedanove, '379700-PK-nedaňové'] as [string, string];
+    await riadok(0, 'dialničná známka', 200, 0, POPLATOK);
+    await riadok(1, 'dialničná známka', 166.67, 0, POPLATOK);
+    await riadok(2, 'dph', 33.33, 0, NEDANOVE);
+
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,200,'EUR')`,
+      [documentId, ...kde],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: poplatok, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Diaľničný poplatok',
+      })),
+    };
+    await maybeAiAccountingSuggestion(
+      database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'F.A.I. Service' },
+      {
+        documentType: 'FP', supplierName: 'F.A.I. Service', totalAmount: 200, currency: 'EUR',
+        lineDescriptions: ['dialničná známka', 'dph'],
+        polozky: [{ popis: 'dialničná známka', suma: 166.67 }, { popis: 'dph', suma: 33.33 }],
+      },
+      parser,
+    );
+
+    const prompt = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    // Denník je prázdny, takže „rozdelenie" chýba — a napriek tomu má model
+    // v ruke, ako sa doklady tejto protistrany rozpisujú.
+    expect(prompt.rozdelenie).toBeUndefined();
+    expect(prompt.rozuctovanie).toEqual([
+      { doklad: '26FP300', riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, predkontaciaKod: '379700-auto popl.', predkontaciaId: poplatok },
+      { doklad: '26FP300', riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, predkontaciaKod: '379700-PK-nedaňové', predkontaciaId: nedanove },
+    ]);
+  }, 90_000);
+});
