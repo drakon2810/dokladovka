@@ -3274,3 +3274,35 @@ export async function listPresnost(orgId: string): Promise<PresnostBeh[]> {
   );
   return odpoved.behy;
 }
+
+export interface UctoPravidloRiadok {
+  text: string;
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  clenenieKvKod?: string;
+  podiel?: number;
+}
+
+export interface UctoPravidlo {
+  agenda: string;
+  protistrana: string;
+  dokladov: number;
+  zhoda: number;
+  predkontacia_kod?: string;
+  clenenie_dph_kod?: string;
+  clenenie_kv_kod?: string;
+  rozpis: UctoPravidloRiadok[];
+}
+
+/**
+ * Pravidlá protistrán — čo sa program z histórie firmy naučil. Počítajú sa
+ * deterministicky pri analýze profilu, tu sa len čítajú na obrazovku: účtovník
+ * má vidieť, čo program o jeho firme vie, nie tomu len veriť.
+ */
+export async function listUctoPravidla(orgId: string): Promise<UctoPravidlo[]> {
+  if (!REST_DATA_MODE) return [];
+  const odpoved = await restRequest<{ pravidla: UctoPravidlo[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-pravidla`,
+  );
+  return odpoved.pravidla;
+}

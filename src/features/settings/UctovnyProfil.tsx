@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import {
   UCTO_AGENDA_NAZOV, UCTO_AGENDY,
   analyzeUctoProfil, backfillUctoHistory, deleteUctoKategoria, getUctoHistoryStats,
-  listUctoKategorie, updateUctoKategoria,
-  type UctoHistoryStats, type UctoKategoria,
+  listUctoKategorie, listUctoPravidla, updateUctoKategoria,
+  type UctoHistoryStats, type UctoKategoria, type UctoPravidlo,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import { CLENENIE_KV_KODY } from '../../data/types';
@@ -31,33 +31,39 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
   const { data } = useDataQuery();
   const [stats, setStats] = useState<UctoHistoryStats>();
   const [kategorie, setKategorie] = useState<UctoKategoria[]>([]);
+  const [pravidla, setPravidla] = useState<UctoPravidlo[]>([]);
   const [busy, setBusy] = useState<'analyza' | 'kategoria'>();
   const [uprava, setUprava] = useState<KategoriaUprava>();
   /** Vybraná agenda, alebo undefined pre všetky — pokladňa sa účtuje inak než faktúry. */
   const [agenda, setAgenda] = useState<string>();
 
   async function obnov() {
-    const [nasledujuce, zoznam] = await Promise.all([
+    const [nasledujuce, zoznam, odvodene] = await Promise.all([
       getUctoHistoryStats(orgId).catch(() => undefined),
       listUctoKategorie(orgId).catch(() => []),
+      listUctoPravidla(orgId).catch(() => []),
     ]);
     setStats(nasledujuce);
     setKategorie(zoznam);
+    setPravidla(odvodene);
   }
 
   useEffect(() => {
     let active = true;
     setStats(undefined);
     setKategorie([]);
+    setPravidla([]);
     setUprava(undefined);
     setAgenda(undefined);
     void Promise.all([
       getUctoHistoryStats(orgId).catch(() => undefined),
       listUctoKategorie(orgId).catch(() => []),
-    ]).then(([nasledujuce, zoznam]) => {
+      listUctoPravidla(orgId).catch(() => []),
+    ]).then(([nasledujuce, zoznam, odvodene]) => {
       if (!active) return;
       setStats(nasledujuce);
       setKategorie(zoznam);
+      setPravidla(odvodene);
     });
     return () => {
       active = false;
@@ -200,6 +206,75 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
           {busy === 'analyza' ? t('uctoProfil.analyzujem') : t('uctoProfil.spustitAnalyzu')}
         </button>
       </div>
+
+      {/* Čo sa program naučil o protistranách. Nie je to výstup modelu ale
+          súčet z histórie, preto sa dá čítať ako fakt: „takto to robíte".
+          Účtovník má vidieť, čo program vie, nie tomu len veriť. */}
+      <section className="border-t border-line pt-3">
+        <h4 className="text-[13px] font-semibold">{t('uctoProfil.pravidlaNadpis')}</h4>
+        <p className="mt-1 max-w-3xl text-xs text-ink-soft">{t('uctoProfil.pravidlaPopis')}</p>
+        {pravidla.length === 0 ? (
+          <p className="mt-2 text-[13px] text-ink-soft">{t('uctoProfil.pravidlaZiadne')}</p>
+        ) : (
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead className="text-[11.5px] text-ink-soft">
+                <tr className="text-left">
+                  <th className="py-1">{t('uctoProfil.pravidlaProtistrana')}</th>
+                  <th className="py-1 text-right">{t('uctoProfil.pravidlaDokladov')}</th>
+                  <th className="py-1">{t('uctoProfil.pravidlaZaucotvanie')}</th>
+                  <th className="py-1">{t('uctoProfil.pravidlaRozpis')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pravidla
+                  .filter((pravidlo) => agenda === undefined || pravidlo.agenda === agenda)
+                  .map((pravidlo) => (
+                    <tr key={`${pravidlo.agenda}-${pravidlo.protistrana}`} className="border-t border-line align-top">
+                      <td className="py-1.5">
+                        {pravidlo.protistrana}
+                        <span className="ml-1 text-[11.5px] text-ink-soft">{pravidlo.agenda}</span>
+                      </td>
+                      {/* Zhoda z dokladov: účtovník má rozoznať zákon od zvyku. */}
+                      <td className="py-1.5 text-right tnum">
+                        {pravidlo.zhoda}/{pravidlo.dokladov}
+                      </td>
+                      <td className="py-1.5">
+                        {pravidlo.predkontacia_kod ?? '—'}
+                        <span className="text-ink-soft">
+                          {pravidlo.clenenie_dph_kod ? ` · ${pravidlo.clenenie_dph_kod}` : ''}
+                          {pravidlo.clenenie_kv_kod ? ` · ${pravidlo.clenenie_kv_kod}` : ''}
+                        </span>
+                      </td>
+                      <td className="py-1.5">
+                        {pravidlo.rozpis.length === 0 ? (
+                          <span className="text-ink-soft">{t('uctoProfil.pravidlaBezRozpisu')}</span>
+                        ) : (
+                          <div className="flex flex-col gap-0.5">
+                            {pravidlo.rozpis.map((riadok, poradie) => (
+                              <span key={poradie}>
+                                {riadok.podiel !== undefined && (
+                                  <b className="tnum">{Math.round(riadok.podiel * 100)} % </b>
+                                )}
+                                {riadok.text || '—'}
+                                {' → '}
+                                {riadok.predkontaciaKod ?? '—'}
+                                <span className="text-ink-soft">
+                                  {riadok.clenenieDphKod ? ` · ${riadok.clenenieDphKod}` : ''}
+                                  {riadok.clenenieKvKod ? ` · ${riadok.clenenieKvKod}` : ''}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {kategorie.length === 0 ? (
         <p className="text-[13px] text-ink-soft">{t('uctoProfil.ziadneKategorie')}</p>
