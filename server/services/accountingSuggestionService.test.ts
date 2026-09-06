@@ -1714,3 +1714,80 @@ describe('riadok, ktorý sa od hlavičky líši len režimom DPH', () => {
     });
   }, 90_000);
 });
+
+// Rozrezanie položky: rovnaký index vo viacerých riadkoch, podiely dokopy 1.
+// Neúplná skupina sa zahadzuje CELÁ — jedna časť bez súrodencov by z dokladu
+// odkrojila kus sumy a zvyšok by sa stratil.
+describe('návrh rozrezania položky', () => {
+  it('prijme skupinu, ktorá dá celok, a neúplnú zahodí', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const phm = randomUUID();
+    const nadspotreba = randomUUID();
+    for (const [id, kod, ucet] of [[phm, 'PHM-501200', '501200'], [nadspotreba, 'PHM-Nadspotreba', '501201']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    const dphPd = randomUUID();
+    const dphPn = randomUUID();
+    for (const [id, kod] of [[dphPd, 'PD'], [dphPn, 'PN']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
+        [id, ...kde, kod],
+      );
+    }
+    for (const cislo of ['26FP201', '26FP202', '26FP203']) {
+      for (const ucet of ['501200', '501201', '343100']) {
+        await database.query(
+          `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,doklad_cislo,
+             ucet_md,ucet_dal,partner_nazov)
+           VALUES ($1,$2,$3,$4,'Prijaté faktúry',$5,$6,'321100','Up Déjeuner, s. r. o.')`,
+          [randomUUID(), ...kde, `${cislo}-${ucet}`, cislo, ucet],
+        );
+      }
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,202.67,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: phm, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'PHM s nadspotrebou',
+        riadky: [
+          // Natural 95: základ 80/20, daň polovicou — auto sa používa aj súkromne.
+          { index: 1, predkontaciaId: phm, clenenieDphId: dphPd, clenenieKvKod: 'B2', podiel: 0.8, podielDph: 0.5 },
+          { index: 1, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: null, podiel: 0.2, podielDph: 0.5 },
+          // Nafta: jediná časť, súčet nedá celok — celá skupina von.
+          { index: 0, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: null, podiel: 0.2, podielDph: null },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Up Déjeuner, s. r. o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Up Déjeuner, s. r. o.', totalAmount: 202.67, currency: 'EUR',
+      lineDescriptions: ['Nafta', 'Natural 95'],
+      polozky: [{ popis: 'Nafta', sadzbaDph: 23, suma: 123.11 }, { popis: 'Natural 95', sadzbaDph: 23, suma: 81 }],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const riadky = (await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky as Array<Record<string, unknown>>;
+    // Ostali len dve časti Naturalu; nafta s jedinou časťou vypadla.
+    expect(riadky.map((riadok) => [riadok.index, riadok.podiel, riadok.podielDph])).toEqual([
+      [1, 0.8, 0.5], [1, 0.2, 0.5],
+    ]);
+    expect(riadky[1].predkontaciaId).toBe(nadspotreba);
+  }, 90_000);
+});

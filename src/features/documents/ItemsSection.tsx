@@ -25,7 +25,7 @@ const HEADER_OPTION: DcOption = { value: '', label: '— ako doklad' };
 export function navrhPreRiadky(
   riadky: Array<{
     index: number; popis: string; predkontaciaId: string;
-    clenenieDphId?: string; clenenieKvKod?: string;
+    clenenieDphId?: string; clenenieKvKod?: string; podiel?: number;
   }> | undefined,
   polozky: DocumentLineItem[],
   codeLists: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[] },
@@ -34,6 +34,17 @@ export function navrhPreRiadky(
   for (const riadok of riadky ?? []) {
     const polozka = polozky[riadok.index];
     if (!polozka || riadok.popis !== (polozka.popis ?? '')) continue;
+    // Rozrezanie sa nedá ukázať kódom jednej predkontácie — riadok sa rozpadne
+    // na viac riadkov. Predloha preto povie pomer; účty vymenuje tooltip.
+    if (riadok.podiel != null) {
+      const doterajsie = mapa[riadok.index]?.predkontacia;
+      const percento = `${Math.round(riadok.podiel * 100)} %`;
+      mapa[riadok.index] = {
+        predkontacia: polozka.ucto?.predkontaciaId ? undefined
+          : `rozdeliť ${doterajsie ? `${doterajsie.replace('rozdeliť ', '')}/${percento}` : percento}`,
+      };
+      continue;
+    }
     mapa[riadok.index] = {
       predkontacia: polozka.ucto?.predkontaciaId
         ? undefined : codeLists.predkontacie.find((item) => item.id === riadok.predkontaciaId)?.kod,
@@ -44,6 +55,57 @@ export function navrhPreRiadky(
     };
   }
   return mapa;
+}
+
+/**
+ * Rozreže položku na časti podľa podielov z návrhu. Druhý riadok na doklade
+ * nie je — vzniká tu. Faktúra za PHM má jediné „Natural 95" a účtovník z neho
+ * v POHODE robí daňovú časť 80 % a nedaňovú 20 %.
+ *
+ * Daň má vlastný podiel: pri aute používanom aj súkromne je základ delený
+ * 80/20, ale odpočet krátený na polovicu (§ 49 ods. 5), takže daň ide 50/50.
+ *
+ * Posledná časť dostáva ZVYŠOK, nie svoj vypočítaný podiel — inak by
+ * zaokrúhlenie ubralo alebo pridalo haliere a doklad by sa rozišiel s vlastným
+ * súčtom. Množstvo ide na 1 a jednotková cena na základ časti, lebo validácia
+ * kontroluje ich súčin proti základu; rovnako to vyzerá aj v POHODE.
+ */
+export function rozrezPolozku(
+  polozka: DocumentLineItem,
+  casti: ReadonlyArray<{
+    podiel?: number; podielDph?: number;
+    predkontaciaId: string; clenenieDphId?: string; clenenieKvKod?: string;
+  }>,
+): DocumentLineItem[] {
+  const efektivne = lineItemEffective(polozka);
+  const zaklad = efektivne.bezDph;
+  // Bez základu niet čo deliť — položka ostane, ako bola.
+  if (zaklad === undefined || casti.length < 2) return [polozka];
+  const dph = efektivne.dph ?? 0;
+  let zvysokZakladu = zaklad;
+  let zvysokDane = dph;
+  return casti.map((cast, poradie) => {
+    const posledna = poradie === casti.length - 1;
+    const castZakladu = posledna ? round2(zvysokZakladu) : round2(zaklad * (cast.podiel ?? 0));
+    const castDane = posledna ? round2(zvysokDane) : round2(dph * (cast.podielDph ?? cast.podiel ?? 0));
+    zvysokZakladu = round2(zvysokZakladu - castZakladu);
+    zvysokDane = round2(zvysokDane - castDane);
+    return {
+      ...polozka,
+      id: `${polozka.id}-${poradie + 1}`,
+      mnozstvo: 1,
+      jednotkovaCenaBezDph: castZakladu,
+      sumaBezDph: castZakladu,
+      sumaDph: castDane,
+      sumaSpolu: round2(castZakladu + castDane),
+      ucto: {
+        ...polozka.ucto,
+        predkontaciaId: cast.predkontaciaId,
+        ...(cast.clenenieDphId ? { clenenieDphId: cast.clenenieDphId } : {}),
+        ...(cast.clenenieKvKod ? { clenenieKvKod: cast.clenenieKvKod } : {}),
+      },
+    };
+  });
 }
 
 export const parseNum = (value: string): number => {

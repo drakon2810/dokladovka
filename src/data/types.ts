@@ -918,6 +918,14 @@ export interface NavrhRiadku {
   clenenieDphId?: string;
   /** Sekcia KV riadku — riadok mimo priznania (KN) ju z hlavicky nezdedi. */
   clenenieKvKod?: string;
+  /**
+   * Podiel položky pripadajúci na tento riadok. Prítomný len vtedy, keď sa
+   * položka ROZREZÁVA — vtedy je rovnaký index vo viacerých riadkoch a podiely
+   * dávajú dokopy 1. Bez neho ide celá položka.
+   */
+  podiel?: number;
+  /** Podiel DPH, keď sa daň nedelí ako základ (PHM: základ 80/20, daň 50/50). */
+  podielDph?: number;
 }
 
 export interface AccountingSuggestion {

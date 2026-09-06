@@ -16,7 +16,7 @@ import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
-import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
+import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, rozpisZPoloziek, rozrezPolozku, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
 import './invoicePanel.css';
 import './sourceHighlight.css';
@@ -748,10 +748,18 @@ export function InvoicePanel({
     // ukazoval na inú položku, než pre ktorú vznikol.
     const navrhyRiadkov = suggestion.riadky ?? [];
     if (navrhyRiadkov.length > 0 && polozky.length > 0) {
-      updateExtracted('polozky', polozky.map((polozka, index) => {
-        const navrh = navrhyRiadkov.find((riadok) => riadok.index === index
+      updateExtracted('polozky', polozky.flatMap((polozka, index) => {
+        const preRiadok = navrhyRiadkov.filter((riadok) => riadok.index === index
           && riadok.popis === (polozka.popis ?? ''));
-        if (!navrh) return polozka;
+        if (preRiadok.length === 0) return [polozka];
+        // Rozrezanie položky: druhý riadok na doklade nie je, vzniká tu. Faktúra
+        // za PHM má jediné „Natural 95" a účtovník z neho robí daňovú časť 80 %
+        // a nedaňovú 20 %; daň sa pritom delí polovicou (§ 49 ods. 5), nie
+        // v pomere základu — preto vlastný podielDph.
+        if (preRiadok.some((riadok) => riadok.podiel != null)) {
+          return rozrezPolozku(polozka, preRiadok);
+        }
+        const navrh = preRiadok[0];
         const doplnene = {
           ...(polozka.ucto?.predkontaciaId ? {} : { predkontaciaId: navrh.predkontaciaId }),
           ...(navrh.clenenieDphId && !polozka.ucto?.clenenieDphId
@@ -761,8 +769,8 @@ export function InvoicePanel({
           ...(navrh.clenenieKvKod && !polozka.ucto?.clenenieKvKod
             ? { clenenieKvKod: navrh.clenenieKvKod } : {}),
         };
-        return Object.keys(doplnene).length === 0
-          ? polozka : { ...polozka, ucto: { ...polozka.ucto, ...doplnene } };
+        return [Object.keys(doplnene).length === 0
+          ? polozka : { ...polozka, ucto: { ...polozka.ucto, ...doplnene } }];
       }));
     }
     setAiApplied(true);
