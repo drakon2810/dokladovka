@@ -8,6 +8,7 @@ import { HttpError } from '../http.js';
 import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
 import { prepocitajPravidla } from './uctoPravidlaService.js';
+import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -295,6 +296,9 @@ export async function analyzujUctovnyProfil(
   // Pravidlá protistrán sa počítajú z toho istého korpusu, len bez modelu.
   // Bežia tu, nie na vlastnom tlačidle: účtovník má stlačiť jedno.
   const pravidla = await prepocitajPravidla(database, input);
+  // Kategória hovorí o DRUHU plnenia, takže jej rozpis platí aj pre dodávateľa,
+  // ktorého firma nikdy nemala — to pravidlo protistrany nedokáže.
+  const kategoriaRozpis = await doplnRozpisKategorii(database, input);
 
   return {
     kategorii: kategorie.size,

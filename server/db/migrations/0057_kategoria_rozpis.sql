@@ -1,0 +1,12 @@
+-- Kategória plnenia si nesie aj tvar rozpisu, nielen jedno zaúčtovanie.
+--
+-- Kategória „Leasing - splátka (istina a úrok)" mala v názve dve veci a v poli
+-- jedno: účet pre istinu. Úrok sa nemal kam zapísať. To isté pri PHM — bez
+-- miesta pre druhý riadok tvrdila kategória PN/KN pre celé palivo, hoci
+-- v skutočnosti je nedaňová len pätina.
+--
+-- Rozpis sa počíta rovnako ako pri protistranách: deterministicky z dokladov,
+-- ktoré do kategórie spadli. Rozdiel je v tom, že kategória hovorí o DRUHU
+-- plnenia, takže platí aj pre dodávateľa, ktorého firma nikdy nemala — presne
+-- to na pravidle protistrany chýba.
+ALTER TABLE ucto_kategorie ADD COLUMN rozpis jsonb NOT NULL DEFAULT '[]'::jsonb;

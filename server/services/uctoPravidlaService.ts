@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Queryable } from '../db/database.js';
+import { pocetZhodSlov } from './accountingSuggestionService.js';
 
 /**
  * Pravidlá odvodené z korpusu: čo firma s dokladmi tejto protistrany robí.
@@ -14,7 +15,7 @@ import type { Database, Queryable } from '../db/database.js';
  */
 
 /** Od koľkých dokladov sa protistrana považuje za ustálenú prax, nie za náhodu. */
-const MIN_DOKLADOV = 3;
+export const MIN_DOKLADOV = 3;
 /** Akú prevahu musí mať väčšinová hlavička, aby sa zapísala ako pravidlo. */
 const MIN_ZHODA = 0.6;
 
@@ -40,17 +41,21 @@ export interface UctoPravidlo {
   rozpis: PravidloRiadok[];
 }
 
-interface Riadok {
-  agenda: string;
-  dokladCislo: string;
-  protistrana: string;
-  ico?: string;
+/** Riadok dokladu, z ktorého sa odvodzuje tvar rozpisu. */
+export interface RozpisRiadok {
   riadokIndex: number;
   text: string;
   suma?: number;
   predkontaciaKod?: string;
   clenenieDphKod?: string;
   clenenieKvKod?: string;
+}
+
+interface Riadok extends RozpisRiadok {
+  agenda: string;
+  dokladCislo: string;
+  protistrana: string;
+  ico?: string;
 }
 
 /** Najčastejšia hodnota a počet jej výskytov. */
@@ -70,7 +75,7 @@ function prevaha<T>(hodnoty: Array<T | undefined>): { hodnota?: T; pocet: number
  * ROVNAKÝ počet položiek a na každej pozícii rovnaké zaúčtovanie — inak to nie je
  * tvar, ale priemer z rôznych dokladov a ten by klamal.
  */
-function odvodRozpis(doklady: Riadok[][]): PravidloRiadok[] {
+export function odvodRozpis(doklady: RozpisRiadok[][]): PravidloRiadok[] {
   const podlaPoctu = prevaha(doklady.map((polozky) => polozky.length));
   const pocet = podlaPoctu.hodnota ?? 0;
   if (pocet < 2 || podlaPoctu.pocet < Math.max(2, doklady.length * MIN_ZHODA)) return [];

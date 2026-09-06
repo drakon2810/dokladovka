@@ -1030,6 +1030,7 @@ CONSISTENCY CHECK — do this before you answer, it outranks how often something
 - Empty or all zero: no tax was charged — do not pick a domestic taxable classification.
 The journal usually holds several variants of the same service (domestic, abroad, reverse charge, exempt); the VAT on this document decides which one applies, never the count. When the journal rows carry "sadzbaDph", prefer rows whose rate matches this document.
 If "profilKlienta" is present, follow its "pokyny" strictly — they are the accountant's VAT rules for this client.
+A category in "kategorie" may carry its own "rozpis" — the settled shape of lines for that KIND of supply. Unlike "pravidlo" it holds for a supplier the firm has never had, so use it when the counterparty is new and the kind of supply is familiar.
 "pravidlo" — what this firm does with documents from THIS counterparty, counted from its whole history without a model: the header codes it settled on, in how many of how many documents, and "rozpis", the settled shape of the lines. A line there carrying "podiel" means the firm divides that line in a fixed ratio every time. This is the summary; when it is present, follow it unless the document in front of you plainly contradicts it, and say in the reason which part you followed.
 HOW THIS COUNTERPARTY'S DOCUMENTS GET POSTED — "rozuctovanie". These are the lines of the last documents this firm received from THIS counterparty, exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. When this block is present it is not a hint, it is the record of a decision the firm has already made repeatedly. Read the shape of it and reproduce that shape on the document in front of you. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
@@ -1053,6 +1054,8 @@ interface KategoriaPreNavrh extends Record<string, unknown> {
   clenenie_kv_kod?: string;
   vynimky?: unknown;
   pocet?: number;
+  /** Ustálený tvar položiek pre tento druh plnenia. */
+  rozpis?: unknown;
 }
 
 /** Typ dokladu → agendy korpusu histórie (ucto_historia). PD sa v POHODE delí
@@ -1281,7 +1284,7 @@ async function najdiKategorie(
   if (!lineText) return [];
   const rows = await database.query<KategoriaPreNavrh>(
     `SELECT nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
-            clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, vektor, vektor_model
+            clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, rozpis, vektor, vektor_model
        FROM ucto_kategorie
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true`,
     [input.tenantId, input.organizationId],
@@ -1643,6 +1646,9 @@ export async function maybeAiAccountingSuggestion(
             clenenieDphId: kategoria.clenenie_dph_id,
             clenenieKvKod: kategoria.clenenie_kv_kod,
             vynimky: kategoria.vynimky,
+            // Tvar rozpisu druhu plnenia — platí aj pre dodávateľa, ktorého firma
+            // nikdy nemala, čo pravidlo protistrany nedokáže.
+            rozpis: Array.isArray(kategoria.rozpis) && kategoria.rozpis.length > 0 ? kategoria.rozpis : undefined,
             pouziteKrat: kategoria.pocet,
           })),
           priklady: priklady.map((priklad) => ({

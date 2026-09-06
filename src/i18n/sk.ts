@@ -1437,6 +1437,8 @@ export const sk = {
   'uctoProfil.analyzujem': 'Analyzujem…',
   'uctoProfil.analyzaHotova': 'Analýza dokončená.',
   'uctoProfil.analyzaCiastocna': 'Analýza dobehla čiastočne — časť dávok model nestihol. Spustite ju ešte raz, doplní zvyšok.',
+  'uctoProfil.analyzaPravidiel': 'pravidiel',
+  'uctoProfil.analyzaPresnost': 'sebakontrola na dokladoch',
   'uctoProfil.pravidlaNadpis': 'Čo sa program naučil o protistranách',
   'uctoProfil.pravidlaPopis': 'Spočítané z histórie firmy, bez AI — väčšinové zaúčtovanie protistrany a ustálený tvar jej položiek. Pravidlo vzniká od troch dokladov; podiel sa zapíše, len keď je v každom doklade rovnaký.',
   'uctoProfil.pravidlaZiadne': 'Zatiaľ žiadne — vzniknú pri analýze.',

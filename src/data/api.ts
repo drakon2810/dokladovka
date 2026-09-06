@@ -3128,7 +3128,13 @@ export async function backfillUctoHistory(orgId: string): Promise<{ imported: nu
 
 export async function analyzeUctoProfil(
   orgId: string,
-): Promise<{ kategorii: number; textov: number; davok: number; zlyhanychDavok: number; pokrytieRiadkov: number }> {
+): Promise<{
+  kategorii: number; textov: number; davok: number; zlyhanychDavok: number; pokrytieRiadkov: number;
+  /** Pravidlá protistrán a kategórií — počítajú sa v tej istej analýze. */
+  pravidiel?: number; sRozpisom?: number; kategoriiSRozpisom?: number;
+  /** Sebakontrola na konci analýzy — bez nej sa nedá povedať, či je profil lepší. */
+  presnost?: PresnostBeh;
+}> {
   if (!REST_DATA_MODE) throw new Error('Analýza je dostupná len s pripojeným serverom');
   return restRequest(
     `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/analyze`,

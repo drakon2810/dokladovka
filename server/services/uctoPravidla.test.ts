@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
 import { najdiPravidlo, prepocitajPravidla } from './uctoPravidlaService.js';
+import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 
 // Pravidlo je zhrnutie toho, čo v korpuse naozaj stojí — počíta sa bez modelu.
 // Prípady sú z ALPINY: leasing sa delí na istinu a úrok, PHM na daňovú
@@ -109,4 +110,57 @@ describe('pravidlá odvodené z histórie', () => {
       [seeded.organizationId]);
     expect(Number((pocet.rows[0] as { n: string }).n)).toBe(1);
   }, 60_000);
+});
+
+// Rozpis kategórie. Pravidlo protistrany platí len pre dodávateľa, ktorého
+// firma už mala; kategória hovorí o DRUHU plnenia, takže platí aj pre celkom
+// nového. Kategória „Leasing - splátka (istina a úrok)" mala doteraz v názve
+// dve veci a v poli jednu.
+describe('rozpis kategórie plnenia', () => {
+  it('odvodí tvar z dokladov, ktoré do kategórie spadli', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    await database.query(
+      `INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,popis,slovnik,pocet)
+       VALUES ($1,$2,$3,'Leasing','Splátky leasingu','["leasing","splátka"]'::jsonb,10)`,
+      [randomUUID(), ...kde],
+    );
+    // Kategória, do ktorej nespadne nič — rozpis dostať nesmie.
+    await database.query(
+      `INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,popis,slovnik,pocet)
+       VALUES ($1,$2,$3,'Kancelária','Kancelárske potreby','["toner","papier"]'::jsonb,4)`,
+      [randomUUID(), ...kde],
+    );
+
+    const riadok = async (cislo: string, index: number, text: string, predkontacia: string) =>
+      database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+           line_text_normalized,suma,predkontacia_kod,riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'OZ',$4,'2026-05-10','ktokoľvek',$5,100,$6,$7,'mdb',$8)`,
+        [randomUUID(), ...kde, cislo, text, predkontacia, index, randomUUID()],
+      );
+    // Tri doklady rôznych dodávateľov — kategória ich spája podľa slovníka.
+    for (const cislo of ['L1', 'L2', 'L3']) {
+      await riadok(cislo, 0, 'leasing splátka vozidla', 'leas.istina');
+      await riadok(cislo, 1, 'istina', 'leas.istina');
+      await riadok(cislo, 2, 'úrok', 'Úroky-leas');
+    }
+
+    const vysledok = await doplnRozpisKategorii(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId,
+    });
+    expect(vysledok).toEqual({ kategoriiSRozpisom: 1 });
+
+    const kategorie = await database.query<Record<string, any>>(
+      'SELECT nazov, rozpis FROM ucto_kategorie WHERE organization_id=$1 ORDER BY nazov', [seeded.organizationId],
+    );
+    expect(kategorie.rows[0].nazov).toBe('Kancelária');
+    expect(kategorie.rows[0].rozpis).toEqual([]);
+    expect((kategorie.rows[1].rozpis as Array<Record<string, unknown>>).map((r) => r.predkontaciaKod))
+      .toEqual(['leas.istina', 'Úroky-leas']);
+  }, 90_000);
 });

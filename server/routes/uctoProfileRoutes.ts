@@ -150,7 +150,21 @@ export function registerUctoProfileRoutes(
       correlationId: request.id,
       metadata: { ...vysledok },
     });
-    return vysledok;
+    // Analýza sa končí sebakontrolou. Bez nej účtovník dostane pravidlá a nemá
+    // ako vedieť, či sú lepšie než predtým — a presne to bolo doteraz: menili
+    // sme veci a merali ich zvlášť, ručne. Vzorka je malá, aby to nepredĺžilo
+    // beh o desiatky minút; na presnejšie číslo je tlačidlo merania.
+    // Zlyhanie sebakontroly nesmie zhodiť analýzu — tá už je zaplatená a uložená.
+    let presnost;
+    try {
+      presnost = await zmerajPresnost(database, config, {
+        tenantId: auth.tenantId, organizationId,
+      }, { vzorka: 40 }, injectedParser as never);
+    } catch (chyba) {
+      console.warn('[ucto-profil] sebakontrola po analýze zlyhala:',
+        chyba instanceof Error ? chyba.message : chyba);
+    }
+    return { ...vysledok, presnost };
   });
 
   app.get('/api/organizations/:id/ucto-profile', async (request) => {

@@ -85,6 +85,11 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       const vysledok = await analyzeUctoProfil(orgId);
       // Nedokončené dávky sa nesmú zamlčať — profil je vtedy neúplný a
       // účtovník má dôvod pustiť analýzu znova.
+      // Sebakontrola patrí do tej istej správy: účtovník má po analýze vedieť
+      // nielen koľko kategórií vzniklo, ale či to niečo zlepšilo.
+      const presnost = vysledok.presnost
+        ? ` · ${t('uctoProfil.analyzaPresnost')}: ${vysledok.presnost.vzorka}`
+        : '';
       showToast(vysledok.zlyhanychDavok > 0
         ? `${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`
         : `${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`);
