@@ -339,6 +339,39 @@ describe('normalizácia SK/CZ faktúr', () => {
       .toContain('line_items_total_mismatch');
   });
 
+  it('halier zo zaokrúhľovania dostane najväčší riadok sadzby', () => {
+    // Faktúra O2 1610898349: deväť riadkov, z toho šesť s 23 %. Dodávateľ počíta
+    // daň raz z celého základu (94,52 × 23 % = 21,74), po riadkoch to dá 21,72.
+    // Doklad sa preto nedal schváliť, hoci žiadny riadok nebol zle prečítaný.
+    const riadok = (popis: string, sadzba: string, zaklad: string, dph: string, spolu: string) =>
+      ({ description: popis, vatRate: sadzba, amountWithoutVat: zaklad, vatAmount: dph, amountTotal: spolu });
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'O2 Slovakia, s.r.o.', ico: '47259116', icDph: 'SK2121743437' },
+      buyer: { ico: '87654321' }, invoiceNumber: '1610898349',
+      issueDate: '2026-07-06', taxDate: '2026-07-06', dueDate: '2026-07-20', currency: 'EUR',
+      lineItems: [
+        riadok('Poplatky za Extra balíčky', '23', '37.93', '8.72', '46.65'),
+        riadok('Mesačné poplatky', '23', '122.25', '28.10', '150.35'),
+        riadok('Hlasové služby (volania)', '23', '2.49', '0.57', '3.06'),
+        riadok('Nehlasové služby', '23', '0', '0', '0'),
+        riadok('Splátka za zariadenia', '0', '14.50', '0', '14.50'),
+        riadok('Zľava na služby za zariadenia', '23', '-7.97', '-1.83', '-9.80'),
+        riadok('Bonusy', '23', '-16.26', '-3.74', '-20.00'),
+        riadok('Zľavy', '23', '-43.92', '-10.10', '-54.02'),
+      ],
+      vatBreakdown: [{ vatRate: '23', base: '94.52', vat: '21.74' }, { vatRate: '0', base: '14.50', vat: '0' }],
+      totalWithoutVat: '109.02', totalVat: '21.74', totalAmount: '130.76',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    }, 'doc-o2', '2026-07-06');
+    // Halier padne na najväčší základ sadzby — mesačné poplatky.
+    const polozky = normalized.extracted.polozky as Array<Record<string, number>>;
+    expect([polozky[1].sumaDph, polozky[1].sumaSpolu]).toEqual([28.12, 150.37]);
+    expect(polozky.reduce((spolu, item) => spolu + (item.sumaSpolu ?? 0), 0)).toBeCloseTo(130.76, 2);
+    expect(validateNormalizedExtraction(normalized, { ico: '87654321' })
+      .map((issue) => issue.code)).not.toContain('line_items_total_mismatch');
+  });
+
   it('DUZP sa odvodí z dátumu vystavenia, keď na faktúre chýba (neblokuje)', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'Geschwandtner GmbH', icDph: 'ATU12345678' },

@@ -210,6 +210,53 @@ function rozpisZPoloziek(
 }
 
 /**
+ * Halier, ktorý vzniká delením. Dodávateľ počíta daň RAZ z celého základu
+ * sadzby, my ju máme po riadkoch — a súčet zaokrúhlených riadkov sa s ňou
+ * rozíde. O2 fakturuje deväť riadkov 23 %: ich dane dajú 21,72, kým na doklade
+ * je 21,74, lebo 94,52 × 23 % sa počítalo naraz. Doklad sa potom nedá schváliť
+ * („zosúladiť sumy položiek s celkovou sumou") a účtovník nemá čo opraviť —
+ * chyba nie je v žiadnom riadku, je v tom, že sa zaokrúhľovalo deväťkrát.
+ *
+ * Rozdiel dostane riadok s najväčším základom tej sadzby: tam je halier
+ * relatívne najmenší. Robí sa to LEN pri zaokrúhľovacom rozdiele, najviac
+ * cent na riadok — väčšia odchýlka nie je zaokrúhlenie, ale zle prečítaný
+ * doklad, a ten má ostať zablokovaný.
+ */
+function zosuladDanPoloziek(
+  polozky: Array<Record<string, unknown>>,
+  rozpisDph: Array<{ sadzba: number; zaklad: number; dph: number }>,
+): Array<Record<string, unknown>> {
+  if (polozky.length === 0 || rozpisDph.length === 0) return polozky;
+  const opravene = new Map<number, number>();
+  for (const riadok of rozpisDph) {
+    const indexy = polozky.flatMap((polozka, index) => (polozka.sadzbaDph === riadok.sadzba
+      && typeof polozka.sumaDph === 'number' && typeof polozka.sumaBezDph === 'number'
+      ? [index] : []));
+    if (indexy.length === 0) continue;
+    const sucet = round2(indexy.reduce((spolu, index) => spolu + (polozky[index].sumaDph as number), 0));
+    const rozdiel = round2(riadok.dph - sucet);
+    if (rozdiel === 0 || Math.abs(rozdiel) > 0.01 * indexy.length) continue;
+    const kam = indexy.reduce((najvacsi, index) =>
+      Math.abs(polozky[index].sumaBezDph as number) > Math.abs(polozky[najvacsi].sumaBezDph as number)
+        ? index : najvacsi);
+    opravene.set(kam, rozdiel);
+  }
+  if (opravene.size === 0) return polozky;
+  return polozky.map((polozka, index) => {
+    const rozdiel = opravene.get(index);
+    if (rozdiel === undefined) return polozka;
+    const dph = round2((polozka.sumaDph as number) + rozdiel);
+    return {
+      ...polozka,
+      sumaDph: dph,
+      // Suma s daňou sa prepočíta, nie posunie: riadok musí ostať konzistentný
+      // sám v sebe, inak spadne invalid_line_item_total.
+      sumaSpolu: round2((polozka.sumaBezDph as number) + dph),
+    };
+  });
+}
+
+/**
  * Doklad s cudzou daňou ide do účtovníctva ako JEDNA nezdaniteľná suma.
  * Rakúskych 20 % nie je DPH, ktorú by šlo odpočítať alebo vykázať — rozpis na
  * základ a daň nemá čo znamenať, POHODA preň nemá sadzbu a celá suma jej aj tak
@@ -341,7 +388,11 @@ export function normalizeExtractionResult(
   // Cudzia daň sa nerozpisuje na základ a DPH — celá suma je nezdaniteľná.
   const sumy = jeCudziDodavatel(dodavatel)
     ? bezCudzejDane(polozky, rozpisPrepocitany)
-    : { polozky, rozpisDph: rozpisPrepocitany, cudziaDan: undefined };
+    : {
+      polozky: zosuladDanPoloziek(polozky, rozpisPrepocitany),
+      rozpisDph: rozpisPrepocitany,
+      cudziaDan: undefined,
+    };
 
   return {
     // INY sem dorazí len pri opakovanej extrakcii už existujúceho dokladu —
