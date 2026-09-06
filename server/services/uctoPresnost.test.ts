@@ -150,3 +150,55 @@ describe('deliaci dátum', () => {
     expect(Object.keys(vysledok.vysledok)).toContain('FP');
   }, 90_000);
 });
+
+// Druhé ostré meranie ALPINY malo rozpísaných dokladov nula, hoci za deliacim
+// dátumom ich je 166 v OZ a 169 v INT. Príčina: staršie importy niesli len
+// hlavičku a riadok_index majú prázdny, takže pri predvolenom NULLS LAST prišla
+// taká hlavička AŽ ZA položkami toho istého dokladu — a prepísala ich.
+describe('skladanie dokladu z korpusu', () => {
+  it('stará hlavička bez indexu neprepíše položky', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const hlavna = randomUUID();
+    const iny = randomUUID();
+    for (const [id, code] of [[hlavna, '518/321'], [iny, '501/321']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
+        [id, ...kde, code],
+      );
+    }
+    const riadok = async (index: number | null, text: string, predkontacia: string) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,predkontacia_id,riadok_index,suma,source,riadok_hash)
+       VALUES ($1,$2,$3,'FP','26FP500','2026-08-10','dodavatel',$4,$5,$6,50,'mdb',$7)`,
+      [randomUUID(), ...kde, text, predkontacia, index, randomUUID()],
+    );
+    await riadok(0, 'nová hlavička', hlavna);
+    await riadok(1, 'tovar', hlavna);
+    await riadok(2, 'rozúčtovaná časť', iny);
+    // Stará hlavička z .mdb importu — bez indexu.
+    await riadok(null, 'stará hlavička', hlavna);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: hlavna, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Tovar',
+      })),
+    };
+    const vysledok = await zmerajPresnost(
+      database, testConfig(), { tenantId: seeded.tenantId, organizationId: seeded.organizationId },
+      { deliciDatum: '2026-08-01', vzorka: 5 }, parser as never,
+    );
+
+    // Doklad je rozpísaný a obe položky sa k modelu dostali.
+    expect(vysledok.vysledok.FP).toMatchObject({ dokladov: 1, rozpisanych: 1 });
+    const prompt = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(prompt.dokument.polozky.map((polozka: any) => polozka.popis))
+      .toEqual(['tovar', 'rozúčtovaná časť']);
+  }, 90_000);
+});

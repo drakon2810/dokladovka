@@ -87,7 +87,11 @@ async function nacitajDoklady(
             supplier_ico, supplier_name_normalized, predkontacia_id, clenenie_dph_id, clenenie_kv_kod
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND doklad_cislo IS NOT NULL AND datum >= $3::date
-      ORDER BY datum, doklad_cislo, riadok_index`,
+      -- NULLS FIRST je nutnosť, nie kozmetika: staršie importy niesli len
+      -- hlavičku a riadok_index majú prázdny. Pri predvolenom NULLS LAST prišla
+      -- taká hlavička AŽ ZA položkami toho istého dokladu a prepísala ich —
+      -- doklad potom vyzeral ako nerozpísaný a model dostal len text hlavičky.
+      ORDER BY datum, doklad_cislo, riadok_index NULLS FIRST`,
     [input.tenantId, input.organizationId, deliciDatum],
   )).rows;
 
@@ -219,6 +223,12 @@ export async function zmerajPresnost(
   )).rows[0]?.d;
   if (!deliciDatum) throw new HttpError(409, 'not_enough_data', 'V korpuse nie sú doklady s dátumom.');
 
+  // Kódy pre čitateľný zoznam rozdielov — účtovník číta kódy, nie id.
+  const kod = new Map((await database.query<{ id: string; code: string } & Record<string, unknown>>(
+    'SELECT id, code FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2',
+    [input.tenantId, input.organizationId],
+  )).rows.map((row) => [row.id, row.code.trim()]));
+
   const vsetky = await nacitajDoklady(database, input, deliciDatum);
   if (vsetky.length === 0) {
     throw new HttpError(409, 'not_enough_data', 'Za meraným obdobím nie sú doklady so zaúčtovaním.');
@@ -282,8 +292,17 @@ export async function zmerajPresnost(
       rozdiely.push({
         doklad: doklad.dokladCislo, agenda: doklad.agenda, datum: doklad.datum,
         dodavatel: doklad.supplierName,
-        skutocne: { predkontaciaId: doklad.predkontaciaId, clenenieDphId: doklad.clenenieDphId, kv: doklad.clenenieKvKod },
-        navrh: { predkontaciaId: navrh?.predkontacia_id, clenenieDphId: navrh?.clenenie_dph_id, kv: navrh?.clenenie_kv_kod },
+        // Kódy, nie id — rozdiely má čítať účtovník, nie databáza.
+        skutocne: {
+          predkontacia: kod.get(doklad.predkontaciaId ?? '') ?? null,
+          clenenieDph: kod.get(doklad.clenenieDphId ?? '') ?? null,
+          kv: doklad.clenenieKvKod ?? null,
+        },
+        navrh: {
+          predkontacia: kod.get(navrh?.predkontacia_id ?? '') ?? null,
+          clenenieDph: kod.get(navrh?.clenenie_dph_id ?? '') ?? null,
+          kv: navrh?.clenenie_kv_kod ?? null,
+        },
         rozpisany: doklad.rozpisany,
       });
     }
