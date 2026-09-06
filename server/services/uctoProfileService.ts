@@ -9,6 +9,7 @@ import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSugge
 import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
 import { prepocitajPravidla } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
+import { overPravnuStranku } from './uctoPravnaKontrola.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -299,6 +300,14 @@ export async function analyzujUctovnyProfil(
   // Kategória hovorí o DRUHU plnenia, takže jej rozpis platí aj pre dodávateľa,
   // ktorého firma nikdy nemala — to pravidlo protistrany nedokáže.
   const kategoriaRozpis = await doplnRozpisKategorii(database, input);
+  // Právna kontrola dvojice členenie + sekcia KV. Zlyhanie ju nesmie zhodiť —
+  // profil je hotový a poznámka je navyše, nie podmienka.
+  let pravna = { overenych: 0, sporne: 0 };
+  try {
+    pravna = await overPravnuStranku(database, config, input);
+  } catch (chyba) {
+    console.warn('[ucto-profil] právna kontrola zlyhala:', chyba instanceof Error ? chyba.message : chyba);
+  }
 
   return {
     kategorii: kategorie.size,

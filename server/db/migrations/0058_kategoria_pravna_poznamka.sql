@@ -1,0 +1,11 @@
+-- Poznámka právnej kontroly ku kategórii plnenia.
+--
+-- Model sa na zákon vie spýtať aj pri doklade, ale robí to zakaždým znova, na
+-- jeden konkrétny prípad a bez stopy. Dvojica „členenie DPH + sekcia KV" sa
+-- pritom v jednej firme opakuje stovky ráz — keď je zlá, je zlá systematicky.
+-- Overuje sa preto raz pri analýze profilu a poznámka ostáva napísaná tam, kde
+-- sa účtovník rozhoduje.
+--
+-- Kontroluje sa LEN dvojica kódov. Účet je vecou firmy; sekcia KV je vecou
+-- zákona (§ 78a), a práve tam sa dá overiť bez toho, aby model videl doklad.
+ALTER TABLE ucto_kategorie ADD COLUMN pravna_poznamka text;
