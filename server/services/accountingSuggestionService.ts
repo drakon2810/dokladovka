@@ -1907,6 +1907,19 @@ export async function maybeAiAccountingSuggestion(
     }];
   });
 
+  // Model rozpis opísal v dôvode, ale do poľa ho nedal — alebo dal a overenie
+  // ho zahodilo celé. Z uloženého návrhu sa to nerozozná, tak nech to povie log.
+  const vratenych = parsed.riadky?.length ?? 0;
+  if (vratenych > 0 && riadky.length === 0) {
+    console.warn(`[ai-navrh] ${input.documentId}: model vrátil ${vratenych} riadkov rozpisu a všetky vypadli`,
+      (parsed.riadky ?? []).map((riadok) => ({
+        index: riadok.index,
+        polozkaExistuje: Boolean(polozkyPreModel[riadok.index]),
+        predkontaciaVPonuke: vPonukePredkontacii.has(riadok.predkontaciaId),
+        podiel: riadok.podiel,
+      })));
+  }
+
   await database.query(
     `INSERT INTO accounting_suggestions
       (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,
