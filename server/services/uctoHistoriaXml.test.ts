@@ -33,17 +33,30 @@ describe('doklady s položkami z POHODY', () => {
       agenda: 'FP', supplierIco: '54085292', supplierName: 'Print-Office s.r.o.', datum: '2026-07-16',
     });
 
-    // DF260181 Up Déjeuner: rozúčtovanie PHM na 80/20. „Nafta" sa nedelí vôbec
-    // a daňová časť má to isté zaúčtovanie ako hlavička — do korpusu ide len
-    // nedaňová časť, teda to jediné, čo je rozhodnutím účtovníka.
+    // DF260181 Up Déjeuner: rozúčtovanie PHM na 80/20. Doklad je rozúčtovaný,
+    // takže sa berú VŠETKY jeho položky — pomer sa číta z dvojice a daňová časť
+    // 80 % drží hlavičkové zaúčtovanie, takže by inak vypadla a v korpuse by
+    // ostalo len osamotené „13,17 nedaňové", z ktorého pomer nikto nevyčíta.
     const phm = rows.filter((row) => row.dokladCislo === 'DF260181');
     expect(phm.map((row) => [row.riadokIndex, row.lineText, row.predkontaciaKod, row.clenenieDphKod]))
       .toEqual([
         [0, 'PHM', 'PHM-501200', 'PD'],
+        [1, 'Nafta', 'PHM-501200', 'PD'],
+        [2, 'Natural 95 (daňová časť 80 %)', 'PHM-501200', 'PD'],
         [3, 'Natural 95 (nedaňová časť 20 %)', 'PHM-Nadspotreba', 'PN'],
+        [4, 'PHM', 'PHM-501200', 'PD'],
       ]);
+    // Sumy sú to podstatné: 52,68 a 13,17 dávajú pomer základu 80/20, kým DPH
+    // 7,58 a 7,57 ukazuje, že odpočet je krátený na polovicu (§ 49 ods. 5).
+    // Z podielu základu to nijako nevyplýva a bez súm to model len hádal.
+    expect(phm.slice(2, 4).map((row) => [row.suma, row.sumaDph])).toEqual([
+      [52.68, 7.58],
+      [13.17, 7.57],
+    ]);
+    // Nafta sa nedelí — jedna položka, celá s odpočtom.
+    expect([phm[1].suma, phm[1].sumaDph]).toEqual([100.09, 23.02]);
     // Sekcia KV sa dedí z hlavičky, keď ju položka nemá vlastnú.
-    expect(phm[1].clenenieKvKod).toBe('B2');
+    expect(phm[3].clenenieKvKod).toBe('B2');
   });
 
   it('odmietne súbor, ktorý nie je odpoveďou z POHODY', () => {

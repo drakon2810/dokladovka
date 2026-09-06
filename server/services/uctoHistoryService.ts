@@ -42,6 +42,8 @@ export const historyRowSchema = z.object({
   supplierName: z.string().trim().max(300).optional(),
   lineText: z.string().trim().max(2000),
   suma: z.number().finite().optional(),
+  /** DPH položky. Krátenie odpočtu (PHM 50 %) sa z podielu základu nedá odvodiť. */
+  sumaDph: z.number().finite().optional(),
   sadzbaDph: z.number().finite().optional(),
   predkontaciaKod: z.string().trim().max(100).optional(),
   clenenieDphKod: z.string().trim().max(100).optional(),
@@ -86,6 +88,7 @@ interface ResolvedRow {
   supplierName: string | null;
   lineText: string;
   suma: number | null;
+  sumaDph: number | null;
   sadzbaDph: number | null;
   predkontaciaKod: string | null;
   predkontaciaId: string | null;
@@ -161,6 +164,7 @@ export async function importUctoHistory(
       supplierName: normalizeName(row.supplierName) || null,
       lineText,
       suma: row.suma ?? null,
+      sumaDph: row.sumaDph ?? null,
       sadzbaDph: row.sadzbaDph ?? null,
       // „BEZ…" nie je účet, ale doklad bez zaúčtovania — do korpusu sa nedostane
       // ani ako kód, inak by z neho analýza spravila kategóriu s účtom BEZ321100.
@@ -186,16 +190,24 @@ export async function importUctoHistory(
     const result = await database.query(
       `INSERT INTO ucto_historia
         (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_ico,supplier_name_normalized,
-         line_text_normalized,suma,sadzba_dph,predkontacia_kod,predkontacia_id,clenenie_dph_kod,
+         line_text_normalized,suma,suma_dph,sadzba_dph,predkontacia_kod,predkontacia_id,clenenie_dph_kod,
          clenenie_dph_id,clenenie_kv_kod,stredisko_kod,stredisko_id,source,riadok_hash)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-       ON CONFLICT (organization_id, riadok_hash) DO NOTHING`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       -- Prepis, nie DO NOTHING: korpus je zrkadlo POHODY a import, ktorý
+       -- prinesie viac (sumy pribudli neskôr), musí riadok doplniť. xmax=0
+       -- rozlíši skutočný vklad od prepisu, inak by boli duplicity vždy nula.
+       ON CONFLICT (organization_id, riadok_hash) DO UPDATE SET
+         suma=excluded.suma, suma_dph=excluded.suma_dph, sadzba_dph=excluded.sadzba_dph,
+         predkontacia_kod=excluded.predkontacia_kod, predkontacia_id=excluded.predkontacia_id,
+         clenenie_dph_kod=excluded.clenenie_dph_kod, clenenie_dph_id=excluded.clenenie_dph_id,
+         clenenie_kv_kod=excluded.clenenie_kv_kod
+       RETURNING (xmax = 0) AS vlozeny`,
       [randomUUID(), tenantId, organizationId, row.agenda, row.dokladCislo, row.datum,
-        row.supplierIco, row.supplierName, row.lineText, row.suma, row.sadzbaDph,
+        row.supplierIco, row.supplierName, row.lineText, row.suma, row.sumaDph, row.sadzbaDph,
         row.predkontaciaKod, row.predkontaciaId, row.clenenieDphKod, row.clenenieDphId,
         row.clenenieKvKod, row.strediskoKod, row.strediskoId, input.source, row.hash],
     );
-    if (result.rowCount > 0) imported += 1;
+    if ((result.rows[0] as { vlozeny?: boolean } | undefined)?.vlozeny) imported += 1;
   }
   return { imported, duplicates: resolved.length - imported, bezKodu };
 }
@@ -261,6 +273,7 @@ export async function backfillHistoryFromDecisions(
       supplierName: row.supplier_name_normalized ?? null,
       lineText: row.line_text_normalized,
       suma: null,
+      sumaDph: null,
       sadzbaDph: null,
       predkontaciaKod: jeBezPredkontacia(row.predkontacia_kod) ? null : row.predkontacia_kod ?? null,
       predkontaciaId: jeBezPredkontacia(row.predkontacia_kod) ? null : row.predkontacia_id ?? null,

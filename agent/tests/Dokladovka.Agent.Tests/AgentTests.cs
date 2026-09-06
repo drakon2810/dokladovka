@@ -1047,17 +1047,20 @@ public sealed class DocumentFolderTests
             </rsp:responsePack>
             """;
         var rows = PohodaXml.ParseHistoryRows(response).Rows;
-        // Hlavička + jediná položka, ktorá sa účtuje INAK. „Nafta" nemá vlastné
-        // zaúčtovanie a daňová časť má to isté ako hlavička — obe by korpus len
-        // zopakovali.
-        Assert.Equal(2, rows.Count);
+        // Doklad je rozúčtovaný, takže sa berú VŠETKY jeho položky — hlavička,
+        // nafta, daňová aj nedaňová časť. Daňová časť drží hlavičkové
+        // zaúčtovanie a sama o sebe by do korpusu nepatrila, lenže bez nej
+        // ostane len osamotené „13,17 nedaňové" a pomer z toho nikto nevyčíta.
+        Assert.Equal(4, rows.Count);
         Assert.Equal(new PohodaXml.HistoryRow(
             "FP", "DF260181", "2026-07-31", "53528654", "Up Déjeuner, s. r. o.",
             "PHM", "PHM-501200", "PD", "B2", 0), rows[0]);
         // Sekcia KV sa dedí z hlavičky, keď ju položka nemá vlastnú.
         Assert.Equal(new PohodaXml.HistoryRow(
             "FP", "DF260181", "2026-07-31", "53528654", "Up Déjeuner, s. r. o.",
-            "Natural 95 (nedaňová časť 20 %)", "PHM-Nadspotreba", "PN", "B2", 3), rows[1]);
+            "Natural 95 (nedaňová časť 20 %)", "PHM-Nadspotreba", "PN", "B2", 3, 13.17m), rows[3]);
+        // Pomer základu 80/20 je čitateľný až z dvojice: 52,68 a 13,17.
+        Assert.Equal(new decimal?[] { 52.68m, 13.17m }, rows.Skip(2).Select(row => row.Suma).ToArray());
     }
     // Denník sa dovtedy sťahoval iba ručne. Request je jediné, čo agent pre
     // neho skladá — odpoveď rozoberá server —, takže schéma je jediná kontrola,
@@ -1122,11 +1125,11 @@ public sealed class DocumentFolderTests
         Assert.Equal(3, rows.Count);
         Assert.Equal(new PohodaXml.HistoryRow(
             "FP", "DF260169", "2026-07-16", "54085292", "Print-Office s.r.o.",
-            "spese di rappres./repre", "kancelár.potreby", "PD", "B2", 1), rows[1]);
+            "spese di rappres./repre", "kancelár.potreby", "PD", "B2", 1, 49.70m), rows[1]);
         // Tá istá predkontácia ako hlavička, ale mimo priznania aj mimo výkazu.
         Assert.Equal(new PohodaXml.HistoryRow(
             "FP", "DF260169", "2026-07-16", "54085292", "Print-Office s.r.o.",
-            "spese di rappres./repre", "repre", "PN", "KN", 2), rows[2]);
+            "spese di rappres./repre", "repre", "PN", "KN", 2, 165.44m), rows[2]);
     }
     // TEN ISTÝ súbor číta aj server (uctoHistoriaXml.test.ts). Formát majú
     // zatiaľ dva parsery — agent v C# a server v TypeScripte pre ručnú cestu —
@@ -1163,9 +1166,16 @@ public sealed class DocumentFolderTests
             new[]
             {
                 "0|PHM|PHM-501200|PD",
+                "1|Nafta|PHM-501200|PD",
+                "2|Natural 95 (daňová časť 80 %)|PHM-501200|PD",
                 "3|Natural 95 (nedaňová časť 20 %)|PHM-Nadspotreba|PN",
+                "4|PHM|PHM-501200|PD",
             },
             phm.Select(row => $"{row.RiadokIndex}|{row.LineText}|{row.PredkontaciaKod}|{row.ClenenieDphKod}").ToArray());
-        Assert.Equal("B2", phm[1].ClenenieKvKod);
+        Assert.Equal("B2", phm[3].ClenenieKvKod);
+        // Sumy su to podstatne: 52,68 a 13,17 dava pomer zakladu 80/20, kym DPH
+        // 7,58 a 7,57 ukazuje kratenie odpoctu na polovicu (§ 49 ods. 5).
+        Assert.Equal(new decimal?[] { 52.68m, 13.17m }, phm.Skip(2).Take(2).Select(row => row.Suma).ToArray());
+        Assert.Equal(new decimal?[] { 7.58m, 7.57m }, phm.Skip(2).Take(2).Select(row => row.SumaDph).ToArray());
     }
 }

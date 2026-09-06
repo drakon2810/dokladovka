@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+﻿using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -188,7 +189,11 @@ public static class PohodaXml
         /// <summary>0 = hlavička dokladu, 1..n jeho položky. Ide do odtlačku
         /// riadka na serveri; bez neho by položka dostala poradie podľa pozície
         /// v dávke a pri prvom doklade by kolidovala s vlastnou hlavičkou.</summary>
-        int? RiadokIndex = null);
+        int? RiadokIndex = null,
+        /// <summary>Základ a DPH položky. Bez nich sa pomer rozúčtovania nedá
+        /// prečítať a krátenie odpočtu (PHM 50 %) z podielu základu nevyplýva.</summary>
+        decimal? Suma = null,
+        decimal? SumaDph = null);
 
     /// <summary>
     /// Číselný rad prečítaný z DOKLADU, nie z číselníka. POHODA rad, ktorý nemá
@@ -306,12 +311,24 @@ public static class PohodaXml
             // ponytail: keby textová zhoda potrebovala aj bežné položky
             //   („Nafta" sedí na doklad lepšie než hlavičkové „PHM"), pustiť
             //   sem všetky — korpus tým ale narastie rádovo.
+            // Keď je doklad rozúčtovaný, berú sa VŠETKY jeho položky — aj tie,
+            // ktoré zaúčtovanie dedia. Pomer sa totiž číta z DVOJICE: „Natural
+            // 95 (daňová časť 80 %)" za 52,68 drží hlavičkové zaúčtovanie
+            // a inak by v korpuse ostalo len osamotené „13,17 nedaňové",
+            // z ktorého pomer nikto nevyčíta.
+            var rozuctovany = DetailItems(element, headerName).Any(dvojica =>
+            {
+                var itemPredkontacia = RefIds(dvojica.Item, "accounting");
+                var itemClenenie = RefIds(dvojica.Item, "classificationVAT");
+                return (itemPredkontacia is not null || itemClenenie is not null)
+                    && !(itemPredkontacia == predkontacia && itemClenenie == clenenieDph);
+            });
             foreach (var (item, poradie) in DetailItems(element, headerName))
             {
                 var itemPredkontacia = RefIds(item, "accounting");
                 var itemClenenie = RefIds(item, "classificationVAT");
-                if (itemPredkontacia is null && itemClenenie is null) continue;
-                if (itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
+                if (!rozuctovany && itemPredkontacia is null && itemClenenie is null) continue;
+                if (!rozuctovany && itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
                 // Text položky smie chýbať. Na reálnom exporte ALPINY je bez textu
                 // 18 zo 68 rozúčtovaných položiek — a sú medzi nimi tie
                 // najvýrečnejšie: faktúra Print-Office má prázdny text presne na
@@ -322,12 +339,16 @@ public static class PohodaXml
                 var itemText = Trimmed(item.Elements()
                     .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value)
                     ?? lineText;
+                var ceny = item.Elements()
+                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "homeCurrency");
                 rows.Add(new HistoryRow(
                     agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, itemText,
                     itemPredkontacia ?? predkontacia, itemClenenie ?? clenenieDph,
                     ZakladnaKvSekcia(RefIds(item, "classificationKVDPH"))
                         ?? ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")),
-                    poradie));
+                    poradie,
+                    Suma: Ciastka(ceny, "price"),
+                    SumaDph: Ciastka(ceny, "priceVAT")));
             }
         }
 
@@ -588,6 +609,14 @@ public static class PohodaXml
     // Kód referencie (typ:ids) priamo pod daným elementom — hlavičkou aj položkou.
     // Pozerá len na priamych potomkov, takže z hlavičky nikdy nevytiahne
     // zaúčtovanie položky (invoiceDetail je súrodenec hlavičky, nie jej dieťa).
+    /// <summary>Suma z typ:typeCurrencyHomeItem — POHODA ju píše bodkou, nie čiarkou.</summary>
+    private static decimal? Ciastka(XElement? ceny, string localName)
+    {
+        var hodnota = ceny is null ? null : Trimmed(ceny.Elements()
+            .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == localName)?.Value);
+        return decimal.TryParse(hodnota, NumberStyles.Number, CultureInfo.InvariantCulture, out var suma) ? suma : null;
+    }
+
     private static string? RefIds(XElement header, string localName)
     {
         var element = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == localName);

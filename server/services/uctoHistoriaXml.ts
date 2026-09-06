@@ -131,21 +131,40 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
     // na hlavičke. Text smie chýbať: na reálnom exporte ALPINY je bez textu 18
     // zo 68 rozúčtovaných položiek a je medzi nimi práve riadok „repre / PN /
     // KN". Vtedy sa berie text hlavičky, ktorý účtovník pri položke aj tak vidí.
+    // Keď je doklad rozúčtovaný, berú sa VŠETKY jeho položky — aj tie, ktoré
+    // zaúčtovanie dedia. Rozúčtovanie sa totiž číta z DVOJICE: „Natural 95
+    // (daňová časť 80 %)" za 52,68 drží hlavičkové zaúčtovanie a do korpusu by
+    // nepadla, takže by v ňom ostala len nedaňová časť za 13,17 a pomer by
+    // z nej nikto nevyčítal. Pri nerozúčtovanom doklade sa nič nepridáva.
+    const polozky = asArray(doklad[mena.detail]?.[mena.item])
+      .filter((polozka: unknown): polozka is Record<string, unknown> => Boolean(polozka) && typeof polozka === 'object');
+    const rozuctovany = polozky.some((polozka) => {
+      const itemPredkontacia = refIds(polozka.accounting);
+      const itemClenenie = refIds(polozka.classificationVAT);
+      return (itemPredkontacia || itemClenenie)
+        && !(itemPredkontacia === predkontacia && itemClenenie === clenenieDph);
+    });
     let poradie = 0;
-    for (const polozka of asArray(doklad[mena.detail]?.[mena.item])) {
+    for (const polozka of polozky) {
       poradie += 1;
-      if (!polozka || typeof polozka !== 'object') continue;
-      const itemPredkontacia = refIds((polozka as any).accounting);
-      const itemClenenie = refIds((polozka as any).classificationVAT);
-      if (!itemPredkontacia && !itemClenenie) continue;
-      if (itemPredkontacia === predkontacia && itemClenenie === clenenieDph) continue;
+      const itemPredkontacia = refIds(polozka.accounting);
+      const itemClenenie = refIds(polozka.classificationVAT);
+      if (!rozuctovany && !itemPredkontacia && !itemClenenie) continue;
+      if (!rozuctovany && itemPredkontacia === predkontacia && itemClenenie === clenenieDph) continue;
+      const ceny = polozka.homeCurrency as Record<string, unknown> | undefined;
+      const suma = Number(text(ceny?.price) ?? Number.NaN);
+      const sumaDph = Number(text(ceny?.priceVAT) ?? Number.NaN);
       rows.push({
         ...spolocne,
-        lineText: text((polozka as any).text) ?? lineText,
+        lineText: text(polozka.text) ?? lineText,
         riadokIndex: poradie,
+        // Bez súm sa pomer rozúčtovania nedá prečítať a krátenie dane (PHM 50 %)
+        // z podielu základu vôbec nevyplýva.
+        ...(Number.isFinite(suma) ? { suma } : {}),
+        ...(Number.isFinite(sumaDph) ? { sumaDph } : {}),
         predkontaciaKod: itemPredkontacia ?? predkontacia,
         clenenieDphKod: itemClenenie ?? clenenieDph,
-        clenenieKvKod: platnyKvKod(refIds((polozka as any).classificationKVDPH)) ?? kvHlavicky,
+        clenenieKvKod: platnyKvKod(refIds(polozka.classificationKVDPH)) ?? kvHlavicky,
       });
     }
   }

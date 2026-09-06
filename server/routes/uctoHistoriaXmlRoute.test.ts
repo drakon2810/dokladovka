@@ -42,8 +42,9 @@ describe('nahratie dokladov s položkami', () => {
       payload: { xml },
     });
     expect(nahrate.statusCode, nahrate.body.slice(0, 200)).toBe(200);
-    // Dva doklady, štyri + dva riadky. Opakovania sú duplicity, nie nové riadky.
-    expect(nahrate.json().imported).toBe(6);
+    // Dva rozúčtované doklady, takže všetky ich položky: hlavička + tri (repre)
+    // a hlavička + štyri (PHM). Opakovania sú duplicity, nie nové riadky.
+    expect(nahrate.json().imported).toBe(9);
 
     const korpus = await database.query<{ line_text_normalized: string; predkontacia_kod: string; clenenie_dph_kod: string } & Record<string, unknown>>(
       `SELECT line_text_normalized, predkontacia_kod, clenenie_dph_kod FROM ucto_historia

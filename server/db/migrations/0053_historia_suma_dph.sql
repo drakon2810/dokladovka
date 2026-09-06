@@ -1,0 +1,13 @@
+-- Korpus histórie drží aj DPH položky, nielen základ.
+--
+-- Bez nej sa nedá prečítať, ako sa doklad rozúčtoval. Faktúra Up Déjeuner má
+-- „Natural 95 (daňová časť 80 %)" za 52,68 a „(nedaňová časť 20 %)" za 13,17 —
+-- z toho vidno pomer základu. Lenže DPH sa pri PHM pre auto používané aj
+-- súkromne delí POLOVICOU (§ 49 ods. 5), teda 7,58 a 7,57, a to z podielu
+-- základu nijako nevyplýva.
+--
+-- Model dostal texty a kódy bez súm, prečítal si z textu „20 % nedaňové"
+-- a použil ten pomer aj na daň — rozdelil 15,15 na 12,12 a 3,03. Pomer aj
+-- krátenie dane sú pritom v pôvodných dokladoch zapísané číslami; stačí ich
+-- doniesť.
+ALTER TABLE ucto_historia ADD COLUMN suma_dph numeric(18,2);
