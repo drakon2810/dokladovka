@@ -260,7 +260,7 @@ export async function zmerajPresnost(
           supplierIco: doklad.supplierIco, supplierName: doklad.supplierName,
         }, context, injectedParser);
         navrh = (await database.query<Record<string, any>>(
-          'SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, riadky FROM accounting_suggestions WHERE document_id=$1',
+          'SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, riadky, reason FROM accounting_suggestions WHERE document_id=$1',
           [documentId],
         )).rows[0];
       });
@@ -288,6 +288,17 @@ export async function zmerajPresnost(
     if (sedi.rad) skore.rad += 1;
     if (doklad.rozpisany && sedi.rozpis) skore.rozpis += 1;
 
+    // Doklad, ktorý účtovník rozpísal a model nie, ide do rozdielov aj vtedy,
+    // keď hlavička sedí — aj s odôvodnením modelu. Bez neho zostáva len holé
+    // „rozpis 0 zo 16" a príčinu treba hádať; model ju pritom povie sám.
+    if (doklad.rozpisany && !sedi.rozpis) {
+      rozdiely.push({
+        doklad: doklad.dokladCislo, agenda: doklad.agenda, datum: doklad.datum,
+        dodavatel: doklad.supplierName, chybaRozpis: true,
+        polozky: doklad.polozky.map((polozka) => polozka.popis).slice(0, 8),
+        dovod: navrh?.reason ?? null,
+      });
+    }
     if (!sedi.predkontacia || !sedi.clenenieDph || !sedi.kv) {
       rozdiely.push({
         doklad: doklad.dokladCislo, agenda: doklad.agenda, datum: doklad.datum,

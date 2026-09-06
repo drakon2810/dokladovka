@@ -1477,7 +1477,12 @@ export async function maybeAiAccountingSuggestion(
       // Predkontácie účtov rozpadu musia v ponuke ostať, inak by model dostal
       // pokyn rozdeliť doklad a nemal by na čo — textová podobnosť ich nenájde,
       // reprezentácia sa v popise položky spravidla nespomína.
-      ...rozdelenieUcty.flatMap((polozka) => polozka.predkontacie.map((item) => item.id))],
+      ...rozdelenieUcty.flatMap((polozka) => polozka.predkontacie.map((item) => item.id)),
+      // A rovnako predkontácie z rozúčtovania protistrany. V praxi ich ponuke
+      // dodá už denník tej istej protistrany, takže to nič neopravuje — ale
+      // závisieť na tom je krehké: dôkaz a ponuka majú sedieť z definície, nie
+      // náhodou.
+      ...rozuctovanie.map((riadok) => riadok.predkontaciaId as string | undefined)],
   );
 
   // DPH profil klienta: pokyny idú do promptu ako dáta a pre organizáciu bez

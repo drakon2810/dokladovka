@@ -1894,6 +1894,16 @@ describe('rozúčtovanie protistrany ide do promptu aj bez denníka', () => {
     await riadok(1, 'dialničná známka', 166.67, 0, POPLATOK);
     await riadok(2, 'dph', 33.33, 0, NEDANOVE);
 
+    // Ponuka sa zužuje až nad 25 predkontáciami — bez výplne by test meral
+    // stav, ktorý v žiadnej reálnej firme nenastane (ALPINA ich má 1141).
+    for (let poradie = 0; poradie < 40; poradie += 1) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
+        [randomUUID(), ...kde, `vypln-${poradie}`],
+      );
+    }
+
     const documentId = randomUUID();
     await database.query(
       `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
@@ -1921,6 +1931,9 @@ describe('rozúčtovanie protistrany ide do promptu aj bez denníka', () => {
     // Denník je prázdny, takže „rozdelenie" chýba — a napriek tomu má model
     // v ruke, ako sa doklady tejto protistrany rozpisujú.
     expect(prompt.rozdelenie).toBeUndefined();
+    // Dôkaz a ponuka musia sedieť: kód, ktorý model vidí v rozúčtovaní, musí
+    // mať aj na výber. Inak ho nemôže vrátiť — a keby vrátil, overenie ho zahodí.
+    expect(prompt.ciselniky.predkontacie.map((item: any) => item.id)).toContain(nedanove);
     expect(prompt.rozuctovanie).toEqual([
       { doklad: '26FP300', riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, predkontaciaKod: '379700-auto popl.', predkontaciaId: poplatok },
       { doklad: '26FP300', riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, predkontaciaKod: '379700-PK-nedaňové', predkontaciaId: nedanove },
