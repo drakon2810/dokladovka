@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { overPravnuStranku } from './uctoPravnaKontrola.js';
+import { listUctoKategorie } from './uctoProfileService.js';
 
 // Kontroluje sa DVOJICA kódov, nie zaúčtovanie: účet je vecou firmy, sekcia KV
 // je vecou zákona (§ 78a). Poznámka sa píše na kategórie, ktoré tú dvojicu
@@ -45,12 +46,12 @@ describe('právna kontrola profilu', () => {
     );
     expect(vysledok).toEqual({ overenych: 2, sporne: 1 });
 
-    const kategorie = await database.query<Record<string, any>>(
-      'SELECT nazov, pravna_poznamka FROM ucto_kategorie WHERE organization_id=$1 ORDER BY nazov',
-      [seeded.organizationId],
-    );
-    expect(kategorie.rows[0]).toMatchObject({ nazov: 'Preprava', pravna_poznamka: null });
-    expect(kategorie.rows[1].pravna_poznamka).toContain('KN');
+    // Čítané cez listUctoKategorie, nie priamo zo SQL: poznámka, ktorá sa
+    // nedostane na obrazovku účtovníka, je zbytočná.
+    const kategorie = (await listUctoKategorie(database, seeded.tenantId, seeded.organizationId))
+      .sort((a, b) => a.nazov.localeCompare(b.nazov));
+    expect(kategorie[0]).toMatchObject({ nazov: 'Preprava', pravnaPoznamka: undefined });
+    expect(kategorie[1].pravnaPoznamka).toContain('KN');
 
     // Bez nástroja na web sa volanie zopakuje bez neho, nie zahodí.
     expect((parser.create.mock.calls[0][0] as any).tools).toEqual([{ type: 'web_search' }]);

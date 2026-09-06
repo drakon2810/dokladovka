@@ -3049,6 +3049,16 @@ export interface UctoKategoria {
   agendy: string[];
   pocet: number;
   konflikt?: string;
+  /** Tvar rozúčtovania odvodený z položiek — prázdny, keď sa plnenie nedelí. */
+  rozpis?: Array<{
+    text: string;
+    predkontaciaKod?: string;
+    clenenieDphKod?: string;
+    clenenieKvKod?: string;
+    podiel?: number;
+  }>;
+  /** Výhrada právnej kontroly k dvojici členenie DPH + sekcia KV. */
+  pravnaPoznamka?: string;
 }
 
 /**

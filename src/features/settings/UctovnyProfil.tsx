@@ -87,12 +87,18 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       // účtovník má dôvod pustiť analýzu znova.
       // Sebakontrola patrí do tej istej správy: účtovník má po analýze vedieť
       // nielen koľko kategórií vzniklo, ale či to niečo zlepšilo.
-      const presnost = vysledok.presnost
-        ? ` · ${t('uctoProfil.analyzaPresnost')}: ${vysledok.presnost.vzorka}`
+      const skore = Object.values(vysledok.presnost?.vysledok ?? {})
+        .reduce((sucet, agenda) => ({
+          dokladov: sucet.dokladov + agenda.dokladov,
+          predkontacia: sucet.predkontacia + agenda.predkontacia,
+        }), { dokladov: 0, predkontacia: 0 });
+      const presnost = skore.dokladov > 0
+        ? ` · ${t('uctoProfil.analyzaPresnost')}: ${Math.round((skore.predkontacia / skore.dokladov) * 100)} %`
+          + ` (${skore.dokladov})`
         : '';
-      showToast(vysledok.zlyhanychDavok > 0
+      showToast((vysledok.zlyhanychDavok > 0
         ? `${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`
-        : `${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`);
+        : `${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`) + presnost);
       await obnov();
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
@@ -420,6 +426,27 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
                       {kategoria.konflikt && (
                         <span className="mt-1 block rounded-md bg-amber-50 px-1.5 py-0.5 text-[11.5px] text-amber-800">
                           {kategoria.konflikt}
+                        </span>
+                      )}
+                      {/* Rozpis: doklad sa nedelí len na účty, ale aj v pomere.
+                          Bez toho účtovník nevidí, že kategória sľubuje delenie. */}
+                      {kategoria.rozpis && kategoria.rozpis.length > 0 && (
+                        <span className="mt-1 block text-[11.5px] text-ink-faint">
+                          Rozpis:{' '}
+                          {kategoria.rozpis.map((riadok, index) => (
+                            <span key={index}>
+                              {index > 0 && ' + '}
+                              {riadok.predkontaciaKod ?? '—'}
+                              {riadok.clenenieDphKod && ` / ${riadok.clenenieDphKod}`}
+                              {riadok.clenenieKvKod && ` / KV ${riadok.clenenieKvKod}`}
+                              {riadok.podiel != null && ` · ${Math.round(riadok.podiel * 100)} %`}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                      {kategoria.pravnaPoznamka && (
+                        <span className="mt-1 block rounded-md bg-rose-50 px-1.5 py-0.5 text-[11.5px] text-rose-800">
+                          Právna kontrola: {kategoria.pravnaPoznamka}
                         </span>
                       )}
                     </td>

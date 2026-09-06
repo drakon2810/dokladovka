@@ -7,7 +7,7 @@ import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
-import { prepocitajPravidla } from './uctoPravidlaService.js';
+import { prepocitajPravidla, type PravidloRiadok } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { overPravnuStranku } from './uctoPravnaKontrola.js';
 
@@ -333,6 +333,10 @@ export interface UctoKategoria {
   agendy: string[];
   pocet: number;
   konflikt?: string;
+  /** Tvar rozúčtovania odvodený z položiek dokladov, ktoré do kategórie spadli. */
+  rozpis: PravidloRiadok[];
+  /** Výhrada právnej kontroly k dvojici členenie DPH + sekcia KV. */
+  pravnaPoznamka?: string;
 }
 
 function mapKategoria(row: Record<string, any>): UctoKategoria {
@@ -350,6 +354,8 @@ function mapKategoria(row: Record<string, any>): UctoKategoria {
     agendy: Array.isArray(row.agendy) ? row.agendy : [],
     pocet: Number(row.pocet ?? 0),
     konflikt: row.konflikt ?? undefined,
+    rozpis: Array.isArray(row.rozpis) ? row.rozpis : [],
+    pravnaPoznamka: row.pravna_poznamka ?? undefined,
   };
 }
 
@@ -360,7 +366,7 @@ export async function listUctoKategorie(
 ): Promise<UctoKategoria[]> {
   const result = await database.query<Record<string, any>>(
     `SELECT id, nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
-            clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt
+            clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt, rozpis, pravna_poznamka
        FROM ucto_kategorie
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
       ORDER BY pocet DESC, nazov`,
@@ -446,7 +452,7 @@ export async function updateUctoKategoria(
     `UPDATE ucto_kategorie SET ${polia.join(', ')}, updated_at=now()
       WHERE tenant_id=$1 AND organization_id=$2 AND id=$3 AND active=true
       RETURNING id, nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
-                clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt`,
+                clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, konflikt, rozpis, pravna_poznamka`,
     hodnoty,
   );
   if (result.rows.length === 0) throw new HttpError(404, 'not_found', 'Kategória neexistuje');
