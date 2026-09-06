@@ -771,6 +771,10 @@ export const sk = {
   'trening.nahratDennik': 'Nahrať účtovný denník (XML)',
   'trening.dennikNahraty': 'Účtovný denník nahratý — proviozok:',
   'trening.dennikSPredkontaciou': 'z toho s jednoznačnou predkontáciou',
+  'trening.stiahnutPolozkyRequest': 'Stiahnuť request na doklady s položkami',
+  'trening.nahratPolozky': 'Nahrať doklady s položkami (XML)',
+  'trening.polozkyNahrate': 'Doklady s položkami nahraté — dokladov:',
+  'trening.polozkyRiadkov': 'nových riadkov korpusu',
   'trening.navrhy': 'Návrhy pravidiel od AI',
   'trening.navrhyPopis':
     'AI našla v pamäti opakujúce sa vzory. Zaškrtnite pravidlá, ktoré majú platiť — navrhovať začnú až po potvrdení.',

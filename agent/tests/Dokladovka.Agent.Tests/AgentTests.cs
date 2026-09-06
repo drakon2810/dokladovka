@@ -1128,4 +1128,44 @@ public sealed class DocumentFolderTests
             "FP", "DF260169", "2026-07-16", "54085292", "Print-Office s.r.o.",
             "spese di rappres./repre", "repre", "PN", "KN", 2), rows[2]);
     }
+    // TEN ISTÝ súbor číta aj server (uctoHistoriaXml.test.ts). Formát majú
+    // zatiaľ dva parsery — agent v C# a server v TypeScripte pre ručnú cestu —
+    // a jediné, čo ich drží pri sebe, je táto spoločná fixtúra z reálneho
+    // exportu ALPINY. Keď sa rozídu, korpus bude mať dva rôzne tvary toho
+    // istého dokladu a nikto si toho nevšimne.
+    [Fact]
+    public void ParseHistoryRows_SediSoServerovymParserom()
+    {
+        var koren = AppContext.BaseDirectory;
+        while (koren is not null && !File.Exists(Path.Combine(koren, "server", "services", "__fixtures__", "pohoda-doklady-s-polozkami.xml")))
+        {
+            koren = Path.GetDirectoryName(koren);
+        }
+        Assert.NotNull(koren);
+        var xml = File.ReadAllText(Path.Combine(koren!, "server", "services", "__fixtures__", "pohoda-doklady-s-polozkami.xml"));
+
+        var rows = PohodaXml.ParseHistoryRows(xml).Rows;
+        var printOffice = rows.Where(row => row.DokladCislo == "DF260169").ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "0|repre|PD|B2",
+                "1|kancelár.potreby|PD|B2",
+                "2|repre|PN|KN",
+                "3|548-vratný obal|PN|KN",
+            },
+            printOffice.Select(row => $"{row.RiadokIndex}|{row.PredkontaciaKod}|{row.ClenenieDphKod}|{row.ClenenieKvKod}").ToArray());
+        // Položka bez textu si berie text hlavičky — inak by z korpusu vypadla.
+        Assert.Equal("spese di rappres./repre", printOffice[2].LineText);
+
+        var phm = rows.Where(row => row.DokladCislo == "DF260181").ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "0|PHM|PHM-501200|PD",
+                "3|Natural 95 (nedaňová časť 20 %)|PHM-Nadspotreba|PN",
+            },
+            phm.Select(row => $"{row.RiadokIndex}|{row.LineText}|{row.PredkontaciaKod}|{row.ClenenieDphKod}").ToArray());
+        Assert.Equal("B2", phm[1].ClenenieKvKod);
+    }
 }

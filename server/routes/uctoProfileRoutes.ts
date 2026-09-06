@@ -10,6 +10,7 @@ import {
   historyStats,
   importUctoHistory,
 } from '../services/uctoHistoryService.js';
+import { parseHistoriaXml } from '../services/uctoHistoriaXml.js';
 import {
   analyzujUctovnyProfil,
   deleteUctoKategoria,
@@ -47,6 +48,27 @@ export function registerUctoProfileRoutes(
       rows: body.rows,
       source: 'mdb',
     });
+  });
+
+  // Doklady s položkami priamo z POHODY, bez agenta: účtovník si stiahne
+  // request, prežene ho v POHODE a odpoveď nahrá sem.
+  //
+  // NEROBÍ reset korpusu, na rozdiel od prenosu agentom. Ručný export býva
+  // filtrovaný — ten prvý mal štyroch dodávateľov a 45 dokladov —, takže reset
+  // by z korpusu spravil práve tie štyri firmy a zvyšok roka by zmizol. Riadky
+  // sa preto zlievajú; duplicitu drží riadok_hash.
+  app.put('/api/organizations/:id/ucto-historia-xml', {
+    // Predvolený bodyLimit Fastify je 1 MB a nastavuje sa pre každú cestu
+    // zvlášť. Doklady s položkami majú ~4,5 kB na doklad, celý rok teda desiatky MB.
+    bodyLimit: 30 * 1024 * 1024,
+  }, async (request) => {
+    const { auth, organizationId } = await pristup(request, true);
+    const { xml } = z.object({ xml: z.string().min(1).max(28_000_000) }).strict().parse(request.body);
+    const { rows, warnings } = parseHistoriaXml(xml);
+    const vysledok = await importUctoHistory(database, {
+      tenantId: auth.tenantId, organizationId, rows, source: 'mdb',
+    });
+    return { ...vysledok, dokladov: rows.filter((row) => row.riadokIndex === 0).length, warnings };
   });
 
   // Preklopenie existujúcej pamäte rozhodnutí do korpusu — aby analýza mala

@@ -106,3 +106,52 @@ export function buildDennikRequestXml(
 export function buildDennikRequestFileName(organization: Organization, rok: number): string {
   return `pohoda-request-dennik-${slugifyOrganizationName(organization.nazov, 40)}-${rok}.xml`;
 }
+
+const HISTORIA_TYPY_FAKTUR = [
+  'receivedInvoice', 'receivedCreditNotice', 'receivedDebitNote', 'receivedAdvanceInvoice',
+  'issuedInvoice', 'issuedCreditNotice', 'issuedDebitNote', 'issuedAdvanceInvoice',
+  // Ostatné záväzky sú tiež agenda faktúr, ale POHODA ich bez vlastnej
+  // požiadavky nevráti — musia byť v zozname zvlášť.
+  'commitment',
+];
+
+/**
+ * Doklady s POLOŽKAMI: všetky dokladové agendy (faktúry vrátane dobropisov,
+ * ťarchopisov a zálohových, ostatné záväzky, pokladňa, interné doklady).
+ *
+ * Rozúčtovanie dokladu je vidieť jedine tu. Hlavička faktúry Print-Office nesie
+ * „repre / PD / B2" a v účtovnom denníku po nej ostanú štyri proviozky s tým
+ * istým textom — že vody a káva idú mimo priznania (PN, KN), kým kancelárske
+ * potreby majú odpočet, stojí až v položkách.
+ *
+ * Bez filtra: request je pre celý korpus, nie pre jeden prípad. Odpoveď má
+ * rádovo 4,5 kB na doklad.
+ */
+export function buildHistoriaRequestXml(organization: Organization): string {
+  const orgCode = slugifyOrganizationName(organization.nazov, 32);
+  const polozky = HISTORIA_TYPY_FAKTUR.map((typ, index) =>
+    `  <dat:dataPackItem id="h${String(index + 1).padStart(2, '0')}" version="2.0">`
+    + `<lst:listInvoiceRequest version="2.0" invoiceType="${typ}" invoiceVersion="2.0">`
+    + '<lst:requestInvoice/></lst:listInvoiceRequest></dat:dataPackItem>');
+  polozky.push(
+    `  <dat:dataPackItem id="h${HISTORIA_TYPY_FAKTUR.length + 1}" version="2.0">`
+    + '<lst:listVoucherRequest version="2.0" voucherVersion="2.0">'
+    + '<lst:requestVoucher/></lst:listVoucherRequest></dat:dataPackItem>',
+    `  <dat:dataPackItem id="h${HISTORIA_TYPY_FAKTUR.length + 2}" version="2.0">`
+    + '<lst:listIntDocRequest version="2.0" intDocVersion="2.0">'
+    + '<lst:requestIntDoc/></lst:listIntDocRequest></dat:dataPackItem>',
+  );
+  return [
+    '<?xml version="1.0" encoding="Windows-1250"?>',
+    `<dat:dataPack version="2.0" id="${escapeXml(`Polozky-${orgCode}`)}" ico="${escapeXml(organization.ico)}"`,
+    '    application="Dokladovka" note="Export dokladov s polozkami"',
+    `    xmlns:dat="${DATA_NAMESPACE}"`,
+    `    xmlns:lst="${LIST_NAMESPACE}">`,
+    ...polozky,
+    '</dat:dataPack>',
+  ].join('\n');
+}
+
+export function buildHistoriaRequestFileName(organization: Organization): string {
+  return `pohoda-request-polozky-${slugifyOrganizationName(organization.nazov, 40)}.xml`;
+}

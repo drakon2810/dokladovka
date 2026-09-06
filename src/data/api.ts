@@ -2069,6 +2069,28 @@ export async function importUctoDennik(orgId: string, xml: string): Promise<Denn
   );
 }
 
+export interface HistoriaXmlImportResult {
+  imported: number;
+  duplicates: number;
+  bezKodu: number;
+  dokladov: number;
+  warnings: string[];
+}
+
+/**
+ * Doklady s položkami z POHODY do korpusu histórie. Rozúčtovanie dokladu
+ * (ktorá položka ide mimo priznania, na ktorý účet) nie je vidieť nikde inde —
+ * ani v hlavičke, ani v účtovnom denníku. Agent to sťahuje sám; toto je ručná
+ * cesta pre firmu, ktorá agenta ešte nemá.
+ */
+export async function importUctoHistoriaXml(orgId: string, xml: string): Promise<HistoriaXmlImportResult> {
+  if (!REST_DATA_MODE) throw new Error('Doklady s položkami sa dajú nahrať iba v serverovom režime');
+  return restRequest<HistoriaXmlImportResult>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-historia-xml`,
+    { method: 'PUT', body: JSON.stringify({ xml }) },
+  );
+}
+
 export async function importPohodaCodeLists(
   orgId: string,
   preview: CodeListImportPreview,
