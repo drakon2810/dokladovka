@@ -1433,9 +1433,37 @@ export async function maybeAiAccountingSuggestion(
     .filter((row) => row.kind === kind)
     .map((row) => ({ id: row.id, kod: row.code, nazov: row.name, agenda: (row.agenda as string | null) ?? undefined }));
   // Protistrana dokladu: na vydanej faktúre odberateľ, inak dodávateľ.
-  const protistranaKontextu = documentContext.documentType === 'FV'
-    ? { nazov: documentContext.odberatel?.nazov, ico: documentContext.odberatel?.ico }
-    : { nazov: documentContext.supplierName, ico: documentContext.supplierIco };
+  const protistranaZDokladu = documentContext.documentType === 'FV'
+    ? {
+        nazov: documentContext.odberatel?.nazov, ico: documentContext.odberatel?.ico,
+        icDph: documentContext.odberatel?.icDph,
+        // IBAN patrí dodávateľovi — na FV by spároval partnera s vlastnou firmou.
+        iban: undefined,
+      }
+    : {
+        nazov: documentContext.supplierName, ico: documentContext.supplierIco,
+        icDph: input.supplierIcDph, iban: input.supplierIban,
+      };
+  // Kľúčom protistrany je KARTA z adresára POHODY, nie meno vytlačené na doklade.
+  //
+  // Korpus, pravidlá protistrán aj denník sú pomenované adresárom („guretruck"),
+  // kým faktúra tlačí obchodné meno s právnou formou („Guretruck, S. L.").
+  // najdiPravidlo porovnáva mená presnou rovnosťou (uctoPravidlaService.ts:217)
+  // a španielsky dodávateľ nemá IČO, takže druhá vetva lookupu je mŕtva —
+  // ustálené pravidlo „16 zo 16 → TACHpopl." sa ticho nenašlo a model rozhodoval
+  // od nuly. Mlčali pritom všetky kanály viazané na protistranu naraz: pravidlo,
+  // rozúčtovanie, rozdelenie, denník aj číselný rad — všetky berú tento objekt.
+  //
+  // Karta obe mená spojí: nájde sa podľa IČ DPH (ESB20720611 je na faktúre aj na
+  // karte) a nesie meno z adresára, teda presne ten kľúč, ktorým je pomenovaný
+  // korpus. Fuzzy porovnávanie mien tu netreba a nechceme ho: adresár je tá istá
+  // autorita, ktorá korpus pomenovala. Keď sa karta nenájde, ostáva meno
+  // z dokladu ako doteraz.
+  const kartaProtistrany = await najdiPartnera(
+    database, input.tenantId, input.organizationId, protistranaZDokladu);
+  const protistranaKontextu = kartaProtistrany
+    ? { nazov: kartaProtistrany.nazov, ico: kartaProtistrany.ico || protistranaZDokladu.ico }
+    : { nazov: protistranaZDokladu.nazov, ico: protistranaZDokladu.ico };
   // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
   // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
   // určí rovnako ako inde (nastavenie účtovníka, rad tejto protistrany

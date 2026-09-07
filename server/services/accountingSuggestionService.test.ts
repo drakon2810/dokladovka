@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { forgetUctoDecision, maybeAiAccountingSuggestion, mesiacZNazvu, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
+import { prepocitajPravidla } from './uctoPravidlaService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -707,6 +708,81 @@ describe('accounting suggestions', () => {
     expect(payload.dennik.filter((riadok: any) => riadok.tejProtistrany)).toHaveLength(3);
     // Riadky iných odberateľov ostávajú v denníku ako porovnanie, len nižšie.
     expect(payload.dennik.some((riadok: any) => riadok.clenenieKvKod === 'A1' && !riadok.tejProtistrany)).toBe(true);
+  }, 90_000);
+
+  // Ostrý prípad Guretruck: firma má 16 zo 16 dokladov na TACHpopl., pravidlo
+  // to vie — a doklad ho aj tak nedostal. Korpus je pomenovaný adresárom POHODY
+  // („guretruck"), faktúra tlačí obchodné meno s právnou formou
+  // („Guretruck, S. L."), a najdiPravidlo porovnáva mená presnou rovnosťou.
+  // Španielsky dodávateľ navyše nemá IČO, takže druhá vetva lookupu je mŕtva.
+  // Mlčali tým naraz všetky kanály viazané na protistranu. Karta partnera obe
+  // mená spojí: nájde sa podľa IČ DPH a nesie meno z adresára.
+  it('protistrana sa kľúčuje kartou z adresára, nie menom z faktúry', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const dph = randomUUID();
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,220,'EUR')`,
+      [documentId, ...kde, JSON.stringify({
+        dodavatel: { nazov: 'Guretruck, S. L.', icDph: 'ESB20720611' },
+        polozky: [{ popis: 'FEE (assistance fee)' }, { popis: 'Telephonic transfer to the card' }],
+      })],
+    );
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','TACHpopl.','TACHpopl.','pohoda'),
+              ($4,$2,$3,'cleneniaDph','PN','PN','pohoda')`,
+      [pred, ...kde, dph],
+    );
+    // Karta z adresára POHODY: iné meno než na faktúre, ale to isté IČ DPH.
+    await database.query(
+      `INSERT INTO partners (id,tenant_id,organization_id,name,name_normalized,ic_dph,source)
+       VALUES ($1,$2,$3,'GURETRUCK','guretruck','ESB20720611','auto')`,
+      [randomUUID(), ...kde],
+    );
+    // Korpus pomenovaný adresárom — štyri doklady, všetky na TACHpopl.
+    for (const cislo of ['ZF1', 'ZF2', 'ZF3', 'ZF4']) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+           line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,
+           riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'FP',$4,'2026-05-10','guretruck','nabitie + poplatok',
+                 'TACHpopl.',$5,'PN',$6,0,'mdb',$7)`,
+        [randomUUID(), ...kde, cislo, pred, dph, randomUUID()],
+      );
+    }
+    expect(await prepocitajPravidla(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId,
+    })).toMatchObject({ pravidiel: 1 });
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: dph, clenenieKvKod: 'KN',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Pravidlo protistrany',
+      })),
+    };
+    const context = {
+      documentType: 'FP', supplierName: 'Guretruck, S. L.',
+      totalAmount: 220, currency: 'EUR',
+      lineDescriptions: ['FEE (assistance fee)', 'Telephonic transfer to the card'],
+    };
+    const input = {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+      supplierName: 'Guretruck, S. L.', supplierIcDph: 'ESB20720611',
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    // Bez karty by pravidlo v prompte nebolo vôbec — meno z faktúry sa
+    // s menom z adresára presnou rovnosťou nikdy nestretne.
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(payload.pravidlo).toMatchObject({ dokladov: 4, zhoda: 4, predkontaciaKod: 'TACHpopl.' });
   }, 90_000);
 
   it('web search: preambula pred tool callom nezhodí návrh a prázdna odpoveď nezmaže deterministický', async () => {
