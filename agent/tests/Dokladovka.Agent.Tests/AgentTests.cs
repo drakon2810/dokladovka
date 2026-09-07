@@ -1178,4 +1178,48 @@ public sealed class DocumentFolderTests
         Assert.Equal(new decimal?[] { 52.68m, 13.17m }, phm.Skip(2).Take(2).Select(row => row.Suma).ToArray());
         Assert.Equal(new decimal?[] { 7.58m, 7.57m }, phm.Skip(2).Take(2).Select(row => row.SumaDph).ToArray());
     }
+
+    // Doklad účtovaný celý na jeden účet. AGS tak vedie prijaté faktúry, takže
+    // rozúčtovaná je len každá siedma — a text zvyšných šiestich sa strácal,
+    // hoci rozlíšiť treba práve súrodenecké účty služieb a hlavička na to slová
+    // nemá. Rovnaké dva prípady drží server v uctoHistoriaXml.test.ts.
+    [Theory]
+    [InlineData("<inv:text>T-1 Erledigung elektronisch im System</inv:text>", 2)]
+    [InlineData("", 1)]
+    public void ParseHistoryRows_PolozkaBezVlastnehoUctovaniaOstaneLenSTextom(string textPolozky, int ocakavanychRiadkov)
+    {
+        var xml = $@"<?xml version=""1.0"" encoding=""Windows-1250""?>
+<rsp:responsePack version=""2.0"" state=""ok"" ico=""36283410""
+  xmlns:rsp=""http://www.stormware.cz/schema/version_2/response.xsd""
+  xmlns:typ=""http://www.stormware.cz/schema/version_2/type.xsd""
+  xmlns:lst=""http://www.stormware.cz/schema/version_2/list.xsd""
+  xmlns:inv=""http://www.stormware.cz/schema/version_2/invoice.xsd"">
+  <rsp:responsePackItem version=""2.0"" id=""p01"" state=""ok"">
+    <lst:listInvoice version=""2.0"" invoiceType=""receivedInvoice"" state=""ok"">
+      <lst:invoice version=""2.0""><inv:invoiceHeader><inv:id>1</inv:id>
+        <inv:invoiceType>receivedInvoice</inv:invoiceType>
+        <inv:number><typ:numberRequested>2026345</typ:numberRequested></inv:number>
+        <inv:date>2026-07-31</inv:date><inv:dateTax>2026-07-31</inv:dateTax>
+        <inv:accounting><typ:ids>518900 ost.sl.-tuz.</typ:ids></inv:accounting>
+        <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT>
+        <inv:text>Importné colné služby a administratívne poplatky</inv:text>
+        <inv:partnerIdentity><typ:address><typ:company>MUNDUS Spedition</typ:company></typ:address></inv:partnerIdentity>
+      </inv:invoiceHeader><inv:invoiceDetail><inv:invoiceItem>{textPolozky}
+        <inv:homeCurrency><typ:price>20</typ:price><typ:priceVAT>0</typ:priceVAT></inv:homeCurrency>
+        <inv:accounting><typ:ids>518900 ost.sl.-tuz.</typ:ids></inv:accounting>
+        <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT>
+      </inv:invoiceItem></inv:invoiceDetail></lst:invoice>
+    </lst:listInvoice>
+  </rsp:responsePackItem>
+</rsp:responsePack>";
+
+        var rows = PohodaXml.ParseHistoryRows(xml).Rows;
+        Assert.Equal(ocakavanychRiadkov, rows.Count);
+        if (ocakavanychRiadkov == 2)
+        {
+            Assert.Equal("T-1 Erledigung elektronisch im System", rows[1].LineText);
+            // Zaúčtovanie sa dedí z hlavičky — položka o ňom nič nové nehovorí.
+            Assert.Equal("518900 ost.sl.-tuz.", rows[1].PredkontaciaKod);
+        }
+    }
 }

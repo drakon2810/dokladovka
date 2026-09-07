@@ -149,8 +149,21 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
       poradie += 1;
       const itemPredkontacia = refIds(polozka.accounting);
       const itemClenenie = refIds(polozka.classificationVAT);
-      if (!rozuctovany && !itemPredkontacia && !itemClenenie) continue;
-      if (!rozuctovany && itemPredkontacia === predkontacia && itemClenenie === clenenieDph) continue;
+      // Položka, ktorá zaúčtovanie hlavičky iba zopakuje, sa berie vtedy, keď
+      // má VLASTNÝ text. O zaúčtovaní síce nepovie nič nové, ale povie, ČO sa
+      // kupovalo — a práve to hlavička zahmlieva: „Importné colné služby a
+      // administratívne poplatky" v hlavičke proti „1 x Importabfertigung im
+      // HZA-Wien" na položke. AGS účtuje prijaté faktúry na jeden účet, takže
+      // rozúčtovaná je iba každá siedma — a text položiek sa doteraz stratil
+      // pri zvyšných šiestich. Rozlíšiť pritom treba práve súrodenecké účty
+      // služieb (preprava/colné/destinácia, tuzemsko/zahraničie, s § 69 aj bez)
+      // a hlavička na to slová nemá.
+      //
+      // Bez vlastného textu by šlo o čistý duplikát hlavičky, ten sa preskočí.
+      const vlastnyText = Boolean(text(polozka.text));
+      if (!rozuctovany && !vlastnyText && !itemPredkontacia && !itemClenenie) continue;
+      if (!rozuctovany && !vlastnyText
+        && itemPredkontacia === predkontacia && itemClenenie === clenenieDph) continue;
       const ceny = polozka.homeCurrency as Record<string, unknown> | undefined;
       const suma = Number(text(ceny?.price) ?? Number.NaN);
       const sumaDph = Number(text(ceny?.priceVAT) ?? Number.NaN);

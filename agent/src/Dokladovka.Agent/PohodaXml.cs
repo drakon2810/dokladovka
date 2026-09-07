@@ -305,12 +305,10 @@ public static class PohodaXml
             // v položkách — „Natural 95 (nedaňová časť 20 %)" s predkontáciou
             // PHM-Nadspotreba a členením PN.
             //
-            // Berú sa LEN položky s VLASTNÝM zaúčtovaním, teda tie, kde sa
-            // účtovník rozhodol inak než na hlavičke. Položka, ktorá hlavičku
-            // dedí, by korpus iba zopakovala.
-            // ponytail: keby textová zhoda potrebovala aj bežné položky
-            //   („Nafta" sedí na doklad lepšie než hlavičkové „PHM"), pustiť
-            //   sem všetky — korpus tým ale narastie rádovo.
+            // Berú sa položky s VLASTNÝM zaúčtovaním — tie, kde sa účtovník
+            // rozhodol inak než na hlavičke — a položky s vlastným TEXTOM;
+            // tie nesú, čo sa kupovalo. Položka bez jedného aj druhého by
+            // korpus iba zopakovala.
             // Keď je doklad rozúčtovaný, berú sa VŠETKY jeho položky — aj tie,
             // ktoré zaúčtovanie dedia. Pomer sa totiž číta z DVOJICE: „Natural
             // 95 (daňová časť 80 %)" za 52,68 drží hlavičkové zaúčtovanie
@@ -327,8 +325,22 @@ public static class PohodaXml
             {
                 var itemPredkontacia = RefIds(item, "accounting");
                 var itemClenenie = RefIds(item, "classificationVAT");
-                if (!rozuctovany && itemPredkontacia is null && itemClenenie is null) continue;
-                if (!rozuctovany && itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
+                // Položka, ktorá zaúčtovanie hlavičky iba zopakuje, sa berie
+                // vtedy, keď má VLASTNÝ text. O zaúčtovaní nepovie nič nové,
+                // ale povie, ČO sa kupovalo — a to hlavička zahmlieva:
+                // „Importné colné služby a administratívne poplatky" proti
+                // „1 x Importabfertigung im HZA-Wien" na položke. AGS účtuje
+                // prijaté faktúry na jeden účet, takže rozúčtovaná je len každá
+                // siedma a text zvyšných šiestich sa strácal — pritom rozlíšiť
+                // treba práve súrodenecké účty služieb (preprava/colné/
+                // destinácia, tuzemsko/zahraničie, s § 69 aj bez).
+                // Bez vlastného textu ide o čistý duplikát hlavičky a preskočí sa;
+                // korpus tak rastie o texty, nie o zopakované zaúčtovanie.
+                var maVlastnyText = Trimmed(item.Elements()
+                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value) is not null;
+                if (!rozuctovany && !maVlastnyText && itemPredkontacia is null && itemClenenie is null) continue;
+                if (!rozuctovany && !maVlastnyText
+                    && itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
                 // Text položky smie chýbať. Na reálnom exporte ALPINY je bez textu
                 // 18 zo 68 rozúčtovaných položiek — a sú medzi nimi tie
                 // najvýrečnejšie: faktúra Print-Office má prázdny text presne na

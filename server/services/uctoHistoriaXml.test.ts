@@ -59,6 +59,57 @@ describe('doklady s položkami z POHODY', () => {
     expect(phm[3].clenenieKvKod).toBe('B2');
   });
 
+  // AGS účtuje prijaté faktúry na jeden účet, takže rozúčtovaná je len každá
+  // siedma — a text položiek sa pri zvyšných šiestich strácal. Pritom rozlíšiť
+  // treba súrodenecké účty služieb a hlavička na to slová nemá: „Importné colné
+  // služby a administratívne poplatky" proti „1 x Importabfertigung im HZA-Wien".
+  describe('doklad účtovaný na jeden účet', () => {
+    const doklad = (polozky: string) => `<?xml version="1.0" encoding="Windows-1250"?>
+<rsp:responsePack version="2.0" state="ok" ico="36283410"
+  xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd"
+  xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
+  xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd">
+  <rsp:responsePackItem version="2.0" id="p01" state="ok">
+    <lst:listInvoice version="2.0" invoiceType="receivedInvoice" state="ok">
+      <lst:invoice version="2.0"><inv:invoiceHeader><inv:id>1</inv:id>
+        <inv:invoiceType>receivedInvoice</inv:invoiceType>
+        <inv:number><typ:numberRequested>2026345</typ:numberRequested></inv:number>
+        <inv:date>2026-07-31</inv:date><inv:dateTax>2026-07-31</inv:dateTax>
+        <inv:accounting><typ:ids>518900 ost.sl.-tuz.</typ:ids></inv:accounting>
+        <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT>
+        <inv:classificationKVDPH><typ:ids>KN</typ:ids></inv:classificationKVDPH>
+        <inv:text>Importné colné služby a administratívne poplatky</inv:text>
+        <inv:partnerIdentity><typ:address><typ:company>MUNDUS Spedition</typ:company></typ:address></inv:partnerIdentity>
+      </inv:invoiceHeader><inv:invoiceDetail>${polozky}</inv:invoiceDetail></lst:invoice>
+    </lst:listInvoice>
+  </rsp:responsePackItem>
+</rsp:responsePack>`;
+    const polozka = (text: string) => `<inv:invoiceItem>${text}
+      <inv:homeCurrency><typ:price>20</typ:price><typ:priceVAT>0</typ:priceVAT></inv:homeCurrency>
+      <inv:accounting><typ:ids>518900 ost.sl.-tuz.</typ:ids></inv:accounting>
+      <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT></inv:invoiceItem>`;
+
+    it('si nechá položky, ktoré nesú vlastný text', () => {
+      const { rows } = parseHistoriaXml(doklad(
+        polozka('<inv:text>T-1 Erledigung elektronisch im System</inv:text>')
+        + polozka('<inv:text>1 x Importabfertigung im HZA-Wien</inv:text>'),
+      ));
+      expect(rows.map((row) => [row.riadokIndex, row.lineText])).toEqual([
+        [0, 'Importné colné služby a administratívne poplatky'],
+        [1, 'T-1 Erledigung elektronisch im System'],
+        [2, '1 x Importabfertigung im HZA-Wien'],
+      ]);
+      // Zaúčtovanie sa dedí z hlavičky — položka o ňom nič nové nehovorí.
+      expect(rows[1]).toMatchObject({ predkontaciaKod: '518900 ost.sl.-tuz.', clenenieDphKod: 'PN' });
+    });
+
+    it('položku bez vlastného textu nepridáva — bol by to duplikát hlavičky', () => {
+      const { rows } = parseHistoriaXml(doklad(polozka('') + polozka('')));
+      expect(rows.map((row) => row.riadokIndex)).toEqual([0]);
+    });
+  });
+
   it('odmietne súbor, ktorý nie je odpoveďou z POHODY', () => {
     expect(() => parseHistoriaXml('<html><body>nie je to XML z POHODY</body></html>')).toThrow(/responsePack/);
   });
