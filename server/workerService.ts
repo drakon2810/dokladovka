@@ -1045,8 +1045,8 @@ export async function processNextJob(
             // IČO nespáruje nikdy a pravidlo „16 zo 16" sa ticho nenájde.
             // rebuildAccountingSuggestion o pár stoviek riadkov vyššie ich
             // posiela oba už dávno — chýbali len tu.
+            // IBAN summary nenesie — službe ho aj tak dodá samotný doklad.
             supplierIcDph: summary.supplierIcDph,
-            supplierIban: summary.supplierIban,
           }, doklad.kontext);
         } catch (cause) {
           // Návrh je voliteľný — chyba AI nezhodí doklad, ktorý je už uložený,
