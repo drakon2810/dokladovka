@@ -482,6 +482,39 @@ describe('rozpis DPH sa dopočíta z položiek', () => {
       .toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
   });
 
+  // Ostrý prípad PACCAR 26002838: desať splátok po 1 391,19 + 23 %. Dodávateľ
+  // počíta daň po riadkoch (319,97), takže súčet 3 199,70 sa od sadzby zo súčtu
+  // základov (3 199,74) líši o štyri centy. Faktúra je správna; pri pevnej
+  // dvojcentovej tolerancii sa nedala schváliť.
+  const paccar = (zaklad: number, dphRiadku: number) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FP',
+    supplier: { nazov: 'PACCAR Financial', ico: '12345678' },
+    buyer: { ico: '35761571' }, invoiceNumber: '26002838',
+    issueDate: '2026-09-01', taxDate: '2026-09-01', dueDate: '2026-09-15',
+    currency: 'EUR',
+    lineItems: Array.from({ length: 10 }, (_, index) => ({
+      description: `Zmluva SK0000133${index}/1`, vatRate: '23',
+      amountWithoutVat: '1391.19', vatAmount: '319.97', amountTotal: '1711.16',
+    })),
+    vatBreakdown: [{ vatRate: '23', base: String(zaklad), vat: String(dphRiadku) }],
+    totalWithoutVat: String(zaklad), totalVat: String(dphRiadku), totalAmount: '17111.60',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-paccar', '2026-09-01');
+
+  it('riadkové zaokrúhľovanie dane cez desať položiek prejde', () => {
+    expect(validateNormalizedExtraction(paccar(13911.90, 3199.70), { ico: '35761571' })
+      .filter((issue) => issue.code === 'invalid_vat_row')).toEqual([]);
+  });
+
+  // Rozpis sedí s celkovou sumou (14 000 + 3 111,60 = 17 111,60), takže položky
+  // ho neprebijú — a vtedy musí zafungovať kontrola samotného riadku: 23 % zo
+  // 14 000 je 3 220, nie 3 111,60. Sto eur sa desiatimi centmi tolerancie
+  // vysvetliť nedá.
+  it('skutočne zlá daň blokuje aj pri desiatich položkách', () => {
+    expect(validateNormalizedExtraction(paccar(14000, 3111.60), { ico: '35761571' })
+      .map((issue) => issue.code)).toContain('invalid_vat_row');
+  });
+
   // Ostrý prípad Guretruck A27432, kvôli ktorému sa rozhodnutie zmenilo.
   it('model zabudol druhú položku v rozpise — vyhrajú položky', () => {
     const normalized = normalizeExtractionResult({

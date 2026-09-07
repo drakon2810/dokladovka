@@ -85,10 +85,21 @@ export function checkVatId(value: string): VatIdCheck {
 
 export const VAT_ROW_TOLERANCE = 0.02; // € na riadok (SPEC §6.4, §11.14)
 
-/** |základ×sadzba − dph| ≤ 0,02 € (SPEC §6.4). */
-export function isVatRowConsistent(row: VatBreakdownRow): boolean {
+/**
+ * |základ×sadzba − dph| ≤ 0,02 € (SPEC §6.4), plus pol centa za položku, ktorá
+ * do tejto sadzby prispela.
+ *
+ * Dodávateľ počíta daň po RIADKOCH a každý zaokrúhli na centy, takže pri
+ * mnohých riadkoch sa rozdiel proti „sadzba zo súčtu základov" nasčíta celkom
+ * legálne — presne tak, ako to už rieši isLineItemQuantityConsistent pri
+ * jednotkovej cene. PACCAR 26002838: desať splátok po 1 391,19 × 23 % =
+ * 319,9737, dodávateľ účtuje 319,97; desaťkrát to dá 3 199,70, kým sadzba zo
+ * súčtu základov dá 3 199,74. Faktúra je správna, rozdiel štyri centy, a doklad
+ * sa pri pevnej dvojcentovej tolerancii nedal schváliť.
+ */
+export function isVatRowConsistent(row: VatBreakdownRow, pocetPoloziek = 0): boolean {
   const expected = row.zaklad * (row.sadzba / 100);
-  return Math.abs(expected - row.dph) <= VAT_ROW_TOLERANCE + 1e-9;
+  return Math.abs(expected - row.dph) <= VAT_ROW_TOLERANCE + Math.max(0, pocetPoloziek) * 0.005 + 1e-9;
 }
 
 /**

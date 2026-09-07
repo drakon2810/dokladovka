@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { jeUpozornenie, validateDocument } from './documentValidation';
+import { round2 } from '../../lib/validate';
 
 /** Doklad, ktorý je v poriadku okrem jedného poľa. */
 const doklad = (iban: string) => ({
@@ -38,6 +39,44 @@ describe('chybný IBAN je upozornenie, nie prekážka', () => {
     for (const code of ['invalid_ico', 'total_mismatch', 'invoice_number_required'] as const) {
       expect(jeUpozornenie(code)).toBe(false);
     }
+  });
+});
+
+// Ostrý prípad PACCAR 26002838: desať splátok vozidiel, každá 1 391,19 + 23 %.
+// 1 391,19 × 0,23 = 319,9737, dodávateľ účtuje 319,97 — desaťkrát to dá
+// 3 199,70, kým sadzba zo súčtu základov dá 3 199,74. Faktúra je správna,
+// rozdiel štyri centy z riadkového zaokrúhľovania, a doklad sa pri pevnej
+// dvojcentovej tolerancii nedal schváliť.
+describe('riadkové zaokrúhľovanie dane neblokuje schválenie', () => {
+  const paccar = (dph: number) => ({
+    typ: 'FP',
+    extracted: {
+      cisloFaktury: '26002838',
+      dodavatel: { nazov: 'PACCAR Financial', ico: '12345678' },
+      odberatel: { nazov: 'ALPINA EST s.r.o.' },
+      datumVystavenia: '2026-09-01',
+      datumDanovejPovinnosti: '2026-09-01',
+      datumSplatnosti: '2026-09-15',
+      mena: 'EUR',
+      sumaSpolu: 17_111.60,
+      rozpisDph: [{ sadzba: 23, zaklad: 13_911.90, dph, spolu: round2(13_911.90 + dph) }],
+      polozky: Array.from({ length: 10 }, (_, index) => ({
+        id: `li-${index}`, popis: `Zmluva ${index}`,
+        sadzbaDph: 23, sumaBezDph: 1_391.19, sumaDph: 319.97, sumaSpolu: 1_711.16,
+      })),
+    },
+    processingStatus: 'ready_for_review',
+  }) as never;
+
+  it('štyri centy z desiatich riadkov prejdú', () => {
+    expect(validateDocument(paccar(3_199.70), undefined)
+      .some((n) => n.code === 'invalid_vat_row')).toBe(false);
+  });
+
+  it('skutočne zlá daň blokuje ďalej', () => {
+    // Pol eura sa riadkovým zaokrúhľovaním desiatich položiek vysvetliť nedá.
+    expect(validateDocument(paccar(3_150.00), undefined)
+      .some((n) => n.code === 'invalid_vat_row')).toBe(true);
   });
 });
 

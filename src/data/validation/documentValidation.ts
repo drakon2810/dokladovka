@@ -211,7 +211,11 @@ export function validateDocument(
   if (!smieBytBezRozpisu && extracted.rozpisDph.length === 0) {
     issues.push({ code: 'vat_breakdown_required', field: 'rozpisDph' });
   }
-  if (extracted.rozpisDph.some((row) => !isVatRowConsistent(row))) {
+  // Koľko položiek do sadzby prispelo — každá zaokrúhľuje svoju daň zvlášť,
+  // takže tolerancia riadku o toľko polcentov rastie.
+  const poloziekSoSadzbou = (sadzba: number) =>
+    (extracted.polozky ?? []).filter((polozka) => polozka?.sadzbaDph === sadzba).length;
+  if (extracted.rozpisDph.some((row) => !isVatRowConsistent(row, poloziekSoSadzbou(row.sadzba)))) {
     issues.push({ code: 'invalid_vat_row', field: 'rozpisDph' });
   }
   // Prázdny rozpis pri mzdách nie je nesúlad, ale „bez DPH" — porovnávať nulu

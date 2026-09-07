@@ -689,8 +689,16 @@ export function validateNormalizedExtraction(
   // BV: „celková suma" je konečný zostatok výpisu — záporný zostatok je legálny.
   if (!Number.isFinite(normalized.totalAmount) || (normalized.totalAmount < 0 && normalized.documentType !== 'BV')) issues.push({ code: 'invalid_total', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nie je platná' });
   const rows = extracted.rozpisDph as Array<{ sadzba: number; zaklad: number; dph: number }>;
+  // Dodávateľ počíta daň po RIADKOCH a každý zaokrúhli na centy, takže pri
+  // mnohých riadkoch sa rozdiel proti „sadzba zo súčtu základov" nasčíta celkom
+  // legálne. PACCAR 26002838: 10 splátok po 1 391,19 × 23 % = 319,9737, doklad
+  // účtuje 319,97 — desaťkrát 3 199,70 proti 3 199,74 zo súčtu. Tolerancia preto
+  // rastie o pol centa za položku, rovnako ako v isVatRowConsistent na klientovi
+  // (src/lib/validate.ts) a v isLineItemQuantityConsistent pri jednotkovej cene.
+  const polozkyDokladu = Array.isArray(extracted.polozky) ? extracted.polozky as Array<{ sadzbaDph?: number }> : [];
   for (const [index, row] of rows.entries()) {
-    if (!isValidVatRate(row.sadzba) || Math.abs(round2(row.zaklad * row.sadzba / 100) - row.dph) > 0.02) {
+    const tolerancia = 0.02 + polozkyDokladu.filter((polozka) => polozka.sadzbaDph === row.sadzba).length * 0.005;
+    if (!isValidVatRate(row.sadzba) || Math.abs(round2(row.zaklad * row.sadzba / 100) - row.dph) > tolerancia) {
       issues.push({ code: 'invalid_vat_row', field: `rozpisDph.${index}`, severity: 'error', message: 'Rozpis DPH matematicky nesedí' });
     }
     if (isValidVatRate(row.sadzba) && !isCurrentSupportedVatRate(row.sadzba)) {
