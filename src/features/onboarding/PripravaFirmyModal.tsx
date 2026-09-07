@@ -120,16 +120,15 @@ export const KROKY: readonly Krok[] = [
     // (ucto_historia). Že sú to dve tabuľky, nie je problém účtovníka —
     // preklopenie je idempotentné, tak ho spraví analýza sama. Bez neho
     // padala na 409 „v histórii je primálo riadkov".
+    //
+    // Analýza sa len postaví do fronty — beží vo workeri desiatky minút a
+    // spojenie prehliadača toľko nevydrží. Krok preto dobieha rovnako ako
+    // mostík nad ním: beží ďalej, kým sa neobjavia kategórie. Že model
+    // nevrátil nič použiteľné, tak povie „splneny", nie návratová hodnota;
+    // dôvod zlyhania ukáže obrazovka účtovného profilu.
     spustit: async (organizationId) => {
       await backfillUctoHistory(organizationId);
-      const vysledok = await analyzeUctoProfil(organizationId);
-      // Nula kategórií nie je úspech — model nevrátil nič použiteľné. Bez
-      // tejto kontroly sprievodca ohlási hotovo a krok po zavretí okna zase
-      // svieti ako nespravený, bez vysvetlenia.
-      if (vysledok.kategorii === 0) throw new Error(t('priprava.analyzaPrazdna'));
-      if (vysledok.zlyhanychDavok > 0) {
-        showToast(`${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`);
-      }
+      await analyzeUctoProfil(organizationId);
     },
     beziKymNeHotovy: true,
     bezimText: 'priprava.analyzujem',

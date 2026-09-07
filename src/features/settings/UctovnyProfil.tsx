@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
   UCTO_AGENDA_NAZOV, UCTO_AGENDY,
-  analyzeUctoProfil, backfillUctoHistory, deleteUctoKategoria, getUctoHistoryStats,
+  analyzaStav, analyzeUctoProfil, backfillUctoHistory, deleteUctoKategoria, getUctoHistoryStats,
   listUctoKategorie, listUctoPravidla, updateUctoKategoria,
-  type UctoHistoryStats, type UctoKategoria, type UctoPravidlo,
+  type AnalyzaBeh, type UctoHistoryStats, type UctoKategoria, type UctoPravidlo,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import { CLENENIE_KV_KODY } from '../../data/types';
@@ -33,6 +33,8 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
   const [kategorie, setKategorie] = useState<UctoKategoria[]>([]);
   const [pravidla, setPravidla] = useState<UctoPravidlo[]>([]);
   const [busy, setBusy] = useState<'analyza' | 'kategoria'>();
+  const [beh, setBeh] = useState<AnalyzaBeh | null>(null);
+  const analyzaBezi = beh?.status === 'queued' || beh?.status === 'running';
   const [uprava, setUprava] = useState<KategoriaUprava>();
   /** Vybraná agenda, alebo undefined pre všetky — pokladňa sa účtuje inak než faktúry. */
   const [agenda, setAgenda] = useState<string>();
@@ -55,20 +57,72 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
     setPravidla([]);
     setUprava(undefined);
     setAgenda(undefined);
+    setBeh(null);
     void Promise.all([
       getUctoHistoryStats(orgId).catch(() => undefined),
       listUctoKategorie(orgId).catch(() => []),
       listUctoPravidla(orgId).catch(() => []),
-    ]).then(([nasledujuce, zoznam, odvodene]) => {
+      // Beh sa načíta hneď pri otvorení: analýzu mohol spustiť aj niekto iný,
+      // alebo ten istý účtovník pred hodinou z iného počítača.
+      analyzaStav(orgId).catch(() => null),
+    ]).then(([nasledujuce, zoznam, odvodene, poslednyBeh]) => {
       if (!active) return;
       setStats(nasledujuce);
       setKategorie(zoznam);
       setPravidla(odvodene);
+      setBeh(poslednyBeh);
     });
     return () => {
       active = false;
     };
   }, [orgId]);
+
+  /**
+   * Výsledok behu do jednej vety. Nedokončené dávky sa nesmú zamlčať — profil
+   * je vtedy neúplný a účtovník má dôvod pustiť analýzu znova. Sebakontrola
+   * patrí do tej istej správy: má vedieť nielen koľko kategórií vzniklo, ale
+   * či to niečo zlepšilo.
+   */
+  function oznamVysledok(dokoncene: AnalyzaBeh) {
+    if (dokoncene.status !== 'succeeded' || !dokoncene.vysledok) {
+      showToast(`${t('uctoProfil.analyzaZlyhala')}: ${dokoncene.error_message ?? ''}`.trim(), { tone: 'error' });
+      return;
+    }
+    const vysledok = dokoncene.vysledok;
+    const skore = Object.values(vysledok.presnost?.vysledok ?? {})
+      .reduce((sucet, polozka) => ({
+        dokladov: sucet.dokladov + polozka.dokladov,
+        predkontacia: sucet.predkontacia + polozka.predkontacia,
+      }), { dokladov: 0, predkontacia: 0 });
+    const presnost = skore.dokladov > 0
+      ? ` · ${t('uctoProfil.analyzaPresnost')}: ${Math.round((skore.predkontacia / skore.dokladov) * 100)} %`
+        + ` (${skore.dokladov})`
+      : '';
+    showToast((vysledok.zlyhanychDavok > 0
+      ? `${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`
+      : `${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`) + presnost);
+  }
+
+  // Analýza beží vo workeri desiatky minút, takže obrazovka sa na ňu pýta.
+  // Beh patrí firme, nie tejto karte: účtovník môže odísť inam aj zavrieť
+  // prehliadač a po návrate uvidí, že ešte beží, alebo ako dopadla.
+  useEffect(() => {
+    if (beh?.status !== 'queued' && beh?.status !== 'running') return undefined;
+    let active = true;
+    const timer = setInterval(() => {
+      void analyzaStav(orgId).then((dalsi) => {
+        if (!active || !dalsi) return;
+        setBeh(dalsi);
+        if (dalsi.status === 'queued' || dalsi.status === 'running') return;
+        oznamVysledok(dalsi);
+        void obnov();
+      }).catch(() => undefined);
+    }, 10_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [beh?.status, orgId]);
 
   async function spusti() {
     // Analýza je prepočet celého profilu — ručné úpravy aj zmazania kategórií
@@ -82,24 +136,9 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       // tak beží vždy pred analýzou. Dve tlačidlá v poradí, ktoré si nikto
       // nepamätal, boli len návod na chybu.
       await backfillUctoHistory(orgId);
-      const vysledok = await analyzeUctoProfil(orgId);
-      // Nedokončené dávky sa nesmú zamlčať — profil je vtedy neúplný a
-      // účtovník má dôvod pustiť analýzu znova.
-      // Sebakontrola patrí do tej istej správy: účtovník má po analýze vedieť
-      // nielen koľko kategórií vzniklo, ale či to niečo zlepšilo.
-      const skore = Object.values(vysledok.presnost?.vysledok ?? {})
-        .reduce((sucet, agenda) => ({
-          dokladov: sucet.dokladov + agenda.dokladov,
-          predkontacia: sucet.predkontacia + agenda.predkontacia,
-        }), { dokladov: 0, predkontacia: 0 });
-      const presnost = skore.dokladov > 0
-        ? ` · ${t('uctoProfil.analyzaPresnost')}: ${Math.round((skore.predkontacia / skore.dokladov) * 100)} %`
-          + ` (${skore.dokladov})`
-        : '';
-      showToast((vysledok.zlyhanychDavok > 0
-        ? `${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`
-        : `${t('uctoProfil.analyzaHotova')} (${vysledok.kategorii})`) + presnost);
-      await obnov();
+      const { uzBezi } = await analyzeUctoProfil(orgId);
+      setBeh(await analyzaStav(orgId).catch(() => null));
+      showToast(uzBezi ? t('uctoProfil.analyzaUzBezi') : t('uctoProfil.analyzaSpustena'));
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
     } finally {
@@ -211,11 +250,23 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn btn-primary" disabled={busy !== undefined}
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-primary" disabled={busy !== undefined || analyzaBezi}
           onClick={() => void spusti()}>
-          {busy === 'analyza' ? t('uctoProfil.analyzujem') : t('uctoProfil.spustitAnalyzu')}
+          {busy === 'analyza' || analyzaBezi ? t('uctoProfil.analyzujem') : t('uctoProfil.spustitAnalyzu')}
         </button>
+        {/* Beh trvá desiatky minút. Bez tohto riadku tlačidlo len zošedne a
+            účtovník nemá ako rozoznať bežiacu analýzu od zaseknutej obrazovky. */}
+        {analyzaBezi && beh && (
+          <span className="text-[12px] text-ink-faint">
+            {t('uctoProfil.analyzaOd')} {new Date(beh.created_at).toLocaleTimeString('sk-SK')}
+          </span>
+        )}
+        {beh?.status === 'failed' && (
+          <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[11.5px] text-rose-800">
+            {t('uctoProfil.analyzaZlyhala')}: {beh.error_message}
+          </span>
+        )}
       </div>
 
       {/* Čo sa program naučil o protistranách. Nie je to výstup modelu ale

@@ -28,9 +28,15 @@ describe('príprava firmy', () => {
     expect(backfill.mock.invocationCallOrder[0]).toBeLessThan(analyze.mock.invocationCallOrder[0]);
   });
 
-  it('nula kategórií je chyba, nie hotovo', async () => {
-    analyze.mockResolvedValueOnce({ kategorii: 0, textov: 0, davok: 0, pokrytieRiadkov: 0 });
-    await expect(KROKY.find((k) => k.cislo === 5)!.spustit!('org-1')).rejects.toThrow(/kategórie/);
+  // Analýza beží vo workeri, takže spustit() sa vráti hneď a o výsledku nevie
+  // nič. Že nula kategórií neprejde ako hotovo, drží odteraz „splneny": krok
+  // dobieha, kým sa kategórie naozaj neobjavia — rovnako ako mostík nad ním.
+  it('nula kategórií nie je hotovo ani po spustení', async () => {
+    const analyza = KROKY.find((krok) => krok.cislo === 5)!;
+    await analyza.spustit!('org-1');
+    expect(analyza.beziKymNeHotovy).toBe(true);
+    expect(analyza.splneny({ ...priprava, kategorie: 0 }, organizacia)).toBe(false);
+    expect(analyza.splneny({ ...priprava, kategorie: 12 }, organizacia)).toBe(true);
   });
 
   it('krok 5 čaká na číselníky aj pamäť', () => {

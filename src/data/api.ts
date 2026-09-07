@@ -3136,20 +3136,41 @@ export async function backfillUctoHistory(orgId: string): Promise<{ imported: nu
   );
 }
 
-export async function analyzeUctoProfil(
-  orgId: string,
-): Promise<{
+export interface AnalyzaVysledok {
   kategorii: number; textov: number; davok: number; zlyhanychDavok: number; pokrytieRiadkov: number;
   /** Pravidlá protistrán a kategórií — počítajú sa v tej istej analýze. */
   pravidiel?: number; sRozpisom?: number; kategoriiSRozpisom?: number;
   /** Sebakontrola na konci analýzy — bez nej sa nedá povedať, či je profil lepší. */
   presnost?: PresnostBeh;
-}> {
+}
+
+export interface AnalyzaBeh {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'dead_letter';
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+  vysledok?: AnalyzaVysledok;
+}
+
+/**
+ * Analýza sa iba postaví do fronty — beží vo workeri desiatky minút a spojenie
+ * prehliadača toľko nevydrží. Stav sa potom číta cez analyzaStav().
+ */
+export async function analyzeUctoProfil(orgId: string): Promise<{ jobId: string; uzBezi: boolean }> {
   if (!REST_DATA_MODE) throw new Error('Analýza je dostupná len s pripojeným serverom');
   return restRequest(
     `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/analyze`,
     { method: 'POST', body: JSON.stringify({}) },
   );
+}
+
+export async function analyzaStav(orgId: string): Promise<AnalyzaBeh | null> {
+  if (!REST_DATA_MODE) return null;
+  const odpoved = await restRequest<{ beh: AnalyzaBeh | null }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/analyze`,
+  );
+  return odpoved.beh;
 }
 
 export async function listUctoKategorie(orgId: string): Promise<UctoKategoria[]> {

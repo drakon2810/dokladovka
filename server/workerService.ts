@@ -30,6 +30,8 @@ import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.
 import { matchStatementPayments } from './services/paymentService.js';
 import { doplnZKartyPartnera, upsertPartnerZDokladu } from './services/partnerService.js';
 import { profilPreKlasifikaciu } from './services/firemnyProfilService.js';
+import { analyzujUctovnyProfil } from './services/uctoProfileService.js';
+import { zmerajPresnost } from './services/uctoPresnostService.js';
 import { opravSkDanoveCisla } from './services/skTaxIdsService.js';
 import type { ObjectStorage } from './storage.js';
 import { PDFDocument } from 'pdf-lib';
@@ -41,11 +43,30 @@ interface JobRow extends Record<string, unknown> {
   attachment_id: string;
   document_id?: string;
   correlation_id: string;
-  kind: 'extract_document' | 'reprocess_document';
+  kind: 'extract_document' | 'reprocess_document' | typeof ANALYZA_KIND;
   attempts: number;
   max_attempts: number;
-  payload: { mockExtraction?: MockExtractionHints };
+  payload: { mockExtraction?: MockExtractionHints; vzorka?: number };
 }
+
+/**
+ * Analýza účtovného profilu ako job, nie ako HTTP požiadavka.
+ *
+ * Bežala synchrónne v POST-e a pri ALPINE trvala 26 minút: osemnásť dávok
+ * modelu, potom pravidlá, rozpis kategórií, právna kontrola a sebakontrola.
+ * Odpoveď sa k prehliadaču nikdy nevrátila — spojenie toľko nevydrží —, takže
+ * účtovník stlačil tlačidlo a nedozvedel sa nič: ani že beží, ani že skončila.
+ * Práca sa pritom celá uložila.
+ */
+export const ANALYZA_KIND = 'ucto_analyza';
+
+/**
+ * Ako dlho smie job bežať, kým ho iný bežec vyhlási za zaseknutý. Extrakcia je
+ * zhora ohraničená timeoutom volania AI; analýza je desiatky volaní za sebou a
+ * s desaťminútovým oknom by ju druhá slučka toho istého workera prebrala
+ * uprostred behu a spustila celú znova — dvakrát zaplatené, dvakrát zapísané.
+ */
+const ANALYZA_STALE_SECONDS = 4 * 3600;
 
 interface AttachmentContext extends Record<string, unknown> {
   id: string;
@@ -91,11 +112,12 @@ async function claimJob(
            -- Zaseknutý beh: worker padol alebo ho niekto reštartoval uprostred
            -- extrakcie. Bez tejto vetvy ostane job navždy 'running' a doklad
            -- navždy v stave „spracúva sa" — nikto ho už nikdy nevyzdvihne.
-           OR (status='running' AND locked_at < now() - make_interval(secs => $1))
+           OR (status='running' AND locked_at < now() - make_interval(
+                 secs => CASE WHEN kind=$2 THEN $3::double precision ELSE $1::double precision END))
         ORDER BY created_at
         FOR UPDATE SKIP LOCKED
         LIMIT 1`,
-      [staleRunningSeconds],
+      [staleRunningSeconds, ANALYZA_KIND, ANALYZA_STALE_SECONDS],
     );
     const job = result.rows[0];
     if (!job) return undefined;
@@ -777,6 +799,49 @@ async function failJob(
   }
 }
 
+/**
+ * Analýza profilu v pozadí. Nemá prílohu ani doklad, takže nejde cestou
+ * extrakcie — a jej zlyhanie sa nesmie zapisovať do inbound_attachments,
+ * kde nič nemá.
+ */
+async function spracujAnalyzu(database: Database, config: ServerConfig, job: JobRow): Promise<void> {
+  try {
+    const kde = { tenantId: job.tenant_id, organizationId: job.organization_id };
+    const vysledok = await analyzujUctovnyProfil(database, config, kde);
+    // Sebakontrola patrí do tej istej úlohy: bez nej účtovník dostane pravidlá
+    // a nemá ako vedieť, či sú lepšie než predtým. Jej zlyhanie nesmie zhodiť
+    // analýzu — tá je už zaplatená a uložená.
+    let presnost;
+    try {
+      presnost = await zmerajPresnost(database, config, kde, { vzorka: job.payload?.vzorka ?? 40 });
+    } catch (chyba) {
+      console.warn('[ucto-profil] sebakontrola po analýze zlyhala:',
+        chyba instanceof Error ? chyba.message : chyba);
+    }
+    await database.query(
+      `UPDATE processing_jobs SET status='succeeded', locked_at=NULL, locked_by=NULL,
+              error_code=NULL, error_message=NULL, payload=payload || $1::jsonb, updated_at=now()
+        WHERE id=$2`,
+      [JSON.stringify({ vysledok: { ...vysledok, presnost } }), job.id],
+    );
+    await writeAudit(database, {
+      tenantId: job.tenant_id, organizationId: job.organization_id, actorType: 'system',
+      action: 'ucto_profile.analyzed', entityType: 'organization', entityId: job.organization_id,
+      correlationId: job.correlation_id, metadata: { ...vysledok },
+    });
+  } catch (chyba) {
+    // Analýza sa neopakuje sama: každý pokus je osemnásť volaní modelu a keď
+    // padla na chýbajúcej histórii či na kľúči, druhý pokus padne rovnako.
+    await database.query(
+      `UPDATE processing_jobs SET status='failed', locked_at=NULL, locked_by=NULL,
+              error_code=$1, error_message=$2, updated_at=now()
+        WHERE id=$3`,
+      [(chyba as { code?: string })?.code ?? 'analyza_zlyhala',
+        (chyba instanceof Error ? chyba.message : String(chyba)).slice(0, 500), job.id],
+    );
+  }
+}
+
 export async function processNextJob(
   database: Database,
   config: ServerConfig,
@@ -789,6 +854,10 @@ export async function processNextJob(
   const staleRunningSeconds = Math.max(600, Math.ceil(config.openai.timeoutMs / 1000) * 2);
   const job = await claimJob(database, workerId, staleRunningSeconds);
   if (!job) return false;
+  if (job.kind === ANALYZA_KIND) {
+    await spracujAnalyzu(database, config, job);
+    return true;
+  }
   const jobStartedAt = performance.now();
   let prepared: PreparedRun | undefined;
   try {

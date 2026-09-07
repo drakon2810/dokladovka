@@ -532,6 +532,46 @@ describe('agent backend contour', () => {
 
     await app.close();
   }, 90_000);
+
+  // ParseCodeLists v agentovi vracia vždy všetkých päť číselníkov. Keď POHODA
+  // na jeden kontajner odpovie chybou, príde prázdny zoznam — a ten by inak
+  // zhasol všetky predkontácie firmy, pričom odpoveď je 'ok'. Účtovník by
+  // stratil zaúčtovanie a nemal by kde to vidieť.
+  it('prázdna dávka číselníka nezhasne to, čo už firma má', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const browserHeaders = { cookie: String(login.headers['set-cookie']).split(';')[0], 'x-csrf-token': login.json().csrfToken as string };
+    await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
+    const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders, payload: { organizationId: seeded.organizationId } });
+    const paired = await app.inject({
+      method: 'POST', url: '/api/agent/pair',
+      payload: { pairingCode: pairing.json().code as string, hostname: 'POHODA-SRV', agentVersion: '1.0.0', companyIco: '12345678' },
+    });
+    const agentHeaders = { authorization: `Bearer ${paired.json().agentToken as string}` };
+    const nahraj = (items: unknown[]) => app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`,
+      headers: agentHeaders, payload: { kind: 'predkontacie', items },
+    });
+
+    expect((await nahraj([{ kod: '518/321', nazov: 'Služby' }, { kod: '501/321', nazov: 'Materiál' }])).statusCode).toBe(200);
+    const prazdna = await nahraj([]);
+    expect(prazdna.statusCode, prazdna.body).toBe(200);
+    expect(prazdna.json()).toEqual({ upserted: 0, deactivated: 0 });
+    const aktivne = await database.query<{ code: string }>(
+      "SELECT code FROM code_list_items WHERE organization_id=$1 AND kind='predkontacie' AND active=true ORDER BY code",
+      [seeded.organizationId],
+    );
+    expect(aktivne.rows.map((row) => row.code)).toEqual(['501/321', '518/321']);
+
+    // Neprázdna dávka deaktivuje ďalej: rad, ktorý POHODA naozaj zrušila, zhasnúť má.
+    expect((await nahraj([{ kod: '518/321', nazov: 'Služby' }])).json()).toEqual({ upserted: 1, deactivated: 1 });
+
+    await app.close();
+  }, 90_000);
 });
 
 // Denník sa dovtedy nahrával iba ručne cez prehliadač. Agent posiela surové

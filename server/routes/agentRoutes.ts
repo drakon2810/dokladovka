@@ -372,13 +372,23 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       }
       // Nové predkontácie dostanú účet z prefixu kódu a daňový pomer z názvu.
       if (body.kind === 'predkontacie') await seedTaxRatioDefaults(tx, agent.tenant_id, id);
-      const deactivated = await tx.query(
+      // Prázdna dávka nikdy nič nezhasne. ParseCodeLists v agentovi vracia
+      // VŽDY všetkých päť číselníkov — keď POHODA na jeden kontajner odpovie
+      // chybou, príde prázdny zoznam, nie výnimka, a agent ho nahrá ako
+      // ktorýkoľvek iný. Deaktivácia by vtedy zhasla všetky predkontácie firmy
+      // a odpoveď by pritom bola 'ok': účtovník by prišiel o zaúčtovanie a
+      // nemal by kde to vidieť. Odmietnuť dávku sa nedá — číselník smie byť
+      // aj naozaj prázdny (firma bez stredísk) a chyba by zhodila celý cyklus
+      // agenta aj pre ostatné druhy. Staré položky teda ostanú aktívne; to je
+      // najviac ponuka navyše, kým zhasnuté predkontácie sú účtovanie mimo
+      // prevádzky.
+      const deactivated = normalized.size === 0 ? 0 : (await tx.query(
         `UPDATE code_list_items SET active=false, updated_at=now()
           WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND source='pohoda' AND active=true
             AND NOT (code = ANY($4::text[]))`,
         [agent.tenant_id, id, body.kind, [...normalized.keys()]],
-      );
-      await writeAudit(tx, { tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id, action: 'agent.code_lists_synced', entityType: 'organization', entityId: id, correlationId: request.id, metadata: { kind: body.kind, itemCount: normalized.size, deactivated: deactivated.rowCount } });
+      )).rowCount;
+      await writeAudit(tx, { tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id, action: 'agent.code_lists_synced', entityType: 'organization', entityId: id, correlationId: request.id, metadata: { kind: body.kind, itemCount: normalized.size, deactivated } });
       // Žiadosť „Synchronizovať mostíkom" je vybavená prvým nahratým číselníkom —
       // agent v jednom cykle nahráva všetky druhy, netreba čakať na posledný.
       await tx.query(
@@ -386,7 +396,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
           WHERE organization_id=$1 AND tenant_id=$2 AND code_list_sync_requested_at IS NOT NULL`,
         [id, agent.tenant_id],
       );
-      return { upserted: insertedOrUpdated, deactivated: deactivated.rowCount };
+      return { upserted: insertedOrUpdated, deactivated };
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now(), agent_version=$1 WHERE id=$2', [agent.agent_version, agent.id]);
     return counts;

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
@@ -12,8 +13,8 @@ import {
 } from '../services/uctoHistoryService.js';
 import { parseHistoriaXml } from '../services/uctoHistoriaXml.js';
 import { zmerajPresnost } from '../services/uctoPresnostService.js';
+import { ANALYZA_KIND } from '../workerService.js';
 import {
-  analyzujUctovnyProfil,
   deleteUctoKategoria,
   kategoriaZmenaSchema,
   listUctoKategorie,
@@ -129,42 +130,52 @@ export function registerUctoProfileRoutes(
     return historyStats(database, auth.tenantId, organizationId);
   });
 
-  // Jednorazová analýza. Beží synchrónne v požiadavke — pri veľkej histórii to
-  // môže trvať desiatky minút.
-  // ponytail: synchrónne volanie, pri stovkách dávok prejsť na durable job
-  // (rovnaká tabuľka processing_jobs ako extrakcia).
-  app.post('/api/organizations/:id/ucto-profile/analyze', async (request) => {
+  // Jednorazová analýza. Beží ako job vo workeri, nie v tejto požiadavke:
+  // pri ALPINE trvala 26 minút a odpoveď sa k prehliadaču nikdy nevrátila —
+  // účtovník stlačil tlačidlo a nedozvedel sa ani že beží, ani že skončila.
+  app.post('/api/organizations/:id/ucto-profile/analyze', async (request, reply) => {
     const { auth, organizationId } = await pristup(request, true);
-    const vysledok = await analyzujUctovnyProfil(database, config, {
-      tenantId: auth.tenantId,
-      organizationId,
-    }, injectedParser);
+    // Druhé stlačenie nesmie spustiť druhý beh: je to osemnásť volaní modelu
+    // a obidva by písali do tých istých tabuliek.
+    const bezi = await database.query<{ id: string }>(
+      `SELECT id FROM processing_jobs
+        WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND status IN ('queued','running')
+        LIMIT 1`,
+      [auth.tenantId, organizationId, ANALYZA_KIND],
+    );
+    if (bezi.rows[0]) return reply.code(202).send({ jobId: bezi.rows[0].id, uzBezi: true });
+
+    const jobId = randomUUID();
+    await database.query(
+      `INSERT INTO processing_jobs (id,tenant_id,organization_id,kind,status,max_attempts,correlation_id,payload)
+       VALUES ($1,$2,$3,$4,'queued',1,$5,'{}'::jsonb)`,
+      [jobId, auth.tenantId, organizationId, ANALYZA_KIND, String(request.id)],
+    );
     await writeAudit(database, {
       tenantId: auth.tenantId,
       organizationId,
       actorType: 'user',
       actorId: auth.userId,
-      action: 'ucto_profile.analyzed',
+      action: 'ucto_profile.analysis_queued',
       entityType: 'organization',
       entityId: organizationId,
       correlationId: request.id,
-      metadata: { ...vysledok },
+      metadata: { jobId },
     });
-    // Analýza sa končí sebakontrolou. Bez nej účtovník dostane pravidlá a nemá
-    // ako vedieť, či sú lepšie než predtým — a presne to bolo doteraz: menili
-    // sme veci a merali ich zvlášť, ručne. Vzorka je malá, aby to nepredĺžilo
-    // beh o desiatky minút; na presnejšie číslo je tlačidlo merania.
-    // Zlyhanie sebakontroly nesmie zhodiť analýzu — tá už je zaplatená a uložená.
-    let presnost;
-    try {
-      presnost = await zmerajPresnost(database, config, {
-        tenantId: auth.tenantId, organizationId,
-      }, { vzorka: 40 }, injectedParser as never);
-    } catch (chyba) {
-      console.warn('[ucto-profil] sebakontrola po analýze zlyhala:',
-        chyba instanceof Error ? chyba.message : chyba);
-    }
-    return { ...vysledok, presnost };
+    return reply.code(202).send({ jobId, uzBezi: false });
+  });
+
+  // Stav posledného behu — jediné, z čoho sa účtovník dozvie, ako to dopadlo.
+  app.get('/api/organizations/:id/ucto-profile/analyze', async (request) => {
+    const { auth, organizationId } = await pristup(request, false);
+    const beh = await database.query<Record<string, any>>(
+      `SELECT id, status, error_message, created_at, updated_at, payload->'vysledok' AS vysledok
+         FROM processing_jobs
+        WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3
+        ORDER BY created_at DESC LIMIT 1`,
+      [auth.tenantId, organizationId, ANALYZA_KIND],
+    );
+    return { beh: beh.rows[0] ?? null };
   });
 
   app.get('/api/organizations/:id/ucto-profile', async (request) => {

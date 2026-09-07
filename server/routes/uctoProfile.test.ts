@@ -14,9 +14,38 @@ import {
   importUctoHistory,
 } from '../services/uctoHistoryService.js';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { ANALYZA_KIND, processNextJob } from '../workerService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
+
+// Analýza bežala synchrónne v POST-e a pri ALPINE trvala 26 minút — odpoveď sa
+// k prehliadaču nikdy nevrátila. Teraz je to job, takže musí prejsť workerom,
+// a to CESTOU MIMO PRÍLOHY: tento druh jobu žiadnu nemá.
+describe('analýza ako job', () => {
+  it('worker ju spracuje mimo cesty prílohy a zlyhanie zapíše k jobu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const jobId = randomUUID();
+    await database.query(
+      `INSERT INTO processing_jobs (id,tenant_id,organization_id,kind,status,max_attempts,correlation_id,payload)
+       VALUES ($1,$2,$3,$4,'queued',1,'test','{}'::jsonb)`,
+      [jobId, seeded.tenantId, seeded.organizationId, ANALYZA_KIND],
+    );
+
+    expect(await processNextJob(database, testConfig(), 'test-worker')).toBe(true);
+
+    const job = (await database.query<Record<string, any>>(
+      'SELECT status, error_code, error_message FROM processing_jobs WHERE id=$1', [jobId],
+    )).rows[0];
+    // Bez vetvy na ANALYZA_KIND by job spadol na chýbajúcej prílohe — kód chyby
+    // je jediné, čo tie dve cesty od seba odlíši.
+    expect(job.error_code).not.toBe('attachment_context_missing');
+    expect(job).toMatchObject({ status: 'failed', error_code: 'ai_unavailable' });
+    expect(String(job.error_message)).not.toBe('');
+  }, 60_000);
+});
 
 async function seedCodeLists(
   database: Awaited<ReturnType<typeof createTestDatabase>>,
