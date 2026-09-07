@@ -1038,6 +1038,15 @@ export async function processNextJob(
             documentId: doklad.documentId,
             supplierIco: summary.supplierIco,
             supplierName: summary.supplierName,
+            // IČ DPH a IBAN sú kľúče, ktorými sa hľadá karta partnera — tá
+            // spája meno vytlačené na faktúre („Guretruck, S. L.") s menom
+            // z adresára POHODY („guretruck"), ktorým je pomenovaný korpus
+            // aj pravidlá protistrán. Bez nich sa zahraničný dodávateľ bez
+            // IČO nespáruje nikdy a pravidlo „16 zo 16" sa ticho nenájde.
+            // rebuildAccountingSuggestion o pár stoviek riadkov vyššie ich
+            // posiela oba už dávno — chýbali len tu.
+            supplierIcDph: summary.supplierIcDph,
+            supplierIban: summary.supplierIban,
           }, doklad.kontext);
         } catch (cause) {
           // Návrh je voliteľný — chyba AI nezhodí doklad, ktorý je už uložený,

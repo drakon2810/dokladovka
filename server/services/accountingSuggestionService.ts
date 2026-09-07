@@ -1459,8 +1459,20 @@ export async function maybeAiAccountingSuggestion(
   // korpus. Fuzzy porovnávanie mien tu netreba a nechceme ho: adresár je tá istá
   // autorita, ktorá korpus pomenovala. Keď sa karta nenájde, ostáva meno
   // z dokladu ako doteraz.
-  const kartaProtistrany = await najdiPartnera(
-    database, input.tenantId, input.organizationId, protistranaZDokladu);
+  // Identifikátory berieme aj z DOKLADU, nielen zo vstupu. Volajúci ich posielať
+  // nemusí — a jeden to naozaj nerobil: workerService pri návrhu po extrakcii
+  // posielal len meno a IČO, takže karta sa nemala podľa čoho nájsť a oprava
+  // vyššie bežala naprázdno. Doklad ich má vždy, tak nech na volajúcom nezáleží.
+  const dodavatelDokladu = (await database.query<{ strana: { ico?: string; icDph?: string; iban?: string } | null }>(
+    `SELECT extracted->$3 AS strana FROM documents WHERE id=$1 AND tenant_id=$2`,
+    [input.documentId, input.tenantId, documentContext.documentType === 'FV' ? 'odberatel' : 'dodavatel'],
+  )).rows[0]?.strana ?? {};
+  const kartaProtistrany = await najdiPartnera(database, input.tenantId, input.organizationId, {
+    ...protistranaZDokladu,
+    ico: protistranaZDokladu.ico || dodavatelDokladu.ico,
+    icDph: protistranaZDokladu.icDph || dodavatelDokladu.icDph,
+    iban: protistranaZDokladu.iban || (documentContext.documentType === 'FV' ? undefined : dodavatelDokladu.iban),
+  });
   const protistranaKontextu = kartaProtistrany
     ? { nazov: kartaProtistrany.nazov, ico: kartaProtistrany.ico || protistranaZDokladu.ico }
     : { nazov: protistranaZDokladu.nazov, ico: protistranaZDokladu.ico };

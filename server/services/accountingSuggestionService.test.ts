@@ -773,9 +773,12 @@ describe('accounting suggestions', () => {
       totalAmount: 220, currency: 'EUR',
       lineDescriptions: ['FEE (assistance fee)', 'Telephonic transfer to the card'],
     };
+    // ZÁMERNE bez supplierIcDph: workerService pri návrhu po extrakcii posiela
+    // len meno a IČO. Karta sa preto musí nájsť z DOKLADU, inak oprava beží
+    // naprázdno presne tak, ako bežala v ostrej prevádzke.
     const input = {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
-      supplierName: 'Guretruck, S. L.', supplierIcDph: 'ESB20720611',
+      supplierName: 'Guretruck, S. L.',
     };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
 
