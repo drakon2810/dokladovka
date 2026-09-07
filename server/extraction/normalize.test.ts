@@ -468,13 +468,55 @@ describe('rozpis DPH sa dopočíta z položiek', () => {
     expect(doklad([]).extracted.rozpisDph).toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
   });
 
-  it('rozpis z dokladu má prednosť pred dopočtom', () => {
+  it('rozpis z dokladu má prednosť, kým sedí s celkovou sumou', () => {
     expect(doklad([{ vatRate: '23', base: '1869.50', vat: '429.99' }]).extracted.rozpisDph)
       .toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
-    // Doklad, kde sa rozpis a položky rozchádzajú, si ponechá svoj rozpis —
-    // rozdiel má vyriešiť účtovník, nie tichý prepočet.
+    // ZMENA ROZHODNUTIA (účtovník, 2026-09-07). Predtým si doklad ponechal svoj
+    // rozpis aj keď sa s položkami rozchádzal — rozdiel mal vyriešiť účtovník.
+    // Lenže vyriešiť sa nedal: pri zapnutých položkách editor rozpis zamyká
+    // a hlási „počíta sa z položiek". Účtovník tak videl zamknuté číslo, ktoré
+    // odporovalo tomu, čo obrazovka sľubovala, a doklad ostal nechváliteľný.
+    // Teraz rozhoduje aritmetika: 1000 + 190 sa nerovná 2299,49, položky áno,
+    // takže vyhrajú položky.
     expect(doklad([{ vatRate: '19', base: '1000', vat: '190' }]).extracted.rozpisDph)
-      .toEqual([{ sadzba: 19, zaklad: 1000, dph: 190 }]);
+      .toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
+  });
+
+  // Ostrý prípad Guretruck A27432, kvôli ktorému sa rozhodnutie zmenilo.
+  it('model zabudol druhú položku v rozpise — vyhrajú položky', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Guretruck, S. L.', icDph: 'ESB20720611' },
+      buyer: { ico: '35761571' }, invoiceNumber: 'A27432',
+      issueDate: '2026-09-01', taxDate: '2026-09-01', dueDate: '2026-09-01',
+      currency: 'EUR',
+      lineItems: [
+        { description: 'FEE', vatRate: '0', amountWithoutVat: '20', vatAmount: '0', amountTotal: '20' },
+        { description: 'Telephonic transfer', vatRate: '0', amountWithoutVat: '200', vatAmount: '0', amountTotal: '200' },
+      ],
+      vatBreakdown: [{ vatRate: '0', base: '20', vat: '0' }],
+      totalWithoutVat: '220', totalVat: '0', totalAmount: '220',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-guretruck', '2026-09-01');
+    expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 220, dph: 0 }]);
+    expect(validateNormalizedExtraction(normalized, { ico: '35761571' })).toEqual([]);
+  });
+
+  // Poistka: keď nesedí ANI JEDNO, rozpis z dokladu ostáva a doklad zastane
+  // na kontrole. Dopočítať sa tam nedá z čoho — hádanie by daň len zakrylo.
+  it('keď nesedí rozpis ani položky, ostáva rozpis z dokladu', () => {
+    const normalized = normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP',
+      supplier: { nazov: 'Dodávateľ s.r.o.', ico: '12345678' },
+      buyer: { ico: '35761571' }, invoiceNumber: 'FA-8',
+      issueDate: '2026-09-01', taxDate: '2026-09-01', dueDate: '2026-09-01',
+      currency: 'EUR',
+      lineItems: [{ description: 'Časť', vatRate: '0', amountWithoutVat: '50', vatAmount: '0', amountTotal: '50' }],
+      vatBreakdown: [{ vatRate: '0', base: '100', vat: '0' }],
+      totalWithoutVat: '220', totalVat: '0', totalAmount: '220',
+      fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-nesedi', '2026-09-01');
+    expect((normalized.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 100, dph: 0 }]);
   });
 });
 

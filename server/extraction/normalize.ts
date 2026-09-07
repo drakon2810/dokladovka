@@ -366,7 +366,29 @@ export function normalizeExtractionResult(
   // Model občas rozpis DPH vôbec nevráti, hoci položky sadzbu aj daň nesú.
   // Prázdny rozpis blokuje schválenie a do POHODY by odišli nulové základy —
   // preto sa dopočíta z položiek. Vlastný rozpis z dokladu má vždy prednosť.
-  const rozpisZaklad = rozpisZOdpovede.length > 0 ? rozpisZOdpovede : rozpisZPoloziek(polozky);
+  const zPoloziek = rozpisZPoloziek(polozky);
+  /** Sedí súčet rozpisu s celkovou sumou dokladu? Tolerancia ako inde: cent. */
+  const sediSDokladom = (rozpis: Array<{ zaklad: number; dph: number }>): boolean =>
+    rozpis.length > 0
+    && Math.abs(round2(rozpis.reduce((sucet, row) => sucet + row.zaklad + row.dph, 0)) - totalAmount) <= 0.02;
+  // Rozpis z dokladu má prednosť — ale len kým sedí s celkovou sumou.
+  //
+  // Doteraz platilo, že rozpis si doklad ponechá vždy a rozdiel proti položkám
+  // vyrieši účtovník. Guretruck A27432 ukázal, čo to stojí: model prečítal obe
+  // položky správne (20,00 poplatok + 200,00 prevod = 220,00), ale do rozpisu
+  // dal len prvú. Doklad sa nedal schváliť a keby prešiel, do POHODY ide základ
+  // 20 namiesto 220. Editor pritom pri zapnutých položkách rozpis ZAMYKÁ a hlási
+  // „počíta sa z položiek" — účtovník teda videl zamknuté číslo, ktoré si sám
+  // opraviť nemohol a ktoré nesúhlasilo s tým, čo obrazovka sľubovala.
+  //
+  // Rozhoduje aritmetika, nie dôvera v zdroj: keď rozpis s celkovou sumou
+  // NEsedí a položky sedia, vyhrajú položky. Keď sedí rozpis, ostáva rozpis aj
+  // pri nesediacich položkách (tie bývajú neúplné). Keď nesedí ani jedno,
+  // ostáva rozpis z dokladu a doklad zastane na kontrole — hádať nie je z čoho.
+  const rozpisZaklad = rozpisZOdpovede.length === 0
+    || (!sediSDokladom(rozpisZOdpovede) && sediSDokladom(zPoloziek))
+    ? zPoloziek
+    : rozpisZOdpovede;
   // Doklad bez DPH, ktorý nemá ani položky: pokuta, poplatok, odvod. Rozpis
   // nemá z čoho vzniknúť a prázdny je zle dvakrát — schválenie blokuje
   // („doplniť rozpis DPH") a keby sa schválil, do POHODY odíde nulový doklad,
