@@ -58,6 +58,13 @@ export async function doplnRozpisKategorii(
     const hlavicka = riadky.find((riadok) => riadok.riadokIndex === 0);
     const polozky = riadky.filter((riadok) => riadok.riadokIndex > 0);
     if (!hlavicka || polozky.length === 0) continue;
+    // Tvar rozpisu smú učiť LEN doklady, ktoré účtovník naozaj rozúčtoval.
+    // Odkedy korpus drží aj položky dokladov účtovaných na jeden účet (kvôli
+    // ich textom), tvoria väčšinu — a odvodRozpis potom vidí prevažne rovnaké
+    // riadky, zahodí ich ako „nič sa nedelí" a kategórii neostane nič. AGS tak
+    // prišlo z piatich kategórií s rozpisom na nulu. Doklad na jeden účet
+    // o DELENÍ nehovorí nič; do korpusu patrí pre svoj text, nie pre tvar.
+    if (new Set(polozky.map((polozka) => polozka.predkontaciaKod ?? '')).size < 2) continue;
     let najlepsia: { id: string; zhoda: number } | undefined;
     for (const kategoria of kategorie) {
       const zhoda = pocetZhodSlov(kategoria.slovnik, hlavicka.text);

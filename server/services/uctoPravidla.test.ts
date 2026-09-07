@@ -150,6 +150,15 @@ describe('rozpis kategórie plnenia', () => {
       await riadok(cislo, 2, 'úrok', 'Úroky-leas');
     }
 
+    // Doklady účtované na JEDEN účet sú v korpuse kvôli textom položiek, ale
+    // o delení nehovoria nič. Keby tvar učili aj ony, prevážili by — odvodRozpis
+    // by videl prevažne rovnaké riadky a kategórii by neostalo nič.
+    for (const cislo of ['J1', 'J2', 'J3', 'J4', 'J5']) {
+      await riadok(cislo, 0, 'leasing splátka vozidla', 'leas.istina');
+      await riadok(cislo, 1, 'splátka', 'leas.istina');
+      await riadok(cislo, 2, 'splátka', 'leas.istina');
+    }
+
     const vysledok = await doplnRozpisKategorii(database, {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId,
     });
