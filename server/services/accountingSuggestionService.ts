@@ -2040,6 +2040,22 @@ export async function maybeAiAccountingSuggestion(
     doterajsie.push(riadok);
     skupiny.set(riadok.index, doterajsie);
   }
+  // Osamotená časť, ktorá si berie skoro celú položku, nie je rez — model tak
+  // píše „celá položka" (v meraní ALPINY prišlo 0,99 aj 0,9999999999999999).
+  // Rez z jedinej časti neprejde kontrolou súčtu a doteraz vypadol celý, a
+  // s ním aj účet, ktorý model pre tú položku vybral: doklad tak stratil
+  // rozpis, hoci model ho navrhol. Deliť položku 99/1 pritom nikto neúčtuje.
+  // Osamotená časť s menším podielom sa naďalej zahadzuje — tam model naozaj
+  // odkrojil kus a kam patrí zvyšok, nepovedal.
+  // ponytail: hranica z pozorovaných hodnôt; pri firme, ktorá delí jemnejšie
+  // než na dvadsatinu, ju treba znížiť.
+  const CELA_POLOZKA_OD = 0.95;
+  const celePolozky = new Set<number>();
+  for (const [index, casti] of skupiny) {
+    if (casti.length === 1 && (casti[0].podiel ?? 0) >= CELA_POLOZKA_OD) celePolozky.add(index);
+  }
+  for (const index of celePolozky) skupiny.delete(index);
+
   const platneSkupiny = new Set<number>();
   for (const [index, casti] of skupiny) {
     const sucet = casti.reduce((spolu, cast) => spolu + (cast.podiel ?? 0), 0);
@@ -2054,7 +2070,7 @@ export async function maybeAiAccountingSuggestion(
   const pouziteIndexy = new Set<number>();
   const riadky = (parsed.riadky ?? []).flatMap((riadok) => {
     const polozka = polozkyPreModel[riadok.index];
-    const jeCast = jeRez(riadok.podiel);
+    const jeCast = jeRez(riadok.podiel) && !celePolozky.has(riadok.index);
     // Rozrezanie sa berie iba celé. Jedna časť bez svojich súrodencov by
     // z dokladu odkrojila kus sumy a zvyšok by sa stratil.
     if (jeCast && !platneSkupiny.has(riadok.index)) return [];

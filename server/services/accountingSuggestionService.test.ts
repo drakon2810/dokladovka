@@ -1929,23 +1929,28 @@ describe('návrh rozrezania položky', () => {
           { index: 1, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: null, podiel: 0.2, podielDph: 0.5 },
           // Nafta: jediná časť, súčet nedá celok — celá skupina von.
           { index: 0, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: null, podiel: 0.2, podielDph: null },
+          // AdBlue: jediná časť, ale skoro celá položka — to nie je rez, to je
+          // 'celá položka' napísaná ako podiel. Riadok má ostať, nie vypadnúť.
+          { index: 2, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: null, podiel: 0.99, podielDph: null },
         ],
       })),
     };
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Up Déjeuner, s. r. o.' };
     const context = {
       documentType: 'FP', supplierName: 'Up Déjeuner, s. r. o.', totalAmount: 202.67, currency: 'EUR',
-      lineDescriptions: ['Nafta', 'Natural 95'],
-      polozky: [{ popis: 'Nafta', sadzbaDph: 23, suma: 123.11 }, { popis: 'Natural 95', sadzbaDph: 23, suma: 81 }],
+      lineDescriptions: ['Nafta', 'Natural 95', 'AdBlue'],
+      polozky: [{ popis: 'Nafta', sadzbaDph: 23, suma: 123.11 }, { popis: 'Natural 95', sadzbaDph: 23, suma: 81 },
+        { popis: 'AdBlue', sadzbaDph: 23, suma: 20 }],
     };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
 
     const riadky = (await database.query<Record<string, any>>(
       'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0].riadky as Array<Record<string, unknown>>;
-    // Ostali len dve časti Naturalu; nafta s jedinou časťou vypadla.
+    // Ostali dve časti Naturalu; nafta s jedinou pätinovou časťou vypadla,
+    // AdBlue s jedinou takmer celou ostalo — už ako celý riadok, nie ako rez.
     expect(riadky.map((riadok) => [riadok.index, riadok.podiel, riadok.podielDph])).toEqual([
-      [1, 0.8, 0.5], [1, 0.2, 0.5],
+      [1, 0.8, 0.5], [1, 0.2, 0.5], [2, undefined, undefined],
     ]);
     expect(riadky[1].predkontaciaId).toBe(nadspotreba);
   }, 90_000);
