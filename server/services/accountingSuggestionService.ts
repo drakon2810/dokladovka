@@ -1199,7 +1199,33 @@ async function najdiDennik(
   // dokladmi iných: „skladné" súkromnej osobe patrí do KV D2, tá istá služba
   // firme s IČ DPH do A1 — a texty sa pritom líšia len mesiacom. Preto idú
   // riadky protistrany do denníka vždy, aj keď ich text sedí menej.
-  const tejto = (nazov || ico) ? (await dopyt(true)).slice(0, 5) : [];
+  // Päť slotov protistrany nesmie zhltnúť jedna a tá istá prax.
+  //
+  // ČSOB Leasing posiela ALPINE dva druhy prijatej faktúry: upomienky
+  // (544-Zml. pokuty) a výkupy vozidiel (042/321100Obst.maj.). Pri anglickom
+  // či inak formulovanom texte je podobnosť u VŠETKÝCH riadkov 0 a počet
+  // rovnaký, takže komparátor vyššie vráti pre každú dvojicu 0, stabilný sort
+  // ponechá poradie z Postgresu a slice(0,5) vezme päť takmer identických
+  // upomienok. Výkupy stáli na 7., 9., 19., 20. a 21. mieste a do denníka sa
+  // nedostali ani raz — model teda videl jedinú prax protistrany, a nie tú,
+  // ktorá na doklad sadla.
+  //
+  // Kľúčom je DVOJICA (predkontácia, členenie DPH), nie text: dennikZhoda
+  // nižšie porovnáva presne tieto dve id. Dedup beží AŽ PO sorte, takže z
+  // každej dvojice ostane ten riadok, ktorý sedel najlepšie — čo dnes trafí
+  // dennikZhoda, sa nestratí.
+  const poDvojiciach = (riadky: DennikRiadok[], kolko: number): DennikRiadok[] => {
+    const videne = new Set<string>();
+    const prve: DennikRiadok[] = [];
+    const zvysok: DennikRiadok[] = [];
+    for (const riadok of riadky) {
+      const dvojica = `${riadok.predkontaciaKod ?? ''}|${riadok.clenenieDphKod ?? ''}`;
+      if (videne.has(dvojica)) zvysok.push(riadok);
+      else { videne.add(dvojica); prve.push(riadok); }
+    }
+    return [...prve, ...zvysok].slice(0, kolko);
+  };
+  const tejto = (nazov || ico) ? poDvojiciach(await dopyt(true), 5) : [];
   const kluc = (riadok: DennikRiadok) =>
     [riadok.text, riadok.predkontaciaKod, riadok.clenenieDphKod, riadok.clenenieKvKod].join('|');
   const uz = new Set(tejto.map(kluc));

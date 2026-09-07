@@ -788,6 +788,75 @@ describe('accounting suggestions', () => {
     expect(payload.pravidlo).toMatchObject({ dokladov: 4, zhoda: 4, predkontaciaKod: 'TACHpopl.' });
   }, 90_000);
 
+  // Ostrý prípad ČSOB Leasing: protistrana má DVE praxe na prijatých faktúrach —
+  // upomienky (544-Zml. pokuty, veľa dokladov) a výkupy vozidiel
+  // (042/321100Obst.maj., päť dokladov). Text novej faktúry („Predajná cena
+  // nájomcovi") nesedí ani s jedným, takže podobnosť je všade 0 a počty rovnaké:
+  // komparátor vráti 0, stabilný sort ponechá poradie z databázy a päť slotov
+  // protistrany zhltnú upomienky. Výkupy sa do denníka nedostali vôbec.
+  it('denník: päť slotov protistrany si nerozoberie jedna prax', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pokuty = randomUUID();
+    const majetok = randomUUID();
+    const dph = randomUUID();
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,35424,'EUR')`,
+      [documentId, ...kde, JSON.stringify({
+        dodavatel: { nazov: 'ČSOB Leasing, a.s.', ico: '35704713' },
+        polozky: [{ popis: 'Predajná cena nájomcovi' }],
+      })],
+    );
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','544-Zml. pokuty','544-Zml. pokuty','pohoda'),
+              ($4,$2,$3,'predkontacie','042/321100Obst.maj.','042/321100Obst.maj.','pohoda'),
+              ($5,$2,$3,'cleneniaDph','PD','PD','pohoda')`,
+      [pokuty, ...kde, majetok, dph],
+    );
+    // Poradie zámerne ako z Postgresu: upomienky prvé, výkupy až za nimi.
+    const riadok = (text: string, pk: string, pkId: string) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,supplier_ico,
+         line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,source,riadok_hash)
+       VALUES ($1,$2,$3,'FP',$4,'2026-04-08','čsob leasing, a.s.','35704713',$5,$6,$7,'PD',$8,'mdb',$9)`,
+      [randomUUID(), ...kde, randomUUID().slice(0, 8), text, pk, pkId, dph, randomUUID()],
+    );
+    for (let index = 0; index < 8; index += 1) {
+      await riadok(`úroky z omeškania upomienka ${index}`, '544-Zml. pokuty', pokuty);
+    }
+    for (let index = 0; index < 5; index += 1) {
+      await riadok(`kúpa ojazdene vozidlo - leasingová zmluva ${index}`, '042/321100Obst.maj.', majetok);
+    }
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: majetok, clenenieDphId: dph, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Denník protistrany',
+      })),
+    };
+    const context = {
+      documentType: 'FP', supplierName: 'ČSOB Leasing, a.s.', supplierIco: '35704713',
+      totalAmount: 35424, currency: 'EUR', lineDescriptions: ['Predajná cena nájomcovi'],
+    };
+    const input = {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+      supplierName: 'ČSOB Leasing, a.s.', supplierIco: '35704713',
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    // Obe praxe protistrany musia byť v denníku vidieť, nielen tá početnejšia.
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const kody = payload.dennik.filter((r: any) => r.tejProtistrany).map((r: any) => r.predkontaciaKod);
+    expect(kody).toContain('042/321100Obst.maj.');
+    expect(kody).toContain('544-Zml. pokuty');
+  }, 90_000);
+
   it('web search: preambula pred tool callom nezhodí návrh a prázdna odpoveď nezmaže deterministický', async () => {
     const database = await createTestDatabase();
     databases.push(database);
