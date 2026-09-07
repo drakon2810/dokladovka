@@ -1243,6 +1243,49 @@ async function najdiDennik(
  * riadkov jedného dokladu tak, ako ju účtovník zapísal: 52,68 / 7,58 a
  * 13,17 / 7,57. Pomer základu aj krátenie dane sú z toho priamo vidieť.
  */
+/**
+ * Členenie DPH, ktoré firma na tomto účte používa BEZ VÝNIMKY.
+ *
+ * Meranie ALPINY ukázalo päť dokladov, kde model vybral správnu predkontáciu
+ * a hneď si k nej vybral členenie, aké firma na tom účte nikdy nemala:
+ * 518-nájom ťah má PD v 32 dokladoch z 32, leas.istina379201 PD v 54 z 54,
+ * 325100/378005 na internom doklade UN v 55 z 55 — a návrh dal PN.
+ *
+ * Keď je účet vybraný, členenie z neho spravidla vyplýva: naprieč štyrmi
+ * firmami je jednoznačných 61 zo 74, 27 z 36, 21 z 34 a 7 z 10 dvojíc. Model
+ * o ňom teda nerozhoduje, len sa svojmu vlastnému výberu účtu protirečí.
+ *
+ * Úsudok, na ktorý treba doklad, mu ostáva — účet vyberá ďalej on. A kde prax
+ * firmy kolíše (medzinárodný prepravca vozí na jednom účte viac režimov), sa
+ * nestane nič: dvojica s dvoma variantmi sem nespadne.
+ */
+/** Menej dokladov než toľko je náhoda, nie prax firmy. */
+const CLENENIE_Z_UCTU_OD = 5;
+
+async function clenenieZUctu(
+  database: Database,
+  input: SuggestionInput,
+  agendy: readonly string[],
+  predkontaciaKod: string,
+  doDatumu?: string,
+): Promise<string | undefined> {
+  if (agendy.length === 0 || !predkontaciaKod.trim()) return undefined;
+  const rows = (await database.query<Record<string, any>>(
+    `SELECT clenenie_dph_kod, count(DISTINCT doklad_cislo) AS dokladov
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+        AND coalesce(riadok_index, 0) = 0
+        AND btrim(predkontacia_kod) = btrim($4)
+        AND clenenie_dph_kod IS NOT NULL AND doklad_cislo IS NOT NULL
+        AND ($5::date IS NULL OR datum < $5::date)
+      GROUP BY 1`,
+    [input.tenantId, input.organizationId, agendy, predkontaciaKod, doDatumu ?? null],
+  )).rows;
+  if (rows.length !== 1) return undefined;
+  return Number(rows[0].dokladov) >= CLENENIE_Z_UCTU_OD
+    ? String(rows[0].clenenie_dph_kod) : undefined;
+}
+
 async function najdiRozuctovanie(
   database: Database,
   input: SuggestionInput,
@@ -1827,6 +1870,27 @@ export async function maybeAiAccountingSuggestion(
   }
 
   if (!hasAccounting(validated)) return false;
+
+  // Členenie z účtu. Prebíja LEN odpoveď modelu: pravidlo účtovníka aj to, čo
+  // je na doklade (extrakcia z neho číta odkaz na paragraf, ktorý model
+  // v prompte nevidí), ostávajú vyššie. Beží až tu, lebo potrebuje účet, ktorý
+  // sa práve rozhodol — a KV sa počíta nižšie, takže sekcia sa dopočíta už
+  // z opraveného členenia.
+  if (!pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
+    const kodUctu = codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code;
+    const kodClenenia = kodUctu
+      ? await clenenieZUctu(database, input, HISTORIA_AGENDY[documentContext.documentType] ?? [],
+        String(kodUctu), documentContext.historiaDoDatumu)
+      : undefined;
+    const zHistorie = kodClenenia
+      ? vsetkyClenenia.find((item) => item.kod.trim() === kodClenenia.trim())?.id
+      : undefined;
+    if (zHistorie && zHistorie !== validated.clenenie_dph_id) {
+      console.info(`[ai-navrh] ${input.documentId}: členenie ${kodClenenia} podľa účtu ${String(kodUctu).trim()}`
+        + ' — firma iné na ňom nemala');
+      validated.clenenie_dph_id = zHistorie;
+    }
+  }
   // Kategória, ktorú model nasledoval — nesie aj sekciu KV z reálnej histórie.
   const kategoriaZhoda = kategorie.find((kategoria) =>
     kategoria.predkontacia_id && kategoria.predkontacia_id === validated.predkontacia_id);

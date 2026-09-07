@@ -2159,3 +2159,89 @@ describe('istota pri ustálenom pravidle protistrany', () => {
     expect(Number(navrh.confidence)).toBeLessThan(0.9);
   }, 90_000);
 });
+
+// Meranie ALPINY: model vybral správnu predkontáciu a hneď si k nej vybral
+// členenie, aké firma na tom účte nikdy nemala — 518-nájom ťah má PD v 32
+// dokladoch z 32, a návrh dal PN. Keď je účet vybraný, členenie z neho
+// spravidla vyplýva; model sa tam neháda s dokladom, ale sám so sebou.
+describe('členenie DPH podľa účtu, keď firma iné nemala', () => {
+  async function navrhSHistoriou(historia: Array<{ clenenie: string; dokladov: number }>) {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const predkontacia = randomUUID();
+    const pd = randomUUID();
+    const pn = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518-nájom ťah','518-nájom ťah','pohoda')`,
+      [predkontacia, ...kde],
+    );
+    for (const [id, kod] of [[pd, 'PD'], [pn, 'PN']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
+        [id, ...kde, kod],
+      );
+    }
+    let cislo = 0;
+    for (const { clenenie, dokladov } of historia) {
+      for (let index = 0; index < dokladov; index += 1) {
+        cislo += 1;
+        await database.query(
+          `INSERT INTO ucto_historia
+            (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+             line_text_normalized,predkontacia_kod,clenenie_dph_kod,riadok_index,source,riadok_hash)
+           VALUES ($1,$2,$3,'FP',$4,'2026-03-10','paccar','nájom ťahača','518-nájom ťah',$5,0,'mdb',$6)`,
+          [randomUUID(), ...kde, `26FP${cislo}`, clenenie, randomUUID()],
+        );
+      }
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, ...kde],
+    );
+    // Model trafí účet a k nemu si vyberie PN.
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predkontacia, clenenieDphId: pn, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Nájom ťahača',
+      })),
+    };
+    await maybeAiAccountingSuggestion(
+      database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Paccar' },
+      {
+        documentType: 'FP', supplierName: 'Paccar', totalAmount: 100, currency: 'EUR',
+        lineDescriptions: ['nájom ťahača'], polozky: [{ popis: 'nájom ťahača', suma: 100 }],
+      },
+      parser,
+    );
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT predkontacia_id, clenenie_dph_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    return { navrh, pd, pn, predkontacia };
+  }
+
+  it('bez jedinej výnimky v histórii prebije odpoveď modelu', async () => {
+    const { navrh, pd, predkontacia } = await navrhSHistoriou([{ clenenie: 'PD', dokladov: 8 }]);
+    // Účet ostáva ten, ktorý vybral model — berie sa mu len to, čo z účtu plynie.
+    expect(navrh.predkontacia_id).toBe(predkontacia);
+    expect(navrh.clenenie_dph_id).toBe(pd);
+  }, 90_000);
+
+  it('kde prax firmy kolíše, rozhoduje ďalej model', async () => {
+    const { navrh, pn } = await navrhSHistoriou([
+      { clenenie: 'PD', dokladov: 6 }, { clenenie: 'PN', dokladov: 4 },
+    ]);
+    expect(navrh.clenenie_dph_id).toBe(pn);
+  }, 90_000);
+
+  it('štyri doklady sú náhoda, nie prax — model ostáva', async () => {
+    const { navrh, pn } = await navrhSHistoriou([{ clenenie: 'PD', dokladov: 4 }]);
+    expect(navrh.clenenie_dph_id).toBe(pn);
+  }, 90_000);
+});
