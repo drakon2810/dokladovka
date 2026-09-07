@@ -247,6 +247,17 @@ export async function zmerajPresnost(
       podtyp: DRUH_PODLA_AGENDY[doklad.agenda].podtyp,
       supplierName: doklad.supplierName,
       supplierIco: doklad.supplierIco,
+      // Na vydanej faktúre je protistranou ODBERATEĽ a číta sa z iného poľa
+      // (accountingSuggestionService.ts:1462). Korpus drží protistranu vždy v
+      // supplier_name_normalized — aj pri FV, kde je to zákazník —, takže bez
+      // tohto riadku išla každá vydaná faktúra do merania bez protistrany: bez
+      // pravidla, bez denníka tej protistrany, bez rozúčtovania aj bez radu.
+      // Model potom odpovedal najčastejším vzorom firmy a meranie to rátalo
+      // ako jeho chybu. V ostrej prevádzke odberateľ nechýba, prišiel by
+      // z dokladu — merali sme teda niečo, čo sa v produkte nedeje.
+      ...(DRUH_PODLA_AGENDY[doklad.agenda].typ === 'FV'
+        ? { odberatel: { nazov: doklad.supplierName, ico: doklad.supplierIco } }
+        : {}),
       datumVystavenia: doklad.datum,
       lineDescriptions: doklad.polozky.map((polozka) => polozka.popis),
       polozky: doklad.polozky.map((polozka) => ({ popis: polozka.popis, suma: polozka.suma })),

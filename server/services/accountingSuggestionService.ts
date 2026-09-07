@@ -1535,7 +1535,8 @@ export async function maybeAiAccountingSuggestion(
   // Pravidlo protistrany: to isté, čo je v rozúčtovaní, ale zhrnuté cez všetky
   // doklady a spočítané bez modelu. Účtovník si ho vie prečítať a opraviť.
   const pravidloProtistrany = await najdiPravidlo(
-    database, input, HISTORIA_AGENDY[documentContext.documentType] ?? [], protistranaKontextu);
+    database, input, HISTORIA_AGENDY[documentContext.documentType] ?? [], protistranaKontextu,
+    documentContext.historiaDoDatumu);
   // Model nevie účtovať na účet — vyberá predkontáciu. Ku každému účtu rozpadu
   // preto idú predkontácie, ktoré na tento účet účtujú; bez nich by mu ostalo
   // len číslo účtu, ktoré v číselníku nemá čo vybrať.

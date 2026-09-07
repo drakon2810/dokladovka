@@ -114,6 +114,33 @@ export function odvodRozpis(doklady: RozpisRiadok[][]): PravidloRiadok[] {
   return vsetkyRovnake ? [] : rozpis;
 }
 
+/**
+ * Prax jednej protistrany z jej dokladov. Vydelené z prepočtu, lebo to isté
+ * treba spočítať aj na mieru dátumu — pri meraní presnosti, kde uložené
+ * pravidlo nesmie hovoriť o budúcnosti.
+ */
+function odvodPravidlo(doklady: Map<string, Riadok[]>): Omit<UctoPravidlo, 'id' | 'agenda' | 'protistrana'> | undefined {
+  if (doklady.size < MIN_DOKLADOV) return undefined;
+  const hlavicky = [...doklady.values()]
+    .map((riadky) => riadky.find((riadok) => riadok.riadokIndex === 0))
+    .filter((riadok): riadok is Riadok => Boolean(riadok));
+  if (hlavicky.length < MIN_DOKLADOV) return undefined;
+  const predkontacia = prevaha(hlavicky.map((riadok) => riadok.predkontaciaKod));
+  if (!predkontacia.hodnota || predkontacia.pocet < hlavicky.length * MIN_ZHODA) return undefined;
+  const polozky = [...doklady.values()]
+    .map((riadky) => riadky.filter((riadok) => riadok.riadokIndex > 0))
+    .filter((riadky) => riadky.length > 0);
+  return {
+    protistranaIco: hlavicky.find((riadok) => riadok.ico)?.ico,
+    dokladov: hlavicky.length,
+    zhoda: predkontacia.pocet,
+    predkontaciaKod: predkontacia.hodnota,
+    clenenieDphKod: prevaha(hlavicky.map((riadok) => riadok.clenenieDphKod)).hodnota,
+    clenenieKvKod: prevaha(hlavicky.map((riadok) => riadok.clenenieKvKod)).hodnota,
+    rozpis: polozky.length >= MIN_DOKLADOV ? odvodRozpis(polozky) : [],
+  };
+}
+
 export async function prepocitajPravidla(
   database: Database,
   input: { tenantId: string; organizationId: string },
@@ -153,31 +180,10 @@ export async function prepocitajPravidla(
 
   const pravidla: UctoPravidlo[] = [];
   for (const [kluc, doklady] of skupiny) {
-    if (doklady.size < MIN_DOKLADOV) continue;
+    const odvodene = odvodPravidlo(doklady);
+    if (!odvodene) continue;
     const [agenda, protistrana] = kluc.split('|');
-    const hlavicky = [...doklady.values()]
-      .map((riadky) => riadky.find((riadok) => riadok.riadokIndex === 0))
-      .filter((riadok): riadok is Riadok => Boolean(riadok));
-    if (hlavicky.length < MIN_DOKLADOV) continue;
-
-    const predkontacia = prevaha(hlavicky.map((riadok) => riadok.predkontaciaKod));
-    if (!predkontacia.hodnota || predkontacia.pocet < hlavicky.length * MIN_ZHODA) continue;
-
-    const polozky = [...doklady.values()]
-      .map((riadky) => riadky.filter((riadok) => riadok.riadokIndex > 0))
-      .filter((riadky) => riadky.length > 0);
-    pravidla.push({
-      id: randomUUID(),
-      agenda,
-      protistrana,
-      protistranaIco: hlavicky.find((riadok) => riadok.ico)?.ico,
-      dokladov: hlavicky.length,
-      zhoda: predkontacia.pocet,
-      predkontaciaKod: predkontacia.hodnota,
-      clenenieDphKod: prevaha(hlavicky.map((riadok) => riadok.clenenieDphKod)).hodnota,
-      clenenieKvKod: prevaha(hlavicky.map((riadok) => riadok.clenenieKvKod)).hodnota,
-      rozpis: polozky.length >= MIN_DOKLADOV ? odvodRozpis(polozky) : [],
-    });
+    pravidla.push({ id: randomUUID(), agenda, protistrana, ...odvodene });
   }
 
   // Náhrada celej sady: pravidlo je odvodenina korpusu, nie samostatný záznam.
@@ -201,16 +207,71 @@ export async function prepocitajPravidla(
   return { pravidiel: pravidla.length, sRozpisom: pravidla.filter((item) => item.rozpis.length > 0).length };
 }
 
+/** Prax protistrany spočítaná len z dokladov spred dátumu — pre meranie presnosti. */
+async function pravidloKDatumu(
+  database: Database,
+  input: { tenantId: string; organizationId: string },
+  agendy: readonly string[],
+  protistrana: { ico: string; nazov: string },
+  doDatumu: string,
+): Promise<UctoPravidlo | undefined> {
+  const rows = (await database.query<Record<string, any>>(
+    `SELECT agenda, doklad_cislo, supplier_name_normalized, supplier_ico,
+            coalesce(riadok_index, 0) AS riadok_index, line_text_normalized, suma,
+            predkontacia_kod, clenenie_dph_kod, clenenie_kv_kod
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+        AND doklad_cislo IS NOT NULL AND datum < $6::date
+        AND (($4::text <> '' AND supplier_ico=$4) OR ($5::text <> '' AND supplier_name_normalized=$5))
+      ORDER BY agenda, doklad_cislo, coalesce(riadok_index, 0)`,
+    [input.tenantId, input.organizationId, agendy, protistrana.ico, protistrana.nazov, doDatumu],
+  )).rows.map((row): Riadok => ({
+    agenda: row.agenda,
+    dokladCislo: row.doklad_cislo,
+    protistrana: row.supplier_name_normalized,
+    ico: row.supplier_ico ?? undefined,
+    riadokIndex: Number(row.riadok_index),
+    text: row.line_text_normalized ?? '',
+    suma: row.suma === null ? undefined : Number(row.suma),
+    predkontaciaKod: row.predkontacia_kod ?? undefined,
+    clenenieDphKod: row.clenenie_dph_kod ?? undefined,
+    clenenieKvKod: row.clenenie_kv_kod ?? undefined,
+  }));
+  // Podľa agendy zvlášť a vyhrá tá s najviac dokladmi — presne ako výber
+  // z uloženej tabuľky (ORDER BY dokladov DESC).
+  const podlaAgendy = new Map<string, Map<string, Riadok[]>>();
+  for (const riadok of rows) {
+    let doklady = podlaAgendy.get(riadok.agenda);
+    if (!doklady) podlaAgendy.set(riadok.agenda, doklady = new Map());
+    doklady.set(riadok.dokladCislo, [...(doklady.get(riadok.dokladCislo) ?? []), riadok]);
+  }
+  let najlepsie: UctoPravidlo | undefined;
+  for (const [agenda, doklady] of podlaAgendy) {
+    const odvodene = odvodPravidlo(doklady);
+    if (!odvodene || (najlepsie && odvodene.dokladov <= najlepsie.dokladov)) continue;
+    najlepsie = { id: randomUUID(), agenda, protistrana: protistrana.nazov, ...odvodene };
+  }
+  return najlepsie;
+}
+
 /** Pravidlo pre protistranu dokladu — ide modelu do promptu a účtovníkovi na obrazovku. */
 export async function najdiPravidlo(
   database: Database,
   input: { tenantId: string; organizationId: string },
   agendy: readonly string[],
   protistrana: { nazov?: string; ico?: string },
+  doDatumu?: string,
 ): Promise<UctoPravidlo | undefined> {
   const ico = String(protistrana.ico ?? '').replace(/\D/g, '');
   const nazov = (protistrana.nazov ?? '').trim().toLocaleLowerCase('sk').replace(/\s+/g, ' ');
   if (agendy.length === 0 || (!ico && !nazov)) return undefined;
+  // Uložené pravidlo zhŕňa CELÝ korpus, teda aj doklady, ktoré sa v meranom
+  // období ešte nestali — vrátane toho meraného. Pri meraní by teda model
+  // dostal do promptu zhrnutie vlastnej odpovede a číslo by chválilo samo
+  // seba; pri protistrane s troma dokladmi je meraný doklad tretina dôkazu.
+  // S dátumom sa preto prax dopočíta priamo z histórie, rovnako ako denník
+  // a príklady, ktoré deliaci dátum rešpektujú od začiatku.
+  if (doDatumu) return pravidloKDatumu(database, input, agendy, { ico, nazov }, doDatumu);
   const row = (await database.query<Record<string, any>>(
     `SELECT * FROM ucto_pravidla
       WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])

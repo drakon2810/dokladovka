@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { zmerajPresnost } from './uctoPresnostService.js';
+import { prepocitajPravidla } from './uctoPravidlaService.js';
 
 // Meranie stojí a padá na jednej veci: meraný doklad NESMIE vidieť sám seba.
 // Korpus je zrkadlo toho, čo účtovník urobil, takže bez delenia časom by model
@@ -84,6 +85,54 @@ describe('meranie presnosti zaúčtovania', () => {
 
     const behy = await database.query('SELECT vzorka FROM ucto_presnost WHERE organization_id=$1', [seeded.organizationId]);
     expect(behy.rowCount).toBe(1);
+  }, 90_000);
+
+  // Na vydanej faktúre je protistranou ODBERATEĽ a návrh ho číta z iného poľa
+  // než dodávateľa. Meranie ho neposielalo, takže každá vydaná faktúra išla do
+  // modelu bez protistrany — bez pravidla, bez jej denníka, bez rozúčtovania.
+  // Model odpovedal najčastejším vzorom firmy a meranie mu to rátalo ako chybu:
+  // AGS malo takto DPH 3 z 8, hoci v ostrej prevádzke odberateľ nechýba.
+  it('vydaná faktúra nesie odberateľa, inak sa meria naslepo', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const predkontacia = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+       VALUES ($1,$2,$3,'predkontacie','602200','602200 sklad.-tuz.','pohoda','311100','602200')`,
+      [predkontacia, ...kde],
+    );
+    const doKorpusu = async (cislo: string, datum: string, index: number) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,predkontacia_id,predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,
+         riadok_index,suma,source,riadok_hash)
+       VALUES ($1,$2,$3,'FV',$4,$5::date,'milena pribis','skladovanie',$6,'602200','UD','D2',$7,100,'mdb',$8)`,
+      [randomUUID(), ...kde, cislo, datum, predkontacia, index, randomUUID()],
+    );
+    for (const [index, cislo] of ['26FV001', '26FV002', '26FV003'].entries()) {
+      await doKorpusu(cislo, `2026-0${index + 1}-15`, 0);
+    }
+    await doKorpusu('26FV090', '2026-08-20', 0);
+    await prepocitajPravidla(database, { tenantId: seeded.tenantId, organizationId: seeded.organizationId });
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predkontacia, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Skladovanie',
+      })),
+    };
+    await zmerajPresnost(
+      database, testConfig(), { tenantId: seeded.tenantId, organizationId: seeded.organizationId },
+      { deliciDatum: '2026-08-01', vzorka: 10 }, parser as never,
+    );
+
+    const prompt = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(prompt.dokument.odberatel).toMatchObject({ nazov: 'milena pribis' });
+    // A dôsledok, kvôli ktorému to celé je: pravidlo tej protistrany sa modelu
+    // naozaj dostane. Bez odberateľa je tento blok prázdny.
+    expect(prompt.pravidlo).toMatchObject({ dokladov: 3, zhoda: 3, predkontaciaKod: '602200' });
   }, 90_000);
 
   it('bez dokladov za meraným obdobím to povie, nie spadne', async () => {
