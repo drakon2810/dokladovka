@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { uploadDocumentFile } from '../../data/api';
 import { useDataQuery } from '../../data/query';
+import { useAuth } from '../../auth/AuthContext';
 import { t } from '../../i18n/sk';
 
 /**
@@ -86,7 +87,8 @@ async function doPdf(strany: Strana[]): Promise<Blob> {
 }
 
 export function FotoPage() {
-  const { data } = useDataQuery();
+  const { data, loading, error } = useDataQuery();
+  const { session } = useAuth();
   const firmy = useMemo(
     () => (data?.organizations ?? []).filter((organizacia) => !organizacia.archived),
     [data],
@@ -190,6 +192,17 @@ export function FotoPage() {
       <main className="flex-1 overflow-y-auto px-4 py-4">
         {chyba && (
           <p className="mb-3 rounded bg-rose-50 px-3 py-2 text-[13px] text-rose-800">{chyba}</p>
+        )}
+        {/* Prázdny zoznam firiem vyzerá ako pokazená appka, hoci dôvod býva
+            jednoduchý: na telefóne je prihlásený iný účet než na počítači.
+            Firmy sa berú z ČLENSTIEV používateľa, nie z jeho roly — aj admin
+            bez členstva ich nemá žiadne. Preto sa píše aj to, kto je
+            prihlásený; bez toho účtovník hľadá chybu tam, kde nie je. */}
+        {!loading && firmy.length === 0 && (
+          <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+            {error ? t('foto.chybaNacitania') : t('foto.ziadneFirmy')}
+            {session && <span className="mt-1 block text-amber-700">{session.user.email}</span>}
+          </p>
         )}
 
         {rozpracovany.length > 0 && (

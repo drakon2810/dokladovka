@@ -253,6 +253,8 @@ export const sk = {
   'foto.zahod': 'Zahodiť',
   'foto.zahodStranu': 'Zahodiť stranu',
   'foto.chybaSpracovania': 'Snímku sa nepodarilo spracovať',
+  'foto.ziadneFirmy': 'Tento účet nemá priradenú žiadnu firmu. Prihláste sa účtom, ktorý firmy má.',
+  'foto.chybaNacitania': 'Firmy sa nepodarilo načítať. Skontrolujte pripojenie.',
   'stav.ziadneData': 'Žiadne dáta',
   'chyba.vseobecna': 'Nastala chyba. Skúste to znova.',
   'chyba.obrazovkaTitulok': 'Obrazovku sa nepodarilo zobraziť',
