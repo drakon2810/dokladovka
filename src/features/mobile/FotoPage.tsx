@@ -202,6 +202,10 @@ export function FotoPage() {
           <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
             {error ? t('foto.chybaNacitania') : t('foto.ziadneFirmy')}
             {session && <span className="mt-1 block text-amber-700">{session.user.email}</span>}
+            {/* Text chyby doslova. Bez neho sa na telefóne nedá zistiť nič —
+                server odpovedá 200, takže v jeho logu problém nie je vidieť,
+                a hádať sa dá donekonečna. */}
+            {error && <span className="mt-1 block break-words text-amber-700">{error.message}</span>}
           </p>
         )}
 
