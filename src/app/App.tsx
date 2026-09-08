@@ -22,6 +22,7 @@ import { RegisterPage } from '../features/auth/RegisterPage';
 import { ForgotPasswordPage } from '../features/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
+import { FotoPage } from '../features/mobile/FotoPage';
 
 const DocumentDetailPage = lazy(() =>
   import('../features/documents/DocumentDetailPage').then((module) => ({
@@ -41,6 +42,19 @@ function AppShell() {
   // obrazovka s globálnymi pravidlami (bez navigácie a bez snapshotu tenanta).
   if (session.user.role === 'superadmin') return <GlobalRulesPage />;
   return <Layout />;
+}
+
+/**
+ * Telefónna obrazovka beží MIMO Layout: na 360 px šírky nie je miesto na
+ * bočnú navigáciu a hľadáčik chce celú plochu. Prihlásenie je to isté —
+ * rovnaký účet, rovnaká relácia ako na počítači.
+ */
+function MobileShell({ children }: { children: JSX.Element }) {
+  const { session, loading } = useAuth();
+  const location = useLocation();
+  if (loading) return <p className="p-6 text-sm text-ink-soft">{t('stav.nacitavam')}</p>;
+  if (!session) return <Navigate to="/login" replace state={{ from: location }} />;
+  return children;
 }
 
 function AdminRoute({ children }: { children: JSX.Element }) {
@@ -63,6 +77,7 @@ export function App() {
           <Route path="/registracia" element={<RegisterPage />} />
           <Route path="/zabudnute-heslo" element={<ForgotPasswordPage />} />
           <Route path="/obnova-hesla" element={<ResetPasswordPage />} />
+          <Route path="/foto" element={<MobileShell><FotoPage /></MobileShell>} />
           <Route element={<AppShell />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/doklady" element={<DocumentsPage />} />
