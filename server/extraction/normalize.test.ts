@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeExtractionResult, validateNormalizedExtraction } from './normalize.js';
+import { round2 } from '../../src/lib/validate.js';
 import { splitPostalAddress } from '../pohodaXml.js';
 
 describe('normalizácia SK/CZ faktúr', () => {
@@ -80,8 +81,14 @@ describe('normalizácia SK/CZ faktúr', () => {
   });
 
   // Rakúska diaľničná známka ASFINAG: 89,00 + 20 % = 106,80. Rakúska daň sa
-  // v SR neodpočíta ani nevykáže, takže doklad ide ako jedna nezdaniteľná suma.
-  it('cudziu daň nerozpisuje na základ a DPH — doklad je jedna nezdaniteľná suma', () => {
+  // v SR neodpočíta ani nevykáže, takže rozpis DPH ostáva jedna nezdaniteľná suma.
+  //
+  // ZMENA (účtovník, 2026-09-08): daň už NEZOSTÁVA v náklade. Doteraz sa položke
+  // prepísal základ na 106,80 a rakúska daň sa tak stala nákladom; účtovník ju
+  // v POHODE vždy dáva na vlastný riadok („phm nafta it" + „dph taliansko"
+  // vedľa seba, W.A.G. ZF260678). Rozpis DPH aj cudziaDan sú nedotknuté — do
+  // priznania ani KV nič nového nevstupuje.
+  it('cudzia daň ide na vlastný riadok, rozpis ostáva jedna nezdaniteľná suma', () => {
     const normalized = normalizeExtractionResult({
       schemaVersion: '2', documentType: 'FP',
       supplier: { nazov: 'Autobahnen- und Schnellstraßen-Finanzierungs-AG', icDph: 'ATU43143200', adresa: 'A-1030 Wien, Schnirchgasse 17', krajina: 'AT' },
@@ -96,8 +103,13 @@ describe('normalizácia SK/CZ faktúr', () => {
     } as never, 'doc-asfinag', '2026-07-13');
     const extracted = normalized.extracted as any;
     expect(extracted.rozpisDph).toEqual([{ sadzba: 0, zaklad: 106.8, dph: 0 }]);
+    expect(extracted.polozky).toHaveLength(2);
+    // Náklad ostáva čistý — známka stála 89,00, nie 106,80.
     expect(extracted.polozky[0]).toMatchObject({
-      sadzbaDph: 0, sumaBezDph: 106.8, sumaDph: 0, sumaSpolu: 106.8, jednotkovaCenaBezDph: 106.8,
+      sadzbaDph: 0, sumaBezDph: 89, sumaDph: 0, sumaSpolu: 89, jednotkovaCenaBezDph: 89,
+    });
+    expect(extracted.polozky[1]).toMatchObject({
+      popis: 'DPH AT 20 %', sumaBezDph: 17.8, sumaSpolu: 17.8, sadzbaDph: 0,
     });
     // Koľko cudzej dane v sume sedí, sa nestráca — DPH poradca z toho žije.
     expect(extracted.cudziaDan).toBe(17.8);
@@ -480,6 +492,51 @@ describe('rozpis DPH sa dopočíta z položiek', () => {
     // takže vyhrajú položky.
     expect(doklad([{ vatRate: '19', base: '1000', vat: '190' }]).extracted.rozpisDph)
       .toEqual([{ sadzba: 23, zaklad: 1869.5, dph: 429.99 }]);
+  });
+
+  // Ostrý prípad W.A.G. 3116668238: talianske mýto, 17 riadkov, spolu 6 627,46.
+  // Model prečítal ČISTÉ sumy po riadkoch (spolu 5 433,03) a taliansku IVA
+  // 1 194,43 vrátil len v rozpise — na doklade nie je riadkom, stojí v súhrne
+  // dole. Doteraz sa každej položke prepísal základ na sumu s daňou, takže celých
+  // 6 627,46 skončilo na 518202-myto a náklad bol nadhodnotený o daň.
+  // Účtovník to v POHODE robí opačne: „phm nafta it" na nákladovom účte a hneď
+  // za ním „dph taliansko" na účte IT.
+  const wag = (polozky: Array<Record<string, unknown>>) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FP',
+    supplier: { nazov: 'W.A.G. payment solutions, a.s.', icDph: 'IT00138349998', krajina: 'CZ' },
+    buyer: { ico: '35761571' }, invoiceNumber: '3116668238',
+    issueDate: '2026-08-31', taxDate: '2026-08-31', dueDate: '2026-09-14', currency: 'EUR',
+    lineItems: polozky,
+    vatBreakdown: [{ vatRate: '22', base: '5429.23', vat: '1194.43' }, { vatRate: '0', base: '3.80', vat: '0' }],
+    totalWithoutVat: '5433.03', totalVat: '1194.43', totalAmount: '6627.46',
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-wag', '2026-08-31');
+
+  const mytoRiadky = [
+    { description: 'EETS IT Mýto (Axxes) – SC411FK', vatRate: '22', amountWithoutVat: '2000', vatAmount: '440', amountTotal: '2440' },
+    { description: 'EETS IT Mýto (Axxes) – SC429GR', vatRate: '22', amountWithoutVat: '2000', vatAmount: '440', amountTotal: '2440' },
+    { description: 'EETS IT Mýto (Axxes) – SC430HH', vatRate: '22', amountWithoutVat: '1433.03', vatAmount: '314.43', amountTotal: '1747.46' },
+  ];
+
+  it('cudzia daň dostane vlastný riadok, náklad ostane čistý', () => {
+    const polozky = (wag(mytoRiadky).extracted as any).polozky as Array<Record<string, number | string>>;
+    expect(polozky).toHaveLength(4);
+    // Nákladové riadky ostávajú ČISTÉ — o daň sa už nenafukujú.
+    expect(polozky.slice(0, 3).map((p) => p.sumaBezDph)).toEqual([2000, 2000, 1433.03]);
+    // Daň stojí samostatne a vie, z ktorej krajiny je.
+    expect(polozky[3]).toMatchObject({ popis: 'DPH IT 22 %', sumaBezDph: 1194.43, sumaSpolu: 1194.43, sadzbaDph: 0 });
+    // Peniaze dokladu sa nestratili ani nepribudli.
+    expect(round2(polozky.reduce((sucet, p) => sucet + Number(p.sumaSpolu), 0))).toBe(6627.46);
+    expect(validateNormalizedExtraction(wag(mytoRiadky), { ico: '35761571' })).toEqual([]);
+  });
+
+  // Poistka: bez vlastného základu na KAŽDEJ položke sa nedá povedať, koľko
+  // z riadku je daň — vtedy ostáva pôvodné správanie a doklad sa nemení.
+  it('položka bez vlastného základu vráti pôvodné hrubé sumy', () => {
+    const bezZakladu = [{ ...mytoRiadky[0], amountWithoutVat: undefined }, mytoRiadky[1], mytoRiadky[2]];
+    const polozky = (wag(bezZakladu as never).extracted as any).polozky as Array<Record<string, number>>;
+    expect(polozky).toHaveLength(3);
+    expect(polozky.some((p) => String((p as { popis?: string }).popis ?? '').startsWith('DPH'))).toBe(false);
   });
 
   // Ostrý prípad PACCAR 26002838: desať splátok po 1 391,19 + 23 %. Dodávateľ

@@ -267,9 +267,22 @@ function zosuladDanPoloziek(
  * vyzeral ako plnenie BEZ dane, čiže ako kandidát na samozdanenie — a DPH
  * poradca by stratil aj varovanie, aj blokáciu odpočtu cudzej dane.
  */
+/**
+ * Krajina cudzej dane pre popis riadku: z IČ DPH dodávateľa („IT00138349998"
+ * → IT), inak z adresy. Bez nej sa riadok volá len „DPH".
+ */
+function krajinaCudzejDane(dodavatel: { icDph?: string; krajina?: string }): string {
+  const prefix = String(dodavatel.icDph ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 2);
+  if (/^[A-Z]{2}$/.test(prefix)) return prefix;
+  const krajina = String(dodavatel.krajina ?? '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(krajina) ? krajina : '';
+}
+
 function bezCudzejDane(
   polozky: Array<Record<string, unknown>>,
   rozpisDph: Array<{ sadzba: number; zaklad: number; dph: number }>,
+  totalAmount: number,
+  dodavatel: { icDph?: string; krajina?: string },
 ): {
   polozky: Array<Record<string, unknown>>;
   rozpisDph: Array<{ sadzba: number; zaklad: number; dph: number }>;
@@ -279,6 +292,53 @@ function bezCudzejDane(
   // Zahraničná faktúra bez dane (prenesenie daňovej povinnosti, oslobodené
   // plnenie) sa nemení — tam je nulová sadzba pravda dokladu, nie náhrada.
   if (cudziaDan === 0) return { polozky, rozpisDph };
+
+  // Cudzia daň patrí na VLASTNÝ riadok, nie do nákladu.
+  //
+  // Doteraz sa každej položke prepísal základ na sumu s daňou, takže talianska
+  // IVA skončila na nákladovom účte a náklad bol o ňu nadhodnotený. Účtovník to
+  // v POHODE robí inak a robí to vždy: W.A.G. ZF260678 má „phm nafta it"
+  // 16 894,13 na 501100-Nafta a hneď za ním „dph taliansko" 3 716,71 na účte IT.
+  // Ten istý tvar leží v korpuse pri 26 protistranách (a zvyšných 5 riadok tiež
+  // zakladá, len doň dá nulu), takže oddeliť ju je pravidlo, nie výnimka.
+  //
+  // Podmienka je aritmetická, nie dôverou v model: každá položka musí niesť
+  // vlastný základ a súčet základov plus daň sa musí rovnať celkovej sume. Keď
+  // nesedí, ostáva pôvodná hrubá vetva — na nej nebeží zosuladDanPoloziek,
+  // takže halier by nemal kto zosúladiť a doklad by sa zasekol na kontrole.
+  const zaklady = polozky.map((polozka) => polozka.sumaBezDph);
+  const mozeOddelit = polozky.length > 0
+    && zaklady.every((zaklad): zaklad is number => typeof zaklad === 'number')
+    && Math.abs(round2((zaklady as number[]).reduce((sucet, zaklad) => sucet + zaklad, 0) + cudziaDan) - totalAmount) <= 0.02;
+  if (mozeOddelit) {
+    const krajina = krajinaCudzejDane(dodavatel);
+    // Sadzba do popisu z riadku s najväčšou daňou — na doklade s viacerými
+    // sadzbami je to tá, o ktorú v skutočnosti ide.
+    const sadzba = [...rozpisDph].sort((a, b) => b.dph - a.dph)[0]?.sadzba;
+    return {
+      polozky: [
+        // Základ z modelu je už čistý; jednotková cena sa NEprepočítava.
+        ...polozky.map((polozka) => ({
+          ...polozka, sadzbaDph: 0, sumaDph: 0, sumaSpolu: polozka.sumaBezDph,
+        })),
+        {
+          id: `${(polozky[0] as { id?: string }).id ?? 'li'}-dph`,
+          popis: `DPH ${krajina}${sadzba ? ` ${sadzba} %` : ''}`.replace(/\s+/g, ' ').trim(),
+          mnozstvo: 1,
+          sadzbaDph: 0,
+          sumaBezDph: cudziaDan,
+          sumaDph: 0,
+          sumaSpolu: cudziaDan,
+        },
+      ],
+      rozpisDph: [{
+        sadzba: 0,
+        zaklad: round2(rozpisDph.reduce((sum, row) => sum + row.zaklad + row.dph, 0)),
+        dph: 0,
+      }],
+      cudziaDan,
+    };
+  }
   return {
     polozky: polozky.map((polozka) => {
       const spolu = (polozka.sumaSpolu as number | undefined)
@@ -409,7 +469,7 @@ export function normalizeExtractionResult(
   const dodavatel = { ...opravIdentifikatory(result.supplier), nazov: result.supplier.nazov ?? '' };
   // Cudzia daň sa nerozpisuje na základ a DPH — celá suma je nezdaniteľná.
   const sumy = jeCudziDodavatel(dodavatel)
-    ? bezCudzejDane(polozky, rozpisPrepocitany)
+    ? bezCudzejDane(polozky, rozpisPrepocitany, totalAmount, dodavatel)
     : {
       polozky: zosuladDanPoloziek(polozky, rozpisPrepocitany),
       rozpisDph: rozpisPrepocitany,
