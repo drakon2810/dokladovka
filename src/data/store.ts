@@ -222,11 +222,33 @@ export function migratePersistedState(persisted: unknown, version: number): AppD
   };
 }
 
+/**
+ * V serverovom režime je zdrojom pravdy server, nie localStorage.
+ *
+ * Ukladal sa tam CELÝ snapshot tenanta — všetky doklady, e-maily, behy
+ * extrakcie. Pri účte so siedmimi firmami to sú megabajty, a Safari na iPhone
+ * má na doménu asi 5 MB: zápis spadol na „The quota has been exceeded" priamo
+ * vo fetchRestSnapshot a aplikácia ostala bez dát. Na počítači je limit väčší,
+ * takže sa to tam neprejavilo.
+ *
+ * Uložiť treba len to, čo server nevie a čo je po obnovení stránky škoda
+ * stratiť: filter firmy a rola. Dáta si aj tak vyžiada snapshot pri každom
+ * načítaní. V mock režime naopak persist DRŽÍ celý stav — tam žiadny server
+ * nie je a bez neho by sa po obnovení stratila celá práca.
+ */
+const REST_REZIM = import.meta.env.VITE_DATA_MODE === 'rest';
+
+/** Čo z klientského stavu prežije obnovenie stránky v serverovom režime. */
+export function persistovanyStavRest(stav: AppDataState): AppDataState {
+  return { role: stav.role, currentOrgId: stav.currentOrgId } as AppDataState;
+}
+
 export const useAppStore = create<AppDataState>()(
   persist<AppDataState>(() => buildSeedState(), {
     name: 'dokladovka-store',
     version: APP_STORE_PERSIST_VERSION,
     migrate: migratePersistedState,
+    ...(REST_REZIM ? { partialize: persistovanyStavRest } : {}),
   }),
 );
 
