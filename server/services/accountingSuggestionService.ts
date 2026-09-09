@@ -232,6 +232,11 @@ const KV_KODY_PRE_TYP: Record<string, readonly string[]> = {
   FV: ['A1', 'A2', 'C1', 'D1', 'D2', 'KN'],
   FP: ['B1', 'B2', 'B3', 'C2', 'KN'],
   OZ: ['B1', 'B2', 'B3', 'C2', 'KN'],
+  // Pokladničný blok je zjednodušená faktúra (§74 ods. 3) — s odpočtom patrí do
+  // B3, bez odpočtu do KN. B2 je sekcia bežnej prijatej faktúry a na bločku
+  // nemá čo hľadať: v denníku klientov stojí PD spolu s B3 na 264 riadkoch
+  // z 266, kým na prijatých faktúrach PD spolu s B2 na 2328 z 2336.
+  PD: ['B3', 'KN'],
 };
 
 /** Je to vôbec zákonná sekcia kontrolného výkazu? Bez ohľadu na doklad. */
@@ -265,6 +270,18 @@ export function kvPreDruh(
       return upper === oprava || upper === 'KN' ? upper : undefined;
     }
   }
+  // Sekciu určuje DRUH dokladu, nie účet: „501600 Auto" nesie v denníku B2 na
+  // prijatej faktúre a B3 na tom istom nákupe z bločku. Zdroj návrhu (pravidlo
+  // protistrany, riadok denníka, model) si sekciu prináša z faktúry, tak sa tu
+  // prepíše — samotné odmietnutie by nechalo pole prázdne a doklad by sa bez
+  // sekcie nedal schváliť, hoci odpočet je ten istý.
+  //
+  // Prepisuje sa LEN B2. B1 je prenos daňovej povinnosti na odberateľa, nie tá
+  // istá vec v inej forme — na bločku sa v denníku klientov nevyskytuje ani raz,
+  // takže je to skôr šum zdroja. Ten prepadne nižšie na undefined, pole ostane
+  // prázdne a rozhodne účtovník; tichá zámena za B3 by priznala odpočet, ktorý
+  // nikto nepotvrdil.
+  if (typ === 'PD' && upper === 'B2') return 'B3';
   const povolene = KV_KODY_PRE_TYP[typ];
   return !povolene || povolene.includes(upper) ? upper : undefined;
 }
@@ -1006,11 +1023,14 @@ A1 — issued invoices where the payer is the person liable for Slovak tax, not 
 A2 — issued invoices with the domestic transfer of liability under §69 ods. 12 písm. f) to j).
 B1 — received invoices or another document where the RECIPIENT owes the tax under §69 ods. 2, 3, 6, 7 and 9 to 12.
 B2 — received invoices from another Slovak payer under §69 ods. 1, with deduction.
-B3 — simplified invoices under §74 ods. 3.
+B3 — simplified invoices under §74 ods. 3. A cash register receipt (documentType PD — bloček, účtenka, till slip) IS such a simplified invoice: whenever the firm deducts the tax on it the section is B3, never B2. The section follows the KIND of document, not the account — the very same predkontácia sits in B2 on a received invoice and in B3 on the same purchase made over the counter. Deducting or not is the firm's own practice for that kind of purchase, read from its history; when it does not deduct, the section is KN.
 C1 / C2 — issued / received corrective invoices (§71 ods. 2, §25a).
 D1 — turnover recorded by an e-kasa cash register.
 D2 — supplies OTHER than those in A1 on which the payer owes tax IN SLOVAKIA, outside e-kasa.
 KN — do not include in the control statement at all.
+
+WHAT THE LAW SAYS OUTRANKS WHAT THE FIRM HAPPENS TO HAVE DONE. The code lists, the journal rows and the examples show you this firm's HABITS, not the rules. When the firm has never posted this kind of purchase on this kind of document, do not fall back to whatever account it uses most often in that agenda — that is how a restaurant bill ends up on "ostatné služby". Decide from the substance of the purchase and pick the account that matches it; the firm's history breaks the tie between accounts that BOTH fit, it does not choose for you when none has been used yet.
+FOOD, DRINK AND HOSPITALITY NEVER DEDUCT. §49 ods. 7 písm. a) denies the deduction on hospitality and entertainment (pohostenie a zábava). A restaurant, café or bar bill — dishes, drinks, a table number, a business lunch — takes the firm's NON-deductible classification and KN, never a deductible classification and never B3, even when Slovak VAT is printed on it and even when the firm has no such posting on this document type yet. Its account is the firm's representation account (513, "repre"); when the code list offers several, take the one whose agenda matches this document. Employee meal schemes (stravné, závodné stravovanie, finančný príspevok na stravu) are a different regime and are not this rule.
 
 REVERSE CHARGE LIVES ON A DIFFERENT DOCUMENT. When a foreign supplier bills a Slovak payer with no VAT and the tax is self-assessed under §69 ods. 3, the RECEIVED INVOICE itself is not a Slovak taxable supply: it takes the classification this firm uses for invoices outside the VAT return, and KN. The self-assessment — the classification that reports the tax and its KV section B1 — belongs to a SEPARATE internal document the accountant creates. Do not move the internal document's classification onto the invoice, however correct the law is: you would report the tax twice and on the wrong document.
 "ciselniky.cleneniaDph" carries "pouziteNaTomtoTypeDokladu": how many times this firm used that classification on THIS document type. Zero on a classification the firm uses elsewhere is the signal above — the code belongs to the other document, not to this one. A classification the firm has never used anywhere is a legitimate first occurrence and stays available; classifications proven to belong to another document type are removed from the list entirely.

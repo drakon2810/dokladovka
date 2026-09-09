@@ -48,4 +48,22 @@ describe('kvPreDruh — sekcia pre TENTO doklad', () => {
   it('podtyp na nefaktúrových dokladoch nič nemení', () => {
     expect(kvPreDruh('B1', { typ: 'OZ', podtyp: 'dobropis' })).toBe('B1');
   });
+
+  // Bloček je zjednodušená faktúra (§74 ods. 3): s odpočtom B3, bez odpočtu KN.
+  // Sekciu nesie druh dokladu, nie účet — „501600 Auto" stojí v denníku klientov
+  // ako B2 na prijatej faktúre a ako B3 na tom istom nákupe z bločku. Zdroj
+  // návrhu prináša sekciu z faktúry, tak sa B1/B2 prepíše; odmietnuť ju by
+  // znamenalo prázdne pole a doklad, ktorý sa nedá schváliť.
+  it('pokladničný doklad berie B3, nie B2', () => {
+    expect(kvPreDruh('B2', { typ: 'PD', podtyp: 'bezna' })).toBe('B3');
+    expect(kvPreDruh('B3', { typ: 'PD', podtyp: 'bezna' })).toBe('B3');
+    expect(kvPreDruh('KN', { typ: 'PD', podtyp: 'bezna' })).toBe('KN');
+    // B1 (prenos daňovej povinnosti) nie je B2 v inej forme — nemlčky sa
+    // neprepisuje, pole ostane prázdne a sekciu určí účtovník.
+    expect(kvPreDruh('B1', { typ: 'PD', podtyp: 'bezna' })).toBeUndefined();
+    // Výstupné sekcie na bloček nepatria — ten je vždy na strane odberateľa.
+    for (const kod of ['A1', 'A2', 'C1', 'C2', 'D1', 'D2']) {
+      expect(kvPreDruh(kod, { typ: 'PD', podtyp: 'bezna' })).toBeUndefined();
+    }
+  });
 });

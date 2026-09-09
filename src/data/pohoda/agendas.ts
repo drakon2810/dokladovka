@@ -110,6 +110,11 @@ const KV_KODY_PRE_TYP: Partial<Record<DocumentType, readonly string[]>> = {
   FV: ['A1', 'A2', 'C1', 'D1', 'D2', 'KN'],
   FP: ['B1', 'B2', 'B3', 'C2', 'KN'],
   OZ: ['B1', 'B2', 'B3', 'C2', 'KN'],
+  // Bloček je zjednodušená faktúra (§74 ods. 3): s odpočtom B3, bez odpočtu KN.
+  // B2 patrí bežnej prijatej faktúre — sekciu určuje druh dokladu, nie účet.
+  // Server drží zhodné pravidlo v kvPreDruh a B2 na bločku rovno prepíše na B3;
+  // B1 (prenos daňovej povinnosti) neprepisuje, tam sekciu určí účtovník.
+  PD: ['B3', 'KN'],
 };
 
 /**
