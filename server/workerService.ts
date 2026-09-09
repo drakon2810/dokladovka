@@ -691,13 +691,34 @@ async function completeRun(
       krajina: strana('odberatel')?.krajina,
     },
   };
-  // Sadzba DPH na položkách je pre model dôkaz o daňovom režime dokladu.
-  const polozkyPreModel = (items: typeof result.lineItems) => items.slice(0, 15).map((item) => ({
-    popis: item.description ?? undefined,
-    sadzbaDph: item.vatRate == null ? undefined : Number(item.vatRate),
-    suma: item.amountTotal == null ? undefined : Number(item.amountTotal),
+  /**
+   * Položky pre model sa berú z NORMALIZOVANÉHO dokladu, nie zo surovej odpovede
+   * modelu čítania. Práve normalizácia vie doklad doplniť o riadok, ktorý na
+   * papieri ako položka nestojí — cudziu daň z rekapitulácie: faktúra W.A.G.
+   * má 17 surových položiek a 18 normalizovaných, tou navyše je „DPH IT 22 %".
+   * Návrh sa staval zo surových, takže presne ten riadok, ktorý účtovník účtuje
+   * samostatne, model nikdy nevidel.
+   *
+   * Dôležitejšie je, že do documents.extracted sa ukladá normalizovaný doklad, a
+   * riadky odpovede modelu sa adresujú indexom. Kým model dostával iné pole, než
+   * na aké sa jeho index neskôr uplatní, bola zhoda indexov len zhodou náhod.
+   * Teraz je to zhoda z definície.
+   *
+   * ponytail: strop 60 položiek. Najdlhší doklad v prevádzke má 18 a nad 15 sú
+   * dva zo 125; strop je poistka proti hromadnému importu, nie proti faktúram.
+   */
+  const polozkyModelu = (extracted: unknown) => {
+    const polozky = (extracted as { polozky?: unknown })?.polozky;
+    return Array.isArray(polozky) ? (polozky as Array<Record<string, unknown>>).slice(0, 60) : [];
+  };
+  const polozkyPreModel = (extracted: unknown) => polozkyModelu(extracted).map((polozka) => ({
+    popis: typeof polozka.popis === 'string' ? polozka.popis : undefined,
+    sadzbaDph: typeof polozka.sadzbaDph === 'number' ? polozka.sadzbaDph : undefined,
+    suma: typeof polozka.sumaSpolu === 'number' ? polozka.sumaSpolu : undefined,
   }));
-  const popisy = (items: typeof result.lineItems) => items.map((item) => item.description ?? '').filter(Boolean);
+  const popisy = (extracted: unknown) => polozkyModelu(extracted)
+    .map((polozka) => (typeof polozka.popis === 'string' ? polozka.popis : ''))
+    .filter(Boolean);
   return {
     status,
     ...strany,
@@ -717,10 +738,10 @@ async function completeRun(
     // tak namiesto „325100-pokuty šofér" dostala väčšinový nedaňový OZ z denníka.
     // Jediný text, ktorý taký doklad odlíši, je jeho zhrnutie — presne tak to
     // o pár riadkov nižšie už rieši doklad z rozdelenia.
-    lineDescriptions: popisy(result.lineItems).length > 0
-      ? popisy(result.lineItems)
+    lineDescriptions: popisy(normalized.extracted).length > 0
+      ? popisy(normalized.extracted)
       : [result.documentSummary].filter((text): text is string => Boolean(text)),
-    polozky: polozkyPreModel(result.lineItems),
+    polozky: polozkyPreModel(normalized.extracted),
     // Sadzby z rozpisu DPH: doklad bez položiek ich inak nemá odkiaľ vziať.
     sadzbyRozpisu: [...new Set(result.vatBreakdown
       .map((riadok) => Number(riadok.vatRate))
@@ -736,10 +757,11 @@ async function completeRun(
       // fondu, zúčtovanie zálohy) — jediný text, ktorý ho odlíši, je jeho
       // popis. Bez neho by model rozhodoval len podľa typu a sumy a nenašiel
       // by ani kategóriu, ani riadok denníka.
-      lineDescriptions: [dalsi.zdroj.documentSummary, ...popisy(dalsi.zdroj.lineItems)]
+      lineDescriptions: [dalsi.zdroj.documentSummary, ...popisy(dalsi.normalized.extracted)]
         .filter((text): text is string => Boolean(text)),
       // Prázdne pole by v prompte zatienilo fallback na popisy — radšej nič.
-      polozky: dalsi.zdroj.lineItems.length > 0 ? polozkyPreModel(dalsi.zdroj.lineItems) : undefined,
+      polozky: polozkyPreModel(dalsi.normalized.extracted).length > 0
+        ? polozkyPreModel(dalsi.normalized.extracted) : undefined,
     })),
   };
 }

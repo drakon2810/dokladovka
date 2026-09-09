@@ -1159,7 +1159,28 @@ describe('zuzPonukuPredkontacii', () => {
   it('nájde predkontáciu hlboko za hranicou bývalého LIMIT 300', () => {
     const vybrane = zuzPonukuPredkontacii(rozvrh(800, { index: 700, nazov: 'PHM nafta' }), 'nafta diesel tankovanie', []);
     expect(vybrane.map((item) => item.id)).toContain('p700');
-    expect(vybrane.length).toBeLessThanOrEqual(25);
+    expect(vybrane[0].id).toBe('p700');
+  });
+
+  // Účet bez jediného spoločného slova s dokladom prežije, ak sa číselník zmestí.
+  // Presne toto padlo na bločku MANGI: AGS má pre pokladňu 61 predkontácií,
+  // „repre" nemá s textom „stravovanie a nápoje" spoločný token, dostal skóre 0
+  // a pevný strop 25 riadkov ho z ponuky vyhodil. Model nevyberal zle — správnu
+  // možnosť nikdy nevidel.
+  it('celý číselník agendy prejde: účet s nulovou zhodou ostáva v ponuke', () => {
+    const vsetky = rozvrh(400, { index: 380, nazov: 'repre' });
+    const vybrane = zuzPonukuPredkontacii(vsetky, 'stravovanie a napoje', []);
+    expect(vybrane).toHaveLength(400);
+    expect(vybrane.map((item) => item.id)).toContain('p380');
+  });
+
+  // Strop je v znakoch, nie v riadkoch: reže sa až chvost, ktorý sa do promptu
+  // nezmestí, a najlepší kandidát ostáva prvý.
+  it('neúmerne veľký rozvrh sa oreže, poradie ostáva', () => {
+    const vsetky = rozvrh(3000, { index: 2500, nazov: 'PHM nafta' });
+    const vybrane = zuzPonukuPredkontacii(vsetky, 'nafta diesel', []);
+    expect(vybrane.length).toBeLessThan(3000);
+    expect(vybrane[0].id).toBe('p2500');
   });
 
   it('predkontácie z príkladov účtovníka sú v ponuke aj bez textovej zhody', () => {
@@ -1168,9 +1189,13 @@ describe('zuzPonukuPredkontacii', () => {
     expect(vybrane.map((item) => item.id)).toContain('p512');
   });
 
-  it('krátky rozvrh sa nezužuje', () => {
+  it('krátky rozvrh sa nezužuje, len zoradí', () => {
     const vsetky = rozvrh(10, { index: 3, nazov: 'PHM nafta' });
-    expect(zuzPonukuPredkontacii(vsetky, 'nafta', [])).toEqual(vsetky);
+    const vybrane = zuzPonukuPredkontacii(vsetky, 'nafta', []);
+    // Nič sa nestratí — zmení sa len poradie, zhoda ide navrch.
+    expect([...vybrane].sort((a, b) => a.id.localeCompare(b.id)))
+      .toEqual([...vsetky].sort((a, b) => a.id.localeCompare(b.id)));
+    expect(vybrane[0].id).toBe('p3');
   });
 });
 
@@ -2001,6 +2026,61 @@ describe('návrh rozrezania položky', () => {
       [1, 0.8, 0.5], [1, 0.2, 0.5], [2, undefined, undefined],
     ]);
     expect(riadky[1].predkontaciaId).toBe(nadspotreba);
+  }, 90_000);
+
+  // Súčet podielov sa overoval PRED filtrom, ktorý zahodí časť s predkontáciou
+  // mimo ponuky. Skupina 0,4 + 0,3 + 0,3 tak prešla ako celok a po zahodení
+  // tretej časti ostalo 0,7 — doklad ticho stratil 30 % sumy. A podiel dane sa
+  // kontroloval len v súčte, takže -1 a 2 prešli a doklad dostal zápornú daň.
+  it('rez s neznámou predkontáciou ani so zápornou daňou neprejde po častiach', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const ucet = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+       VALUES ($1,$2,$3,'predkontacie','501200','501200','pohoda','501200','321100')`,
+      [ucet, ...kde],
+    );
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.9, reason: 'Rez',
+        riadky: [
+          // Položka 0: súčet dá 1, ale tretia časť má ID, ktoré v ponuke nie je.
+          { index: 0, predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null, podiel: 0.4, podielDph: 0.4 },
+          { index: 0, predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null, podiel: 0.3, podielDph: 0.3 },
+          { index: 0, predkontaciaId: 'neexistujuce-id', clenenieDphId: null, clenenieKvKod: null, podiel: 0.3, podielDph: 0.3 },
+          // Položka 1: podiely sedia, ale daň je -1 a 2. Súčet je jednotka.
+          { index: 1, predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null, podiel: 0.5, podielDph: -1 },
+          { index: 1, predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null, podiel: 0.5, podielDph: 2 },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Test' };
+    const context = {
+      documentType: 'FP', supplierName: 'Test', totalAmount: 100, currency: 'EUR',
+      lineDescriptions: ['Prvá', 'Druhá'],
+      polozky: [{ popis: 'Prvá', sadzbaDph: 23, suma: 50 }, { popis: 'Druhá', sadzbaDph: 23, suma: 50 }],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const riadky = (await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky as Array<Record<string, unknown>> | null;
+    // Ani jeden rez neprejde: doklad radšej ostane nerozdelený, než rozdelený
+    // na 70 % sumy alebo so zápornou daňou.
+    const rezy = (riadky ?? []).filter((riadok) => riadok.podiel != null);
+    expect(rezy).toEqual([]);
   }, 90_000);
 });
 

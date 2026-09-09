@@ -181,13 +181,31 @@ export function pocetZhodSlov(keywords: unknown, lineText: string): number {
     .length;
 }
 
-const MAX_PREDKONTACII_V_PONUKE = 25;
+/**
+ * Strop ponuky predkontácií je v ZNAKOCH, nie v riadkoch. Pevných 25 riadkov
+ * zahadzovalo správny účet: AGS má pre pokladňu 61 predkontácií a „repre" medzi
+ * nimi nemá ani históriu, ani kategóriu s účtom, ani jedno spoločné slovo
+ * s textom „stravovanie a nápoje" — dostal skóre 0, skončil 56. a do ponuky sa
+ * nedostal vôbec. Model potom nevyberal zle; správnu možnosť nikdy nevidel.
+ *
+ * Ponuka je pritom už zúžená na agendu dokladu a celý číselník JEDNEJ agendy je
+ * malý: pokladňa 62 predkontácií, prijaté faktúry 140, záväzky 170, a najväčší
+ * nameraný je ALPINA internalDocument s 402. Šetrilo sa teda na niečom, čo
+ * netlačí. Poradie podľa skóre ostáva — najpravdepodobnejší kandidáti sú prví,
+ * strop len prestal zahadzovať chvost.
+ */
+const MAX_ZNAKOV_PONUKY = 64_000;
 
-/** Modelu sa neposiela celý účtovný rozvrh (stovky predkontácií) — ponuka sa
- *  zúži na riadky podobné textu položiek, zjednotené s predkontáciami vybraných
- *  príkladov (príklad s ID mimo ponuky by model nemohol nasledovať). Predtým tu
- *  bol spoločný LIMIT 300 cez všetky číselníky: kinds sa radia abecedne, takže
- *  predkontácie dostali len zvyšok kvóty a správna často v ponuke vôbec nebola. */
+/** Čo riadok ponuky stojí v prompte: id (UUID), kód, názov a réžia JSON-u. */
+const cenaRiadku = (item: { id: string; kod: string; nazov: string }): number =>
+  item.id.length + item.kod.length + item.nazov.length + 30;
+
+/** Ponuka predkontácií pre model: zoradená podľa podobnosti s textom položiek,
+ *  s predkontáciami vybraných príkladov navrchu (príklad s ID mimo ponuky by
+ *  model nemohol nasledovať). Zoznam sa reže až po znakovom strope, takže celý
+ *  číselník agendy spravidla prejde celý. Predtým tu bol spoločný LIMIT 300 cez
+ *  všetky číselníky (kinds sa radia abecedne, predkontácie dostali len zvyšok
+ *  kvóty), potom pevných 25 riadkov — a ten zahadzoval aj správny účet. */
 export function zuzPonukuPredkontacii<T extends { id: string; kod: string; nazov: string }>(
   vsetky: T[],
   lineText: string,
@@ -195,21 +213,22 @@ export function zuzPonukuPredkontacii<T extends { id: string; kod: string; nazov
   /** Účty zhodných kategórií plnení — musia byť v ponuke, inak ich model nemôže vybrať. */
   dalsieIds: Array<string | undefined> = [],
 ): T[] {
-  if (vsetky.length <= MAX_PREDKONTACII_V_PONUKE) return vsetky;
   const zPrikladov = new Set([
     ...priklady.map((priklad) => priklad.predkontaciaId),
     ...dalsieIds,
   ].filter(Boolean));
-  return vsetky
+  const zoradene = vsetky
     .map((item) => ({
       item,
       // Predkontácie z príkladov majú prednosť pred akoukoľvek textovou zhodou.
       skore: zPrikladov.has(item.id) ? 1.1 : textSimilarity(lineText, `${item.kod} ${item.nazov}`),
     }))
     .sort((a, b) => b.skore - a.skore)
-    // Bez tokenovej zhody radšej prvých N než prázdna ponuka — model vráti null.
-    .slice(0, MAX_PREDKONTACII_V_PONUKE)
     .map((row) => row.item);
+  // Odreže sa až to, čo sa do promptu naozaj nezmestí. Bez tokenovej zhody
+  // radšej prvé riadky než prázdna ponuka — model by inak vrátil null.
+  let znakov = 0;
+  return zoradene.filter((item) => (znakov += cenaRiadku(item)) <= MAX_ZNAKOV_PONUKY);
 }
 
 interface MemoryRow extends SuggestionCandidate {
@@ -2097,6 +2116,19 @@ export async function maybeAiAccountingSuggestion(
     const sucetDph = casti.reduce((spolu, cast) => spolu + (cast.podielDph ?? cast.podiel ?? 0), 0);
     if (casti.length >= 2 && polozkyPreModel[index]
       && casti.every((cast) => (cast.podiel ?? 0) > 0 && (cast.podiel ?? 0) < 1)
+      // Podiel dane sa doteraz kontroloval LEN v súčte, takže časti so
+      // -1 a 2 prešli — súčet dal jednotku a doklad dostal zápornú daň.
+      // Nula je legitímna (časť, ktorá daň nenesie: PHM 80/20 dáva odpočet
+      // celý jednej strane), jednotka tiež; mimo intervalu to nie je podiel.
+      && casti.every((cast) => {
+        const dan = cast.podielDph ?? cast.podiel ?? 0;
+        return dan >= 0 && dan <= 1;
+      })
+      // Súčet sa overuje pred filtrom riadkov nižšie, ktorý časť s neznámou
+      // predkontáciou zahodí. Skupina .4 + .3 + .3 tak prešla ako celok a po
+      // zahodení tretej časti ostalo 0,7: doklad ticho stratil 30 % sumy.
+      // Rez je buď celý, alebo žiadny.
+      && casti.every((cast) => vPonukePredkontacii.has(cast.predkontaciaId))
       && Math.abs(sucet - 1) <= PRESNOST_PODIELU && Math.abs(sucetDph - 1) <= PRESNOST_PODIELU) {
       platneSkupiny.add(index);
     }
