@@ -55,11 +55,27 @@ export function FotoPage() {
     window.clearTimeout(casovacZablesku.current);
   }, []);
 
-  // Náhľady sú objectURL; bez uvoľnenia by pri veľkej dávke narástla pamäť.
+  /**
+   * Náhľady sú objectURL a bez uvoľnenia by pri veľkej dávke narástla pamäť.
+   * Uvoľňujú sa VŠETKY naraz až pri odchode z obrazovky — a jednotlivo vtedy,
+   * keď stranu alebo doklad naozaj zahodíme (zahodStranu / zahodDoklad).
+   *
+   * Predtým záviselo upratovanie na [doklad, rozpracovany], takže cleanup bežal
+   * pri KAŽDEJ ich zmene: zavretie dokladu presunulo strany z rozpracovaného do
+   * dávky a v tom istom kroku im zrušilo náhľady. V dávke potom svietil štvorec
+   * s otáznikom a odfotené sa nedalo pozrieť.
+   */
+  const nahlady = useRef<string[]>([]);
   useEffect(() => () => {
-    for (const strana of rozpracovany) URL.revokeObjectURL(strana.nahlad);
-    for (const item of doklad) for (const strana of item.strany) URL.revokeObjectURL(strana.nahlad);
-  }, [doklad, rozpracovany]);
+    for (const url of nahlady.current) URL.revokeObjectURL(url);
+    nahlady.current = [];
+  }, []);
+
+  /** Náhľad zahodenej strany drží pamäť zbytočne — pustíme ho hneď. */
+  function pustNahlad(url: string) {
+    URL.revokeObjectURL(url);
+    nahlady.current = nahlady.current.filter((iny) => iny !== url);
+  }
 
   function ukazOznam(text: string) {
     window.clearTimeout(casovacOznamu.current);
@@ -70,7 +86,9 @@ export function FotoPage() {
   async function pridajStranu(zdroj: Blob) {
     try {
       const jpeg = await pripravSnimku(zdroj);
-      setRozpracovany((zoznam) => [...zoznam, { id: noveId(), jpeg, nahlad: URL.createObjectURL(jpeg) }]);
+      const nahlad = URL.createObjectURL(jpeg);
+      nahlady.current.push(nahlad);
+      setRozpracovany((zoznam) => [...zoznam, { id: noveId(), jpeg, nahlad }]);
       setChyba('');
     } catch {
       setChyba(t('foto.chybaSpracovania'));
@@ -221,7 +239,11 @@ export function FotoPage() {
           chyba={chyba}
           onOdfot={() => void odfot()}
           onHotovo={uzavriDoklad}
-          onZahodStranu={(id) => setRozpracovany((zoznam) => zoznam.filter((s) => s.id !== id))}
+          onZahodStranu={(id) => setRozpracovany((zoznam) => {
+            const strana = zoznam.find((s) => s.id === id);
+            if (strana) pustNahlad(strana.nahlad);
+            return zoznam.filter((s) => s.id !== id);
+          })}
           onDavka={() => setObrazovka('davka')}
           onZmenitFirmu={zmenitFirmu}
         />
@@ -348,7 +370,10 @@ export function FotoPage() {
                 item={item}
                 akcie={!odosielaSa}
                 onOtvor={() => { setOtvoreny(poradie); setObrazovka('doklad'); }}
-                onZahod={() => setDoklad((zoznam) => zoznam.filter((polozka) => polozka.id !== item.id))}
+                onZahod={() => setDoklad((zoznam) => {
+                  for (const strana of item.strany) pustNahlad(strana.nahlad);
+                  return zoznam.filter((polozka) => polozka.id !== item.id);
+                })}
                 onOpakuj={() => void opakuj(item.id)}
               />
             ))}
