@@ -721,6 +721,10 @@ async function completeRun(
       ? popisy(result.lineItems)
       : [result.documentSummary].filter((text): text is string => Boolean(text)),
     polozky: polozkyPreModel(result.lineItems),
+    // Sadzby z rozpisu DPH: doklad bez položiek ich inak nemá odkiaľ vziať.
+    sadzbyRozpisu: [...new Set(result.vatBreakdown
+      .map((riadok) => Number(riadok.vatRate))
+      .filter((sadzba) => Number.isFinite(sadzba)))],
     dalsie: dalsieDoklady.map((dalsi) => ({
       documentId: dalsi.id,
       ...strany,

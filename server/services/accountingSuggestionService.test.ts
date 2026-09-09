@@ -561,6 +561,8 @@ describe('accounting suggestions', () => {
     // Sadzba DPH samostatne: rozhoduje medzi tuzemským a zahraničným členením,
     // ktoré má firma v denníku obidve pre tú istú službu.
     expect(payload.dokument.sadzbyDphNaDoklade).toEqual([23]);
+    // Zhrnutie dokladu: jediny text, ktory ma doklad bez poloziek.
+    expect(payload.dokument.zhrnutie).toBe('Door to door removal service');
     // Denník nesie len FV riadky, zoskupené s počtom výskytov.
     expect(payload.dennik).toHaveLength(1);
     expect(payload.dennik[0]).toMatchObject({ predkontaciaKod: '602100 sťahov.-tuz.', clenenieKvKod: 'D2', pocet: 3 });
@@ -581,6 +583,52 @@ describe('accounting suggestions', () => {
     suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
     expect(suggestion).toMatchObject({ predkontacia_id: predPravidlo, clenenie_dph_id: dph, clenenie_kv_kod: 'A1' });
     expect(String(suggestion.reason)).toContain('Pravidlo');
+  }, 90_000);
+
+  // Bloček sa často prečíta bez položiek, ale s rozpisom DPH. Sadzby sa zbierali
+  // VÝLUČNE z položiek, takže model dostal prázdny zoznam — a prompt mu prázdny
+  // zoznam vysvetľuje ako „na doklade nie je daň". DECATHLON tak dostal PN/KN
+  // napriek rozpisu 23 % / 8,05 / 1,85. Bez položiek zmizlo aj zhrnutie: krok
+  // účtovania nedostal ani slovo o tom, čo sa kúpilo.
+  it('doklad bez položiek nesie sadzby z rozpisu DPH aj zhrnutie', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'PD','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,9.90,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({ dodavatel: { nazov: 'DECATHLON' }, polozky: [] })],
+    );
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','501600 Auto','501600 Auto','pohoda')`,
+      [pred, seeded.tenantId, seeded.organizationId],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.5, reason: 'Bloček',
+      })),
+    };
+    const context = {
+      documentType: 'PD', supplierName: 'DECATHLON', supplierKrajina: 'SK',
+      totalAmount: 9.9, currency: 'EUR',
+      lineDescriptions: ['Nákup športového tovaru'],
+      polozky: [],
+      sadzbyRozpisu: [23],
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'DECATHLON' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(payload.dokument.polozky).toEqual([]);
+    // Sadzba z rozpisu sa k modelu dostane aj bez jedinej položky.
+    expect(payload.dokument.sadzbyDphNaDoklade).toEqual([23]);
+    // A doklad si nesie aspoň to, čo sa na ňom kúpilo.
+    expect(payload.dokument.zhrnutie).toBe('Nákup športového tovaru');
   }, 90_000);
 
   it('zahraničná faktúra: odpočet cudzej dane sa neuloží a sekcia A1 na FP vypadne', async () => {

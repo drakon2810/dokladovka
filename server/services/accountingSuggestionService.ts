@@ -1030,7 +1030,7 @@ D2 — supplies OTHER than those in A1 on which the payer owes tax IN SLOVAKIA, 
 KN — do not include in the control statement at all.
 
 WHAT THE LAW SAYS OUTRANKS WHAT THE FIRM HAPPENS TO HAVE DONE. The code lists, the journal rows and the examples show you this firm's HABITS, not the rules. When the firm has never posted this kind of purchase on this kind of document, do not fall back to whatever account it uses most often in that agenda — that is how a restaurant bill ends up on "ostatné služby". Decide from the substance of the purchase and pick the account that matches it; the firm's history breaks the tie between accounts that BOTH fit, it does not choose for you when none has been used yet.
-FOOD, DRINK AND HOSPITALITY NEVER DEDUCT. §49 ods. 7 písm. a) denies the deduction on hospitality and entertainment (pohostenie a zábava). A restaurant, café or bar bill — dishes, drinks, a table number, a business lunch — takes the firm's NON-deductible classification and KN, never a deductible classification and never B3, even when Slovak VAT is printed on it and even when the firm has no such posting on this document type yet. Its account is the firm's representation account (513, "repre"); when the code list offers several, take the one whose agenda matches this document. Employee meal schemes (stravné, závodné stravovanie, finančný príspevok na stravu) are a different regime and are not this rule.
+HOSPITALITY AND ENTERTAINMENT DO NOT DEDUCT — and the test is the PURPOSE, not the goods. §49 ods. 7 písm. a) denies the deduction on pohostenie a zábava, NOT on every purchase of food. Food and drink consumed as hospitality — a restaurant, café or bar bill, a table of dishes and drinks, a business lunch, entertaining a guest — takes the firm's NON-deductible classification and KN, never a deductible classification and never B3, even with Slovak VAT printed on it and even when the firm has no such posting on this document type yet; its account is the firm's representation account (513, "repre"), and when the code list offers several, take the one whose agenda matches this document. Food and drink bought as an INPUT to something the firm itself supplies stays deductible: goods for resale, catering it re-invoices, refreshments inside a training or an event it charges for. Employee meal schemes (stravné, závodné stravovanie, finančný príspevok na stravu) are a separate regime and are not this rule. When the paper does not say which of the three it is, write that in the reason instead of assuming hospitality.
 
 REVERSE CHARGE LIVES ON A DIFFERENT DOCUMENT. When a foreign supplier bills a Slovak payer with no VAT and the tax is self-assessed under §69 ods. 3, the RECEIVED INVOICE itself is not a Slovak taxable supply: it takes the classification this firm uses for invoices outside the VAT return, and KN. The self-assessment — the classification that reports the tax and its KV section B1 — belongs to a SEPARATE internal document the accountant creates. Do not move the internal document's classification onto the invoice, however correct the law is: you would report the tax twice and on the wrong document.
 "ciselniky.cleneniaDph" carries "pouziteNaTomtoTypeDokladu": how many times this firm used that classification on THIS document type. Zero on a classification the firm uses elsewhere is the signal above — the code belongs to the other document, not to this one. A classification the firm has never used anywhere is a legitimate first occurrence and stays available; classifications proven to belong to another document type are removed from the list entirely.
@@ -1448,6 +1448,13 @@ export interface AiSuggestionDocumentContext {
   /** Položky so sadzbou DPH — sadzba na doklade je pre model dôkaz o režime. */
   polozky?: Array<{ popis?: string; sadzbaDph?: number; suma?: number }>;
   /**
+   * Sadzby z rozpisu DPH. Bloček sa často prečíta bez položiek, ale s rozpisom
+   * — a sadzby sa doteraz zbierali VÝLUČNE z položiek, takže model dostal
+   * prázdny zoznam a prompt mu ho vysvetľuje ako „na doklade nie je daň".
+   * DECATHLON má rozpis 23 % / 8,05 / 1,85 a napriek tomu dostal PN/KN.
+   */
+  sadzbyRozpisu?: number[];
+  /**
    * Len pre meranie presnosti: história sa drží k tomuto dátumu. Doklad tak
    * nevidí seba ani nič, čo vzniklo po ňom — bez toho by si odpoveď odpísal
    * z vlastného záznamu a meranie by ukázalo 100 % o ničom.
@@ -1724,13 +1731,21 @@ export async function maybeAiAccountingSuggestion(
             mena: documentContext.currency,
             // Sadzby DPH samostatne, nielen skryté v položkách: rozhodujú
             // o daňovom režime dokladu a model ich inak prehliadne.
-            sadzbyDphNaDoklade: [...new Set((documentContext.polozky ?? [])
-              .map((polozka) => polozka.sadzbaDph)
-              .filter((sadzba): sadzba is number => sadzba != null))],
+            sadzbyDphNaDoklade: [...new Set([
+              ...(documentContext.polozky ?? [])
+                .map((polozka) => polozka.sadzbaDph)
+                .filter((sadzba): sadzba is number => sadzba != null),
+              ...(documentContext.sadzbyRozpisu ?? []),
+            ])],
             // Index je explicitne v dátach: podľa neho sa vracia rozpis riadkov
             // a poradie v poli je príliš krehký dohovor na to, aby o ňom
             // rozhodovalo zaúčtovanie.
             polozky: polozkyPreModel.map((polozka, index) => ({ index, ...polozka })),
+            // Zhrnutie dokladu. Bez neho doklad bez položiek dorazí k modelu ako
+            // meno dodávateľa a suma — „Stravovanie a nápoje" pozná krok čítania,
+            // ale krok účtovania ten text doteraz nedostal vôbec, tak vybral
+            // najpoužívanejší účet agendy namiesto reprezentácie.
+            zhrnutie: documentContext.lineDescriptions.join(' | ').slice(0, 300) || undefined,
           },
           // Pravidlo protistrany — zhrnutie praxe cez všetky jej doklady.
           pravidlo: pravidloProtistrany ? {
