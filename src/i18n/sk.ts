@@ -255,6 +255,7 @@ export const sk = {
   'foto.dokladUlozeny': 'Doklad uložený',
   'foto.blesk': 'Blesk',
   'foto.spat': 'Späť',
+  'foto.zmenaFirmyZahodi': 'Zmena firmy zahodí rozfotené doklady. Pokračovať?',
   'foto.otvorit': 'Otvoriť doklad',
   'foto.vPoradi': 'V poradí',
   'foto.nepodariloSa': 'Nepodarilo sa odoslať',

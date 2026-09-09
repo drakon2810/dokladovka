@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Dokladovka — spracovanie účtovných dokladov" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Doklady sa fotia telefonom na /foto. Bez tychto riadkov je to len
+         webstranka: dolu ostane adresny riadok prehliadaca a fotenie sa robi
+         v okne, ktore vyzera ako Safari. S nimi sa da appka pridat na plochu
+         a bezi cez celu obrazovku.
+         Manifest riesi Android/Chrome, apple-* riadky iOS — Safari manifest
+         dlho ignorovalo a stare iPhony ho ignoruju dodnes, preto oboje. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0e7a5f" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Dokladovka" />
+    <link rel="apple-touch-icon" href="/ikona-180.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />

@@ -29,7 +29,7 @@ const RAM = '#16A37B';
 
 export function FotoPage() {
   const { data, loading, error } = useDataQuery();
-  const { session } = useAuth();
+  const { session, logout } = useAuth();
   const firmy = useMemo(
     () => (data?.organizations ?? []).filter((firma) => !firma.archived),
     [data],
@@ -98,6 +98,20 @@ export function FotoPage() {
     setDoklad((zoznam) => [...zoznam, { id: noveId(), strany: rozpracovany, stav: 'caka' }]);
     setRozpracovany([]);
     ukazOznam(t('foto.dokladUlozeny'));
+  }
+
+  /**
+   * Späť na výber firmy. Firma platí pre celú dávku, takže jej zmena znamená
+   * zahodiť rozfotené — pýtame sa len vtedy, keď je čo stratiť.
+   */
+  function zmenitFirmu() {
+    const rozrobene = rozpracovany.length > 0 || doklad.length > 0;
+    if (rozrobene && !window.confirm(t('foto.zmenaFirmyZahodi'))) return;
+    setRozpracovany([]);
+    setDoklad([]);
+    setOtvoreny(undefined);
+    setFirma(undefined);
+    setObrazovka('firmy');
   }
 
   async function odosli() {
@@ -186,6 +200,7 @@ export function FotoPage() {
           prazdno={!loading && firmy.length === 0}
           chybaNacitania={error?.message}
           email={session?.user.email}
+          onOdhlasit={() => void logout()}
         />
       </Ramec>
     );
@@ -208,6 +223,7 @@ export function FotoPage() {
           onHotovo={uzavriDoklad}
           onZahodStranu={(id) => setRozpracovany((zoznam) => zoznam.filter((s) => s.id !== id))}
           onDavka={() => setObrazovka('davka')}
+          onZmenitFirmu={zmenitFirmu}
         />
       </Ramec>
     );
@@ -380,7 +396,7 @@ function Tlacidlo({ children, onClick }: { children: React.ReactNode; onClick: (
 /* ── 1. Výber firmy ─────────────────────────────────────────────────────── */
 
 function VyberFirmy({
-  firmy, hladanie, onHladanie, onVyber, prazdno, chybaNacitania, email,
+  firmy, hladanie, onHladanie, onVyber, prazdno, chybaNacitania, email, onOdhlasit,
 }: {
   firmy: Organization[];
   hladanie: string;
@@ -389,6 +405,7 @@ function VyberFirmy({
   prazdno: boolean;
   chybaNacitania?: string;
   email?: string;
+  onOdhlasit: () => void;
 }) {
   const dopyt = hladanie.trim().toLocaleLowerCase('sk');
   const najdene = firmy.filter((firma) => !dopyt
@@ -445,6 +462,19 @@ function VyberFirmy({
           <div className="px-3 py-8 text-center text-[14px] text-ink-faint">{t('foto.ziadnaVyhovuje')}</div>
         )}
       </div>
+      {/* Pod ktorým účtom telefón beží a ako z neho von. Bez toho sa účet
+          nedal prepnúť inak než vymazaním údajov prehliadača — a keď bol
+          prihlásený iný než na počítači, zoznam firiem vyzeral pokazený. */}
+      <div className="flex flex-none items-center gap-3 border-t border-line px-4 py-3">
+        <span className="min-w-0 flex-1 truncate text-[13px] text-ink-soft">{email ?? ''}</span>
+        <button
+          type="button"
+          onClick={onOdhlasit}
+          className="flex-none rounded border border-line px-3 py-1.5 text-[13px] font-medium text-ink"
+        >
+          {t('auth.odhlasit')}
+        </button>
+      </div>
     </div>
   );
 }
@@ -453,7 +483,7 @@ function VyberFirmy({
 
 function Snimanie({
   firma, cisloDokladu, strany: zoznamStran, vDavke, kamera, zablesk, oznam, chyba,
-  onOdfot, onHotovo, onZahodStranu, onDavka,
+  onOdfot, onHotovo, onZahodStranu, onDavka, onZmenitFirmu,
 }: {
   firma: string;
   cisloDokladu: number;
@@ -467,6 +497,7 @@ function Snimanie({
   onHotovo: () => void;
   onZahodStranu: (id: string) => void;
   onDavka: () => void;
+  onZmenitFirmu: () => void;
 }) {
   const napoveda = chyba
     || (kamera.nedostupna ? t('foto.kameraNedostupna')
@@ -478,7 +509,18 @@ function Snimanie({
         className="flex h-[38px] flex-none items-center justify-between gap-2.5 px-4"
         style={{ background: 'rgba(9,13,11,.55)' }}
       >
-        <span className="min-w-0 truncate text-[13px] font-medium" style={{ color: '#DDE4E0' }}>{firma}</span>
+        {/* Jediná cesta späť na výber firmy. Bez nej sa dá odísť len tlačidlom
+            prehliadača, ktoré vyhodí z /foto na hlavnú stránku — a v režime
+            appky (pridané na plochu) tam žiadne tlačidlo prehliadača nie je. */}
+        <button
+          type="button"
+          onClick={onZmenitFirmu}
+          className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium"
+          style={{ color: '#DDE4E0' }}
+        >
+          <span aria-hidden className="flex-none text-[15px]">‹</span>
+          <span className="min-w-0 truncate">{firma}</span>
+        </button>
         <span className="tnum flex-none text-[13px] font-bold text-white">
           {t('foto.doklad')} {cisloDokladu} · {t('foto.strana')} {zoznamStran.length + 1}
         </span>
