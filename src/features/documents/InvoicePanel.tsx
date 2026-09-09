@@ -708,6 +708,18 @@ export function InvoicePanel({
   // daň dvakrát, raz zo zálohy a raz zo zúčtovania.
   const zalohova = druhDokladu.podtyp === 'zalohova';
   const jePokladna = draft.typ === 'PD';
+  // Pokladničný doklad sa bez kódu pokladne a smeru nedá schváliť ani exportovať.
+  // Doteraz sa oboje doplnilo len pri RUČNEJ zmene číselného radu, takže doklad,
+  // ktorému rad určil návrh AI, prišiel s prázdnymi poľami — hoci pole typu už
+  // „Výdajový pokladničný doklad" zobrazovalo (fallback v typValue) a predvoľba
+  // pokladne v nastaveniach firmy existovala.
+  useEffect(() => {
+    if (readOnly || draft.typ !== 'PD') return;
+    const patch: Partial<DocumentUcto> = {};
+    if (!ucto.pokladnaTyp) patch.pokladnaTyp = 'expense';
+    if (!ucto.pokladnaKod?.trim() && predvolenaPokladna) patch.pokladnaKod = predvolenaPokladna;
+    if (Object.keys(patch).length > 0) updateUcto(patch);
+  }, [readOnly, draft.typ, ucto.pokladnaTyp, ucto.pokladnaKod, predvolenaPokladna]);
   const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);
   const rezim = `${typLabel}${vybranyRad?.kod ? ` (${vybranyRad.kod})` : ''}`;
 
