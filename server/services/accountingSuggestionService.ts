@@ -784,7 +784,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // pred kvPreClenenie, aby sa stihol použiť kv_section zvoleného členenia.
   const druhDokladu = { typ: documentType ?? '', podtyp: current.rows[0]?.podtyp };
   kvKod = kvPreDruh(
-    await kvPreClenenie(tx, input.tenantId, candidate.clenenie_dph_id, kvPreDruh(kvKod, druhDokladu)),
+    await kvPreClenenie(tx, input, candidate.clenenie_dph_id,
+      HISTORIA_AGENDY[documentType ?? ''] ?? [], kvPreDruh(kvKod, druhDokladu)),
     druhDokladu,
   );
 
@@ -856,20 +857,57 @@ export async function updateRuleFeedback(tx: Queryable, input: {
   );
 }
 
-/** Členenie KV: ak ho zdroj návrhu nedodal, odvodí sa zo sekcie KV zvoleného
- *  členenia DPH (kv_section z importu POHODY) — tak ich prepája aj POHODA. */
+/**
+ * Členenie KV, keď ho zdroj návrhu nedodal. Dva zdroje za sebou.
+ *
+ * Prvý je kv_section z číselníka POHODY. V slovenskej POHODE je vždy prázdny a
+ * nejde o chybu prenosu: schéma classificationVAT.xsd nesie sectionInVATLedgerStatement
+ * s poznámkou „pouze CZ verze" — Kontrolní hlášení je český výkaz. Sekcia teda
+ * v SK verzii nie je vlastnosťou členenia a čakať ju od agenta nemá zmysel.
+ *
+ * Druhý zdroj je prax firmy: ako tá istá firma to isté členenie na TEJ ISTEJ
+ * agende naozaj zaraďovala. Agenda je v kľúči nutne — sekcia je vlastnosť
+ * DRUHU DOKLADU: „501600 Auto" stojí v denníku ako B2 na prijatej faktúre a
+ * ako B3 na tom istom nákupe z bločku. Meranie nad korpusom: z 82 dvojíc
+ * (členenie, agenda) je 66 jednoznačných a 79 má prevahu aspoň 90 %.
+ *
+ * Prevaha musí byť aspoň 90 % a aspoň tri riadky — pod tým to nie je prax, ale
+ * náhoda, a mlčanie je lepšie než sekcia, ktorú nikto nepotvrdil. Výsledok ide
+ * ďalej cez kvPreDruh, takže zákon aj tak dostane posledné slovo.
+ */
+const KV_Z_DENNIKA_PREVAHA = 0.9;
+const KV_Z_DENNIKA_RIADKOV = 3;
+
 async function kvPreClenenie(
   tx: Queryable,
-  tenantId: string,
+  input: { tenantId: string; organizationId: string },
   clenenieDphId: string | undefined,
+  agendy: readonly string[],
   kvKod: string | undefined,
 ): Promise<string | undefined> {
   if (kvKod || !clenenieDphId) return kvKod;
-  const result = await tx.query<{ kv_section?: string } & Record<string, unknown>>(
+  const zCiselnika = await tx.query<{ kv_section?: string } & Record<string, unknown>>(
     'SELECT kv_section FROM code_list_items WHERE id=$1 AND tenant_id=$2',
-    [clenenieDphId, tenantId],
+    [clenenieDphId, input.tenantId],
   );
-  return result.rows[0]?.kv_section ?? undefined;
+  const kvSection = zCiselnika.rows[0]?.kv_section;
+  if (kvSection) return kvSection;
+  if (agendy.length === 0) return undefined;
+  const zDennika = await tx.query<{ clenenie_kv_kod: string; n: string; spolu: string } & Record<string, unknown>>(
+    `SELECT clenenie_kv_kod, count(*)::text AS n,
+            sum(count(*)) OVER ()::text AS spolu
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND clenenie_dph_id=$3
+        AND agenda = ANY($4::text[]) AND clenenie_kv_kod IS NOT NULL
+      GROUP BY 1 ORDER BY count(*) DESC LIMIT 1`,
+    [input.tenantId, input.organizationId, clenenieDphId, [...agendy]],
+  );
+  const prax = zDennika.rows[0];
+  if (!prax) return undefined;
+  const n = Number(prax.n);
+  const spolu = Number(prax.spolu);
+  return n >= KV_Z_DENNIKA_RIADKOV && n / spolu >= KV_Z_DENNIKA_PREVAHA
+    ? platnyKvKod(prax.clenenie_kv_kod) : undefined;
 }
 
 /**
@@ -2003,7 +2041,7 @@ export async function maybeAiAccountingSuggestion(
   const druhDokladu = { typ, podtyp: documentContext.podtyp };
   const kvKod = validated.clenenie_dph_id
     ? kvPreDruh(await kvPreClenenie(
-        database, input.tenantId, validated.clenenie_dph_id,
+        database, input, validated.clenenie_dph_id, HISTORIA_AGENDY[typ] ?? [],
         kvPreDruh(pravidlo.kvKod, druhDokladu) ?? kvPreDruh(naDoklade.clenenieKvKod, druhDokladu)
           ?? kvPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu)
           // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do

@@ -600,6 +600,62 @@ describe('accounting suggestions', () => {
     expect(String(suggestion.reason)).toContain('Pravidlo');
   }, 90_000);
 
+  // Sekcia KV, ktorú nikto nedodal. Stĺpec kv_section z POHODY je v SK verzii
+  // vždy prázdny — classificationVAT.xsd nesie sectionInVATLedgerStatement s
+  // poznámkou „pouze CZ verze", Kontrolní hlášení je český výkaz. Sekcia sa
+  // preto berie z praxe firmy, a nutne pre TÚ ISTÚ agendu: to isté členenie má
+  // na prijatej faktúre B2 a na bločku B3.
+  it('sekciu KV podľa praxe firmy, keď ju nedodal nikto iný', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    const dph = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,120,'EUR')`,
+      [documentId, ...kde],
+    );
+    for (const [id, kind, kod] of [[pred, 'predkontacie', '501200'], [dph, 'cleneniaDph', 'PD']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, ...kde, kind, kod],
+      );
+    }
+    // Štyri riadky FP s tým istým členením a sekciou B2 — to je prax.
+    for (let i = 0; i < 4; i += 1) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,
+           clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,source,riadok_hash)
+         VALUES ($1,$2,$3,'FP','kancelarske potreby','501200',$4,'PD',$5,'B2','mdb',$6)`,
+        [randomUUID(), ...kde, pred, dph, randomUUID()],
+      );
+    }
+    const parser = {
+      // Model sekciu NEVRÁTI — inak by sa prax firmy vôbec nepýtala.
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: dph, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.6, reason: 'Kancelárske potreby',
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Papier s.r.o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Papier s.r.o.', supplierKrajina: 'SK',
+      totalAmount: 120, currency: 'EUR',
+      lineDescriptions: ['Kancelárske potreby'],
+      polozky: [{ popis: 'Kancelárske potreby', sadzbaDph: 23, suma: 120 }],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT clenenie_kv_kod FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    expect(navrh.clenenie_kv_kod).toBe('B2');
+  }, 90_000);
+
   // Bloček sa často prečíta bez položiek, ale s rozpisom DPH. Sadzby sa zbierali
   // VÝLUČNE z položiek, takže model dostal prázdny zoznam — a prompt mu prázdny
   // zoznam vysvetľuje ako „na doklade nie je daň". DECATHLON tak dostal PN/KN
