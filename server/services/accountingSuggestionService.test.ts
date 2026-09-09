@@ -117,8 +117,18 @@ describe('accounting suggestions', () => {
     const rows = await database.query('SELECT clenenie_kv_kod, polozky_ucto FROM ucto_decisions WHERE document_id=$1', [historyId]);
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0].clenenie_kv_kod).toBe('B3');
-    // Položky bez vlastného zaúčtovania nevyrábajú prázdny jsonb zápis.
-    expect(rows.rows[0].polozky_ucto).toBeNull();
+    // Doklad, ktorý nikto nedelil, je tiež dvojica: „táto položka išla na tento
+    // účet" je informácia, nie jej absencia. Kým sa písali len riadky s vlastným
+    // zaúčtovaním, malo použiteľnú dvojicu 14 zo 107 schválených dokladov.
+    const nerozdeleny = typeof rows.rows[0].polozky_ucto === 'string'
+      ? JSON.parse(rows.rows[0].polozky_ucto) : rows.rows[0].polozky_ucto;
+    expect(nerozdeleny.spolu).toBe(60);
+    expect(nerozdeleny.polozky).toHaveLength(1);
+    // Riadok bez vlastného zaúčtovania dedí hlavičku — tak ho vyexportuje POHODA.
+    expect(nerozdeleny.polozky[0]).toMatchObject({
+      index: 0, popis: 'nafta phm 50l', predkontaciaId: pred, clenenieDphId: dph,
+      clenenieKvKod: 'B3', vlastne: false,
+    });
 
     // Per-riadkové zaúčtovanie z ItemsSection sa ukladá ako zásoba pre seed typov položiek.
     await recordUctoDecision(database, {
@@ -137,10 +147,15 @@ describe('accounting suggestions', () => {
     const zapisy = typeof perLine.rows[0].polozky_ucto === 'string'
       ? JSON.parse(perLine.rows[0].polozky_ucto)
       : perLine.rows[0].polozky_ucto;
-    // Iba riadky s vlastným zaúčtovaním; popis je normalizovaný.
-    expect(zapisy).toEqual([
-      { popis: 'nafta phm 50l', sadzbaDph: 23, predkontaciaId: pred, clenenieDphId: dph },
-    ]);
+    // Obe položky, nielen tá s vlastným zaúčtovaním; popis je normalizovaný.
+    // Príznak vlastne odlišuje rozhodnutie účtovníka od zdedenej hlavičky.
+    expect(zapisy.polozky).toHaveLength(2);
+    expect(zapisy.polozky[0]).toMatchObject({
+      popis: 'nafta phm 50l', sadzbaDph: 23, predkontaciaId: pred, clenenieDphId: dph, vlastne: true,
+    });
+    expect(zapisy.polozky[1]).toMatchObject({
+      popis: 'žuvačky', sadzbaDph: 23, predkontaciaId: pred, clenenieDphId: dph, vlastne: false,
+    });
     // Obnova pôvodného zápisu — zvyšok testu počíta s pôvodným textom položiek.
     await recordUctoDecision(database, decision);
 

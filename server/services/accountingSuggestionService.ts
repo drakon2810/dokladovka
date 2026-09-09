@@ -872,20 +872,66 @@ async function kvPreClenenie(
   return result.rows[0]?.kv_section ?? undefined;
 }
 
-/** Riadky s vlastným zaúčtovaním (ItemsSection) — ukladajú sa do pamäte ako
- *  zásoba pre budúci seed typov položiek. sadzbaDph je jediný zdroj dph_perc. */
-function polozkyUctoJson(extracted: unknown): string | null {
-  const polozky = Array.isArray((extracted as any)?.polozky) ? (extracted as any).polozky : [];
-  const zapisy = polozky
-    .filter((polozka: any) => polozka?.ucto?.predkontaciaId || polozka?.ucto?.clenenieDphId)
-    .map((polozka: any) => ({
-      popis: normalizeName(polozka?.popis).slice(0, 200),
-      sadzbaDph: polozka?.sadzbaDph,
-      predkontaciaId: polozka?.ucto?.predkontaciaId,
-      clenenieDphId: polozka?.ucto?.clenenieDphId,
-      strediskoId: polozka?.ucto?.strediskoId,
-    }));
-  return zapisy.length > 0 ? JSON.stringify(zapisy) : null;
+/**
+ * Dvojica „čo bolo na doklade → ako to účtovník zaúčtoval". Jediný učiaci
+ * podklad, ktorý nemá kde inde vzniknúť: v POHODE je len výsledok, a v korpuse
+ * histórie tiež — pôvodné tlačené riadky tam nie sú. Bez tejto dvojice sa
+ * FORMA dokladu (koľko riadkov z koľkých položiek, čo sa zlúčilo, čo vzniklo
+ * z rekapitulácie DPH) nedá naučiť ničím, koľko by sa promptov neprepísalo.
+ *
+ * Ukladá sa CELÝ doklad, nie len riadky s vlastným zaúčtovaním. Kým sa písali
+ * iba tie, malo použiteľnú dvojicu 14 zo 107 schválených dokladov a z pokladne
+ * ani jeden: nerozdelený doklad je totiž tiež forma — „týchto osem položiek
+ * ide na jeden účet" je informácia, nie jej absencia.
+ *
+ * rozpisDph je tu preto, že práve z neho vzniká riadok, ktorý na papieri ako
+ * položka nestojí (cudzia daň na faktúre W.A.G.). Bez neho by sa z dvojice
+ * nedalo prečítať, odkiaľ sa taký riadok berie.
+ *
+ * Ukladá sa VÝSLEDNÁ podoba dokladu, teda tá, ktorú účtovník schválil. Tlačená
+ * strana dvojice sa nekopíruje: je odvoditeľná z extraction_runs.result tou istou
+ * čistou normalizáciou, ktorá ju vyrobila prvýkrát. Rez položky si pritom nesie
+ * pôvod sám — rozrezPolozku dáva častiam id v tvare „<id položky>-1", „-2",
+ * takže z výsledku vidno, ktoré riadky vznikli z ktorého tlačeného.
+ *
+ * Stĺpec zatiaľ nikto nečíta — je to zásoba. Staré doklady sa dajú doplniť
+ * kedykoľvek z documents.extracted a documents.accounting, nič sa nestráca,
+ * preto sa tu spätný dopočet nerobí.
+ */
+function polozkyUctoJson(extracted: unknown, hlavicka: Record<string, string | undefined>): string | null {
+  const doklad = extracted as any;
+  const polozky = Array.isArray(doklad?.polozky) ? doklad.polozky : [];
+  const rozpis = Array.isArray(doklad?.rozpisDph) ? doklad.rozpisDph : [];
+  if (polozky.length === 0 && rozpis.length === 0) return null;
+  const cislo = (hodnota: unknown): number | undefined =>
+    (typeof hodnota === 'number' && Number.isFinite(hodnota) ? hodnota : undefined);
+  return JSON.stringify({
+    spolu: cislo(doklad?.sumaSpolu),
+    rozpisDph: rozpis.map((riadok: any) => ({
+      sadzba: cislo(riadok?.sadzba), zaklad: cislo(riadok?.zaklad), dph: cislo(riadok?.dph),
+    })),
+    polozky: polozky.map((polozka: any, index: number) => {
+      const vlastne = Boolean(polozka?.ucto?.predkontaciaId || polozka?.ucto?.clenenieDphId);
+      return {
+        index,
+        // Id nesie pôvod rezu: „abc-1" a „abc-2" vznikli z jednej tlačenej
+        // položky „abc". Bez neho by sa z výsledku nedalo prečítať, čo sa delilo.
+        id: typeof polozka?.id === 'string' ? polozka.id : undefined,
+        popis: normalizeName(polozka?.popis).slice(0, 200),
+        sadzbaDph: cislo(polozka?.sadzbaDph),
+        sumaBezDph: cislo(polozka?.sumaBezDph),
+        sumaDph: cislo(polozka?.sumaDph),
+        sumaSpolu: cislo(polozka?.sumaSpolu),
+        // Riadok bez vlastného zaúčtovania dedí hlavičku — presne tak ho
+        // vyexportuje POHODA, takže tak sa má aj učiť.
+        predkontaciaId: polozka?.ucto?.predkontaciaId ?? hlavicka.predkontaciaId,
+        clenenieDphId: polozka?.ucto?.clenenieDphId ?? hlavicka.clenenieDphId,
+        clenenieKvKod: polozka?.ucto?.clenenieKvKod ?? hlavicka.clenenieKvKod,
+        strediskoId: polozka?.ucto?.strediskoId ?? hlavicka.strediskoId,
+        vlastne,
+      };
+    }),
+  });
 }
 
 /** Zápis do pamäte rozhodnutí pri schválení dokladu (spätná väzba = učenie).
@@ -974,7 +1020,7 @@ export async function recordUctoDecision(tx: Queryable, input: {
       normalizeLineText(input.extracted) || null,
       input.accounting.predkontaciaId ?? null, input.accounting.clenenieDphId ?? null,
       input.accounting.ciselnyRadId ?? null, input.accounting.strediskoId ?? null,
-      input.accounting.clenenieKvKod ?? null, polozkyUctoJson(input.extracted), input.documentType ?? null,
+      input.accounting.clenenieKvKod ?? null, polozkyUctoJson(input.extracted, input.accounting), input.documentType ?? null,
       input.podtyp ?? 'bezna'],
   );
 }
