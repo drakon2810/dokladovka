@@ -57,6 +57,10 @@ describe('OpenAIDocumentExtractionProvider', () => {
     expect(extractionSystemInstructions).toContain('Doklad/uzávierka');
     expect(request.store).toBe(false);
     expect(request.text.format).toBeTruthy();
+    // Verzia schémy je v JSON schéme pre OpenAI pevná hodnota — Structured
+    // Outputs potom modelu inú napísať nedovolí (raz ju napísal inak a doklad
+    // skončil ako trvalá chyba schema_version_mismatch).
+    expect(request.text.format.schema.properties.schemaVersion.enum).toEqual([EXTRACTION_SCHEMA_VERSION]);
     expect(request.input[0].content[1]).toMatchObject({ type: 'input_file', filename: 'faktura.pdf' });
     // detail je platný len pre input_image; na input_file ho API odmieta s 400.
     expect(request.input[0].content[1].detail).toBeUndefined();

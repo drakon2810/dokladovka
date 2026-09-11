@@ -117,7 +117,11 @@ const evidenceFieldWireSchema = z.object({
 
 /** Všetky vlastnosti sú povinné; neznáma hodnota je null. To je stabilné pre Structured Outputs. */
 export const extractionWireSchema = z.object({
-  schemaVersion: z.string().max(20),
+  // Jediná prípustná hodnota, nie „akýkoľvek reťazec". Structured Outputs potom
+  // modelu inú verziu napísať nedovolí. S voľným reťazcom ju raz za 152 behov
+  // napísal inak (11. 9., počas výpadku OpenAI) a doklad skončil ako trvalá
+  // chyba schema_version_mismatch, hoci dáta mohli byť v poriadku.
+  schemaVersion: z.enum([EXTRACTION_SCHEMA_VERSION]),
   documentType: z.enum(['FP', 'FV', 'BV', 'MZDY', 'OZ', 'PD', 'INY', 'UNKNOWN']),
   supplier: partyWireSchema,
   buyer: buyerWireSchema,
