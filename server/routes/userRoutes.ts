@@ -160,6 +160,18 @@ async function existujuciUcet(tx: Queryable, emailNormalized: string): Promise<E
   return result.rows[0];
 }
 
+/**
+ * Zlyhaná pošta ako správa, s ktorou admin vie niečo urobiť. EAUTH znamená, že
+ * poštový server odmietol prihlásenie — chyba je v nastavení SMTP servera, nie
+ * v pozvánke, a opakovanie nepomôže.
+ */
+function chybaPosty(error: unknown): HttpError {
+  const kod = (error as { code?: unknown } | null)?.code;
+  return new HttpError(502, 'mail_failed', kod === 'EAUTH'
+    ? 'Pozvánku sa nepodarilo odoslať: poštový server odmietol prihlásenie. Treba opraviť heslo k SMTP v nastaveniach servera.'
+    : 'Pozvánku sa nepodarilo odoslať e-mailom. Skúste to znova o chvíľu.');
+}
+
 function organizationIdsZPozvanky(value: unknown): string[] {
   const raw = typeof value === 'string' ? JSON.parse(value) : value;
   return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
@@ -227,6 +239,8 @@ export function registerUserRoutes(app: FastifyInstance, database: Database, con
     const kancelaria = await database.query<{ name: string } & Record<string, unknown>>(
       'SELECT name FROM tenants WHERE id=$1', [auth.tenantId],
     );
+    const link = `${config.appBaseUrl.replace(/\/$/, '')}/pozvanka?token=${encodeURIComponent(token)}`;
+    const nazovKancelarie = kancelaria.rows[0]?.name ?? 'Dokladovka';
     await database.transaction(async (tx) => {
       // Nová pozvánka odvolá predchádzajúcu — platí vždy len posledný odkaz.
       await tx.query(
@@ -241,20 +255,25 @@ export function registerUserRoutes(app: FastifyInstance, database: Database, con
         [id, auth.tenantId, body.email, emailNormalized, body.meno, body.rola, JSON.stringify(firmy),
           sha256(token), auth.userId, expiresAt.toISOString()],
       );
-    });
-
-    const link = `${config.appBaseUrl.replace(/\/$/, '')}/pozvanka?token=${encodeURIComponent(token)}`;
-    const nazovKancelarie = kancelaria.rows[0]?.name ?? 'Dokladovka';
-    await mailer.send({
-      to: body.email,
-      subject: `Dokladovka — pozvánka do kancelárie ${nazovKancelarie}`,
-      text: `${auth.name} vás pozýva do kancelárie ${nazovKancelarie} v Dokladovke.\n\n`
-        + `Prijmete ju cez tento odkaz:\n${link}\n\n`
-        + `Odkaz platí ${POZVANKA_PLATNOST_DNI} dní a dá sa použiť raz.\n`
-        + (existujuci
-          ? 'Na tejto adrese už účet máte — prihlásite sa svojím doterajším heslom.\n'
-          : 'Pri prijatí si nastavíte heslo.\n')
-        + 'Ak pozvánku nečakáte, tento e-mail ignorujte.',
+      // E-mail ide VNÚTRI transakcie. Keď neodíde, pozvánka sa nezapíše — ani
+      // predchádzajúca sa neodvolá. Pôvodne sa zápis potvrdil pred odoslaním:
+      // pri zlyhanej pošte ostala v databáze pozvánka s odkazom, ktorý nikto
+      // nedostal, a admin videl len „neočakávanú chybu".
+      try {
+        await mailer.send({
+          to: body.email,
+          subject: `Dokladovka — pozvánka do kancelárie ${nazovKancelarie}`,
+          text: `${auth.name} vás pozýva do kancelárie ${nazovKancelarie} v Dokladovke.\n\n`
+            + `Prijmete ju cez tento odkaz:\n${link}\n\n`
+            + `Odkaz platí ${POZVANKA_PLATNOST_DNI} dní a dá sa použiť raz.\n`
+            + (existujuci
+              ? 'Na tejto adrese už účet máte — prihlásite sa svojím doterajším heslom.\n'
+              : 'Pri prijatí si nastavíte heslo.\n')
+            + 'Ak pozvánku nečakáte, tento e-mail ignorujte.',
+        });
+      } catch (error) {
+        throw chybaPosty(error);
+      }
     });
     await writeAudit(database, {
       tenantId: auth.tenantId, actorType: 'user', actorId: auth.userId,

@@ -158,6 +158,28 @@ describe('pozvánky do kancelárie', () => {
       expect(pozvanka.json().code).toBe('user_in_other_office');
     }
   }, 90_000);
+  // V produkcii poštový server odmietol prihlásenie (535 5.7.8). Zápis sa vtedy
+  // potvrdil pred odoslaním: v databáze ostala pozvánka s odkazom, ktorý nikto
+  // nedostal, a admin videl len „neočakávanú chybu".
+  it('keď pošta neodíde, pozvánka nevznikne a admin dostane zrozumiteľnú chybu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const zlyhanaPosta = {
+      send: async () => { throw Object.assign(new Error('Invalid login: 535 5.7.8 Authentication failed.'), { code: 'EAUTH' }); },
+    };
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false, mailer: zlyhanaPosta });
+    const seeded = await seedTestUser(database);
+    const sef = await prihlas(app, seeded.email, seeded.password);
+
+    const pozvanka = await app.inject({
+      method: 'POST', url: '/api/users/invitations', headers: sef,
+      payload: { email: 'm.kazlouski@upkz.sk', meno: 'Mikita', rola: 'admin', organizationIds: [] },
+    });
+    expect(pozvanka.statusCode).toBe(502);
+    expect(pozvanka.json().code).toBe('mail_failed');
+    expect(pozvanka.json().message).toContain('SMTP');
+    expect((await database.query('SELECT 1 FROM user_invitations')).rowCount).toBe(0);
+  }, 90_000);
 });
 
 describe('správa prístupu', () => {
