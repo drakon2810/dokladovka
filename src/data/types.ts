@@ -586,6 +586,8 @@ export interface CodeListItem {
   iban?: string;
   /** Bankové účty: mena účtu (EUR, USD…); prázdna = domáca mena. */
   mena?: string;
+  /** Číselné rady pokladne: kód pokladne POHODY, na ktorú rad patrí (numericalSeries.cashAccount). */
+  pokladnaKod?: string;
   syncedAt?: string;
 }
 

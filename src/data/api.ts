@@ -3065,7 +3065,7 @@ export interface UctoKategoria {
  * Účtovné agendy profilu v poradí, v akom ich účtovník vidí v type dokladu.
  * Musí sedieť s AGENDY_ZOBRAZENE v server/services/uctoHistoryService.ts.
  */
-export const UCTO_AGENDY = ['VPD', 'PPD', 'FP', 'FV', 'OZ', 'INT'] as const;
+export const UCTO_AGENDY = ['VPD', 'PPD', 'FP', 'FV', 'OZ', 'OP', 'INT'] as const;
 
 /** Popisky agend pre používateľa — kód sám o sebe („VPD") nie je čitateľný. */
 export const UCTO_AGENDA_NAZOV: Record<string, string> = {
@@ -3074,6 +3074,7 @@ export const UCTO_AGENDA_NAZOV: Record<string, string> = {
   FP: 'Faktúra prijatá',
   FV: 'Faktúra vydaná',
   OZ: 'Ostatný záväzok',
+  OP: 'Ostatná pohľadávka',
   INT: 'Interný doklad (INT)',
   BV: 'Bankový výpis',
   // Staré importy spred rozdelenia agend — v dátach ešte žijú.

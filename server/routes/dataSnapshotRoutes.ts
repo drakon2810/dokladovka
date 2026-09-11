@@ -115,6 +115,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         posledneCislo: row.last_number ?? undefined, kvSekcia: row.kv_section ?? undefined,
         ucetMd: row.ucet_md ?? undefined, ucetDal: row.ucet_dal ?? undefined,
         iban: row.iban ?? undefined, mena: row.mena ?? undefined,
+        pokladnaKod: row.pokladna_kod ?? undefined,
         syncedAt: iso(row.synced_at),
       });
     }

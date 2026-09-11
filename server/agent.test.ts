@@ -533,6 +533,65 @@ describe('agent backend contour', () => {
     await app.close();
   }, 90_000);
 
+  // Mostík 0.16: pokladňa číselného radu, ostatné pohľadávky a sadzba DPH so
+  // strediskom v histórii. Schémy sú strict, takže server musí nové polia prijať
+  // SKÔR, než sa nový agent rozšíri — inak by synchronizácia padala na 400.
+  it('prijme pokladňu radu, agendu OP aj sadzbu so strediskom — a starší Mostík nič nezmaže', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const browserHeaders = { cookie: String(login.headers['set-cookie']).split(';')[0], 'x-csrf-token': login.json().csrfToken as string };
+    await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
+    const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders, payload: { organizationId: seeded.organizationId } });
+    const paired = await app.inject({
+      method: 'POST', url: '/api/agent/pair',
+      payload: { pairingCode: pairing.json().code as string, hostname: 'POHODA-SRV', agentVersion: '0.16.0', companyIco: '12345678' },
+    });
+    const agentHeaders = { authorization: `Bearer ${paired.json().agentToken as string}` };
+    const ciselnik = (items: unknown[]) => app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`, headers: agentHeaders,
+      payload: { kind: 'ciselneRady', items },
+    });
+    const pokladnaRadu = async () => (await database.query<{ pokladna_kod: string | null } & Record<string, unknown>>(
+      `SELECT pokladna_kod FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND code='26HP'`,
+      [seeded.tenantId, seeded.organizationId],
+    )).rows[0]?.pokladna_kod;
+
+    // Nový Mostík pošle pokladňu, na ktorú rad patrí.
+    const novy = await ciselnik([{ kod: '26HP', nazov: 'Hotovostný príjem', agenda: 'pokladna', pokladnaKod: 'HP1' }]);
+    expect(novy.statusCode, novy.body).toBe(200);
+    expect(await pokladnaRadu()).toBe('HP1');
+
+    // Starší Mostík pole nepozná — prenos nesmie uloženú pokladňu zmazať.
+    const stary = await ciselnik([{ kod: '26HP', nazov: 'Hotovostný príjem', agenda: 'pokladna' }]);
+    expect(stary.statusCode, stary.body).toBe(200);
+    expect(await pokladnaRadu()).toBe('HP1');
+
+    // Ostatné pohľadávky a sadzba DPH so strediskom v riadku histórie.
+    const historia = await app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/ucto-history`, headers: agentHeaders,
+      payload: {
+        reset: true,
+        rows: [{
+          agenda: 'OP', dokladCislo: '26OP001', datum: '2026-05-12', lineText: 'Financna ciastka W.A.G.',
+          predkontaciaKod: '378100', clenenieDphKod: 'UN', riadokIndex: 1, suma: 100, sumaDph: 0,
+          sadzbaDph: 0, strediskoKod: 'BA',
+        }],
+      },
+    });
+    expect(historia.statusCode, historia.body).toBe(200);
+    const riadok = (await database.query<Record<string, unknown>>(
+      `SELECT agenda, sadzba_dph, stredisko_kod FROM ucto_historia WHERE tenant_id=$1 AND organization_id=$2`,
+      [seeded.tenantId, seeded.organizationId],
+    )).rows[0];
+    expect(riadok).toMatchObject({ agenda: 'OP', stredisko_kod: 'BA' });
+    expect(Number(riadok.sadzba_dph)).toBe(0);
+
+    await app.close();
+  }, 90_000);
+
   // ParseCodeLists v agentovi vracia vždy všetkých päť číselníkov. Keď POHODA
   // na jeden kontajner odpovie chybou, príde prázdny zoznam — a ten by inak
   // zhasol všetky predkontácie firmy, pričom odpoveď je 'ok'. Účtovník by

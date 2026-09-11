@@ -63,6 +63,9 @@ const codeListItem = z.object({
   // Bankové účty: IBAN (párovanie výpisu na účet) a mena devízového účtu.
   iban: z.string().max(40).optional(),
   mena: z.string().max(10).optional(),
+  // Číselné rady pokladne: kód pokladne POHODY (numericalSeries.cashAccount).
+  // Nepovinné — starší Mostík ho neposiela a schéma je strict.
+  pokladnaKod: z.string().trim().max(50).optional(),
 }).strict();
 
 const releaseSchema = z.object({
@@ -357,16 +360,19 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       for (const item of normalized.values()) {
         await tx.query(
           `INSERT INTO code_list_items
-            (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, last_number, iban, mena, synced_at)
-           VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,now())
+            (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, last_number, iban, mena, pokladna_kod, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
            ON CONFLICT (tenant_id, organization_id, kind, code)
            DO UPDATE SET name=excluded.name, source='pohoda', active=true, external_id=excluded.external_id,
                          agenda=excluded.agenda, accounting_year=excluded.accounting_year,
                          ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal, last_number=excluded.last_number,
                          iban=excluded.iban, mena=excluded.mena,
+                         -- Starší Mostík pole neposiela: vtedy sa uložená pokladňa nezmaže.
+                         pokladna_kod=coalesce(excluded.pokladna_kod, code_list_items.pokladna_kod),
                          synced_at=now(), updated_at=now()`,
           [randomUUID(), agent.tenant_id, id, body.kind, item.kod, item.nazov, item.externalId ?? null, item.agenda ?? null, item.uctovnyRok ?? null,
-            item.ucetMd ?? null, item.ucetDal ?? null, item.posledneCislo ?? null, item.iban ?? null, item.mena ?? null],
+            item.ucetMd ?? null, item.ucetDal ?? null, item.posledneCislo ?? null, item.iban ?? null, item.mena ?? null,
+            item.pokladnaKod ?? null],
         );
         insertedOrUpdated += 1;
       }

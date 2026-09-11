@@ -713,13 +713,19 @@ export function InvoicePanel({
   // ktorému rad určil návrh AI, prišiel s prázdnymi poľami — hoci pole typu už
   // „Výdajový pokladničný doklad" zobrazovalo (fallback v typValue) a predvoľba
   // pokladne v nastaveniach firmy existovala.
+  // Pokladňa sa berie najprv z radu samotného: POHODA ju drží na rade pokladne
+  // (numericalSeries.cashAccount) a Mostík ju odtiaľ prenesie — firma s dvoma
+  // pokladňami tak dostane správnu k správnemu radu. Predvoľba firmy je až
+  // záloha pre rad, ktorý pokladňu nenesie (starší Mostík, ručný import).
+  const pokladnaRadu = vybranyRad?.pokladnaKod?.trim() || undefined;
   useEffect(() => {
     if (readOnly || draft.typ !== 'PD') return;
     const patch: Partial<DocumentUcto> = {};
     if (!ucto.pokladnaTyp) patch.pokladnaTyp = 'expense';
-    if (!ucto.pokladnaKod?.trim() && predvolenaPokladna) patch.pokladnaKod = predvolenaPokladna;
+    const pokladna = pokladnaRadu ?? predvolenaPokladna;
+    if (!ucto.pokladnaKod?.trim() && pokladna) patch.pokladnaKod = pokladna;
     if (Object.keys(patch).length > 0) updateUcto(patch);
-  }, [readOnly, draft.typ, ucto.pokladnaTyp, ucto.pokladnaKod, predvolenaPokladna]);
+  }, [readOnly, draft.typ, ucto.pokladnaTyp, ucto.pokladnaKod, pokladnaRadu, predvolenaPokladna]);
   const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);
   const rezim = `${typLabel}${vybranyRad?.kod ? ` (${vybranyRad.kod})` : ''}`;
 

@@ -17,7 +17,7 @@ import { jeBezPredkontacia, normalizeName, platnyKvKod } from './accountingSugge
  * ich už nepoužívajú, ale v databáze zostávajú, tak musia prejsť validáciou.
  */
 export const AGENDY = [
-  'FP', 'FV', 'PPD', 'VPD', 'OZ', 'INT', 'BV', 'PD', 'MZDY', 'INE',
+  'FP', 'FV', 'PPD', 'VPD', 'OZ', 'OP', 'INT', 'BV', 'PD', 'MZDY', 'INE',
   // Dobropis, ťarchopis a zálohová faktúra. V POHODE zdieľajú okno s faktúrou,
   // v korpuse musia stáť samostatne: dobropis je oprava základu dane a ide do
   // opačnej sekcie KV (C1/C2), zálohová do výkazu nevstupuje vôbec. V jednej
@@ -28,7 +28,7 @@ export const AGENDY = [
 
 /** Agendy, ktoré sa účtovníkovi ponúkajú ako filter — v poradí ako v type dokladu. */
 export const AGENDY_ZOBRAZENE = [
-  'VPD', 'PPD', 'FP', 'FP-D', 'FP-T', 'FP-Z', 'FV', 'FV-D', 'FV-T', 'FV-Z', 'OZ', 'INT',
+  'VPD', 'PPD', 'FP', 'FP-D', 'FP-T', 'FP-Z', 'FV', 'FV-D', 'FV-T', 'FV-Z', 'OZ', 'OP', 'INT',
 ] as const;
 
 /** Riadok histórie tak, ako ho posiela prehliadač (.mdb) aj agent (POHODA XML). */
