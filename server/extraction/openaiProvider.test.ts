@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { APIConnectionError, APIConnectionTimeoutError } from 'openai';
 import { EXTRACTION_SCHEMA_VERSION, type ExtractionInput } from './contract.js';
 import {
   ExtractionProviderError,
@@ -125,10 +126,16 @@ describe('OpenAIDocumentExtractionProvider', () => {
     });
   });
 
+  // SKUTOČNÉ triedy chýb SDK, nie napodobeniny. Test predtým vyrábal chybu
+  // s ručne nastaveným menom 'APIConnectionError' — lenže SDK meno nenastavuje
+  // (obe triedy majú name === 'Error'), takže test overoval vlastný výmysel
+  // a produkcia medzitým brala výpadok spojenia za trvalú chybu.
   it.each([
-    [Object.assign(new Error('timeout'), { name: 'APIConnectionTimeoutError' }), 'openai_timeout'],
+    [new APIConnectionTimeoutError({}), 'openai_timeout'],
+    [new APIConnectionError({}), 'openai_unavailable'],
+    // Cloudflare pred OpenAI: „nedočkal sa odpovede" — presne toto prišlo 11. 9.
+    [Object.assign(new Error('522 status code (no body)'), { status: 522 }), 'openai_unavailable'],
     [Object.assign(new Error('temporary'), { status: 503 }), 'openai_unavailable'],
-    [Object.assign(new Error('Connection error.'), { name: 'APIConnectionError' }), 'openai_unavailable'],
     [Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }), 'openai_unavailable'],
   ])('opakuje iba dočasnú provider chybu %#', async (error, code) => {
     const parse = vi.fn().mockRejectedValue(error);

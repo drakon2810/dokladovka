@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import OpenAI, { APIConnectionError, APIConnectionTimeoutError } from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { ZodError } from 'zod';
 import type { ServerConfig } from '../config.js';
@@ -89,14 +89,20 @@ function classifyError(error: unknown): ExtractionProviderError {
     return new ExtractionProviderError('invalid_extraction_result', 'AI služba vrátila neplatnú štruktúru údajov', false);
   }
   const candidate = error as { status?: number; code?: string; name?: string };
-  if (candidate.name === 'AbortError' || candidate.name === 'APIConnectionTimeoutError'
-    || candidate.name === 'APITimeoutError' || candidate.code === 'ETIMEDOUT') {
+  // Triedy chýb SDK sa rozoznávajú cez instanceof, NIE podľa mena. SDK openai
+  // meno nenastavuje: APIConnectionError aj APIConnectionTimeoutError majú
+  // name === 'Error'. Porovnanie podľa mena preto nikdy nezabralo — výpadok
+  // spojenia aj timeout padli až do openai_request_failed ako TRVALÁ chyba.
+  // V produkcii 11. 9. tak štyri doklady skončili po dvoch pokusoch v jednej
+  // minúte, počas krátkeho výpadku OpenAI (522 a „Connection error."), hoci
+  // backoff 20/40/80/160/320 s by ho prečkal. Timeout je podtrieda chyby
+  // spojenia, preto sa kontroluje prvý.
+  if (error instanceof APIConnectionTimeoutError || candidate.name === 'AbortError' || candidate.code === 'ETIMEDOUT') {
     return new ExtractionProviderError('openai_timeout', 'Časový limit AI extrakcie vypršal', true);
   }
-  // Prechodné sieťové chyby (reset spojenia, DNS, odmietnuté spojenie) hlási SDK
-  // ako APIConnectionError — sú retryable, inak jeden výpadok siete zmení doklad
-  // na trvalú chybu bez jediného pokusu o opakovanie.
-  if (candidate.name === 'APIConnectionError'
+  // Prechodné sieťové chyby (reset spojenia, DNS, odmietnuté spojenie) — sú
+  // retryable, inak jeden výpadok siete zmení doklad na trvalú chybu.
+  if (error instanceof APIConnectionError
     || (candidate.code !== undefined && ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'EAI_AGAIN'].includes(candidate.code))) {
     return new ExtractionProviderError('openai_unavailable', 'AI služba je dočasne nedostupná', true);
   }
