@@ -766,6 +766,171 @@ public sealed class AgentTests
         Assert.Equal("USD", ucty[1].Mena);
     }
 
+    // Sadzba DPH a stredisko v korpuse. V produkcii ich nemal ani jeden z 25 952
+    // riadkov: agent ich nečítal, hoci server ich prijíma. Sadzba pritom
+    // rozhoduje medzi tuzemskou daňou s odpočtom a cudzou bez neho.
+    [Fact]
+    public void ParseHistoryRows_NesieSadzbuDphAStredisko()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:number><typ:numberRequested>DF260200</typ:numberRequested></inv:number>
+                      <inv:date>2026-07-31</inv:date>
+                      <inv:text>Tankovanie</inv:text>
+                      <inv:accounting><typ:ids>PHM-501200</typ:ids></inv:accounting>
+                      <inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>
+                      <inv:centre><typ:ids>BA</typ:ids></inv:centre>
+                    </inv:invoiceHeader>
+                    <inv:invoiceDetail>
+                      <inv:invoiceItem>
+                        <inv:text>Nafta</inv:text>
+                        <inv:rateVAT value="23">high</inv:rateVAT>
+                      </inv:invoiceItem>
+                      <inv:invoiceItem>
+                        <inv:text>Dialnicna znamka</inv:text>
+                        <inv:rateVAT>none</inv:rateVAT>
+                        <inv:centre><typ:ids>KE</typ:ids></inv:centre>
+                      </inv:invoiceItem>
+                      <inv:invoiceItem>
+                        <inv:text>Obcerstvenie</inv:text>
+                        <inv:percentVAT>5</inv:percentVAT>
+                      </inv:invoiceItem>
+                    </inv:invoiceDetail>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var rows = PohodaXml.ParseHistoryRows(response).Rows;
+        Assert.Equal(4, rows.Count);
+        // Hlavička nesie stredisko, ale sadzbu nie — doklad ich má viac.
+        Assert.Equal("BA", rows[0].StrediskoKod);
+        Assert.Null(rows[0].SadzbaDph);
+        // Číslo z atribútu value, nie kód „high": ten sa bez dátumu previesť nedá.
+        Assert.Equal(23m, rows[1].SadzbaDph);
+        Assert.Equal("BA", rows[1].StrediskoKod);
+        // „none" je nula a vlastné stredisko položky má prednosť pred hlavičkou.
+        Assert.Equal(0m, rows[2].SadzbaDph);
+        Assert.Equal("KE", rows[2].StrediskoKod);
+        // Bez atribútu value sa berie percentVAT.
+        Assert.Equal(5m, rows[3].SadzbaDph);
+    }
+
+    // Ostatné pohľadávky majú vlastnú agendu. Bez nej by padli do zvyšku agendy
+    // FA — medzi ostatné ZÁVÄZKY — a pohľadávka by sa v korpuse tvárila ako dlh.
+    [Fact]
+    public void ParseHistoryRows_OstatnaPohladavkaNiejeZavazok()
+    {
+        static string Doklad(string typ, string cislo) =>
+            "<lst:invoice xmlns:inv=\"http://www.stormware.cz/schema/version_2/invoice.xsd\" xmlns:typ=\"http://www.stormware.cz/schema/version_2/type.xsd\" version=\"2.0\">"
+            + "<inv:invoiceHeader>"
+            + $"<inv:invoiceType>{typ}</inv:invoiceType>"
+            + $"<inv:number><typ:numberRequested>{cislo}</typ:numberRequested></inv:number>"
+            + "<inv:text>Financna ciastka</inv:text>"
+            + "<inv:accounting><typ:ids>378100</typ:ids></inv:accounting>"
+            + "</inv:invoiceHeader></lst:invoice>";
+        var response =
+            "<?xml version=\"1.0\" encoding=\"Windows-1250\"?>"
+            + "<rsp:responsePack xmlns:rsp=\"http://www.stormware.cz/schema/version_2/response.xsd\" version=\"2.0\" state=\"ok\">"
+            + "<rsp:responsePackItem id=\"h01\" state=\"ok\">"
+            + "<lst:listInvoice xmlns:lst=\"http://www.stormware.cz/schema/version_2/list.xsd\" version=\"2.0\">"
+            + Doklad("receivable", "26OP001")
+            + Doklad("commitment", "26OZ001")
+            + "</lst:listInvoice></rsp:responsePackItem></rsp:responsePack>";
+        var agendy = PohodaXml.ParseHistoryRows(response).Rows.Select(row => (row.DokladCislo, row.Agenda)).ToArray();
+        Assert.Contains(("26OP001", "OP"), agendy);
+        Assert.Contains(("26OZ001", "OZ"), agendy);
+    }
+
+    // Požiadavka histórie pýta aj ostatné pohľadávky a ostáva platná podľa XSD.
+    [Fact]
+    public void HistoryListRequest_PytaAjOstatnePohladavky()
+    {
+        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
+        Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
+        var xml = PohodaXml.BuildHistoryListRequest("12345678", "historia-request");
+        Assert.Contains("invoiceType=\"receivable\"", xml, StringComparison.Ordinal);
+        Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
+    }
+
+    // Pokladňa číselného radu. POHODA ju drží na rade pokladne (cashAccount),
+    // agent ju nečítal a pokladničný doklad prichádzal bez nej. ids sa smie
+    // hľadať LEN pod cashAccount — inak by sa vzalo prvé ids v rade.
+    [Fact]
+    public void ParseCodeLists_CitaPokladnuCiselnehoRadu()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="c03" state="ok">
+                <lst:listNumericalSeries xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:numericalSeries xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <nms:numericalSeriesHeader>
+                      <nms:id>12</nms:id>
+                      <nms:prefix>26HP</nms:prefix>
+                      <nms:name>Hotovostny prijem</nms:name>
+                      <nms:agenda>pokladna</nms:agenda>
+                      <nms:accountingUnit><typ:ids>NEPLATI</typ:ids></nms:accountingUnit>
+                      <nms:cashAccount><typ:ids>HP1</typ:ids></nms:cashAccount>
+                    </nms:numericalSeriesHeader>
+                  </lst:numericalSeries>
+                  <lst:numericalSeries xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd" version="2.0">
+                    <nms:numericalSeriesHeader>
+                      <nms:id>13</nms:id>
+                      <nms:prefix>2026</nms:prefix>
+                      <nms:name>Prijate faktury</nms:name>
+                      <nms:agenda>prijate_faktury</nms:agenda>
+                    </nms:numericalSeriesHeader>
+                  </lst:numericalSeries>
+                </lst:listNumericalSeries>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var rady = PohodaXml.ParseCodeLists(response).Items["ciselneRady"];
+        Assert.Equal("HP1", rady.Single(rad => rad.Kod == "26HP").PokladnaKod);
+        // Rad inej agendy pokladňu nemá.
+        Assert.Null(rady.Single(rad => rad.Kod == "2026").PokladnaKod);
+    }
+
+    // Stránkovanie denníka. Strana je 10 000 proviozok (strop schémy); SLO SERVICES
+    // naň narazila presne a zvyšok roka sa nepreniesol.
+    [Fact]
+    public void DennikStrankovanie_IdFromJePlatneAStranaSaCitaSpravne()
+    {
+        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "Schemas");
+        Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
+        var prva = PohodaXml.BuildDennikRequest("12345678", "dennik-1", 2026);
+        var dalsia = PohodaXml.BuildDennikRequest("12345678", "dennik-2", 2026, 55001);
+        Assert.DoesNotContain("idFrom", prva, StringComparison.Ordinal);
+        Assert.Contains("<ftr:idFrom>55001</ftr:idFrom>", dalsia, StringComparison.Ordinal);
+        var validator = new PohodaSchemaValidator(schemaDirectory);
+        Assert.Empty(validator.ValidateDataPack(prva));
+        Assert.Empty(validator.ValidateDataPack(dalsia));
+
+        const string strana = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="dennik" state="ok">
+                <lst:listAccountancy xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:accountancy xmlns:acu="http://www.stormware.cz/schema/version_2/accountancy.xsd" version="2.0">
+                    <acu:accountingItem><acu:id>100</acu:id></acu:accountingItem>
+                    <acu:accountingItem><acu:id>250</acu:id></acu:accountingItem>
+                    <acu:accountingItem><acu:id>180</acu:id></acu:accountingItem>
+                  </lst:accountancy>
+                </lst:listAccountancy>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        // Najvyššie id, nie posledné: ďalšia strana ide od neho, nie od poradia.
+        Assert.Equal((3, 250L), PohodaXml.CitajStranuDennika(strana));
+    }
+
     private static async Task<HttpRequestMessage> CopyAsync(HttpRequestMessage source)
     {
         var copy = new HttpRequestMessage(source.Method, source.RequestUri);

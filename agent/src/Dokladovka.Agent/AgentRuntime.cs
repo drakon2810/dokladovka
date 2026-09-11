@@ -391,20 +391,40 @@ public sealed class AgentCycleRunner
         // takže filter na iný rok by z nej nevrátil nič.
         var rok = int.TryParse(target.Company.Year, out var zDatabazy) && zDatabazy > 1990
             ? zDatabazy : DateTimeOffset.UtcNow.Year;
-        var requestXml = PohodaXml.BuildDennikRequest(
-            organization.Ico, $"dennik-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}", rok);
-        var errors = _validator.ValidateDataPack(requestXml);
-        if (errors.Count > 0) throw new InvalidOperationException("XSD validácia požiadavky denníka zlyhala: " + string.Join("; ", errors.Take(5)));
-        var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
-            requestXml, $"dennik-{organization.OrganizationId}", false, cancellationToken);
-        var result = await _backend.UploadUctoDennikAsync(organization.OrganizationId, response, cancellationToken);
+        // Stránkovanie: strana má 10 000 proviozok (strop schémy). Server riadky
+        // upsertuje podľa externého id, takže prekrytie strán nič nezdvojí.
+        // Prázdnu stranu server odmietne (dennik_bez_proviozok), preto sa na ňu
+        // nepošle nič a slučka skončí.
+        // ponytail: strop 50 strán = 500 000 proviozok za rok. Chráni pred
+        // nekonečnou slučkou, keby POHODA idFrom nerešpektovala; väčšia firma
+        // by potrebovala vyšší strop.
+        const int maxStran = 50;
+        long? idFrom = null;
+        var ulozenych = 0;
+        var strany = 0;
+        for (; strany < maxStran; strany++)
+        {
+            var requestXml = PohodaXml.BuildDennikRequest(
+                organization.Ico, $"dennik-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{strany + 1}", rok, idFrom);
+            var errors = _validator.ValidateDataPack(requestXml);
+            if (errors.Count > 0) throw new InvalidOperationException("XSD validácia požiadavky denníka zlyhala: " + string.Join("; ", errors.Take(5)));
+            var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
+                requestXml, $"dennik-{organization.OrganizationId}", false, cancellationToken);
+            var (pocet, najvyssie) = PohodaXml.CitajStranuDennika(response);
+            if (pocet == 0) break;
+            var result = await _backend.UploadUctoDennikAsync(organization.OrganizationId, response, cancellationToken);
+            ulozenych += result.Ulozenych;
+            // Neúplná strana je posledná. A keby POHODA idFrom ignorovala a vrátila
+            // tie isté riadky znova, najvyššie id sa nepohne — to je tiež koniec.
+            if (pocet < PohodaXml.DennikStrana || najvyssie is null || (idFrom is not null && najvyssie < idFrom)) { strany++; break; }
+            idFrom = najvyssie + 1;
+        }
         await TrySendSyncResultAsync(new AgentSyncResult(
             organization.OrganizationId, "uctovnyDennik", "ok",
-            result.Ulozenych, (int)stopwatch.ElapsedMilliseconds, null), cancellationToken);
+            ulozenych, (int)stopwatch.ElapsedMilliseconds, null), cancellationToken);
         _log.Info("ucto_dennik_synced", new
         {
-            organization.OrganizationId, rok, result.Ulozenych, result.SJednouPredkontaciou,
-            result.SViacerymi, result.BezPredkontacie, durationMs = stopwatch.ElapsedMilliseconds,
+            organization.OrganizationId, rok, ulozenych, strany, durationMs = stopwatch.ElapsedMilliseconds,
         });
     }
 

@@ -111,6 +111,10 @@ public static class PohodaXml
         ("receivedDebitNote", "FP-T"), ("receivedAdvanceInvoice", "FP-Z"),
         ("issuedInvoice", "FV"), ("issuedCreditNotice", "FV-D"),
         ("issuedDebitNote", "FV-T"), ("issuedAdvanceInvoice", "FV-Z"),
+        // Ostatné pohľadávky — vlastná agenda korpusu. Bez nej by ich parsovanie
+        // zaradilo do zvyšku agendy FA, teda medzi ostatné ZÁVÄZKY: pohľadávka
+        // by sa v korpuse tvárila ako dlh.
+        ("receivable", "OP"),
     ];
 
     /// <summary>
@@ -151,11 +155,12 @@ public static class PohodaXml
     /// nakoniec padol. Odpoveď sa neparsuje tu — posiela sa serveru surová,
     /// aby jeden formát nemal dva parsery (parseDennik už na serveri je).
     ///
-    /// Limit 10 000 je strop schémy (filter.xsd limitType); rok 2026 ALPINY má
-    /// 7 389 proviozok, takže sa doň zmestí.
-    /// ponytail: väčšia firma sa doň nezmestí — vtedy stránkovať cez idFrom.
+    /// Strana má 10 000 proviozok — strop schémy (filter.xsd limitType). Denník
+    /// sa preto stránkuje cez idFrom: SLO SERVICES narazila na strop presne
+    /// (v korpuse ostalo 10 000 riadkov) a zvyšok roka sa nepreniesol vôbec.
+    /// Prvá strana ide bez idFrom, ďalšie od najvyššieho id predchádzajúcej.
     /// </summary>
-    public static string BuildDennikRequest(string ico, string requestId, int rok) => $"""
+    public static string BuildDennikRequest(string ico, string requestId, int rok, long? idFrom = null) => $"""
 <?xml version="1.0" encoding="Windows-1250"?>
 <dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export uctovneho dennika"
   xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
@@ -163,7 +168,7 @@ public static class PohodaXml
   xmlns:ftr="http://www.stormware.cz/schema/version_2/filter.xsd">
   <dat:dataPackItem id="dennik" version="2.0">
     <lst:listAccountancyRequest version="2.0" accountancyVersion="2.0">
-      <lst:limit><ftr:count>10000</ftr:count></lst:limit>
+      <lst:limit>{(idFrom is long od ? $"<ftr:idFrom>{od}</ftr:idFrom>" : "")}<ftr:count>{DennikStrana}</ftr:count></lst:limit>
       <lst:requestAccountancy>
         <ftr:filter>
           <ftr:dateFrom>{rok:D4}-01-01</ftr:dateFrom>
@@ -174,6 +179,33 @@ public static class PohodaXml
   </dat:dataPackItem>
 </dat:dataPack>
 """;
+
+    /// <summary>Veľkosť strany účtovného denníka — strop schémy filter.xsd.</summary>
+    public const int DennikStrana = 10_000;
+
+    /// <summary>
+    /// Koľko proviozok strana denníka nesie a najvyššie id medzi nimi — podľa
+    /// toho sa pýta ďalšia strana. Odpoveď inak ide serveru surová (parseDennik),
+    /// tu sa z nej číta len toto.
+    /// </summary>
+    public static (int Pocet, long? NajvyssieId) CitajStranuDennika(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
+        var polozky = document.Descendants()
+            .Where(node => IsStormware(node) && node.Name.LocalName == "accountingItem")
+            .ToArray();
+        long? najvyssie = null;
+        foreach (var polozka in polozky)
+        {
+            var id = polozka.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "id")?.Value;
+            if (long.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hodnota)
+                && (najvyssie is null || hodnota > najvyssie))
+                najvyssie = hodnota;
+        }
+        return (polozky.Length, najvyssie);
+    }
 
     /// <summary>Riadok korpusu histórie — musí sedieť s historyRowSchema na serveri.</summary>
     public sealed record HistoryRow(
@@ -193,7 +225,13 @@ public static class PohodaXml
         /// <summary>Základ a DPH položky. Bez nich sa pomer rozúčtovania nedá
         /// prečítať a krátenie odpočtu (PHM 50 %) z podielu základu nevyplýva.</summary>
         decimal? Suma = null,
-        decimal? SumaDph = null);
+        decimal? SumaDph = null,
+        /// <summary>Sadzba DPH položky ako číslo. Bez nej korpus nevie odlíšiť
+        /// tuzemskú daň s odpočtom (23 %) od cudzej bez odpočtu (20 % AT) —
+        /// a práve to rozhoduje medzi PD a PN, aj pri delení PHM 80/20.</summary>
+        decimal? SadzbaDph = null,
+        /// <summary>Stredisko riadku. Bez neho ho história nevie navrhnúť nikdy.</summary>
+        string? StrediskoKod = null);
 
     /// <summary>
     /// Číselný rad prečítaný z DOKLADU, nie z číselníka. POHODA rad, ktorý nemá
@@ -291,10 +329,14 @@ public static class PohodaXml
             var partnerIco = Trimmed(partner is null ? null : FindText(partner, "ico"));
             var partnerNazov = Trimmed(partner is null ? null : FindText(partner, "company"));
             var agendaDokladu = agenda(header);
+            var strediskoHlavicky = RefIds(header, "centre");
+            // Sadzba na hlavičke sa nedáva: doklad ich máva viac (5 % aj 19 %
+            // na jednom bločku) a jedna hodnota by klamala. Nesú ju položky.
             rows.Add(new HistoryRow(
                 agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, lineText,
                 predkontacia, clenenieDph,
-                ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")), 0));
+                ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")), 0,
+                StrediskoKod: strediskoHlavicky));
 
             // Položky dokladu. POHODA ich v odpovedi posiela celé (invoiceItem
             // má text, accounting aj classificationVAT), korpus z nich doteraz
@@ -360,7 +402,9 @@ public static class PohodaXml
                         ?? ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")),
                     poradie,
                     Suma: Ciastka(ceny, "price"),
-                    SumaDph: Ciastka(ceny, "priceVAT")));
+                    SumaDph: Ciastka(ceny, "priceVAT"),
+                    SadzbaDph: SadzbaDph(item),
+                    StrediskoKod: RefIds(item, "centre") ?? strediskoHlavicky));
             }
         }
 
@@ -430,7 +474,8 @@ public static class PohodaXml
                 case "invoice":
                     yield return (element, "invoiceHeader", header =>
                         HistoryInvoiceTypes.FirstOrDefault(item => item.Type == FindText(header, "invoiceType")).Agenda
-                        // Zvyšok agendy FA sú ostatné záväzky/pohľadávky.
+                        // Zvyšok agendy FA sú ostatné záväzky (commitment); pohľadávky
+                        // majú vlastnú položku v HistoryInvoiceTypes.
                         ?? "OZ");
                     break;
                 case "voucher":
@@ -629,6 +674,22 @@ public static class PohodaXml
         return decimal.TryParse(hodnota, NumberStyles.Number, CultureInfo.InvariantCulture, out var suma) ? suma : null;
     }
 
+    /// <summary>
+    /// Sadzba DPH položky ako číslo. POHODA ju pri exporte píše do atribútu value
+    /// elementu rateVAT (type.xsd vatRateType: „Hodnota sazby DPH (pouze export)");
+    /// text elementu je iba kód high/low/none. Z kódu sa číslo bez dátumu odvodiť
+    /// nedá — SK menila sadzby v roku 2025 — preto najprv value, potom percentVAT,
+    /// a „none" je nula.
+    /// </summary>
+    private static decimal? SadzbaDph(XElement item)
+    {
+        var sadzba = item.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "rateVAT");
+        if (decimal.TryParse(sadzba?.Attribute("value")?.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var hodnota)) return hodnota;
+        var percento = Trimmed(item.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "percentVAT")?.Value);
+        if (decimal.TryParse(percento, NumberStyles.Number, CultureInfo.InvariantCulture, out var zPercenta)) return zPercenta;
+        return Trimmed(sadzba?.Value) == "none" ? 0m : null;
+    }
+
     private static string? RefIds(XElement header, string localName)
     {
         var element = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == localName);
@@ -737,9 +798,19 @@ public static class PohodaXml
                 attributes ? item.Attribute("year")?.Value : FindText(item, "year"),
                 attributes ? Trimmed(item.Attribute("debit")?.Value) : null,
                 attributes ? Trimmed(item.Attribute("credit")?.Value) : null,
-                prefixCode ? Trimmed(FindText(item, "topNumber") ?? FindText(item, "number")) : null));
+                prefixCode ? Trimmed(FindText(item, "topNumber") ?? FindText(item, "number")) : null,
+                // Pokladňa radu (numericalSeriesHeader.cashAccount). ids sa hľadá
+                // LEN pod cashAccount — FindText cez celý rad by vzal prvé ids,
+                // aké nájde, napríklad z účtovnej jednotky.
+                PokladnaKod: prefixCode ? PokladnaRadu(item) : null));
         }
         return values.Values.OrderBy(item => item.Kod, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string? PokladnaRadu(XElement rad)
+    {
+        var pokladna = rad.Descendants().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "cashAccount");
+        return pokladna is null ? null : Trimmed(FindText(pokladna, "ids"));
     }
 
     /// <summary>
