@@ -49,3 +49,29 @@ export async function requestPasswordReset(input: { email: string; captchaToken:
 export async function resetPassword(input: { token: string; password: string }): Promise<void> {
   await post('/api/auth/password/reset', input);
 }
+
+export interface NahladPozvanky {
+  kancelaria: string;
+  email: string;
+  meno: string;
+  pozval: string;
+  /** Adresa už účet má — prijatie chce jej doterajšie heslo, nie nové. */
+  existujuciUcet: boolean;
+}
+
+export async function nacitajPozvanku(token: string): Promise<NahladPozvanky> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/invitations/${encodeURIComponent(token)}`, { credentials: 'include' });
+  } catch {
+    throw new AuthApiError('unavailable', t('auth.nedostupne'));
+  }
+  const data = (await response.json().catch(() => null)) as (NahladPozvanky & { code?: string; message?: string }) | null;
+  if (!response.ok || !data) throw new AuthApiError(data?.code ?? 'unavailable', data?.message || t('auth.nedostupne'));
+  return data;
+}
+
+/** Server po prijatí nastaví session cookie — ako pri potvrdení registrácie. */
+export async function prijmiPozvanku(input: { token: string; heslo: string; meno?: string }): Promise<void> {
+  await post('/api/invitations/accept', input);
+}

@@ -21,6 +21,7 @@ import { LoginPage } from '../features/auth/LoginPage';
 import { RegisterPage } from '../features/auth/RegisterPage';
 import { ForgotPasswordPage } from '../features/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from '../features/auth/ResetPasswordPage';
+import { PozvankaPage } from '../features/auth/PozvankaPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
 import { FotoPage } from '../features/mobile/FotoPage';
 
@@ -77,6 +78,7 @@ export function App() {
           <Route path="/registracia" element={<RegisterPage />} />
           <Route path="/zabudnute-heslo" element={<ForgotPasswordPage />} />
           <Route path="/obnova-hesla" element={<ResetPasswordPage />} />
+          <Route path="/pozvanka" element={<PozvankaPage />} />
           <Route path="/foto" element={<MobileShell><FotoPage /></MobileShell>} />
           <Route element={<AppShell />}>
             <Route path="/" element={<DashboardPage />} />

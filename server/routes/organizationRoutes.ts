@@ -6,6 +6,7 @@ import { writeAudit } from '../audit.js';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
+import { pridajAdminovKFirme } from './userRoutes.js';
 import type { ObjectStorage } from '../storage.js';
 import { insertCustomAlias, insertUniqueAlias, type AliasRecord } from '../services/organizationService.js';
 import { loadDphProfil } from '../services/dphProfileService.js';
@@ -469,6 +470,9 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
         'INSERT INTO organization_memberships (user_id, organization_id, tenant_id) VALUES ($1,$2,$3)',
         [auth.userId, organizationId, auth.tenantId],
       );
+      // Admini kancelárie vidia každú firmu — aj tú, ktorú založil účtovník.
+      // Prístup ide stále len cez členstvo, žiadna skratka „admin vidí všetko".
+      await pridajAdminovKFirme(tx, auth.tenantId, organizationId);
       for (const queue of [
         { name: 'Prijaté faktúry', kind: 'received_invoices', types: ['FP', 'OZ'] },
         { name: 'Vydané faktúry', kind: 'issued_invoices', types: ['FV'] },

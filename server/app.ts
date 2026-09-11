@@ -6,6 +6,7 @@ import type { ServerConfig } from './config.js';
 import type { Database } from './db/database.js';
 import { HttpError } from './http.js';
 import { registerAuthRoutes } from './routes/authRoutes.js';
+import { registerUserRoutes } from './routes/userRoutes.js';
 import { registerDocumentRoutes } from './routes/documentRoutes.js';
 import { registerInboundRoutes } from './routes/inboundRoutes.js';
 import { registerOrganizationRoutes } from './routes/organizationRoutes.js';
@@ -85,7 +86,9 @@ export async function buildApp(input: {
     turnstileSiteKey: input.config.turnstile.siteKey ?? null,
   }));
 
-  registerAuthRoutes(app, input.database, input.config, input.mailer ?? createMailer(input.config));
+  const mailer = input.mailer ?? createMailer(input.config);
+  registerAuthRoutes(app, input.database, input.config, mailer);
+  registerUserRoutes(app, input.database, input.config, mailer);
   registerOrganizationRoutes(app, input.database, input.storage, input.config);
   registerInboundRoutes(app, input.database, input.storage, input.config);
   registerDocumentRoutes(app, input.database, input.storage, input.config);

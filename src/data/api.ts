@@ -2285,6 +2285,53 @@ export async function updateUserRole(userId: string, rola: Role): Promise<void> 
   });
 }
 
+// ===== Ľudia kancelárie a pozvánky (len REST — v demo režime niet kam pozvať) =====
+// Prístup k firme určuje server cez organization_memberships. Toto rozhranie
+// iba číta a mení to, čo server drží; nič z toho nežije v pamäti prehliadača.
+
+export interface PouzivatelKancelarie {
+  id: string;
+  meno: string;
+  email: string;
+  rola: Exclude<Role, 'superadmin'>;
+  organizationIds: string[];
+  /** Prihlásený používateľ — seba odstrániť nemôže. */
+  ja: boolean;
+}
+
+export interface PozvankaKancelarie {
+  id: string;
+  email: string;
+  meno: string;
+  rola: Exclude<Role, 'superadmin'>;
+  organizationIds: string[];
+  expiresAt: string;
+}
+
+export function nacitajPouzivatelov(): Promise<{ users: PouzivatelKancelarie[]; pozvanky: PozvankaKancelarie[] }> {
+  return restRequest('/api/users');
+}
+
+export function pozviPouzivatela(input: {
+  email: string; meno: string; rola: Exclude<Role, 'superadmin'>; organizationIds: string[];
+}): Promise<PozvankaKancelarie> {
+  return restRequest('/api/users/invitations', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function odvolajPozvanku(id: string): Promise<void> {
+  return restRequest(`/api/users/invitations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function upravPouzivatela(id: string, input: {
+  rola?: Exclude<Role, 'superadmin'>; organizationIds?: string[];
+}): Promise<void> {
+  return restRequest(`/api/users/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) });
+}
+
+export function odstranPouzivatela(id: string): Promise<void> {
+  return restRequest(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 export interface UpdateOwnUserProfileInput {
   meno: string;
   jazyk: UserLanguage;

@@ -1205,6 +1205,33 @@ export const sk = {
   'nast.pouz.meno': 'Meno',
   'nast.pouz.email': 'E-mail',
   'nast.pouz.rola': 'Rola',
+  'nast.pouz.firmy': 'Firmy',
+  'nast.pouz.vsetkyFirmy': 'Všetky firmy',
+  'nast.pouz.ziadnaFirma': 'Žiadna firma',
+  'nast.pouz.upravitFirmy': 'Upraviť firmy',
+  'nast.pouz.odstranit': 'Odstrániť z kancelárie',
+  'nast.pouz.odstranitPotvrd': 'Odstrániť {meno} z kancelárie? Stratí prístup ku všetkým firmám a hneď sa odhlási.',
+  'nast.pouz.ja': 'vy',
+  'nast.pouz.adminVidiVsetko': 'Admin vidí všetky firmy kancelárie, aj tie, ktoré pribudnú.',
+  'nast.pouz.pozvat': 'Pozvať do kancelárie',
+  'nast.pouz.pozvatPopis': 'Kolega dostane e-mail s odkazom. Po prijatí uvidí len firmy, ktoré mu tu vyberiete — a bude pracovať s tým istým Mostíkom.',
+  'nast.pouz.odoslatPozvanku': 'Poslať pozvánku',
+  'nast.pouz.pozvankaOdoslana': 'Pozvánka odišla na {email}.',
+  'nast.pouz.cakajuce': 'Čakajúce pozvánky',
+  'nast.pouz.platiDo': 'platí do {datum}',
+  'nast.pouz.odvolat': 'Odvolať',
+  'nast.pouz.ulozit': 'Uložiť',
+  'nast.pouz.zrusit': 'Zrušiť',
+  'nast.pouz.lenAdmin': 'Ľudí v kancelárii spravuje admin.',
+  'pozvanka.titul': 'Pozvánka do kancelárie',
+  'pozvanka.popis': '{pozval} vás pozýva do kancelárie {kancelaria}.',
+  'pozvanka.existujuci': 'Na adrese {email} už účet máte. Pozvánku potvrdíte svojím doterajším heslom — účet sa presunie do tejto kancelárie.',
+  'pozvanka.novy': 'Nastavte si heslo pre {email}.',
+  'pozvanka.meno': 'Meno',
+  'pozvanka.heslo': 'Heslo',
+  'pozvanka.doterajsieHeslo': 'Doterajšie heslo',
+  'pozvanka.prijat': 'Prijať pozvánku',
+  'pozvanka.neplatna': 'Pozvánka je neplatná, už bola použitá, alebo jej vypršala platnosť. Požiadajte o novú.',
 
   // E-mailové schránky
   'schranky.titulok': 'E-mailové schránky',
@@ -1518,4 +1545,9 @@ export type SkKey = keyof typeof sk;
 /** Preklad UI reťazca. Jediné miesto prístupu k textom (SPEC §1). */
 export function t(key: SkKey): string {
   return sk[key];
+}
+
+/** t() s dosadením {premenných} — pre vety, v ktorých stojí meno, e-mail či dátum. */
+export function tv(key: SkKey, vars: Record<string, string>): string {
+  return sk[key].replace(/\{(\w+)\}/g, (_, nazov: string) => vars[nazov] ?? '');
 }
