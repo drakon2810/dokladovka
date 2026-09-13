@@ -2018,6 +2018,164 @@ describe('riadok, ktorý sa od hlavičky líši len režimom DPH', () => {
   }, 90_000);
 });
 
+// Tá istá faktúra Print-Office, ale s chybou, ktorú model spravil naozaj:
+// hlavička „repre / PD / KN" — účet reprezentácie s členením, ktoré odpočet
+// UPLATŇUJE. Riadky reprezentácie nevrátil vôbec, tie teda hlavičku zdedili
+// a s ňou aj odpočet 15,51 €, ktorý § 49 ods. 7 písm. a) zakazuje. Na doklade
+// to nebolo vidieť: sekcia KN doň napísala, že do kontrolného výkazu nejde.
+describe('odpočet na účte, na ktorom firma neodpočítava', () => {
+  type TestDatabase = Awaited<ReturnType<typeof createTestDatabase>>;
+  const repre = randomUUID();
+  const kancelarske = randomUUID();
+  const dphPd = randomUUID();
+  const dphPn = randomUUID();
+
+  const ciselnik = async (database: TestDatabase, kde: string[]) => {
+    for (const [id, kod, ucet] of [[repre, 'repre', '513100'], [kancelarske, 'kancelár.potreby', '501400']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    for (const [id, kod, nazov] of [
+      [dphPd, 'PD', 'Tuzemské plnenia'],
+      // Názov je jediné, z čoho sa „bez nároku na odpočet" dá prečítať —
+      // POHODA ho v číselníku píše presne takto.
+      [dphPn, 'PN', 'Nezahrňovať do priznania DPH'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$5,'pohoda')`,
+        [id, ...kde, kod, nazov],
+      );
+    }
+  };
+
+  // Tri faktúry tak, ako ich účtovník zaúčtoval: hlavička kancelárske potreby
+  // s odpočtom, reprezentácia až na POLOŽKE a bez odpočtu. Na hlavičke účet
+  // „repre" nestojí ani raz — presne preto ho clenenieZUctu nevidí.
+  const historia = async (database: TestDatabase, kde: string[]) => {
+    for (const cislo of ['26FP301', '26FP302', '26FP303']) {
+      for (const [ucet, predkontaciaId, clenenie, clenenieId, kv, index, text] of [
+        ['kancelár.potreby', kancelarske, 'PD', dphPd, 'B2', 0, 'kancelarske potreby'],
+        ['repre', repre, 'PN', dphPn, 'KN', 1, 'kava a caj'],
+      ] as const) {
+        await database.query(
+          `INSERT INTO ucto_historia
+            (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+             line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,
+             clenenie_kv_kod,riadok_index,source,riadok_hash)
+           VALUES ($1,$2,$3,'FP',$4,'2026-05-10','print office',$5,$6,$7,$8,$9,$10,$11,'mdb',$12)`,
+          [randomUUID(), ...kde, cislo, text, ucet, predkontaciaId, clenenie, clenenieId, kv, index, randomUUID()],
+        );
+      }
+    }
+  };
+
+  const doklad = async (database: TestDatabase, kde: string[]) => {
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,170.65,'EUR')`,
+      [documentId, ...kde],
+    );
+    return documentId;
+  };
+
+  const kontext = {
+    documentType: 'FP', supplierName: 'Print-Office s.r.o.', totalAmount: 170.65, currency: 'EUR',
+    lineDescriptions: ['zošit herlitz', 'káva nescafé gold'],
+    polozky: [
+      { popis: 'Zošit Herlitz 524', sadzbaDph: 23, suma: 0.4 },
+      { popis: 'Káva NESCAFÉ GOLD instantná 200 g', sadzbaDph: 19, suma: 12.49 },
+    ],
+  };
+
+  const navrhDokladu = async (database: TestDatabase, documentId: string) => (
+    await database.query<Record<string, any>>(
+      `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, riadky
+         FROM accounting_suggestions WHERE document_id=$1`,
+      [documentId],
+    )).rows[0];
+
+  it('prepíše členenie hlavičky, a riadky ju zdedia už bez odpočtu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'KN',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Kancelárske potreby s reprezentáciou',
+        riadky: [{ index: 0, predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2' }],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.predkontacia_id).toBe(repre);
+    expect(navrh.clenenie_dph_id).toBe(dphPn);
+    expect(navrh.clenenie_kv_kod).toBe('KN');
+  }, 90_000);
+
+  it('prepíše členenie riadku, aj keď hlavička odpočet uplatňuje', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Kancelárske potreby',
+        // Účet reprezentácie model trafil, daňový režim k nemu nie.
+        riadky: [{ index: 1, predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2' }],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    // Hlavička je v poriadku a ostáva, opravuje sa len riadok.
+    expect(navrh.clenenie_dph_id).toBe(dphPd);
+    expect(navrh.riadky).toEqual([{
+      index: 1, popis: 'Káva NESCAFÉ GOLD instantná 200 g',
+      predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN',
+    }]);
+  }, 90_000);
+
+  it('rozpor „odpočet + KN" rozhodne v prospech neodpočtu aj bez histórie', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    const documentId = await doklad(database, kde);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'KN',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Reprezentácia', riadky: null,
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.clenenie_dph_id).toBe(dphPn);
+    expect(navrh.clenenie_kv_kod).toBe('KN');
+  }, 90_000);
+});
+
 // Rozrezanie položky: rovnaký index vo viacerých riadkoch, podiely dokopy 1.
 // Neúplná skupina sa zahadzuje CELÁ — jedna časť bez súrodencov by z dokladu
 // odkrojila kus sumy a zvyšok by sa stratil.

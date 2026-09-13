@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
-import { dphPokynyPreAi, posudDph } from './dphAdvisor.js';
+import { clenenieVyzeraNaOdpocet, dphPokynyPreAi, posudDph } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
@@ -1409,6 +1409,54 @@ async function clenenieZUctu(
     ? String(rows[0].clenenie_dph_kod) : undefined;
 }
 
+/** Menej dokladov než toľko je preklep účtovníka, nie prax firmy. */
+const BEZ_ODPOCTU_DOKLADOV = 3;
+
+/**
+ * Účty, na ktorých táto firma daň NEODPOČÍTAVA, a členenie, ktorým to robí.
+ *
+ * Prečo nestačí clenenieZUctu: to sa pýta len na HLAVIČKY (riadok_index = 0)
+ * a reprezentácia na hlavičke nestojí. Účtovník ju vypisuje na položke dokladu,
+ * ktorý má v hlavičke kancelárske potreby — presne tak vyzerá faktúra
+ * Print-Office. Tu sa preto čítajú hlavičky AJ položky.
+ *
+ * Nejednoznačnosť („ten istý účet nesie raz PD, raz PN") sa tým nerieši a ani
+ * riešiť nemusí: otázka znie len, či firma na tom účte niekedy neodpočítava.
+ * Keď áno, odpočet tam AI navrhovať nemá. Vyhlásiť odpočtový účet za neodpočtový
+ * stojí firmu jej vlastné peniaze; opačná chyba je odpočet, ktorý do priznania
+ * nepatrí, a tú platí firma s pokutou. Preto sa vracia LEN zákaz, nikdy opak.
+ */
+async function uctyBezOdpoctu(
+  database: Queryable,
+  input: { tenantId: string; organizationId: string },
+  agendy: readonly string[],
+  /** Kód členenia BEZ nároku na odpočet → id. Iné sem nemajú čo robiť. */
+  cleneniaBezOdpoctu: Map<string, string>,
+  doDatumu?: string,
+): Promise<Map<string, string>> {
+  if (agendy.length === 0 || cleneniaBezOdpoctu.size === 0) return new Map();
+  const rows = (await database.query<Record<string, any>>(
+    `SELECT btrim(predkontacia_kod) AS ucet, btrim(clenenie_dph_kod) AS clenenie,
+            count(DISTINCT doklad_cislo) AS dokladov
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+        AND predkontacia_kod IS NOT NULL AND clenenie_dph_kod IS NOT NULL
+        AND doklad_cislo IS NOT NULL
+        AND ($4::date IS NULL OR datum < $4::date)
+      GROUP BY 1,2`,
+    [input.tenantId, input.organizationId, agendy, doDatumu ?? null],
+  )).rows;
+  const najcastejsie = new Map<string, { id: string; dokladov: number }>();
+  for (const row of rows) {
+    const id = cleneniaBezOdpoctu.get(String(row.clenenie));
+    const dokladov = Number(row.dokladov);
+    if (!id || dokladov < BEZ_ODPOCTU_DOKLADOV) continue;
+    const ucet = String(row.ucet);
+    if ((najcastejsie.get(ucet)?.dokladov ?? 0) < dokladov) najcastejsie.set(ucet, { id, dokladov });
+  }
+  return new Map([...najcastejsie].map(([ucet, hodnota]) => [ucet, hodnota.id]));
+}
+
 async function najdiRozuctovanie(
   database: Database,
   input: SuggestionInput,
@@ -2039,6 +2087,44 @@ export async function maybeAiAccountingSuggestion(
   // sekciu opačnej strany. Neplatná vypadne a rozhodne ďalší zdroj v poradí.
   const typ = documentContext.documentType;
   const druhDokladu = { typ, podtyp: documentContext.podtyp };
+
+  // O odpočte rozhoduje ÚČET, a doteraz to nekontroloval nikto. Model si vie
+  // vybrať účet reprezentácie a nechať pri ňom odpočtové členenie — na faktúre
+  // Print-Office to spravil (repre / PD) a 15,51 € dane sa tým dostalo do
+  // priznania, hoci § 49 ods. 7 písm. a) odpočet na pohostení zakazuje.
+  // Účet, na ktorom firma preukázateľne neodpočítava, preto členenie prepíše.
+  const cleneniaBezOdpoctu = new Map(vsetkyClenenia
+    .filter((item) => !clenenieVyzeraNaOdpocet({ kod: item.kod, nazov: item.nazov }))
+    .map((item) => [item.kod.trim(), item.id] as const));
+  const bezOdpoctuPreUcet = await uctyBezOdpoctu(
+    database, input, HISTORIA_AGENDY[typ] ?? [], cleneniaBezOdpoctu,
+    documentContext.historiaDoDatumu);
+  /**
+   * Náhradné členenie pre účet, ktorý odpočet nepripúšťa — alebo nič, keď ho
+   * zvolené členenie už neuplatňuje. Iné členenie bez odpočtu je rozhodnutie
+   * účtovníka, nie chyba: mení sa len to, ktoré odpočet uplatňuje.
+   */
+  const opravBezOdpoctu = (
+    predkontaciaId: string | undefined,
+    clenenieDphId: string | undefined,
+  ): string | undefined => {
+    const kodUctu = codeLists.rows.find((row) => row.id === predkontaciaId)?.code?.trim();
+    const nahrada = kodUctu ? bezOdpoctuPreUcet.get(kodUctu) : undefined;
+    if (!nahrada || nahrada === clenenieDphId) return undefined;
+    const zvolene = vsetkyClenenia.find((item) => item.id === clenenieDphId);
+    return !zvolene || clenenieVyzeraNaOdpocet(zvolene) ? nahrada : undefined;
+  };
+  // Pravidlo účtovníka a kód vyčítaný z dokladu (odkaz na paragraf, ktorý model
+  // v prompte nevidí) ostávajú nad AI aj tu — opravuje sa odpoveď modelu.
+  if (!pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
+    const nahrada = opravBezOdpoctu(validated.predkontacia_id, validated.clenenie_dph_id);
+    if (nahrada) {
+      console.info(`[ai-navrh] ${input.documentId}: na účte hlavičky firma daň neodpočítava`
+        + ' — členenie prepísané na bez nároku');
+      validated.clenenie_dph_id = nahrada;
+    }
+  }
+
   const kvKod = validated.clenenie_dph_id
     ? kvPreDruh(await kvPreClenenie(
         database, input, validated.clenenie_dph_id, HISTORIA_AGENDY[typ] ?? [],
@@ -2052,6 +2138,46 @@ export async function maybeAiAccountingSuggestion(
             kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu),
       ), druhDokladu)
     : undefined;
+
+  // Odpočet a KN sa vylučujú. Sekcia KN znamená „do kontrolného výkazu nejde"
+  // a prijatá faktúra sa doň nedostane jedine vtedy, keď sa daň neodpočítava:
+  // § 78a zaraďuje do B2 práve plnenie s odpočtom. Model túto dvojicu vrátil na
+  // faktúre Print-Office (repre / PD / KN) a nikto ju neoveril — riadky, ktoré
+  // hlavičku dedia, tým dostali tichý odpočet mimo výkazu, teda to najhoršie
+  // z oboch strán. Rozpor sa rozhoduje v prospech NEodpočtu: neuplatniť odpočet
+  // je vecou firmy, uplatniť ho neprávom je vecou daňového úradu.
+  //
+  // Beží až po účte: keď členenie opravil už účet, tu nie je čo riešiť. Toto je
+  // poistka pre účet, ku ktorému firma históriu ešte nemá.
+  const zvoleneClenenie = validated.clenenie_dph_id
+    ? vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)
+    : undefined;
+  if (kvKod === 'KN' && zvoleneClenenie && clenenieVyzeraNaOdpocet(zvoleneClenenie)
+    && !pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
+    // Členenie z profilu klienta, inak to, ktorým firma na tejto agende
+    // neodpočítava najčastejšie. Keď nemá ani jedno, nemáme čím nahradiť
+    // a rozpor ostáva na účtovníkovi — tichý odpočet je aj tak menšie zlo než
+    // vymyslený kód.
+    // ponytail: firma bez histórie aj bez DPH profilu dostane prvé neodpočtové
+    // členenie z číselníka (PN aj PNeviem sú oba „bez nároku"). Istota ostáva
+    // na 0.8, takže doklad aj tak otvára účtovník; keby to vadilo, patrí sem
+    // výber podľa kv_section, nie podľa poradia v číselníku.
+    const nahrada = (dphProfil?.clenenieBezOdpoctuId
+      && vsetkyClenenia.some((item) => item.id === dphProfil.clenenieBezOdpoctuId)
+      ? dphProfil.clenenieBezOdpoctuId
+      : undefined)
+      ?? [...cleneniaBezOdpoctu]
+        .map(([kod, id]) => ({ id, tu: pouzitie.get(kod)?.tu ?? 0 }))
+        .sort((a, b) => b.tu - a.tu)[0]?.id;
+    if (nahrada) {
+      console.info(`[ai-navrh] ${input.documentId}: členenie ${zvoleneClenenie.kod} uplatňuje odpočet,`
+        + ' ale sekcia KV je KN — prepisujem na členenie bez nároku');
+      validated.clenenie_dph_id = nahrada;
+    } else {
+      console.warn(`[ai-navrh] ${input.documentId}: členenie ${zvoleneClenenie.kod} uplatňuje odpočet`
+        + ' so sekciou KN a firma nemá členenie bez nároku — nechávam na účtovníka');
+    }
+  }
 
   // Deterministická kontrola po AI: návrh, ktorý by DPH poradca pri schválení
   // aj tak zablokoval (neplatiteľ s odpočtom, odpočet cudzej dane), sa vôbec
@@ -2227,9 +2353,17 @@ export async function maybeAiAccountingSuggestion(
     if (jeCast && !platneSkupiny.has(riadok.index)) return [];
     if (!polozka || (!jeCast && pouziteIndexy.has(riadok.index))) return [];
     if (!vPonukePredkontacii.has(riadok.predkontaciaId)) return [];
-    const clenenieDphId = riadok.clenenieDphId && vPonukeCleneni.has(riadok.clenenieDphId)
+    const zRiadku = riadok.clenenieDphId && vPonukeCleneni.has(riadok.clenenieDphId)
       ? riadok.clenenieDphId : undefined;
-    const clenenieKvKod = kvPreDruh(riadok.clenenieKvKod ?? undefined, druhDokladu);
+    // Účet bez odpočtu prepíše členenie aj na riadku. Keď riadok vlastné nemá,
+    // posudzuje sa to, ktoré by zdedil z hlavičky — práve tadiaľto prešiel
+    // odpočet na reprezentácii: riadok mlčal a hlavička odpočet uplatňovala.
+    const bezOdpoctu = opravBezOdpoctu(riadok.predkontaciaId, zRiadku ?? validated.clenenie_dph_id);
+    const clenenieDphId = bezOdpoctu ?? zRiadku;
+    const clenenieKvKod = bezOdpoctu
+      // Plnenie bez odpočtu do kontrolného výkazu nepatrí, nech model napísal čokoľvek.
+      ? kvPreDruh('KN', druhDokladu)
+      : kvPreDruh(riadok.clenenieKvKod ?? undefined, druhDokladu);
     // Zahodí sa len riadok, ktorý sa od hlavičky nelíši NIČÍM. Samotná zhodná
     // predkontácia nestačí: faktúra Print-Office má hlavičku „repre / PD / B2"
     // a položku reprezentácie s TOU ISTOU predkontáciou, ale s členením PN
