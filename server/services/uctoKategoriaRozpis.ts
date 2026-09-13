@@ -1,6 +1,6 @@
 import type { Database, Queryable } from '../db/database.js';
 import { pocetZhodSlov } from './accountingSuggestionService.js';
-import { odvodRozpis, MIN_DOKLADOV, type PravidloRiadok, type RozpisRiadok } from './uctoPravidlaService.js';
+import { odvodRozpisVarianty, MIN_DOKLADOV, type RozpisVariant, type RozpisRiadok } from './uctoPravidlaService.js';
 
 /**
  * Tvar rozpisu pre KATEGÓRIE plnení.
@@ -80,7 +80,10 @@ export async function doplnRozpisKategorii(
   await database.transaction(async (tx: Queryable) => {
     for (const kategoria of kategorie) {
       const jejDoklady = podlaKategorie.get(kategoria.id) ?? [];
-      const rozpis: PravidloRiadok[] = jejDoklady.length >= MIN_DOKLADOV ? odvodRozpis(jejDoklady) : [];
+      // Podôb môže byť viac: kategória hovorí o DRUHU plnenia a ten istý druh
+      // sa dá kupovať doma aj v cudzine, každé s iným tvarom rozpisu.
+      const rozpis: RozpisVariant[] = jejDoklady.length >= MIN_DOKLADOV
+        ? odvodRozpisVarianty(jejDoklady) : [];
       if (rozpis.length > 0) sRozpisom += 1;
       await tx.query('UPDATE ucto_kategorie SET rozpis=$1::jsonb WHERE id=$2',
         [JSON.stringify(rozpis), kategoria.id]);

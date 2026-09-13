@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
-import { najdiPravidlo, prepocitajPravidla } from './uctoPravidlaService.js';
+import { najdiPravidlo, odvodRozpisVarianty, prepocitajPravidla, variantyRozpisu } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
+import { ocistiSlovnik } from './uctoProfileService.js';
 
 // Pravidlo je zhrnutie toho, čo v korpuse naozaj stojí — počíta sa bez modelu.
 // Prípady sú z ALPINY: leasing sa delí na istinu a úrok, PHM na daňovú
@@ -169,7 +170,79 @@ describe('rozpis kategórie plnenia', () => {
     );
     expect(kategorie.rows[0].nazov).toBe('Kancelária');
     expect(kategorie.rows[0].rozpis).toEqual([]);
-    expect((kategorie.rows[1].rozpis as Array<Record<string, unknown>>).map((r) => r.predkontaciaKod))
-      .toEqual(['leas.istina', 'Úroky-leas']);
+    const varianty = kategorie.rows[1].rozpis as Array<{ pocet: number; riadky: Array<Record<string, unknown>> }>;
+    expect(varianty).toHaveLength(1);
+    expect(varianty[0].pocet).toBe(3);
+    expect(varianty[0].riadky.map((r) => r.predkontaciaKod)).toEqual(['leas.istina', 'Úroky-leas']);
   }, 90_000);
+});
+
+// Kategória je širšia než pravidlo protistrany: hovorí o DRUHU plnenia, a ten
+// istý druh sa kupuje v rôznych režimoch. ALPINA má pod „PHM" 156 dokladov —
+// tuzemskú kartu Shell (PHM-501200 80 % + PHM-Nadspotreba 20 %) a zahraničné
+// tankovanie kamiónov (PHM + DPH tej krajiny). Jeden tvar z toho odvodiť nešlo,
+// na druhej pozícii mal najsilnejší účet 27 % namiesto potrebných 60 %, takže
+// kategória ostala bez rozpisu a tvrdila PN na celé palivo — nový dodávateľ PHM
+// by nedostal odpočet vôbec.
+describe('viac podôb rozpisu v jednej kategórii', () => {
+  const doklad = (ucty: string[], sumy: number[]) => ucty.map((ucet, index) => ({
+    riadokIndex: index + 1, text: ucet, suma: sumy[index], predkontaciaKod: ucet,
+    clenenieDphKod: ucet === 'PHM-Nadspotreba' ? 'PN' : 'PD', clenenieKvKod: undefined,
+  }));
+
+  it('oddelí tuzemský a zahraničný tvar namiesto toho, aby ich zmiešala', () => {
+    const doklady = [
+      // Zahraničné tankovanie — väčšina, ale o tuzemskej karte nehovorí nič.
+      ...Array.from({ length: 5 }, () => doklad(['PHM', 'DPH Taliansko'], [800, 200])),
+      ...Array.from({ length: 4 }, () => doklad(['PHM', 'DPH Francúzsko'], [700, 300])),
+      // Tuzemská karta — menšina, a práve ona nesie pomer 80/20.
+      ...Array.from({ length: 3 }, () => doklad(['PHM-501200', 'PHM-Nadspotreba'], [80, 20])),
+    ];
+    const varianty = odvodRozpisVarianty(doklady);
+    expect(varianty.map((v) => v.riadky.map((r) => r.predkontaciaKod))).toEqual([
+      ['PHM', 'DPH Taliansko'],
+      ['PHM', 'DPH Francúzsko'],
+      ['PHM-501200', 'PHM-Nadspotreba'],
+    ]);
+    // Pomer sa drží podoby, nie kategórie — 80/20 patrí tuzemskej karte.
+    expect(varianty[2].riadky.map((r) => r.podiel)).toEqual([0.8, 0.2]);
+    expect(varianty[2].pocet).toBe(3);
+  });
+
+  it('podobu pod tromi dokladmi nevydá a doklad bez účtu do tvaru nepustí', () => {
+    const doklady = [
+      ...Array.from({ length: 3 }, () => doklad(['PHM', 'DPH Taliansko'], [800, 200])),
+      // Dve je málo — náhoda, nie prax.
+      ...Array.from({ length: 2 }, () => doklad(['PHM', 'diaľ.popl.'], [900, 100])),
+      // Riadok bez účtu: podpis by bol dierou, nie tvarom.
+      [{ riadokIndex: 1, text: 'x', suma: 10, predkontaciaKod: undefined },
+        { riadokIndex: 2, text: 'y', suma: 90, predkontaciaKod: 'PHM' }],
+    ];
+    expect(odvodRozpisVarianty(doklady).map((v) => v.riadky.map((r) => r.predkontaciaKod)))
+      .toEqual([['PHM', 'DPH Taliansko']]);
+  });
+
+  it('starý uložený profil s jedným tvarom sa číta ako jedna podoba', () => {
+    expect(variantyRozpisu([{ text: 'istina', predkontaciaKod: 'leas.istina' }]))
+      .toEqual([{ pocet: 0, riadky: [{ text: 'istina', predkontaciaKod: 'leas.istina' }] }]);
+    expect(variantyRozpisu([])).toEqual([]);
+    expect(variantyRozpisu(null)).toEqual([]);
+  });
+});
+
+// Slovník má strop 30 hesiel a zlučovanie berie prvých tridsať, takže plný
+// slovník sa sám nikdy neuvoľní. V PHM kategórii ALPINY bolo trinásť z tridsiatich
+// hesiel cenou z jedného dokladu a „natural" ani „nafta" sa doň už nezmestili.
+describe('slovník kategórie', () => {
+  it('zahodí cenu z jedného dokladu a ostatné heslá nechá', () => {
+    expect(ocistiSlovnik([
+      'phm', 'phm 1,43€/l', 'tankovanie', 'phm -ad blue cena 1,37/liter',
+      'phm-50%', 'diesel', 'phm 2€/l', 'natural 95',
+    ])).toEqual(['phm', 'tankovanie', 'phm-50%', 'diesel', 'natural 95']);
+  });
+
+  it('radšej zašumený slovník než prázdny', () => {
+    // Kategória bez hesiel sa na doklad nenaviaže a jej účet sa stratí.
+    expect(ocistiSlovnik(['phm 1,43€/l'])).toEqual(['phm 1,43€/l']);
+  });
 });

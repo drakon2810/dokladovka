@@ -7,7 +7,7 @@ import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
-import { prepocitajPravidla, type PravidloRiadok } from './uctoPravidlaService.js';
+import { prepocitajPravidla, variantyRozpisu, type RozpisVariant } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { overPravnuStranku } from './uctoPravnaKontrola.js';
 
@@ -31,6 +31,26 @@ const MAX_TEXTOV = 20_000;
 const DAVKA = 150;
 
 /** Deterministická agregácia korpusu: text položky → prevažujúce zaúčtovanie. */
+/**
+ * Heslo, ktoré sa nikdy nezopakuje: cena z JEDNÉHO dokladu — „phm 1,43€/l",
+ * „phm -ad blue cena 1,37/liter". Ako identifikátor kategórie je bezcenné,
+ * lebo ďalší doklad má cenu inú.
+ *
+ * Prečo to prekáža: slovník má strop 30 hesiel a zlučovanie berie prvých
+ * tridsať, takže plný slovník sa sám nikdy neuvoľní. V kategórii PHM u ALPINY
+ * bolo takých hesiel trinásť z tridsiatich a „natural", „nafta" ani „benzín"
+ * sa do nej už nezmestili — na topľovej faktúre so slovom „Natural 95" potom
+ * kategória nemala ani jedno spoločné slovo a nenaviazala sa vôbec.
+ */
+const CENA_V_HESLE = /\d[^a-z]*(€|eur\b|\/\s*l\b|\/\s*liter|per\s*liter)/i;
+
+export function ocistiSlovnik(slova: string[]): string[] {
+  const ciste = slova.filter((slovo) => !CENA_V_HESLE.test(slovo));
+  // Zašumený slovník je stále lepší než žiadny: kategória bez hesiel sa na
+  // doklad nenaviaže a jej účet sa stratí.
+  return ciste.length > 0 ? ciste : slova;
+}
+
 export async function agregujHistoriu(
   database: Database,
   tenantId: string,
@@ -254,7 +274,7 @@ export async function analyzujUctovnyProfil(
       const existujuca = kategorie.get(nazov.toLocaleLowerCase('sk'));
       if (existujuca) {
         // Rovnaká kategória z ďalšej dávky len dopĺňa slovník, počty a agendy.
-        existujuca.slovnik = [...new Set([...existujuca.slovnik, ...kategoria.slovnik])].slice(0, 30);
+        existujuca.slovnik = ocistiSlovnik([...new Set([...existujuca.slovnik, ...kategoria.slovnik])]).slice(0, 30);
         existujuca.pocet += pokrytie(kategoria);
         existujuca.agendy = [...new Set([...existujuca.agendy, ...agendyKategorie(kategoria)])];
         existujuca.konflikt ??= kategoria.konflikt;
@@ -263,6 +283,7 @@ export async function analyzujUctovnyProfil(
       kategorie.set(nazov.toLocaleLowerCase('sk'), {
         ...kategoria,
         nazov,
+        slovnik: ocistiSlovnik(kategoria.slovnik),
         predkontaciaKod: cistyUcet,
         clenenieDphKod: cisteDph,
         clenenieKvKod: platnyKvKod(kategoria.clenenieKvKod ?? undefined) ?? null,
@@ -333,8 +354,12 @@ export interface UctoKategoria {
   agendy: string[];
   pocet: number;
   konflikt?: string;
-  /** Tvar rozúčtovania odvodený z položiek dokladov, ktoré do kategórie spadli. */
-  rozpis: PravidloRiadok[];
+  /**
+   * Podoby rozúčtovania odvodené z položiek dokladov, ktoré do kategórie
+   * spadli. Viac než jedna preto, že kategória hovorí o DRUHU plnenia a ten
+   * istý druh sa účtuje inak doma a inak v cudzine.
+   */
+  rozpis: RozpisVariant[];
   /** Výhrada právnej kontroly k dvojici členenie DPH + sekcia KV. */
   pravnaPoznamka?: string;
 }
@@ -354,7 +379,7 @@ function mapKategoria(row: Record<string, any>): UctoKategoria {
     agendy: Array.isArray(row.agendy) ? row.agendy : [],
     pocet: Number(row.pocet ?? 0),
     konflikt: row.konflikt ?? undefined,
-    rozpis: Array.isArray(row.rozpis) ? row.rozpis : [],
+    rozpis: variantyRozpisu(row.rozpis),
     pravnaPoznamka: row.pravna_poznamka ?? undefined,
   };
 }

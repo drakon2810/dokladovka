@@ -3098,13 +3098,22 @@ export interface UctoKategoria {
   agendy: string[];
   pocet: number;
   konflikt?: string;
-  /** Tvar rozúčtovania odvodený z položiek — prázdny, keď sa plnenie nedelí. */
+  /**
+   * Podoby rozúčtovania odvodené z položiek — prázdne, keď sa plnenie nedelí.
+   * Viac než jedna preto, že ten istý druh plnenia sa doma a v cudzine účtuje
+   * inak: PHM z tuzemskej karty sa delí na daňovú a nedaňovú časť, zahraničné
+   * tankovanie na palivo a DPH tej krajiny.
+   */
   rozpis?: Array<{
-    text: string;
-    predkontaciaKod?: string;
-    clenenieDphKod?: string;
-    clenenieKvKod?: string;
-    podiel?: number;
+    /** Koľko dokladov má túto podobu. */
+    pocet: number;
+    riadky: Array<{
+      text: string;
+      predkontaciaKod?: string;
+      clenenieDphKod?: string;
+      clenenieKvKod?: string;
+      podiel?: number;
+    }>;
   }>;
   /** Výhrada právnej kontroly k dvojici členenie DPH + sekcia KV. */
   pravnaPoznamka?: string;

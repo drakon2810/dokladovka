@@ -114,6 +114,66 @@ export function odvodRozpis(doklady: RozpisRiadok[][]): PravidloRiadok[] {
   return vsetkyRovnake ? [] : rozpis;
 }
 
+/** Jedna ustálená podoba rozpisu a počet dokladov, ktoré ju majú. */
+export interface RozpisVariant {
+  pocet: number;
+  riadky: PravidloRiadok[];
+}
+
+/** Viac než toľko podôb do promptu nepatrí — kategória by prerástla dôkazy. */
+const MAX_VARIANTOV = 8;
+
+/**
+ * Podoby rozpisu pre množinu dokladov, ktoré nemusia hovoriť o jednej veci.
+ *
+ * Pravidlo protistrany sa pýta na JEDNÉHO dodávateľa, takže jeden tvar stačí.
+ * Kategória je širšia: ALPINA má pod „PHM" 156 dokladov dvoch nezlučiteľných
+ * druhov — tuzemská karta Shell (PHM-501200 80 % + PHM-Nadspotreba 20 %) a
+ * zahraničné tankovanie kamiónov (PHM + DPH Taliansko / Francúzsko / Rakúsko
+ * / Španielsko). Jeden tvar z toho odvodiť NEMOŽNO a odvodRozpis to správne
+ * odmietol: na druhej pozícii mal najsilnejší účet 27 % namiesto potrebných
+ * 60 %. Kategória tak ostala bez rozpisu a tvrdila PN na celé palivo, hoci
+ * nedaňová je pätina — nový dodávateľ PHM by nedostal odpočet vôbec.
+ *
+ * Doklady sa preto najprv rozdelia podľa PODPISU tvaru (postupnosť účtov) a
+ * tvar sa odvodí v každej skupine zvlášť. Model potom vyberá podobu, ktorej
+ * účty sedia na doklad pred ním — rovnako, ako si vyberá príklad v „rozuctovanie".
+ */
+export function odvodRozpisVarianty(doklady: RozpisRiadok[][]): RozpisVariant[] {
+  const skupiny = new Map<string, RozpisRiadok[][]>();
+  for (const polozky of doklady) {
+    // Doklad s riadkom bez účtu tvar neurčuje — podpis by bol dierou, nie tvarom.
+    if (polozky.length === 0 || polozky.some((polozka) => !polozka.predkontaciaKod)) continue;
+    const podpis = polozky.map((polozka) => polozka.predkontaciaKod).join(' | ');
+    const skupina = skupiny.get(podpis) ?? [];
+    skupina.push(polozky);
+    skupiny.set(podpis, skupina);
+  }
+  const varianty: RozpisVariant[] = [];
+  for (const skupina of [...skupiny.values()].sort((a, b) => b.length - a.length)) {
+    if (skupina.length < MIN_DOKLADOV) continue;
+    const riadky = odvodRozpis(skupina);
+    if (riadky.length === 0) continue;
+    varianty.push({ pocet: skupina.length, riadky });
+    if (varianty.length >= MAX_VARIANTOV) break;
+  }
+  return varianty;
+}
+
+/**
+ * Rozpis kategórie v jednotnom tvare. Uložené profily z čias jedného tvaru
+ * nesú plché pole riadkov; prepočet profilu ich prepíše na podoby, dovtedy sa
+ * čítajú ako jediná podoba. Bez toho by staršia firma prišla o rozpis úplne.
+ */
+export function variantyRozpisu(rozpis: unknown): RozpisVariant[] {
+  if (!Array.isArray(rozpis) || rozpis.length === 0) return [];
+  const prvy = rozpis[0] as Record<string, unknown>;
+  if (prvy && typeof prvy === 'object' && Array.isArray(prvy.riadky)) {
+    return (rozpis as RozpisVariant[]).filter((variant) => variant.riadky.length > 0);
+  }
+  return [{ pocet: 0, riadky: rozpis as PravidloRiadok[] }];
+}
+
 /**
  * Prax jednej protistrany z jej dokladov. Vydelené z prepočtu, lebo to isté
  * treba spočítať aj na mieru dátumu — pri meraní presnosti, kde uložené

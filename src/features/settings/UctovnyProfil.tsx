@@ -481,10 +481,14 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
                       )}
                       {/* Rozpis: doklad sa nedelí len na účty, ale aj v pomere.
                           Bez toho účtovník nevidí, že kategória sľubuje delenie. */}
-                      {kategoria.rozpis && kategoria.rozpis.length > 0 && (
-                        <span className="mt-1 block text-[11.5px] text-ink-faint">
-                          Rozpis:{' '}
-                          {kategoria.rozpis.map((riadok, index) => (
+                      {/* Podôb je viac, keď sa ten istý druh plnenia účtuje v
+                          rôznych režimoch — PHM z tuzemskej karty proti
+                          zahraničnému tankovaniu. Počet dokladov ide k podobe,
+                          aby účtovník videl, ktorá je bežná a ktorá okrajová. */}
+                      {kategoria.rozpis?.map((variant, poradie) => (
+                        <span key={poradie} className="mt-1 block text-[11.5px] text-ink-faint">
+                          Rozpis{variant.pocet > 0 && ` (${variant.pocet}×)`}:{' '}
+                          {variant.riadky.map((riadok, index) => (
                             <span key={index}>
                               {index > 0 && ' + '}
                               {riadok.predkontaciaKod ?? '—'}
@@ -494,7 +498,7 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
                             </span>
                           ))}
                         </span>
-                      )}
+                      ))}
                       {kategoria.pravnaPoznamka && (
                         <span className="mt-1 block rounded-md bg-rose-50 px-1.5 py-0.5 text-[11.5px] text-rose-800">
                           Právna kontrola: {kategoria.pravnaPoznamka}
