@@ -10,7 +10,7 @@ import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddin
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
-import { najdiPravidlo } from './uctoPravidlaService.js';
+import { najdiPravidlo, variantyRozpisu } from './uctoPravidlaService.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -1177,7 +1177,7 @@ CONSISTENCY CHECK — do this before you answer, it outranks how often something
 - Empty or all zero: no tax was charged — do not pick a domestic taxable classification.
 The journal usually holds several variants of the same service (domestic, abroad, reverse charge, exempt); the VAT on this document decides which one applies, never the count. When the journal rows carry "sadzbaDph", prefer rows whose rate matches this document.
 If "profilKlienta" is present, follow its "pokyny" strictly — they are the accountant's VAT rules for this client.
-A category in "kategorie" may carry its own "rozpis" — the settled shape of lines for that KIND of supply. Unlike "pravidlo" it holds for a supplier the firm has never had, so use it when the counterparty is new and the kind of supply is familiar.
+A category in "kategorie" may carry its own "rozpis" — the settled shapes of lines for that KIND of supply. Unlike "pravidlo" it holds for a supplier the firm has never had, so use it when the counterparty is new and the kind of supply is familiar. It is a LIST of shapes, each with "pocet", how many documents were posted that way, and "riadky", the lines themselves: one kind of supply is bought under different regimes and each has its own shape. Fuel is the plain case — the same category holds a domestic card split into a deductible and a non-deductible part, and foreign refuelling split into the fuel and that country's VAT. Choose the shape whose accounts and VAT classifications fit the document in front of you, never the one with the highest "pocet"; when none of them fits, follow the category's own account and say so in the reason.
 "pravidlo" — what this firm does with documents from THIS counterparty, counted from its whole history without a model: the header codes it settled on, in how many of how many documents, and "rozpis", the settled shape of the lines. A line there carrying "podiel" means the firm divides that line in a fixed ratio every time. This is the summary; when it is present, follow it unless the document in front of you plainly contradicts it, and say in the reason which part you followed. A document whose items belong to several different accounts does NOT contradict it. The header is only what the lines you do not mark inherit, so a mixture is a reason to name the exceptions in "riadky" — never a reason to move the header off the account this counterparty settled on, not even when the exceptional lines carry most of the money. A category never overrides "pravidlo" either: a category speaks about a kind of supply, "pravidlo" about this very counterparty.
 HOW THIS COUNTERPARTY'S DOCUMENTS GET POSTED — "rozuctovanie". These are the lines of the last documents this firm received from THIS counterparty, exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. When this block is present it is not a hint, it is the record of a decision the firm has already made repeatedly. Read the shape of it and reproduce that shape on the document in front of you. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed. Lines carrying "zdedene": true are the ones the accountant left alone — they hold the header's codes, so they show the shape of the document and the amounts a ratio is computed from, but they decide no account of their own; read them the same way as inherited rows in "dennik" above.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
@@ -1456,6 +1456,8 @@ async function clenenieZUctu(
 
 /** Menej dokladov než toľko je preklep účtovníka, nie prax firmy. */
 const BEZ_ODPOCTU_DOKLADOV = 3;
+/** A menej než toľko z účtu je výnimka na ňom, nie jeho povaha. */
+const BEZ_ODPOCTU_PREVAHA = 0.9;
 
 /**
  * Účty, na ktorých táto firma daň NEODPOČÍTAVA, a členenie, ktorým to robí.
@@ -1465,11 +1467,16 @@ const BEZ_ODPOCTU_DOKLADOV = 3;
  * ktorý má v hlavičke kancelárske potreby — presne tak vyzerá faktúra
  * Print-Office. Tu sa preto čítajú hlavičky AJ položky.
  *
- * Nejednoznačnosť („ten istý účet nesie raz PD, raz PN") sa tým nerieši a ani
- * riešiť nemusí: otázka znie len, či firma na tom účte niekedy neodpočítava.
- * Keď áno, odpočet tam AI navrhovať nemá. Vyhlásiť odpočtový účet za neodpočtový
- * stojí firmu jej vlastné peniaze; opačná chyba je odpočet, ktorý do priznania
- * nepatrí, a tú platí firma s pokutou. Preto sa vracia LEN zákaz, nikdy opak.
+ * Rozhoduje PREVAHA, nie výskyt. „Niekedy tam firma neodpočítava" nestačí ani
+ * zďaleka: 518100 ost.sl. je zberný účet služieb s jedinou nedaňovou položkou
+ * z ôsmich a 518-nájom ťah nesie 11 nedaňových z 29. Pri podmienke „aspoň tri
+ * doklady" oba prepadli ako neodpočtové a faktúry PACCAR, ACCONTI aj Wabez
+ * prišli o odpočet, ktorý im patrí. Účet je neodpočtový až vtedy, keď je taký
+ * takmer vždy: repre 9 z 10, 548-vratný obal 9 z 9, PHM-Nadspotreba 13 z 13.
+ *
+ * Počítajú sa LEN položky. Hlavička rozdeleného dokladu nesie odpočtové
+ * členenie aj vtedy, keď ho žiadny riadok neuplatní — repre má osem takých
+ * hlavičiek a s nimi by prevahu nedosiahlo, hoci na položkách neodpočítava.
  */
 async function uctyBezOdpoctu(
   database: Queryable,
@@ -1482,9 +1489,11 @@ async function uctyBezOdpoctu(
   if (agendy.length === 0 || cleneniaBezOdpoctu.size === 0) return new Map();
   const rows = (await database.query<Record<string, any>>(
     `SELECT btrim(predkontacia_kod) AS ucet, btrim(clenenie_dph_kod) AS clenenie,
-            count(DISTINCT doklad_cislo) AS dokladov
+            count(DISTINCT doklad_cislo) AS dokladov,
+            sum(count(DISTINCT doklad_cislo)) OVER (PARTITION BY btrim(predkontacia_kod)) AS spolu
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+        AND coalesce(riadok_index, 0) > 0
         AND predkontacia_kod IS NOT NULL AND clenenie_dph_kod IS NOT NULL
         AND doklad_cislo IS NOT NULL
         AND ($4::date IS NULL OR datum < $4::date)
@@ -1495,7 +1504,9 @@ async function uctyBezOdpoctu(
   for (const row of rows) {
     const id = cleneniaBezOdpoctu.get(String(row.clenenie));
     const dokladov = Number(row.dokladov);
+    const spolu = Number(row.spolu);
     if (!id || dokladov < BEZ_ODPOCTU_DOKLADOV) continue;
+    if (!(spolu > 0) || dokladov / spolu < BEZ_ODPOCTU_PREVAHA) continue;
     const ucet = String(row.ucet);
     if ((najcastejsie.get(ucet)?.dokladov ?? 0) < dokladov) najcastejsie.set(ucet, { id, dokladov });
   }
@@ -2004,7 +2015,10 @@ export async function maybeAiAccountingSuggestion(
             vynimky: kategoria.vynimky,
             // Tvar rozpisu druhu plnenia — platí aj pre dodávateľa, ktorého firma
             // nikdy nemala, čo pravidlo protistrany nedokáže.
-            rozpis: Array.isArray(kategoria.rozpis) && kategoria.rozpis.length > 0 ? kategoria.rozpis : undefined,
+            // Podôb môže byť viac — ten istý druh plnenia sa doma a v cudzine
+            // účtuje inak. Vyberá si model, nie zúženie tu.
+            rozpis: variantyRozpisu(kategoria.rozpis).length > 0
+              ? variantyRozpisu(kategoria.rozpis) : undefined,
             pouziteKrat: kategoria.pocet,
           })),
           priklady: priklady.map((priklad) => ({

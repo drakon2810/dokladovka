@@ -2153,6 +2153,52 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
     }]);
   }, 90_000);
 
+  // Zberný účet služieb nesie oba režimy: 518100 ost.sl. má u ALPINY jednu
+  // nedaňovú položku z ôsmich, 518-nájom ťah jedenásť z dvadsiatich deviatich.
+  // Kým stačil VÝSKYT troch nedaňových dokladov, oba prepadli ako neodpočtové
+  // a faktúry PACCAR, ACCONTI aj Wabez prišli o odpočet, ktorý im patrí.
+  it('účet, na ktorom firma väčšinou odpočítava, odpočet nestratí', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    const documentId = await doklad(database, kde);
+
+    const riadok = async (cislo: string, index: number, clenenie: string, clenenieId: string, kv: string) =>
+      database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+           line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,
+           clenenie_kv_kod,riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'FP',$4,'2026-05-10','ktokoľvek','sluzba','kancelár.potreby',$5,$6,$7,$8,$9,'mdb',$10)`,
+        [randomUUID(), ...kde, cislo, kancelarske, clenenie, clenenieId, kv, index, randomUUID()],
+      );
+    // Dvadsať dokladov s odpočtom proti štyrom bez neho: nedaňové prekročia
+    // hranicu troch dokladov, prevahu na účte však nemajú ani zďaleka.
+    for (let poradie = 0; poradie < 20; poradie += 1) {
+      await riadok(`26FP5${poradie}`, 0, 'PD', dphPd, 'B2');
+      await riadok(`26FP5${poradie}`, 1, 'PD', dphPd, 'B2');
+    }
+    for (let poradie = 0; poradie < 4; poradie += 1) {
+      await riadok(`26FP6${poradie}`, 0, 'PD', dphPd, 'B2');
+      await riadok(`26FP6${poradie}`, 1, 'PN', dphPn, 'KN');
+    }
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Bežná služba', riadky: null,
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Ktokoľvek s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.clenenie_dph_id).toBe(dphPd);
+    expect(navrh.clenenie_kv_kod).toBe('B2');
+  }, 90_000);
+
   it('rozpor „odpočet + KN" rozhodne v prospech neodpočtu aj bez histórie', async () => {
     const database = await createTestDatabase();
     databases.push(database);
