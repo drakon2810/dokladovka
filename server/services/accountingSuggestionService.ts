@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
-import { clenenieVyzeraNaOdpocet, dphPokynyPreAi, posudDph } from './dphAdvisor.js';
+import { clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, posudDph } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
@@ -55,11 +55,11 @@ function normalizeLineText(extracted: unknown): string {
 export function protistranaDokladu(
   documentType: string | undefined,
   extracted: unknown,
-): { nazov?: string; ico?: string; icDph?: string } {
+): { nazov?: string; ico?: string; icDph?: string; krajina?: string } {
   const strana = documentType === 'FV'
     ? ((extracted as any)?.odberatel ?? {})
     : ((extracted as any)?.dodavatel ?? {});
-  return { nazov: strana.nazov, ico: strana.ico, icDph: strana.icDph };
+  return { nazov: strana.nazov, ico: strana.ico, icDph: strana.icDph, krajina: strana.krajina };
 }
 
 function bezDiakritiky(value: string): string {
@@ -411,7 +411,7 @@ async function resolveSeriesDefault(
   documentType: string | undefined,
   datumVystavenia?: string,
   podtyp?: string,
-  protistrana?: { nazov?: string; ico?: string },
+  protistrana?: { nazov?: string; ico?: string; icDph?: string; krajina?: string },
   doDatumu?: string,
 ): Promise<string | undefined> {
   const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
@@ -478,6 +478,15 @@ async function resolveSeriesDefault(
   // 2611 a stošesťdesiaty druhý doklad, „261200002" je rad 2612 a druhý.
   // Bez odrezania kódu vyhráva rad s dlhším odsadením núl, takže prijatá
   // faktúra dostávala rad „Prijaté dobropisy" s dvomi dokladmi.
+  // Tuzemský či zahraničný doklad — ale LEN keď to doklad naozaj hovorí.
+  // Bez krajiny aj bez IČ DPH sa poradie nemení: zahraničná faktúra, ktorej sa
+  // krajina neprečítala, by inak spadla do tuzemského radu.
+  const krajina = String(protistrana?.krajina ?? '').trim().toUpperCase();
+  const prefixIcDph = String(protistrana?.icDph ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 2);
+  const tuzemsky = krajina === 'SK' || prefixIcDph === 'SK'
+    ? true
+    : (jeCudziDodavatel({ icDph: protistrana?.icDph, krajina: protistrana?.krajina }) ? false : null);
+
   const automatic = await tx.query<{ id: string } & Record<string, unknown>>(
     `SELECT c.id
        FROM code_list_items c
@@ -489,7 +498,18 @@ async function resolveSeriesDefault(
        ) u ON u.ciselny_rad_id=c.id
       WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
         AND c.active=true AND c.agenda=$3
-      ORDER BY COALESCE(u.pouzitia, 0) DESC,
+      -- Rad, ktorý firma sama nazvala zahraničným, nepatrí tuzemskej faktúre.
+      -- Číselník pole „krajina" nemá, firma to má v názve: ALPINA má „Prijaté
+      -- faktúry SK" proti „Prijaté faktúry zahraničné". Podľa protistrany sa to
+      -- vyberá vyššie, ale až od troch dokladov — u nového dodávateľa rozhodoval
+      -- posledný riadok nižšie, teda rad s najvyšším číslom. Preto slovenská
+      -- faktúra od Mgr. Saliniovej (2 doklady v korpuse) dostala ZF260415.
+      -- Iná firma svoje rady tak nazvať nemusí, preto sa tu poradie len
+      -- uprednostní — rad sa nikdy nevylúči a doklad neostane bez radu.
+      ORDER BY CASE WHEN $4::boolean IS NULL THEN 0
+                    WHEN $4::boolean = (COALESCE(c.name, '') NOT ILIKE '%zahrani%') THEN 0
+                    ELSE 1 END,
+               COALESCE(u.pouzitia, 0) DESC,
                COALESCE(NULLIF(regexp_replace(
                  CASE WHEN c.last_number LIKE c.code || '%'
                       THEN substr(c.last_number, length(c.code) + 1)
@@ -497,7 +517,7 @@ async function resolveSeriesDefault(
                  '\\D', '', 'g'), ''), '0')::numeric DESC,
                c.code
       LIMIT 1`,
-    [input.tenantId, input.organizationId, agenda],
+    [input.tenantId, input.organizationId, agenda, tuzemsky],
   );
   return automatic.rows[0]?.id;
 }
@@ -765,7 +785,10 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // Protistrana ide do výberu — u ALPINY práve ona rozhoduje medzi tuzemským
   // radom a zahraničným.
   candidate.ciselny_rad_id ??= await resolveSeriesDefault(
-    tx, input, documentType, datumVystavenia, current.rows[0]?.podtyp, strana);
+    tx, input, documentType, datumVystavenia, current.rows[0]?.podtyp,
+    // Krajina ide vždy z dokladu — input ju nenesie a bez nej sa tuzemský rad
+    // od zahraničného nerozozná.
+    { ...strana, krajina: protistranaDokladu(documentType, current.rows[0]?.extracted).krajina });
 
   candidate = await onlyActiveIds(tx, input, candidate);
   if (!hasAccounting(candidate)) {
@@ -1714,13 +1737,14 @@ export async function maybeAiAccountingSuggestion(
   const protistranaZDokladu = documentContext.documentType === 'FV'
     ? {
         nazov: documentContext.odberatel?.nazov, ico: documentContext.odberatel?.ico,
-        icDph: documentContext.odberatel?.icDph,
+        icDph: documentContext.odberatel?.icDph, krajina: documentContext.odberatel?.krajina,
         // IBAN patrí dodávateľovi — na FV by spároval partnera s vlastnou firmou.
         iban: undefined,
       }
     : {
         nazov: documentContext.supplierName, ico: documentContext.supplierIco,
-        icDph: input.supplierIcDph, iban: input.supplierIban,
+        icDph: input.supplierIcDph, krajina: documentContext.supplierKrajina,
+        iban: input.supplierIban,
       };
   // Kľúčom protistrany je KARTA z adresára POHODY, nie meno vytlačené na doklade.
   //
@@ -1760,7 +1784,9 @@ export async function maybeAiAccountingSuggestion(
   // z korpusu, inak reálne používaný rad).
   const radPreTyp = await resolveSeriesDefault(
     database, input, documentContext.documentType, documentContext.datumVystavenia,
-    documentContext.podtyp, protistranaKontextu, documentContext.historiaDoDatumu);
+    documentContext.podtyp,
+    { ...protistranaKontextu, icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina },
+    documentContext.historiaDoDatumu);
   // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];

@@ -2266,6 +2266,91 @@ describe('riadok histórie, ktorý zaúčtovanie iba zdedil', () => {
   }, 90_000);
 });
 
+// Rad podľa protistrany platí až od troch dokladov. U nového dodávateľa
+// rozhodoval posledný krok — rad s najvyšším číslom — a ten o tuzemsku nevie
+// nič: slovenská faktúra od Mgr. Saliniovej (2 doklady v korpuse) dostala
+// ZF260415, teda rad, ktorý firma sama nazvala zahraničným.
+describe('číselný rad nového dodávateľa podľa krajiny', () => {
+  type TestDatabase = Awaited<ReturnType<typeof createTestDatabase>>;
+  const df = randomUUID();
+  const zf = randomUUID();
+  const pred = randomUUID();
+
+  const pripravit = async (database: TestDatabase, kde: string[], posledne: [string, string]) => {
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+       VALUES ($1,$2,$3,'predkontacie','518100','518100 ost.sl.','pohoda','518100','321100')`,
+      [pred, ...kde],
+    );
+    for (const [id, kod, nazov, last] of [
+      [df, 'DF260', 'Prijaté faktúry SK', posledne[0]],
+      [zf, 'ZF260', 'Prijaté faktúry zahraničné', posledne[1]],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,last_number)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$5,'pohoda','prijate_faktury',$6)`,
+        [id, ...kde, kod, nazov, last],
+      );
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,90,'EUR')`,
+      [documentId, ...kde],
+    );
+    return documentId;
+  };
+
+  const radDokladu = async (database: TestDatabase, documentId: string) => (
+    await database.query<Record<string, any>>(
+      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0]?.ciselny_rad_id;
+
+  const parser = () => ({
+    // Rad model nevyberá — určuje ho nastavenie firmy, nie úsudok AI.
+    create: vi.fn().mockResolvedValue(aiOdpoved({
+      predkontaciaId: pred, clenenieDphId: null, clenenieKvKod: null,
+      ciselnyRadId: null, confidence: 0.8, reason: 'Preklad', riadky: null,
+    })),
+  });
+
+  it('slovenský dodávateľ nedostane zahraničný rad ani keď má vyššie číslo', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    // Presne stav ALPINY: zahraničný rad je ďalej (414 proti 209).
+    const documentId = await pripravit(database, kde, ['DF260209', 'ZF260414']);
+
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Mgr. Ida Saliniová' };
+    const context = {
+      documentType: 'FP', supplierName: 'Mgr. Ida Saliniová', supplierIco: '17851289',
+      supplierKrajina: 'SK', datumVystavenia: '2026-07-21', totalAmount: 90, currency: 'EUR',
+      lineDescriptions: ['Preklad - 6 normostrán'],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser())).toBe(true);
+    expect(await radDokladu(database, documentId)).toBe(df);
+  }, 90_000);
+
+  it('zahraničný dodávateľ dostane zahraničný rad ani keď má nižšie číslo', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    // Opačne než vyššie: bez krajiny by vyhral tuzemský rad.
+    const documentId = await pripravit(database, kde, ['DF260900', 'ZF260010']);
+
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Q8Truck' };
+    const context = {
+      documentType: 'FP', supplierName: 'Q8Truck', supplierKrajina: 'IT',
+      datumVystavenia: '2026-07-21', totalAmount: 90, currency: 'EUR',
+      lineDescriptions: ['pedaggio'],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser())).toBe(true);
+    expect(await radDokladu(database, documentId)).toBe(zf);
+  }, 90_000);
+});
+
 // Rozrezanie položky: rovnaký index vo viacerých riadkoch, podiely dokopy 1.
 // Neúplná skupina sa zahadzuje CELÁ — jedna časť bez súrodencov by z dokladu
 // odkrojila kus sumy a zvyšok by sa stratil.
