@@ -2176,6 +2176,96 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
   }, 90_000);
 });
 
+// Položka, ktorú účtovník nechal tak, dedí v POHODE kódy hlavičky a import ich
+// zapíše na riadok (uctoHistoriaXml). V korpuse sa potom tvári ako rozhodnutie
+// o tej položke. Presne tak sa „kuchynské utierky" dostali na účet
+// reprezentácie: jediný riadok, ktorý o nich korpus mal, zdedil hlavičku repre
+// z faktúry DF260134 — a model ho poslušne zopakoval („pri kuchynských
+// utierkach zachovávam históriu", zo skutočného návrhu).
+describe('riadok histórie, ktorý zaúčtovanie iba zdedil', () => {
+  it('označí sa ako zdedený a doklad nepredvyplní', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const repre = randomUUID();
+    const kancelarske = randomUUID();
+    for (const [id, kod, ucet] of [[repre, 'repre', '513100'], [kancelarske, 'kancelár.potreby', '501400']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    const dphPd = randomUUID();
+    const dphPn = randomUUID();
+    for (const [id, kod, nazov] of [
+      [dphPd, 'PD', 'Tuzemské plnenia'], [dphPn, 'PN', 'Nezahrňovať do priznania DPH'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$5,'pohoda')`,
+        [id, ...kde, kod, nazov],
+      );
+    }
+
+    // Tri faktúry rovnakého tvaru: hlavička kancelárske potreby, voda prenesená
+    // na reprezentáciu (rozhodnutie) a utierky ponechané na hlavičke (dedenie).
+    for (const cislo of ['26FP401', '26FP402', '26FP403']) {
+      for (const [index, text, ucet, predkontaciaId, clenenie, clenenieId, kv] of [
+        [0, 'kancelárske a hygienické potreby', 'kancelár.potreby', kancelarske, 'PD', dphPd, 'B2'],
+        [1, 'pramenitá voda rajec jemne sýtená 12 x 0,5 l', 'repre', repre, 'PN', dphPn, 'KN'],
+        [2, 'kuchynské utierky 3-vrstvové harmony professional', 'kancelár.potreby', kancelarske, 'PD', dphPd, 'B2'],
+      ] as const) {
+        await database.query(
+          `INSERT INTO ucto_historia
+            (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+             line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,
+             clenenie_kv_kod,riadok_index,source,riadok_hash)
+           VALUES ($1,$2,$3,'FP',$4,'2026-05-10','print office',$5,$6,$7,$8,$9,$10,$11,'mdb',$12)`,
+          [randomUUID(), ...kde, cislo, text, ucet, predkontaciaId, clenenie, clenenieId, kv, index, randomUUID()],
+        );
+      }
+    }
+
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,18.40,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Podľa denníka', riadky: null,
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Print-Office s.r.o.', totalAmount: 18.4, currency: 'EUR',
+      lineDescriptions: ['Kuchynské utierky 3-vrstvové HARMONY Professional'],
+      polozky: [{ popis: 'Kuchynské utierky 3-vrstvové HARMONY Professional', sadzbaDph: 23, suma: 14.96 }],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    const utierky = payload.dennik.find((riadok: any) => String(riadok.text).includes('utierky'));
+    const voda = payload.dennik.find((riadok: any) => String(riadok.text).includes('voda'));
+    expect(utierky.zdedene).toBe(true);
+    // Voda sa od hlavičky líši účtom aj režimom — to účtovník naozaj rozhodol.
+    expect(voda.zdedene).toBeUndefined();
+
+    // A zdedený riadok nesmie doklad predvyplniť: strop istoty ostáva na 0.8,
+    // teda pod hranicou 0.9, a doklad otvorí účtovník.
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT confidence FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    expect(Number(navrh.confidence)).toBe(0.8);
+  }, 90_000);
+});
+
 // Rozrezanie položky: rovnaký index vo viacerých riadkoch, podiely dokopy 1.
 // Neúplná skupina sa zahadzuje CELÁ — jedna časť bez súrodencov by z dokladu
 // odkrojila kus sumy a zvyšok by sa stratil.
@@ -2455,8 +2545,11 @@ describe('rozúčtovanie protistrany ide do promptu aj bez denníka', () => {
     // Dôkaz a ponuka musia sedieť: kód, ktorý model vidí v rozúčtovaní, musí
     // mať aj na výber. Inak ho nemôže vrátiť — a keby vrátil, overenie ho zahodí.
     expect(prompt.ciselniky.predkontacie.map((item: any) => item.id)).toContain(nedanove);
+    // Daňová časť nesie kódy hlavičky — účtovník prehodil len tú nedaňovú,
+    // takže prvý riadok je zdedený. Z rozúčtovania kvôli tomu nevypadáva:
+    // pomer 166,67 : 33,33 sa bez neho prečítať nedá.
     expect(prompt.rozuctovanie).toEqual([
-      { doklad: '26FP300', riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, predkontaciaKod: '379700-auto popl.', predkontaciaId: poplatok },
+      { doklad: '26FP300', riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, predkontaciaKod: '379700-auto popl.', predkontaciaId: poplatok, zdedene: true },
       { doklad: '26FP300', riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, predkontaciaKod: '379700-PK-nedaňové', predkontaciaId: nedanove },
     ]);
   }, 90_000);

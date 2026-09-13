@@ -1142,6 +1142,7 @@ Evidence, strongest first:
 1. "pravidla" — written rules (global from the system operator, firm ones from the accountant). Binding; firm rules win over global ones.
 2. "dennik" — rows from THIS company's own POHODA journal for the SAME agenda as this document, with occurrence counts. This is how the firm actually books such operations — every firm books differently, so prefer the journal over general habits. Its kod values refer to the code lists (match by id when present, otherwise find the matching kod).
    A row with "tejProtistrany": true is how the firm books THIS VERY counterparty. Such rows outrank rows with a more similar text but a different counterparty: the same service billed to a private person and to a VAT-registered company belongs to different KV sections, while the texts differ only by the month. Follow them unless the document itself (VAT rate, identifiers) proves this case is different.
+   A row with "zdedene": true is NOT a decision about that line. In POHODA a line the accountant left alone simply takes the codes of the document HEADER, and the import records those inherited codes on the line — so the row looks like a posting for that supply while nobody ever chose one. It tells you WHAT was bought, never where it belongs: a box of kitchen towels sitting on the representation account only because that invoice's header was representation is not evidence that towels are representation, and copying it moves a deductible purchase onto a non-deductible account. For such a supply take the account from a row the accountant actually moved (no "zdedene"), from "pravidlo", from a category, or from the substance of the purchase — and when every row you have for it is inherited, say that in the reason instead of repeating it.
 3. "priklady" — postings the accountant confirmed in this app, same agenda, ranked by text similarity.
 4. "kategorie" — kinds of supply distilled from the firm's history, with usage counts and exceptions.
    Read "zhodaSlov" before you trust one. zhodaSlov > 0 means the category's own vocabulary literally appears in this document's items: that is the firm's documented practice. zhodaSlov = 0 with "podobnostVyznamu" set means the wording did NOT match and the category was offered only because it is semantically close — typically a foreign-language or unusually worded item. Such a candidate is a HYPOTHESIS: take it only when the kind of supply genuinely matches, and never because "pouziteKrat" is high. "pouziteKrat" describes the category, not this document.
@@ -1155,7 +1156,7 @@ The journal usually holds several variants of the same service (domestic, abroad
 If "profilKlienta" is present, follow its "pokyny" strictly — they are the accountant's VAT rules for this client.
 A category in "kategorie" may carry its own "rozpis" — the settled shape of lines for that KIND of supply. Unlike "pravidlo" it holds for a supplier the firm has never had, so use it when the counterparty is new and the kind of supply is familiar.
 "pravidlo" — what this firm does with documents from THIS counterparty, counted from its whole history without a model: the header codes it settled on, in how many of how many documents, and "rozpis", the settled shape of the lines. A line there carrying "podiel" means the firm divides that line in a fixed ratio every time. This is the summary; when it is present, follow it unless the document in front of you plainly contradicts it, and say in the reason which part you followed. A document whose items belong to several different accounts does NOT contradict it. The header is only what the lines you do not mark inherit, so a mixture is a reason to name the exceptions in "riadky" — never a reason to move the header off the account this counterparty settled on, not even when the exceptional lines carry most of the money. A category never overrides "pravidlo" either: a category speaks about a kind of supply, "pravidlo" about this very counterparty.
-HOW THIS COUNTERPARTY'S DOCUMENTS GET POSTED — "rozuctovanie". These are the lines of the last documents this firm received from THIS counterparty, exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. When this block is present it is not a hint, it is the record of a decision the firm has already made repeatedly. Read the shape of it and reproduce that shape on the document in front of you. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed.
+HOW THIS COUNTERPARTY'S DOCUMENTS GET POSTED — "rozuctovanie". These are the lines of the last documents this firm received from THIS counterparty, exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. When this block is present it is not a hint, it is the record of a decision the firm has already made repeatedly. Read the shape of it and reproduce that shape on the document in front of you. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed. Lines carrying "zdedene": true are the ones the accountant left alone — they hold the header's codes, so they show the shape of the document and the amounts a ratio is computed from, but they decide no account of their own; read them the same way as inherited rows in "dennik" above.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
 An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification and the KN section even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction and puts them in the control statement.
 CUTTING ONE ITEM IN TWO. Sometimes the firm does not move a whole item elsewhere but divides the item itself, and the second line does not exist on the invoice — the accountant creates it. In "rozuctovanie" this shows as two lines whose texts name parts of one supply (a percentage, or a word for the deductible and the non-deductible half) on different predkontácie. To propose one, return several "riadky" entries with the SAME index, each carrying "podiel", the fraction of that item it takes — every fraction smaller than 1. An item that goes somewhere WHOLE carries "podiel": null — 0 and 1 are read the same way. A cut is only a fraction strictly between them, so never describe a whole item as a cut of one part. The fractions must add up to 1 and there must be at least two of them; anything else is dropped whole, because a partial cut would lose money from the document.
@@ -1261,6 +1262,12 @@ export interface DennikRiadok {
   podobnost: number;
   /** Riadok je z dokladov TEJ ISTEJ protistrany ako práve spracovaný doklad. */
   tejProtistrany: boolean;
+  /**
+   * Riadok zaúčtovanie iba ZDEDIL z hlavičky — účtovník ho nechal tak. Import
+   * histórie píše zdedené kódy na položku (uctoHistoriaXml), takže sa v korpuse
+   * tvári ako rozhodnutie o tej položke, hoci ním nie je.
+   */
+  zdedene?: boolean;
 }
 
 /**
@@ -1289,14 +1296,28 @@ async function najdiDennik(
       clenenie_dph_kod?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
       sadzba_dph?: string | number; pocet: string;
     } & Record<string, unknown>>(
-      `SELECT line_text_normalized, predkontacia_kod, predkontacia_id,
-              clenenie_dph_kod, clenenie_dph_id, clenenie_kv_kod, sadzba_dph, count(*) AS pocet
-         FROM ucto_historia
-        WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
-          AND ($7::date IS NULL OR datum < $7::date)
+      `SELECT h.line_text_normalized, h.predkontacia_kod, h.predkontacia_id,
+              h.clenenie_dph_kod, h.clenenie_dph_id, h.clenenie_kv_kod, h.sadzba_dph,
+              count(*) AS pocet,
+              -- Zdedené je len to, čo bolo zdedené VŽDY: keď ten istý text s tými
+              -- istými kódmi raz vznikol rozhodnutím účtovníka, dôkaz to je.
+              -- Dvojica sa porovnáva rovnako ako pri importe (uctoHistoriaXml):
+              -- predkontácia a členenie DPH, sekcia KV z nich už vyplýva.
+              -- ponytail: korelované EXISTS nad 22k riadkami korpusu; pri rádovo
+              -- väčšom by pomohol index (organization_id, agenda, doklad_cislo).
+              bool_and(coalesce(h.riadok_index, 0) > 0 AND EXISTS (
+                SELECT 1 FROM ucto_historia hl
+                 WHERE hl.tenant_id=h.tenant_id AND hl.organization_id=h.organization_id
+                   AND hl.agenda=h.agenda AND hl.doklad_cislo=h.doklad_cislo
+                   AND coalesce(hl.riadok_index, 0) = 0
+                   AND hl.predkontacia_kod IS NOT DISTINCT FROM h.predkontacia_kod
+                   AND hl.clenenie_dph_kod IS NOT DISTINCT FROM h.clenenie_dph_kod)) AS zdedene
+         FROM ucto_historia h
+        WHERE h.tenant_id=$1 AND h.organization_id=$2 AND h.agenda=ANY($3::text[])
+          AND ($7::date IS NULL OR h.datum < $7::date)
           AND ($4::boolean = false
-               OR ($5::text <> '' AND supplier_name_normalized=$5)
-               OR ($6::text <> '' AND supplier_ico=$6))
+               OR ($5::text <> '' AND h.supplier_name_normalized=$5)
+               OR ($6::text <> '' AND h.supplier_ico=$6))
         GROUP BY 1,2,3,4,5,6,7
         ORDER BY count(*) DESC
         LIMIT 2000`,
@@ -1314,6 +1335,7 @@ async function najdiDennik(
         pocet: Number(row.pocet),
         podobnost: textSimilarity(lineText, row.line_text_normalized),
         tejProtistrany: lenProtistrany,
+        zdedene: row.zdedene === true,
       }))
       // Bez textovej zhody ostáva poradie podľa početnosti — aj to je prax firmy.
       .sort((a, b) => (b.podobnost - a.podobnost) || (b.pocet - a.pocet));
@@ -1480,7 +1502,15 @@ async function najdiRozuctovanie(
         ORDER BY max(datum) DESC NULLS LAST
         LIMIT 2)
      SELECT h.doklad_cislo, h.riadok_index, h.line_text_normalized, h.suma, h.suma_dph,
-            h.predkontacia_kod, h.predkontacia_id, h.clenenie_dph_kod, h.clenenie_kv_kod
+            h.predkontacia_kod, h.predkontacia_id, h.clenenie_dph_kod, h.clenenie_kv_kod,
+            -- Riadok, ktorý účtovník nechal tak: kódy má z hlavičky. Tvar dokladu
+            -- a sumy pre pomer z neho platia, rozhodnutie o účte v ňom nie je.
+            EXISTS (SELECT 1 FROM ucto_historia hl
+                     WHERE hl.tenant_id=h.tenant_id AND hl.organization_id=h.organization_id
+                       AND hl.agenda=h.agenda AND hl.doklad_cislo=h.doklad_cislo
+                       AND coalesce(hl.riadok_index, 0) = 0
+                       AND hl.predkontacia_kod IS NOT DISTINCT FROM h.predkontacia_kod
+                       AND hl.clenenie_dph_kod IS NOT DISTINCT FROM h.clenenie_dph_kod) AS zdedene
        FROM ucto_historia h JOIN doklady d ON d.doklad_cislo=h.doklad_cislo
       WHERE h.tenant_id=$1 AND h.organization_id=$2 AND h.agenda=ANY($3::text[])
         AND ($6::date IS NULL OR h.datum < $6::date)
@@ -1502,6 +1532,7 @@ async function najdiRozuctovanie(
     predkontaciaId: row.predkontacia_id ?? undefined,
     clenenieDphKod: row.clenenie_dph_kod ?? undefined,
     clenenieKvKod: row.clenenie_kv_kod ?? undefined,
+    ...(row.zdedene === true ? { zdedene: true } : {}),
   }));
 }
 
@@ -1927,6 +1958,9 @@ export async function maybeAiAccountingSuggestion(
             pocet: riadok.pocet,
             podobnost: Number(riadok.podobnost.toFixed(2)),
             tejProtistrany: riadok.tejProtistrany,
+            // Do promptu ide len keď platí — inak by „zdedene": false stálo
+            // tokeny na 2000 riadkoch a nepovedalo nič.
+            ...(riadok.zdedene ? { zdedene: true } : {}),
           })),
           // Kategórie plnení z účtovného profilu firmy — fungujú aj pre
           // dodávateľa, ktorý v histórii nikdy nebol.
@@ -2221,7 +2255,11 @@ export async function maybeAiAccountingSuggestion(
     && kategoriaZhoda.kosinus === undefined
     && Number(kategoriaZhoda.pocet ?? 0) >= KATEGORIA_ISTOTA_OD
     ? kategoriaZhoda : undefined;
+  // Zdedený riadok nie je prax firmy, len kópia hlavičky — doklad predvyplniť
+  // nesmie. Práve tak sa „kuchynské utierky" dostali na účet reprezentácie:
+  // jediný riadok, ktorý o nich korpus mal, zdedil hlavičku repre.
   const dennikZhoda = dennik.find((riadok) => riadok.podobnost >= 0.5 && riadok.pocet >= 3
+    && !riadok.zdedene
     && riadok.predkontaciaId && riadok.predkontaciaId === validated.predkontacia_id
     && (!riadok.clenenieDphId || riadok.clenenieDphId === validated.clenenie_dph_id));
   // Zhoda s potvrdeným rozhodnutím účtovníka na takmer rovnakom texte: predtým
