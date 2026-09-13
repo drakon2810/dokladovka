@@ -263,4 +263,44 @@ describe('správa prístupu', () => {
     const seba = await app.inject({ method: 'DELETE', url: `/api/users/${seeded.userId}`, headers: sef });
     expect(seba.json().code).toBe('cannot_remove_self');
   }, 90_000);
+
+  // Posledný vstup drží zoznam ľudí: bez neho sa nedá rozoznať kolega, ktorý
+  // appku roky neotvoril, od toho, kto v nej žije. Berie sa z relácií, a práve
+  // to spojenie násobí riadky členstiev — firmy sa preto agregujú DISTINCT.
+  it('posledný vstup je z relácií a firmy sa nezmnožia', async () => {
+    const { app, database, seeded } = await harness();
+    const sef = await prihlas(app, seeded.email, seeded.password);
+    // Ďalšie dve prihlásenia = tri relácie toho istého človeka.
+    await prihlas(app, seeded.email, seeded.password);
+    await prihlas(app, seeded.email, seeded.password);
+    // Druhá firma, aby bolo na čom zmnoženie vidieť.
+    const druha = await app.inject({
+      method: 'POST', url: '/api/organizations', headers: sef,
+      payload: { nazov: 'Druhá firma', ico: '87654321', farba: '#0E7A5F' },
+    });
+    expect(druha.statusCode, druha.body).toBe(201);
+
+    const zoznam = await app.inject({ method: 'GET', url: '/api/users', headers: sef });
+    expect(zoznam.statusCode, zoznam.body).toBe(200);
+    const ja = (zoznam.json().users as Array<Record<string, unknown>>)
+      .find((osoba) => osoba.id === seeded.userId)!;
+
+    // Tri relácie × dve firmy by bez DISTINCT dali šesť položiek.
+    expect(ja.organizationIds).toHaveLength(2);
+    expect(new Set(ja.organizationIds as string[]).size).toBe(2);
+    expect(typeof ja.poslednyVstup).toBe('string');
+    expect(Number.isNaN(Date.parse(ja.poslednyVstup as string))).toBe(false);
+
+    // Kto sa ešte neprihlásil, pole nemá — obrazovka to píše slovom,
+    // nie dátumom, ktorý by si musela vymyslieť.
+    await database.query(
+      `INSERT INTO users (id, tenant_id, name, email, role, password_hash, active)
+       VALUES ($1,$2,'Bez vstupu','bez@upkz.sk','uctovnik','x',true)`,
+      [randomUUID(), seeded.tenantId],
+    );
+    const druhyZoznam = await app.inject({ method: 'GET', url: '/api/users', headers: sef });
+    const bezVstupu = (druhyZoznam.json().users as Array<Record<string, unknown>>)
+      .find((osoba) => osoba.email === 'bez@upkz.sk')!;
+    expect(bezVstupu.poslednyVstup).toBeUndefined();
+  }, 90_000);
 });

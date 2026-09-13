@@ -2295,6 +2295,8 @@ export interface PouzivatelKancelarie {
   email: string;
   rola: Exclude<Role, 'superadmin'>;
   organizationIds: string[];
+  /** Posledná relácia — kedy tu človek naozaj bol. Chýba, kým sa neprihlásil. */
+  poslednyVstup?: string;
   /** Prihlásený používateľ — seba odstrániť nemôže. */
   ja: boolean;
 }

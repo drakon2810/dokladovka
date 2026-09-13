@@ -184,11 +184,20 @@ export function registerUserRoutes(app: FastifyInstance, database: Database, con
     requireRole(auth, ['admin']);
     const users = await database.query<{
       id: string; name: string; email: string; role: Rola; active: boolean; organization_ids: string[] | null;
+      posledny_vstup: Date | string | null;
     } & Record<string, unknown>>(
+      // Posledný vstup je najnovšia relácia používateľa. Bez neho sa v zozname
+      // nedá rozoznať kolega, ktorý appku roky neotvoril, od toho, kto v nej
+      // žije — a práve podľa toho sa rozhoduje, komu prístup odobrať.
+      //
+      // Pri spojení s reláciami sa riadky členstiev násobia, preto DISTINCT:
+      // bez neho by človek s tromi reláciami mal každú firmu trikrát.
       `SELECT u.id, u.name, u.email, u.role, u.active,
-              array_remove(array_agg(m.organization_id ORDER BY m.organization_id), NULL) AS organization_ids
+              array_remove(array_agg(DISTINCT m.organization_id ORDER BY m.organization_id), NULL) AS organization_ids,
+              max(s.last_seen_at) AS posledny_vstup
          FROM users u
          LEFT JOIN organization_memberships m ON m.user_id = u.id AND m.tenant_id = u.tenant_id
+         LEFT JOIN sessions s ON s.user_id = u.id AND s.tenant_id = u.tenant_id
         WHERE u.tenant_id = $1 AND u.active = true AND u.role <> 'superadmin'
         GROUP BY u.id ORDER BY u.name`,
       [auth.tenantId],
@@ -205,6 +214,7 @@ export function registerUserRoutes(app: FastifyInstance, database: Database, con
       users: users.rows.map((row) => ({
         id: row.id, meno: row.name, email: row.email, rola: row.role,
         organizationIds: row.organization_ids ?? [], ja: row.id === auth.userId,
+        poslednyVstup: row.posledny_vstup ? new Date(row.posledny_vstup).toISOString() : undefined,
       })),
       pozvanky: pozvanky.rows.map((row) => ({
         id: row.id, email: row.email, meno: row.name, rola: row.role,
