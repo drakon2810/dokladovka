@@ -15,6 +15,21 @@ export interface DphPravidloOdpoctu {
   kategoria: string;
   percento: number;
   klucoveSlova: string[];
+  /**
+   * Podiel DANE, keď sa líši od podielu základu. Pri aute používanom aj
+   * súkromne je to bežné: základ sa delí 80/20 (§ 19 ods. 2 písm. l) zákona
+   * o dani z príjmov), ale odpočet dane je krátený na polovicu (§ 49 ods. 5
+   * zákona o DPH). Bez neho daň sleduje základ.
+   */
+  percentoDph?: number;
+  /**
+   * Účty oboch častí. Kým ich pravidlo nemá, ostáva iba upozornením a pokynom
+   * do promptu — rozrezať doklad sa s percentom bez účtov nedá.
+   */
+  predkontaciaId?: string;
+  predkontaciaNedanovaId?: string;
+  /** Členenie DPH nedaňovej časti; sekcia KV je pri nej vždy KN. */
+  clenenieDphNedanoveId?: string;
 }
 
 export interface DphKategoriaBezNaroku {

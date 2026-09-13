@@ -5,7 +5,9 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
-import { clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, posudDph } from './dphAdvisor.js';
+import {
+  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph,
+} from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
@@ -2422,8 +2424,18 @@ export async function maybeAiAccountingSuggestion(
     }
   }
 
+  interface RiadokNavrhu {
+    index: number;
+    popis: string;
+    predkontaciaId: string;
+    clenenieDphId?: string;
+    clenenieKvKod?: string;
+    podiel?: number;
+    podielDph?: number;
+  }
+
   const pouziteIndexy = new Set<number>();
-  const riadky = (parsed.riadky ?? []).flatMap((riadok) => {
+  const riadky: RiadokNavrhu[] = (parsed.riadky ?? []).flatMap((riadok) => {
     const polozka = polozkyPreModel[riadok.index];
     const jeCast = jeRez(riadok.podiel) && !celePolozky.has(riadok.index);
     // Rozrezanie sa berie iba celé. Jedna časť bez svojich súrodencov by
@@ -2462,6 +2474,61 @@ export async function maybeAiAccountingSuggestion(
     }];
   });
 
+  // Rozrezanie z PROFILU KLIENTA. Pravidlo pre autá nesie podiel základu,
+  // podiel dane aj oba účty, takže rez nie je úsudok modelu ani vzorec
+  // vyčítaný z histórie: je to nastavenie firmy. Platí od PRVÉHO dokladu, aj
+  // u firmy bez histórie a u dodávateľa, ktorého firma nikdy nemala.
+  //
+  // Prečo sa to nedá uhádnuť z dokladu: zákon dáva firme na výber (§ 19 ods. 2
+  // písm. l) zákona o dani z príjmov — paušál 80 %, kniha jázd, alebo 100 %
+  // služobne) a ktoré vozidlo jazdí aj súkromne, na faktúre nestojí. Dve firmy
+  // s tou istou faktúrou účtujú inak a obe správne. Keď si firma vybrala, je
+  // delenie deterministické a model doň nemá čo hovoriť — preto sa jeho riadok
+  // na tej položke nahradí.
+  //
+  // Doklad bez položiek sa nerozreže; pravidlo vtedy ostáva upozornením
+  // (posudDph) a pokynom do promptu (dphPokynyPreAi), ako doteraz.
+  const aktivnePredkontacie = new Set(codeLists.rows
+    .filter((row) => row.kind === 'predkontacie').map((row) => row.id));
+  const pravidlaRezu = (dphProfil?.pravidlaAut ?? []).filter((pravidlo) =>
+    pravidlo.klucoveSlova.length > 0
+    && pravidlo.percento > 0 && pravidlo.percento < 100
+    && pravidlo.predkontaciaId && pravidlo.predkontaciaNedanovaId
+    && aktivnePredkontacie.has(pravidlo.predkontaciaId)
+    && aktivnePredkontacie.has(pravidlo.predkontaciaNedanovaId));
+  const rezyProfilu = new Map<number, RiadokNavrhu[]>();
+  if (pravidlaRezu.length > 0) {
+    const kvNedanovej = kvPreDruh('KN', druhDokladu);
+    const podielZPercenta = (percento: number) => Math.round((percento / 100) * 10_000) / 10_000;
+    polozkyPreModel.forEach((polozka, index) => {
+      const popis = String((polozka as { popis?: string }).popis ?? '');
+      if (!popis) return;
+      const pravidlo = pravidlaRezu.find((item) => najdiKlucoveSlovo([popis], item.klucoveSlova));
+      if (!pravidlo) return;
+      const podiel = podielZPercenta(pravidlo.percento);
+      const podielDph = podielZPercenta(pravidlo.percentoDph ?? pravidlo.percento);
+      rezyProfilu.set(index, [
+        { index, popis, predkontaciaId: pravidlo.predkontaciaId!, podiel, podielDph },
+        {
+          index,
+          popis,
+          predkontaciaId: pravidlo.predkontaciaNedanovaId!,
+          ...(pravidlo.clenenieDphNedanoveId ? { clenenieDphId: pravidlo.clenenieDphNedanoveId } : {}),
+          // Nedaňová časť do kontrolného výkazu nepatrí.
+          ...(kvNedanovej ? { clenenieKvKod: kvNedanovej } : {}),
+          podiel: Math.round((1 - podiel) * 10_000) / 10_000,
+          podielDph: Math.round((1 - podielDph) * 10_000) / 10_000,
+        },
+      ]);
+      console.info(`[ai-navrh] ${input.documentId}: položka ${index} rozrezaná podľa profilu`
+        + ` (${pravidlo.kategoria}, základ ${pravidlo.percento} %, daň ${pravidlo.percentoDph ?? pravidlo.percento} %)`);
+    });
+  }
+  const vsetkyRiadky = rezyProfilu.size === 0
+    ? riadky
+    : [...riadky.filter((riadok) => !rezyProfilu.has(riadok.index)), ...[...rezyProfilu.values()].flat()]
+      .sort((prvy, druhy) => prvy.index - druhy.index);
+
   // Model rozpis opísal v dôvode, ale do poľa ho nedal — alebo dal a overenie
   // ho zahodilo celé. Z uloženého návrhu sa to nerozozná, tak nech to povie log.
   const vratenych = parsed.riadky?.length ?? 0;
@@ -2493,7 +2560,7 @@ export async function maybeAiAccountingSuggestion(
       Math.min(strop, Math.max(0, parsed.confidence)), dovod.slice(0, 500),
       // Pravidlo, ktoré do návrhu prispelo — nesie si samokontrolu (updateRuleFeedback).
       pravidlo.ruleId ?? null,
-      riadky.length > 0 ? JSON.stringify(riadky) : null],
+      vsetkyRiadky.length > 0 ? JSON.stringify(vsetkyRiadky) : null],
   );
   return true;
 }

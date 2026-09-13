@@ -2397,6 +2397,93 @@ describe('číselný rad nového dodávateľa podľa krajiny', () => {
   }, 90_000);
 });
 
+// Delenie PHM nie je vec jednej firmy ani jej histórie. Zákon dáva firme na
+// výber (§ 19 ods. 2 písm. l) ZDP: paušál 80 %, kniha jázd, alebo 100 %
+// služobne) a ktoré vozidlo jazdí aj súkromne, na faktúre nestojí — dve firmy
+// s tou istou faktúrou účtujú inak a obe správne. Preto to nie je odhad
+// z histórie, ale nastavenie klienta, ktoré platí od PRVÉHO dokladu.
+describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
+  it('rozreže palivo osobného auta a naftu do ťahača nechá celú', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+
+    const phm = randomUUID();
+    const nadspotreba = randomUUID();
+    for (const [id, kod, ucet] of [
+      [phm, 'PHM-501200', '501200'], [nadspotreba, 'PHM-Nadspotreba', '501201'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    const dphPd = randomUUID();
+    const dphPn = randomUUID();
+    for (const [id, kod, nazov] of [
+      [dphPd, 'PD', 'Tuzemské plnenia'], [dphPn, 'PN', 'Nezahrňovať do priznania DPH'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$5,'pohoda')`,
+        [id, ...kde, kod, nazov],
+      );
+    }
+    // Nastavenie klienta: základ 80/20, daň 50/50 (§ 49 ods. 5), oba účty.
+    await database.query(
+      `INSERT INTO organization_dph_profiles (organization_id,tenant_id,pravidla_aut)
+       VALUES ($2,$1,$3::jsonb)`,
+      [seeded.tenantId, seeded.organizationId, JSON.stringify([{
+        kategoria: 'Osobné auto', percento: 80, percentoDph: 50,
+        klucoveSlova: ['natural 95', 'premiová nafta'],
+        predkontaciaId: phm, predkontaciaNedanovaId: nadspotreba, clenenieDphNedanoveId: dphPn,
+      }])],
+    );
+
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,270,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      // Model o delení nevie nič a priradí všetko na jeden účet — nastavenie
+      // klienta ho na tých položkách prebije.
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: phm, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.8, reason: 'Palivo', riadky: null,
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Nová čerpacia karta s.r.o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Nová čerpacia karta s.r.o.', totalAmount: 270, currency: 'EUR',
+      lineDescriptions: ['Natural 95', 'Premiová nafta', 'Nafta'],
+      polozky: [
+        { popis: 'Natural 95', sadzbaDph: 23, suma: 69.4 },
+        { popis: 'Premiová nafta', sadzbaDph: 23, suma: 100.01 },
+        { popis: 'Nafta', sadzbaDph: 23, suma: 100.09 },
+      ],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const riadky = (await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky as Array<Record<string, any>>;
+    // Dve položky × dve časti; nafta do ťahača sa nedelí a v rozpise nie je.
+    expect(riadky.map((riadok) => [riadok.index, riadok.predkontaciaId, riadok.podiel, riadok.podielDph])).toEqual([
+      [0, phm, 0.8, 0.5],
+      [0, nadspotreba, 0.2, 0.5],
+      [1, phm, 0.8, 0.5],
+      [1, nadspotreba, 0.2, 0.5],
+    ]);
+    // Nedaňová časť má vlastné členenie a do kontrolného výkazu nepatrí.
+    expect(riadky[1]).toMatchObject({ clenenieDphId: dphPn, clenenieKvKod: 'KN' });
+  }, 90_000);
+});
+
 // Rozrezanie položky: rovnaký index vo viacerých riadkoch, podiely dokopy 1.
 // Neúplná skupina sa zahadzuje CELÁ — jedna časť bez súrodencov by z dokladu
 // odkrojila kus sumy a zvyšok by sa stratil.

@@ -33,6 +33,12 @@ const dphPravidloSchema = z.object({
   kategoria: z.string().trim().min(1).max(120),
   percento: z.number().min(0).max(100),
   klucoveSlova: z.array(z.string().trim().min(1).max(60)).max(30),
+  // Podiel dane a oba účty. Bez nich ostáva pravidlo upozornením; s nimi vie
+  // doklad rozrezať samo, bez histórie firmy a bez úsudku modelu.
+  percentoDph: z.number().min(0).max(100).optional(),
+  predkontaciaId: z.string().optional(),
+  predkontaciaNedanovaId: z.string().optional(),
+  clenenieDphNedanoveId: z.string().optional(),
 }).strict();
 
 const dphProfilSchema = z.object({

@@ -24,7 +24,18 @@ interface PravidloDraft {
   kategoria: string;
   percento: string;
   klucoveSlova: string;
+  /** Podiel dane, keď sa líši od podielu základu (auto: základ 80/20, daň 50/50). */
+  percentoDph: string;
+  /** Účty oboch častí — až s nimi vie pravidlo doklad naozaj rozrezať. */
+  predkontaciaId: string;
+  predkontaciaNedanovaId: string;
+  clenenieDphNedanoveId: string;
 }
+
+const PRAZDNE_PRAVIDLO: PravidloDraft = {
+  kategoria: '', percento: '100', klucoveSlova: '',
+  percentoDph: '', predkontaciaId: '', predkontaciaNedanovaId: '', clenenieDphNedanoveId: '',
+};
 
 interface BezNarokuDraft {
   kategoria: string;
@@ -71,11 +82,19 @@ function draftFromProfile(profil?: DphProfil): ProfilDraft {
       kategoria: pravidlo.kategoria,
       percento: String(pravidlo.percento),
       klucoveSlova: pravidlo.klucoveSlova.join(', '),
+      percentoDph: pravidlo.percentoDph == null ? '' : String(pravidlo.percentoDph),
+      predkontaciaId: pravidlo.predkontaciaId ?? '',
+      predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId ?? '',
+      clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId ?? '',
     })),
     pravidlaAut: (profil?.pravidlaAut ?? []).map((pravidlo) => ({
       kategoria: pravidlo.kategoria,
       percento: String(pravidlo.percento),
       klucoveSlova: pravidlo.klucoveSlova.join(', '),
+      percentoDph: pravidlo.percentoDph == null ? '' : String(pravidlo.percentoDph),
+      predkontaciaId: pravidlo.predkontaciaId ?? '',
+      predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId ?? '',
+      clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId ?? '',
     })),
     bezNaroku: (profil?.bezNaroku ?? []).map((kategoria) => ({
       kategoria: kategoria.kategoria,
@@ -107,6 +126,8 @@ export function ClientProfileTab() {
     ?? draftFromProfile(data.dphProfiles?.find((profil) => profil.organizationId === orgId));
   const cleneniaDph = data.codeLists.cleneniaDph
     .filter((item) => item.orgId === orgId && item.active);
+  const predkontacie = data.codeLists.predkontacie
+    .filter((item) => item.orgId === orgId && item.active);
 
   function update(next: Partial<ProfilDraft>) {
     setDrafts((current) => ({ ...current, [orgId!]: { ...draft, ...next } }));
@@ -122,6 +143,15 @@ export function ClientProfileTab() {
       kategoria: pravidlo.kategoria.trim(),
       percento: Number(pravidlo.percento.replace(',', '.')),
       klucoveSlova: slova(pravidlo.klucoveSlova),
+      // Prázdne pole sa neposiela: podiel dane vtedy sleduje základ a pravidlo
+      // bez účtov ostáva upozornením, presne ako doteraz.
+      ...(pravidlo.percentoDph.trim()
+        ? { percentoDph: Number(pravidlo.percentoDph.replace(',', '.')) } : {}),
+      ...(pravidlo.predkontaciaId ? { predkontaciaId: pravidlo.predkontaciaId } : {}),
+      ...(pravidlo.predkontaciaNedanovaId
+        ? { predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId } : {}),
+      ...(pravidlo.clenenieDphNedanoveId
+        ? { clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId } : {}),
     }));
     const pomerneOdpocitanie = pravidla(draft.pomerneOdpocitanie);
     const pravidlaAut = pravidla(draft.pravidlaAut);
@@ -335,6 +365,16 @@ export function ClientProfileTab() {
                   } as Partial<ProfilDraft>)}
                 />
                 <input
+                  className="input tnum w-24"
+                  inputMode="decimal"
+                  placeholder={t('nast.dph.percentoDph')}
+                  title={t('nast.dph.percentoDphHint')}
+                  value={pravidlo.percentoDph}
+                  onChange={(event) => update({
+                    [key]: draft[key].map((item, i) => (i === index ? { ...item, percentoDph: event.target.value } : item)),
+                  } as Partial<ProfilDraft>)}
+                />
+                <input
                   className="input min-w-64 flex-1"
                   placeholder={t('nast.dph.klucoveSlovaPlaceholder')}
                   value={pravidlo.klucoveSlova}
@@ -342,6 +382,47 @@ export function ClientProfileTab() {
                     [key]: draft[key].map((item, i) => (i === index ? { ...item, klucoveSlova: event.target.value } : item)),
                   } as Partial<ProfilDraft>)}
                 />
+                {/* Bez oboch účtov ostáva pravidlo upozornením — rozrezať doklad
+                    sa s percentom bez účtov nedá. */}
+                <select
+                  className="input w-52"
+                  title={t('nast.dph.uctuDanovej')}
+                  value={pravidlo.predkontaciaId}
+                  onChange={(event) => update({
+                    [key]: draft[key].map((item, i) => (i === index ? { ...item, predkontaciaId: event.target.value } : item)),
+                  } as Partial<ProfilDraft>)}
+                >
+                  <option value="">{t('nast.dph.uctuDanovej')}</option>
+                  {predkontacie.map((item) => (
+                    <option key={item.id} value={item.id}>{item.kod}</option>
+                  ))}
+                </select>
+                <select
+                  className="input w-52"
+                  title={t('nast.dph.uctuNedanovej')}
+                  value={pravidlo.predkontaciaNedanovaId}
+                  onChange={(event) => update({
+                    [key]: draft[key].map((item, i) => (i === index ? { ...item, predkontaciaNedanovaId: event.target.value } : item)),
+                  } as Partial<ProfilDraft>)}
+                >
+                  <option value="">{t('nast.dph.uctuNedanovej')}</option>
+                  {predkontacie.map((item) => (
+                    <option key={item.id} value={item.id}>{item.kod}</option>
+                  ))}
+                </select>
+                <select
+                  className="input w-52"
+                  title={t('nast.dph.clenenieNedanovej')}
+                  value={pravidlo.clenenieDphNedanoveId}
+                  onChange={(event) => update({
+                    [key]: draft[key].map((item, i) => (i === index ? { ...item, clenenieDphNedanoveId: event.target.value } : item)),
+                  } as Partial<ProfilDraft>)}
+                >
+                  <option value="">{t('nast.dph.clenenieNedanovej')}</option>
+                  {cleneniaDph.map((item) => (
+                    <option key={item.id} value={item.id}>{item.kod}</option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   className="btn"
@@ -354,7 +435,7 @@ export function ClientProfileTab() {
             <button
               type="button"
               className="btn mt-2"
-              onClick={() => update({ [key]: [...draft[key], { kategoria: '', percento: '100', klucoveSlova: '' }] } as Partial<ProfilDraft>)}
+              onClick={() => update({ [key]: [...draft[key], PRAZDNE_PRAVIDLO] } as Partial<ProfilDraft>)}
             >
               {t('nast.dph.pridatRiadok')}
             </button>

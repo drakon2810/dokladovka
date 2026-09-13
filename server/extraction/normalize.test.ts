@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeExtractionResult, validateNormalizedExtraction } from './normalize.js';
+import { cenaBezDane, normalizeExtractionResult, validateNormalizedExtraction } from './normalize.js';
 import { round2 } from '../../src/lib/validate.js';
 import { splitPostalAddress } from '../pohodaXml.js';
 
@@ -925,5 +925,29 @@ describe('oslobodené plnenie bez vytlačenej sadzby', () => {
     const iban = issues.find((issue) => issue.code === 'invalid_iban');
     expect(iban?.severity).toBe('warning');
     expect(issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+  });
+});
+
+// Tankovacia karta tlačí cenu NA STOJANE, teda s daňou. Model ju vzal do poľa
+// „cena bez dane" a kontrola „množstvo × cena = základ" faktúru Up Déjeuner
+// zablokovala, hoci všetky sumy na nej sedeli.
+describe('jednotková cena, ktorú doklad tlačí s daňou', () => {
+  it('prepočíta sa zo základu, keď súčin sedí s celkovou sumou', () => {
+    // Natural 95 z faktúry 4226045347: 40,14 l × 1,7289 = 69,40 = suma S daňou.
+    expect(cenaBezDane(1.7289, 40.14, 56.42, 69.4)).toBeCloseTo(1.4056, 4);
+    // Po oprave už súčin sedí so základom: 40,14 × 1,4056 = 56,42.
+    expect(round2(40.14 * 1.4056)).toBeCloseTo(56.42, 2);
+  });
+
+  it('cenu, ktorá so základom sedí, nechá tak', () => {
+    expect(cenaBezDane(2.5, 4, 10, 12.3)).toBe(2.5);
+  });
+
+  it('nesúlad bez dôkazu ostáva chybou pre účtovníka', () => {
+    // Súčin nesedí ani so základom, ani s celkom — dopočítať by znamenalo
+    // prepísať doklad, ktorý je naozaj zlý.
+    expect(cenaBezDane(9, 4, 10, 12.3)).toBe(9);
+    // Bez množstva sa deliť nedá.
+    expect(cenaBezDane(1.7289, 0, 56.42, 69.4)).toBe(1.7289);
   });
 });

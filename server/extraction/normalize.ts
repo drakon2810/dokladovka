@@ -362,6 +362,36 @@ function bezCudzejDane(
   };
 }
 
+/**
+ * Jednotková cena BEZ dane. Model ju berie z ceny za jednotku vytlačenej na
+ * doklade a tá je na tankovacej karte cenou NA STOJANE, teda s daňou: na
+ * faktúre Up Déjeuner dá 40,14 l × 1,7289 presne 69,40, čo je suma S daňou,
+ * kým základ je 56,42. Kontrola „množstvo × cena = základ" to zhodí a doklad
+ * sa nedá schváliť, hoci všetky sumy na ňom sedia.
+ *
+ * Opravuje sa LEN pri dôkaze: súčin nesedí so základom, ale sedí s celkovou
+ * sumou. Každý iný nesúlad ostáva chybou pre účtovníka — dopočítať cenu vždy
+ * by prepísalo aj doklad, ktorý je naozaj zlý.
+ *
+ * Tolerancia je rovnaká ako v kontrole (validateNormalized): cena je na
+ * doklade zaokrúhlená, takže pri väčšom množstve sa rozdiel legálne nasčíta.
+ */
+export function cenaBezDane(
+  cena: number | undefined,
+  mnozstvo: number | undefined,
+  sumaBezDph: number | undefined,
+  sumaSpolu: number | undefined,
+): number | undefined {
+  if (cena === undefined || !mnozstvo || sumaBezDph === undefined || sumaSpolu === undefined) return cena;
+  const tolerancia = 0.02 + Math.abs(mnozstvo) * 0.005;
+  const sucin = round2(mnozstvo * cena);
+  if (Math.abs(sucin - sumaBezDph) <= tolerancia) return cena;
+  if (Math.abs(sucin - sumaSpolu) > tolerancia) return cena;
+  // Štyri desatinné miesta: cena za liter sa tak na dokladoch aj píše a
+  // zaokrúhlenie na centy by pri štyridsiatich litroch spravilo nový nesúlad.
+  return Math.round((sumaBezDph / mnozstvo) * 10_000) / 10_000;
+}
+
 export function normalizeExtractionResult(
   raw: unknown,
   documentId: string,
@@ -381,16 +411,20 @@ export function normalizeExtractionResult(
 
   const polozky = result.lineItems.map((item, index) => {
     const rate = Number(item.vatRate?.replace(',', '.'));
+    const mnozstvo = parseDecimal(item.quantity);
+    const bezDph = parseDecimal(item.amountWithoutVat);
+    const spolu = parseDecimal(item.amountTotal);
     return {
       id: `${documentId}-li-${index}`,
       popis: item.description ?? '',
-      mnozstvo: parseDecimal(item.quantity),
+      mnozstvo,
       jednotka: item.unit,
-      jednotkovaCenaBezDph: parseDecimal(item.unitPriceWithoutVat),
+      jednotkovaCenaBezDph: cenaBezDane(
+        parseDecimal(item.unitPriceWithoutVat), mnozstvo, bezDph, spolu),
       sadzbaDph: isValidVatRate(rate) ? rate : undefined,
-      sumaBezDph: parseDecimal(item.amountWithoutVat),
+      sumaBezDph: bezDph,
       sumaDph: parseDecimal(item.vatAmount),
-      sumaSpolu: parseDecimal(item.amountTotal),
+      sumaSpolu: spolu,
       // Bankový pohyb (BV): dátum platby, protistrana a symboly.
       datumPlatby: item.paymentDate,
       protistrana: item.counterpartyName,

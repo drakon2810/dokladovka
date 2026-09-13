@@ -96,7 +96,7 @@ function extrakt(dokument: DphPosudokDokument): ExtraktDokladu {
   };
 }
 
-function najdiKlucoveSlovo(texty: string[], klucoveSlova: string[]): string | undefined {
+export function najdiKlucoveSlovo(texty: string[], klucoveSlova: string[]): string | undefined {
   for (const slovo of klucoveSlova) {
     const hladane = bezDiakritiky(slovo.trim());
     if (!hladane) continue;

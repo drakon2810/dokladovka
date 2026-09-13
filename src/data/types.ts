@@ -218,6 +218,15 @@ export interface DphPravidloOdpoctu {
   kategoria: string;
   percento: number;
   klucoveSlova: string[];
+  /**
+   * Podiel DANE, keď sa líši od podielu základu: auto používané aj súkromne
+   * delí základ 80/20, ale odpočet dane je krátený na polovicu (§ 49 ods. 5).
+   */
+  percentoDph?: number;
+  /** Účty oboch častí — bez nich je pravidlo len upozornením. */
+  predkontaciaId?: string;
+  predkontaciaNedanovaId?: string;
+  clenenieDphNedanoveId?: string;
 }
 
 /** Kategória bez nároku na odpočet (reprezentácia, občerstvenie…). */
