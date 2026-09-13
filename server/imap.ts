@@ -110,7 +110,22 @@ while (!stopping) {
     await pollOnce();
   } catch (error) {
     // Sieťové výpadky a pod. — zalogovať a pokračovať v ďalšom cykle.
-    log(`cyklus zlyhal — ${error instanceof Error ? error.message : String(error)}`);
+    //
+    // Podrobnosti, nie len message. imapflow hlási takmer každé odmietnutie
+    // servera ako „Command failed" a v logu potom stojí 5588 riadkov, z ktorých
+    // sa nedá zistiť nič: ani či zlyhalo prihlásenie, ani ktorý príkaz.
+    // Odpoveď servera a kód sú to jediné, čo príčinu naozaj pomenuje.
+    const podrobnosti = error as {
+      name?: string; message?: string; code?: string;
+      responseText?: string; serverResponseCode?: string; authenticationFailed?: boolean;
+    };
+    log(`cyklus zlyhal — ${[
+      `${podrobnosti.name ?? 'Error'}: ${podrobnosti.message ?? String(error)}`,
+      podrobnosti.code && `code=${podrobnosti.code}`,
+      podrobnosti.serverResponseCode && `server=${podrobnosti.serverResponseCode}`,
+      podrobnosti.authenticationFailed && 'prihlásenie odmietnuté',
+      podrobnosti.responseText && `odpoveď: ${podrobnosti.responseText}`,
+    ].filter(Boolean).join(' · ')}`);
   }
   await delay(config.imap.pollIntervalSeconds * 1000);
 }
