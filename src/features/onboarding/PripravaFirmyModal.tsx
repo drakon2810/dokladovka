@@ -29,8 +29,9 @@ import './pripravaFirmy.css';
  *  vykresľuje Layout.
  *
  *  Bežiaci krok je tu, nie v komponente: analýza trvá minúty a účtovník
- *  okno medzitým zavrie. Po otvorení musí vidieť, že sa stále pracuje. */
-const usePripravaStore = create<{ orgId: string | null; bezi: { orgId: string; krok: number } | null }>(
+ *  okno medzitým zavrie. Po otvorení musí vidieť, že sa stále pracuje.
+ *  `kedy` je čas chyby kroku pri spustení (viď krokDobehol). */
+const usePripravaStore = create<{ orgId: string | null; bezi: { orgId: string; krok: number; kedy?: string } | null }>(
   () => ({ orgId: null, bezi: null }),
 );
 export const usePripravaOrgId = () => usePripravaStore((s) => s.orgId);
@@ -189,6 +190,13 @@ export function upozorneniePripravenosti(pripravenost: PripravenostFirmy | null 
   return problem && dovodPripravenosti(problem);
 }
 
+/** Riadok nad návrhom v detaile dokladu. „Nie je pripravená" len keď to tvrdí server, pri „overiť" miernejšie. */
+export function upozornenieNavrhu(pripravenost: PripravenostFirmy | null | undefined): string | undefined {
+  const dovod = upozorneniePripravenosti(pripravenost);
+  if (!pripravenost || !dovod) return undefined;
+  return `${t(pripravenost.stav === 'nepripravena' ? 'pripravenost.navrhUpozornenie' : 'pripravenost.navrhOverit')} ${dovod}`;
+}
+
 /** Päta tvrdí „pripravená" len podľa servera — päť hotových krokov na to nestačí. */
 export function poznamkaPaty(vsetkoHotove: boolean, pripravenost: PripravenostFirmy | null | undefined): string {
   if (!vsetkoHotove) return t('priprava.zavriPoznamka');
@@ -204,7 +212,28 @@ export function poznamkaPaty(vsetkoHotove: boolean, pripravenost: PripravenostFi
 export function automatickyKrok(stavy: StavKroku[], pripravenost: PripravenostFirmy | null | undefined): Krok | undefined {
   if (pripravenost === undefined) return undefined;
   if (pripravenost && (pripravenost.signaly.mostik.stav !== 'ok' || pripravenost.signaly.firma.stav !== 'ok')) return undefined;
-  return KROKY.find((krok, i) => krok.automaticky && stavy[i] === 'naRade');
+  // Sám len krok, z ktorého ešte nič neprišlo. Po chybe by každé otvorenie okna
+  // poslalo novú požiadavku; agent číselníky aj tak ťahá každú hodinu.
+  return KROKY.find((krok, i) => krok.automaticky && stavy[i] === 'naRade'
+    && (!pripravenost || Boolean(krok.signaly?.every((nazov) => pripravenost.signaly[nazov].stav === 'caka'))));
+}
+
+/** Chyba, ktorú server pri kroku hlási (napr. číselník, ktorý POHODA nevrátila). */
+function chybaKroku(krok: Krok, pripravenost: PripravenostFirmy | null | undefined): SignalPripravenosti | undefined {
+  if (!pripravenost) return undefined;
+  return krok.signaly?.map((nazov) => pripravenost.signaly[nazov]).find((signal) => signal.stav === 'chyba');
+}
+
+/**
+ * Bežiaci krok dobehol: je hotový, alebo server hlási inú chybu, než mal krok
+ * pri spustení — agent odpovedal, len nie úspechom. Spinner by inak čakal na
+ * „hotovo", ktoré nepríde; dôvod ostane v riadku pod krokom.
+ */
+export function krokDobehol(
+  krok: Krok, stav: StavKroku, pripravenost: PripravenostFirmy | null | undefined, kedyPriSpusteni: string | undefined,
+): boolean {
+  const chyba = chybaKroku(krok, pripravenost);
+  return stav === 'hotovy' || Boolean(chyba && chyba.kedy !== kedyPriSpusteni);
 }
 
 /**
@@ -259,12 +288,12 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
   const stavy = useMemo(() => stavKrokov(priprava, organizacia, pripravenost), [priprava, organizacia, pripravenost]);
   const bezi = beziZaznam?.orgId === organizacia.id ? beziZaznam.krok : null;
   // Krok na pozadí dobehol — spinner zhasne, len čo to vidno v dátach.
-  const beziciHotovy = bezi !== null && stavy[bezi - 1] === 'hotovy';
+  const beziciDobehol = bezi !== null && krokDobehol(KROKY[bezi - 1], stavy[bezi - 1], pripravenost, beziZaznam?.kedy);
   useEffect(() => {
-    if (beziciHotovy) usePripravaStore.setState({ bezi: null });
-  }, [beziciHotovy]);
+    if (beziciDobehol) usePripravaStore.setState({ bezi: null });
+  }, [beziciDobehol]);
   const spusti = (krok: Krok) => {
-    usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo } });
+    usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo, kedy: chybaKroku(krok, pripravenost)?.kedy } });
     void krok.spustit!(organizacia.id)
       .then(() => {
         // Agent pracuje na pozadí; spinner zhasne až keď je výsledok v dátach.

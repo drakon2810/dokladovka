@@ -85,7 +85,7 @@ import {
   getOrganizationMostikStatus,
   type OrganizationMostikStatus,
 } from '../../data/mostik/mostikService';
-import { otvorPripravu, upozorneniePripravenosti, usePripravenost } from '../onboarding/PripravaFirmyModal';
+import { otvorPripravu, upozornenieNavrhu, usePripravenost } from '../onboarding/PripravaFirmyModal';
 
 // ===== Komunikácia: @-spomenutia v komentároch =====
 
@@ -335,7 +335,7 @@ export function DocumentDetailPage() {
   // Návrh firmy, ktorá ešte nie je pripravená (Mostík, história, profil), stojí
   // na neúplných dôkazoch — účtovník to má vidieť skôr, než ho prijme.
   const maNavrh = Boolean(draft && suggestion && suggestion.source !== 'none' && suggestion.documentId === draft.id);
-  const upozorneniePripravy = upozorneniePripravenosti(usePripravenost(maNavrh ? draft?.orgId : undefined));
+  const upozorneniePripravy = upozornenieNavrhu(usePripravenost(maNavrh ? draft?.orgId : undefined));
   const [dphAdvice, setDphAdvice] = useState<DphPosudok>();
   const [lastUsed, setLastUsed] = useState<{ label: string; ucto: DocumentUcto }>();
   const [activeBottomTab, setActiveBottomTab] = useState<'comments' | 'history'>('comments');
@@ -1482,7 +1482,7 @@ export function DocumentDetailPage() {
           {/* Len upozornenie — návrh ani automatické vyplnenie sa neblokujú. */}
           {upozorneniePripravy && (
             <div className="flex items-center gap-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
-              <span className="min-w-0 flex-1">{t('pripravenost.navrhUpozornenie')} {upozorneniePripravy}</span>
+              <span className="min-w-0 flex-1">{upozorneniePripravy}</span>
               <button type="button" className="btn shrink-0" onClick={() => otvorPripravu(draft.orgId)}>{t('priprava.otvorit')}</button>
             </div>
           )}

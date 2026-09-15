@@ -51,7 +51,7 @@ export interface VstupPripravenosti {
   /** Povinné druhy číselníkov: posledný beh a aktívne položky. */
   ciselniky: Array<{
     druh: string;
-    beh: { stav: string; poloziek: number; chyba: string | null } | null;
+    beh: { stav: string; poloziek: number; chyba: string | null; kedy: Cas } | null;
     zPohody: number;
     spolu: number;
   }>;
@@ -63,11 +63,11 @@ export interface VstupPripravenosti {
     /** Riadky ucto_historia bez prenosu so manifestom (starší Mostík). */
     bezManifestu: boolean;
   };
-  /** Posledný job 'ucto_analyza'. */
-  analyza: { stav: string; chyba: string | null; kedy: Cas; kategorii?: number; zlyhanychDavok?: number } | null;
+  /** Posledný job 'ucto_analyza': zaradený (created_at) a naposledy zmenený (updated_at). */
+  analyza: { stav: string; chyba: string | null; zarazena: Cas; kedy: Cas; kategorii?: number; zlyhanychDavok?: number } | null;
   kategorie: boolean;
-  /** Posledné meranie metodikou 2 — agendy sú kľúče jeho výsledku. */
-  meranie: { kedy: Cas; agendy: string[] } | null;
+  /** Posledné meranie metodikou 2 a agendy jeho okna, ktoré sa do vzorky nedostali (manifest.vynechaneAgendy). */
+  meranie: { kedy: Cas; vynechane: string[] } | null;
 }
 
 // ponytail: pevné 3 h na čerstvosť synchronizácie firmy — agent ťahá číselníky
@@ -110,11 +110,15 @@ export function vypocitajPripravenost(
   const bezPohody = vstup.ciselniky.find((druh) => druh.zPohody === 0);
   // Prázdna odpoveď nič nedeaktivuje — staré položky ostanú a počet klame.
   const prazdnaOdpoved = vstup.ciselniky.find((druh) => druh.beh?.stav === 'ok' && druh.beh.poloziek === 0);
+  // Chyba nesie čas posledného behu: sprievodca podľa neho pozná, že agent na
+  // požiadavku odpovedal, a spinner kroku zhasne aj bez „hotovo".
+  const behy = vstup.ciselniky.flatMap((druh) => (druh.beh?.kedy ? [new Date(druh.beh.kedy).getTime()] : []));
+  const poslednyBeh = behy.length ? new Date(Math.max(...behy)).toISOString() : undefined;
   const ciselniky: Signal = zlyhany
-    ? { stav: 'chyba', dovod: 'ciselnik_chyba', detail: `${zlyhany.druh}: ${zlyhany.beh!.chyba ?? 'error'}` }
+    ? { stav: 'chyba', dovod: 'ciselnik_chyba', kedy: poslednyBeh, detail: `${zlyhany.druh}: ${zlyhany.beh!.chyba ?? 'error'}` }
     : vstup.ciselniky.every((druh) => druh.spolu === 0) ? { stav: 'caka', dovod: 'ciselniky_chybaju' }
     : vstup.ciselniky.every((druh) => druh.zPohody === 0) ? { stav: 'overit', dovod: 'ciselniky_rucne' }
-    : bezPohody ? { stav: 'chyba', dovod: 'ciselnik_chyba_druh', detail: bezPohody.druh }
+    : bezPohody ? { stav: 'chyba', dovod: 'ciselnik_chyba_druh', kedy: poslednyBeh, detail: bezPohody.druh }
     : prazdnaOdpoved ? { stav: 'overit', dovod: 'ciselnik_prazdna_odpoved', detail: prazdnaOdpoved.druh }
     : { ...ok, pocet: vstup.ciselniky.reduce((sucet, druh) => sucet + druh.zPohody, 0) };
 
@@ -149,18 +153,20 @@ export function vypocitajPripravenost(
     : analyza.stav !== 'succeeded' ? { stav: 'chyba', dovod: 'analyza_zlyhala', kedy: iso(analyza.kedy), detail: analyza.chyba ?? undefined }
     : !analyza.kategorii ? { stav: 'chyba', dovod: 'analyza_prazdna', kedy: iso(analyza.kedy) }
     : analyza.zlyhanychDavok ? { stav: 'overit', dovod: 'analyza_ciastocna', kedy: iso(analyza.kedy), pocet: analyza.zlyhanychDavok }
-    : skor(analyza.kedy, publikovany?.publikovany) ? { stav: 'overit', dovod: 'profil_starsi_ako_historia', kedy: iso(analyza.kedy) }
+    // Analýza číta históriu pri štarte a beží desiatky minút — rozhoduje čas
+    // zaradenia, nie dokončenia. Čakanie vo fronte dá nanajvýš zbytočné „overiť".
+    : skor(analyza.zarazena, publikovany?.publikovany) ? { stav: 'overit', dovod: 'profil_starsi_ako_historia', kedy: iso(analyza.kedy) }
     : { ...ok, kedy: iso(analyza.kedy), pocet: analyza.kategorii };
 
-  // Pokladňa (voucher) agendu v manifeste nemá — PPD/VPD sa určí až z dokladu,
-  // preto sa porovnávajú len pomenované agendy.
+  // Pokrytie hovorí meranie samo: agendy, ktoré mali v jeho okne merateľné
+  // doklady, a do vzorky sa nedostali. Porovnanie s agendami manifestu histórie
+  // sa splniť nedalo — OP meranie merať nevie a zriedkavá agenda (FP-T) v okne
+  // doklad nemá, takže firma by nebola „pripravená" nikdy.
   const meranie = vstup.meranie;
-  const nezmerane = agendy
-    .filter((agenda) => agenda.agenda && agenda.dokladov > 0 && !meranie?.agendy.includes(agenda.agenda))
-    .map((agenda) => agenda.agenda);
   const meranieSignal: Signal = !meranie ? { stav: 'overit', dovod: 'meranie_chyba' }
     : skor(meranie.kedy, publikovany?.publikovany) ? { stav: 'overit', dovod: 'meranie_starsie', kedy: iso(meranie.kedy) }
-    : nezmerane.length > 0 ? { stav: 'overit', dovod: 'meranie_ciastocne', kedy: iso(meranie.kedy), detail: nezmerane.join(', ') }
+    : meranie.vynechane.length > 0
+      ? { stav: 'overit', dovod: 'meranie_ciastocne', kedy: iso(meranie.kedy), detail: meranie.vynechane.join(', ') }
     : { ...ok, kedy: iso(meranie.kedy) };
 
   const signaly = { mostik, firma, ciselniky, historia, profil, meranie: meranieSignal };

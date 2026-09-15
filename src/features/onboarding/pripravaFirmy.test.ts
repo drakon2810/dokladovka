@@ -18,7 +18,9 @@ vi.mock('../../data/mostik/mostikService', () => ({
   requestMostikCodeListSync: vi.fn(),
 }));
 
-const { KROKY, stavKrokov, automatickyKrok, poznamkaPaty, upozorneniePripravenosti } = await import('./PripravaFirmyModal');
+const {
+  KROKY, stavKrokov, automatickyKrok, krokDobehol, poznamkaPaty, upozorneniePripravenosti, upozornenieNavrhu,
+} = await import('./PripravaFirmyModal');
 
 const organizacia = { id: 'org-1', nazov: 'Firma', emailAlias: 'a@b.sk' } as never;
 const priprava = { organizationId: 'org-1', mostik: true, ciselniky: 40, pamat: 549, kategorie: 0, schranka: true };
@@ -110,6 +112,32 @@ describe('príprava firmy', () => {
     expect(stavKrokov(priprava, organizacia, null)).toEqual(['hotovy', 'hotovy', 'hotovy', 'hotovy', 'naRade']);
     expect(automatickyKrok(stavKrokov({ ...priprava, ciselniky: 0 }, organizacia, null), null)?.cislo).toBe(3);
     expect(poznamkaPaty(true, null)).not.toBe(t('priprava.hotovoPoznamka'));
+  });
+
+  // POHODA vráti jeden číselník s chybou: krok 3 ostane „na rade" s chybou.
+  // Spúšťal sa sám pri každom otvorení a spinner čakal na „hotovo", ktoré nepríde.
+  it('po chybe číselníka sa krok 3 sám nespúšťa a bežiaci spinner zhasne', () => {
+    const chyba: SignalPripravenosti = { stav: 'chyba', dovod: 'ciselnik_chyba_druh', detail: 'ciselneRady', kedy: '2026-09-15T12:00:00.000Z' };
+    const poChybe = pripravenost('nepripravena', { ciselniky: chyba, historia: caka, profil: caka });
+    const stavy = stavKrokov({ ...priprava, ciselniky: 40 }, organizacia, poChybe);
+    expect(stavy[2]).toBe('naRade');
+    expect(automatickyKrok(stavy, poChybe)).toBeUndefined();
+    // Spustený nad prázdnymi číselníkmi — nová chyba znamená, že agent odpovedal.
+    expect(krokDobehol(KROKY[2], 'naRade', poChybe, undefined)).toBe(true);
+    // Tá istá chyba ako pri spustení ešte nie je odpoveď na túto požiadavku.
+    expect(krokDobehol(KROKY[2], 'naRade', poChybe, chyba.kedy)).toBe(false);
+    expect(krokDobehol(KROKY[2], 'naRade', pripravenost('nepripravena', { ciselniky: caka }), undefined)).toBe(false);
+    expect(krokDobehol(KROKY[2], 'hotovy', null, undefined)).toBe(true);
+  });
+
+  it('upozornenie pri návrhu: „nepripravená" len keď to server tvrdí', () => {
+    expect(upozornenieNavrhu(pripravenost('pripravena', {}))).toBeUndefined();
+    expect(upozornenieNavrhu(null)).toBeUndefined();
+    const meranie: SignalPripravenosti = { stav: 'overit', dovod: 'meranie_chyba' };
+    expect(upozornenieNavrhu(pripravenost('overit', { meranie })))
+      .toBe(`${t('pripravenost.navrhOverit')} ${t('pripravenost.meranie_chyba')}`);
+    expect(upozornenieNavrhu(pripravenost('nepripravena', { historia: caka, meranie })))
+      .toBe(`${t('pripravenost.navrhUpozornenie')} ${t('pripravenost.ciselniky_chybaju')}`);
   });
 
   it('upozornenie pri návrhu nesie prvý nesplnený dôvod', () => {

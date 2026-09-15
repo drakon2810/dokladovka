@@ -13,6 +13,8 @@ const publikovany: ImportHistorie = {
       { poziadavka: 'receivedInvoice', agenda: 'FP', stav: 'ok', dokladov: 120, poloziek: 300, riadkov: 420 },
       { poziadavka: 'voucher', stav: 'ok', dokladov: 40, poloziek: 40, riadkov: 80 },
       { poziadavka: 'issuedDebitNote', agenda: 'FV-T', stav: 'ok', dokladov: 0, poloziek: 0, riadkov: 0 },
+      // Ostatné pohľadávky meranie nevie merať — pripravenosť kvôli nim nesmie zamrznúť.
+      { poziadavka: 'receivable', agenda: 'OP', stav: 'ok', dokladov: 3, poloziek: 3, riadkov: 6 },
     ],
   },
 };
@@ -26,12 +28,12 @@ function pripravena(): VstupPripravenosti {
     prepojenie: { dbName: 'StwPh_12345678_2026', uctovnyRok: '2026', matchRule: 'auto_ico' },
     poslednaSynchronizacia: predHodinami(0.5),
     ciselniky: ['predkontacie', 'cleneniaDph', 'ciselneRady'].map((druh) => ({
-      druh, beh: { stav: 'ok', poloziek: 10, chyba: null }, zPohody: 10, spolu: 10,
+      druh, beh: { stav: 'ok', poloziek: 10, chyba: null, kedy: predHodinami(0.5) }, zPohody: 10, spolu: 10,
     })),
     historia: { posledny: publikovany, publikovany, bezManifestu: true },
-    analyza: { stav: 'succeeded', chyba: null, kedy: predHodinami(4), kategorii: 12, zlyhanychDavok: 0 },
+    analyza: { stav: 'succeeded', chyba: null, zarazena: predHodinami(4.5), kedy: predHodinami(4), kategorii: 12, zlyhanychDavok: 0 },
     kategorie: true,
-    meranie: { kedy: predHodinami(4), agendy: ['FP', 'PPD'] },
+    meranie: { kedy: predHodinami(4), vynechane: [] },
   };
 }
 
@@ -40,8 +42,8 @@ const s = (vstup: Partial<VstupPripravenosti>) => vypocitajPripravenost({ ...pri
 describe('pripravenosť firmy', () => {
   it('všetko ok a čerstvé je pripravená', () => {
     const vysledok = s({});
-    expect(vysledok.stav).toBe('pripravena');
-    expect(vysledok.signaly.historia).toMatchObject({ stav: 'ok', pocet: 160 });
+    expect(vysledok.stav, JSON.stringify(vysledok.signaly)).toBe('pripravena');
+    expect(vysledok.signaly.historia).toMatchObject({ stav: 'ok', pocet: 163 });
     expect(vysledok.signaly.firma.detail).toEqual({ dbName: 'StwPh_12345678_2026', uctovnyRok: '2026', matchRule: 'auto_ico' });
   });
 
@@ -72,13 +74,14 @@ describe('pripravenosť firmy', () => {
 
   it('číselníky: chyba behu, len ručné, chýbajúci druh, prázdna odpoveď', () => {
     const [predkontacie, ...ostatne] = pripravena().ciselniky;
-    expect(s({ ciselniky: [{ ...predkontacie, beh: { stav: 'error', poloziek: 0, chyba: 'timeout' } }, ...ostatne] }).signaly.ciselniky)
-      .toMatchObject({ stav: 'chyba', dovod: 'ciselnik_chyba', detail: 'predkontacie: timeout' });
+    // Chyba nesie čas posledného behu — bežiaci krok sprievodcu podľa neho zhasne.
+    expect(s({ ciselniky: [{ ...predkontacie, beh: { stav: 'error', poloziek: 0, chyba: 'timeout', kedy: predHodinami(0.1) } }, ...ostatne] }).signaly.ciselniky)
+      .toMatchObject({ stav: 'chyba', dovod: 'ciselnik_chyba', detail: 'predkontacie: timeout', kedy: predHodinami(0.1) });
     expect(s({ ciselniky: pripravena().ciselniky.map((druh) => ({ ...druh, beh: null, zPohody: 0, spolu: 3 })) }).signaly.ciselniky)
       .toMatchObject({ stav: 'overit', dovod: 'ciselniky_rucne' });
     expect(s({ ciselniky: [{ ...predkontacie, zPohody: 0, spolu: 0 }, ...ostatne] }).signaly.ciselniky)
-      .toMatchObject({ stav: 'chyba', dovod: 'ciselnik_chyba_druh', detail: 'predkontacie' });
-    expect(s({ ciselniky: [{ ...predkontacie, beh: { stav: 'ok', poloziek: 0, chyba: null } }, ...ostatne] }).signaly.ciselniky)
+      .toMatchObject({ stav: 'chyba', dovod: 'ciselnik_chyba_druh', detail: 'predkontacie', kedy: predHodinami(0.5) });
+    expect(s({ ciselniky: [{ ...predkontacie, beh: { stav: 'ok', poloziek: 0, chyba: null, kedy: predHodinami(0.5) } }, ...ostatne] }).signaly.ciselniky)
       .toMatchObject({ stav: 'overit', dovod: 'ciselnik_prazdna_odpoved' });
   });
 
@@ -120,15 +123,23 @@ describe('pripravenosť firmy', () => {
     expect(s({ analyza: { ...analyza, stav: 'failed', chyba: 'kľúč' } }).signaly.profil).toMatchObject({ stav: 'chyba', dovod: 'analyza_zlyhala', detail: 'kľúč' });
     expect(s({ analyza: { ...analyza, kategorii: 0 } }).signaly.profil).toMatchObject({ stav: 'chyba', dovod: 'analyza_prazdna' });
     expect(s({ analyza: { ...analyza, zlyhanychDavok: 2 } }).signaly.profil).toMatchObject({ stav: 'overit', dovod: 'analyza_ciastocna', pocet: 2 });
-    expect(s({ analyza: { ...analyza, kedy: predHodinami(6) } }).signaly.profil).toMatchObject({ stav: 'overit', dovod: 'profil_starsi_ako_historia' });
+    expect(s({ analyza: { ...analyza, zarazena: predHodinami(7), kedy: predHodinami(6) } }).signaly.profil)
+      .toMatchObject({ stav: 'overit', dovod: 'profil_starsi_ako_historia' });
+    // Analýza číta históriu pri štarte: zaradená pred publikáciou, dobehnutá po nej, stojí na starej histórii.
+    expect(s({ analyza: { ...analyza, zarazena: predHodinami(5.5), kedy: predHodinami(4) } }).signaly.profil)
+      .toMatchObject({ stav: 'overit', dovod: 'profil_starsi_ako_historia', kedy: predHodinami(4) });
   });
 
-  it('meranie: chýba, staršie ako publikácia, nepokryté agendy', () => {
+  it('meranie: chýba, staršie ako publikácia, agendy, na ktoré vzorka nestačila', () => {
     expect(s({ meranie: null }).signaly.meranie).toMatchObject({ stav: 'overit', dovod: 'meranie_chyba' });
-    expect(s({ meranie: { kedy: predHodinami(6), agendy: ['FP'] } }).signaly.meranie).toMatchObject({ stav: 'overit', dovod: 'meranie_starsie' });
-    const vysledok = s({ meranie: { kedy: predHodinami(1), agendy: ['PPD'] } });
-    expect(vysledok.signaly.meranie).toMatchObject({ stav: 'overit', dovod: 'meranie_ciastocne', detail: 'FP' });
+    expect(s({ meranie: { kedy: predHodinami(6), vynechane: [] } }).signaly.meranie).toMatchObject({ stav: 'overit', dovod: 'meranie_starsie' });
+    const vysledok = s({ meranie: { kedy: predHodinami(1), vynechane: ['FV-D', 'PPD'] } });
+    expect(vysledok.signaly.meranie).toMatchObject({ stav: 'overit', dovod: 'meranie_ciastocne', detail: 'FV-D, PPD' });
     // Meranie neblokuje — firma sa dá overiť, nie je nepripravená.
     expect(vysledok.stav).toBe('overit');
+  });
+
+  it('agenda histórie, ktorú meranie nevie merať (OP), meranie nezhodí', () => {
+    expect(s({ meranie: { kedy: predHodinami(1), vynechane: [] } }).signaly.meranie).toMatchObject({ stav: 'ok' });
   });
 });

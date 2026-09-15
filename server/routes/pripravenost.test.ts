@@ -73,7 +73,11 @@ describe('GET /api/organizations/:id/pripravenost', () => {
        VALUES ($1,$2,$3,'historia','publikovany',$4::jsonb,now() - interval '2 hours',now() - interval '2 hours')`,
       [randomUUID(), ...scope, JSON.stringify({
         databaza: 'StwPh_12345678_2026', rok: 2026,
-        agendy: [{ poziadavka: 'receivedInvoice', agenda: 'FP', stav: 'ok', dokladov: 12, poloziek: 30, riadkov: 42, preskocene: {} }],
+        agendy: [
+          { poziadavka: 'receivedInvoice', agenda: 'FP', stav: 'ok', dokladov: 12, poloziek: 30, riadkov: 42, preskocene: {} },
+          // Ostatné pohľadávky meranie nemeria — pripravenosť kvôli nim nesmie ostať „overiť".
+          { poziadavka: 'receivable', agenda: 'OP', stav: 'ok', dokladov: 3, poloziek: 3, riadkov: 6, preskocene: {} },
+        ],
       })],
     );
     await database.query(
@@ -82,8 +86,9 @@ describe('GET /api/organizations/:id/pripravenost', () => {
       [randomUUID(), ...scope, ANALYZA_KIND, JSON.stringify({ vysledok: { kategorii: 5, zlyhanychDavok: 0 } })],
     );
     await database.query(
-      `INSERT INTO ucto_presnost (id,tenant_id,organization_id,delici_datum,vzorka,vysledok,metodika)
-       VALUES ($1,$2,$3,'2026-06-01',12,$4::jsonb,2)`, [randomUUID(), ...scope, JSON.stringify({ FP: { dokladov: 12 } })],
+      `INSERT INTO ucto_presnost (id,tenant_id,organization_id,delici_datum,vzorka,vysledok,metodika,manifest)
+       VALUES ($1,$2,$3,'2026-06-01',12,$4::jsonb,2,$5::jsonb)`,
+      [randomUUID(), ...scope, JSON.stringify({ FP: { dokladov: 12 } }), JSON.stringify({ vynechaneAgendy: [] })],
     );
 
     expect(await mostikVSnapshote()).toEqual({ [novaId]: false, [seeded.organizationId]: true });
@@ -93,5 +98,24 @@ describe('GET /api/organizations/:id/pripravenost', () => {
 
     const cudzia = await app.inject({ method: 'GET', url: `/api/organizations/${randomUUID()}/pripravenost`, headers });
     expect(cudzia.statusCode).toBe(404);
+  }, 90_000);
+
+  // Surový text chyby analýzy vidí inak len admin a účtovník (GET ucto-profile/analyze).
+  it('schvaľovateľ dostane stav a dôvod, nie surový detail', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database, { role: 'schvalovatel' });
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = { cookie: String(login.headers['set-cookie']).split(';')[0] };
+    await database.query(
+      `INSERT INTO processing_jobs (id,tenant_id,organization_id,kind,status,correlation_id,error_message)
+       VALUES ($1,$2,$3,$4,'failed','test','OpenAI 401: Incorrect API key sk-proj-abc')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, ANALYZA_KIND],
+    );
+    const odpoved = await app.inject({ method: 'GET', url: `/api/organizations/${seeded.organizationId}/pripravenost`, headers });
+    expect(odpoved.statusCode, odpoved.body).toBe(200);
+    expect(odpoved.json().signaly.profil).toMatchObject({ stav: 'chyba', dovod: 'analyza_zlyhala' });
+    expect(odpoved.body).not.toContain('sk-proj');
   }, 90_000);
 });

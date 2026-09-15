@@ -39,14 +39,14 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
         'SELECT created_at FROM agent_sync_runs WHERE tenant_id=$1 AND organization_id=$2 ORDER BY created_at DESC LIMIT 1', scope,
       ),
       database.query<Record<string, any>>(
-        `SELECT d.druh, r.state, r.item_count, r.error_code,
+        `SELECT d.druh, r.state, r.item_count, r.error_code, r.created_at,
                 (SELECT count(*)::int FROM code_list_items c
                   WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind=d.druh AND c.active AND c.source<>'manual') AS z_pohody,
                 (SELECT count(*)::int FROM code_list_items c
                   WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind=d.druh AND c.active) AS spolu
            FROM unnest($3::text[]) AS d(druh)
            LEFT JOIN LATERAL (
-             SELECT state, item_count, error_code FROM agent_sync_runs
+             SELECT state, item_count, error_code, created_at FROM agent_sync_runs
               WHERE tenant_id=$1 AND organization_id=$2 AND kind=d.druh
               ORDER BY created_at DESC LIMIT 1
            ) r ON true`, [...scope, POVINNE_CISELNIKY],
@@ -56,15 +56,19 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
       database.query<Record<string, any>>(
         'SELECT EXISTS (SELECT 1 FROM ucto_historia WHERE tenant_id=$1 AND organization_id=$2) AS existuje', scope,
       ),
+      // ponytail: processing_jobs má len index (tenant_id, organization_id), takže posledný
+      //   job analýzy prejde všetky joby firmy (každý doklad nechá riadok). Pri desiatkach
+      //   tisíc dokladov pridať migráciou čiastočný index (tenant_id, organization_id,
+      //   created_at DESC) WHERE kind='ucto_analyza' — pomôže aj GET ucto-profile/analyze.
       database.query<Record<string, any>>(
-        `SELECT status, error_message, updated_at, payload->'vysledok' AS vysledok FROM processing_jobs
+        `SELECT status, error_message, created_at, updated_at, payload->'vysledok' AS vysledok FROM processing_jobs
           WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 ORDER BY created_at DESC LIMIT 1`, [...scope, ANALYZA_KIND],
       ),
       database.query<Record<string, any>>(
         'SELECT EXISTS (SELECT 1 FROM ucto_kategorie WHERE tenant_id=$1 AND organization_id=$2 AND active) AS existuje', scope,
       ),
       database.query<Record<string, any>>(
-        `SELECT created_at, vysledok FROM ucto_presnost
+        `SELECT created_at, manifest->'vynechaneAgendy' AS vynechane FROM ucto_presnost
           WHERE tenant_id=$1 AND organization_id=$2 AND metodika=2 ORDER BY created_at DESC LIMIT 1`, scope,
       ),
     ]);
@@ -73,7 +77,7 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
       : null;
     const link = prepojenie.rows[0];
     const job = analyza.rows[0];
-    return vypocitajPripravenost({
+    const pripravenost = vypocitajPripravenost({
       mostikZapnuty: integracia.rows[0]?.mostik_enabled === true,
       pripojenychAgentov: Number(agenti.rows[0]?.pocet ?? 0),
       agentVideny: agenti.rows[0]?.videny,
@@ -81,7 +85,7 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
       poslednaSynchronizacia: synchronizacia.rows[0]?.created_at,
       ciselniky: ciselniky.rows.map((row) => ({
         druh: row.druh,
-        beh: row.state ? { stav: row.state, poloziek: Number(row.item_count), chyba: row.error_code } : null,
+        beh: row.state ? { stav: row.state, poloziek: Number(row.item_count), chyba: row.error_code, kedy: row.created_at } : null,
         zPohody: Number(row.z_pohody),
         spolu: Number(row.spolu),
       })),
@@ -91,11 +95,17 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
         bezManifestu: stara.rows[0]?.existuje === true,
       },
       analyza: job ? {
-        stav: job.status, chyba: job.error_message, kedy: job.updated_at,
+        stav: job.status, chyba: job.error_message, zarazena: job.created_at, kedy: job.updated_at,
         kategorii: job.vysledok?.kategorii, zlyhanychDavok: job.vysledok?.zlyhanychDavok,
       } : null,
       kategorie: kategorie.rows[0]?.existuje === true,
-      meranie: meranie.rows[0] ? { kedy: meranie.rows[0].created_at, agendy: Object.keys(meranie.rows[0].vysledok ?? {}) } : null,
+      meranie: meranie.rows[0] ? { kedy: meranie.rows[0].created_at, vynechane: meranie.rows[0].vynechane ?? [] } : null,
     }, { teraz: new Date(), agentOfflineHodin: config.agentOfflineAlertHours });
+    // Detail nesie surové texty (chyba analýzy, zamietnutý prenos), ktoré inak vidí
+    // len admin a účtovník (GET ucto-profile/analyze). Schvaľovateľ dostane stav a dôvod.
+    if (auth.role !== 'admin' && auth.role !== 'uctovnik') {
+      for (const signal of Object.values(pripravenost.signaly)) delete signal.detail;
+    }
+    return pripravenost;
   });
 }
