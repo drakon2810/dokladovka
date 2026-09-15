@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
-import { maybeAiAccountingSuggestion, type AiSuggestionDocumentContext } from './accountingSuggestionService.js';
+import { maybeAiAccountingSuggestion, resolveSeriesDefault, type AiSuggestionDocumentContext } from './accountingSuggestionService.js';
 
 /**
  * Koľko z toho, čo účtovník naozaj urobil, by AI navrhla sama.
@@ -25,7 +25,7 @@ import { maybeAiAccountingSuggestion, type AiSuggestionDocumentContext } from '.
  */
 
 /** Agenda korpusu → druh dokladu, ako ho pozná spracovanie. */
-const DRUH_PODLA_AGENDY: Record<string, { typ: string; podtyp?: string }> = {
+const DRUH_PODLA_AGENDY: Record<string, { typ: string; podtyp?: string; pokladnaTyp?: 'receipt' | 'expense' }> = {
   FP: { typ: 'FP' },
   'FP-D': { typ: 'FP', podtyp: 'dobropis' },
   'FP-T': { typ: 'FP', podtyp: 'tarchopis' },
@@ -36,8 +36,8 @@ const DRUH_PODLA_AGENDY: Record<string, { typ: string; podtyp?: string }> = {
   'FV-Z': { typ: 'FV', podtyp: 'zalohova' },
   OZ: { typ: 'OZ' },
   INT: { typ: 'MZDY' },
-  VPD: { typ: 'PD' },
-  PPD: { typ: 'PD' },
+  VPD: { typ: 'PD', pokladnaTyp: 'expense' },
+  PPD: { typ: 'PD', pokladnaTyp: 'receipt' },
 };
 
 interface Skutocnost {
@@ -49,6 +49,11 @@ interface Skutocnost {
   predkontaciaId?: string;
   clenenieDphId?: string;
   clenenieKvKod?: string;
+  /** Rad dokladu v POHODE (typ:id) a jeho predpona — staršie importy ho nenesú. */
+  radExternalId?: string;
+  radKod?: string;
+  /** Krajina protistrany — rozhoduje o tuzemskom či zahraničnom rade. */
+  krajina?: string;
   /** Text dokladu z hlavičky — pri doklade bez položiek je to jediné, čo model dostane. */
   hlavickaText?: string;
   polozky: Array<{ popis: string; suma?: number; sumaDph?: number; predkontaciaId?: string }>;
@@ -71,6 +76,8 @@ export interface AgendaSkore {
   clenenieDph: number;
   kv: number;
   rad: number;
+  /** Len doklady, ktorých rad z histórie poznáme — bez neho nie je proti čomu merať. */
+  radov: number;
   /** Len doklady, ktoré účtovník rozpísal — inde nie je čo merať. */
   rozpisanych: number;
   rozpis: number;
@@ -84,7 +91,8 @@ async function nacitajDoklady(
 ): Promise<Skutocnost[]> {
   const rows = (await database.query<Record<string, any>>(
     `SELECT agenda, doklad_cislo, datum, riadok_index, line_text_normalized, suma, suma_dph,
-            supplier_ico, supplier_name_normalized, predkontacia_id, clenenie_dph_id, clenenie_kv_kod
+            supplier_ico, supplier_name_normalized, predkontacia_id, clenenie_dph_id, clenenie_kv_kod,
+            rad_external_id, rad_kod, krajina
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND doklad_cislo IS NOT NULL AND datum >= $3::date
       -- NULLS FIRST je nutnosť, nie kozmetika: staršie importy niesli len
@@ -111,6 +119,9 @@ async function nacitajDoklady(
         predkontaciaId: row.predkontacia_id ?? undefined,
         clenenieDphId: row.clenenie_dph_id ?? undefined,
         clenenieKvKod: row.clenenie_kv_kod ?? undefined,
+        radExternalId: row.rad_external_id ?? undefined,
+        radKod: row.rad_kod ?? undefined,
+        krajina: row.krajina ?? undefined,
         hlavickaText: row.line_text_normalized ?? undefined,
         polozky: [],
         rozpisany: false,
@@ -194,7 +205,7 @@ async function sNahradnymDokladom<T>(
 }
 
 function prazdneSkore(): AgendaSkore {
-  return { dokladov: 0, predkontacia: 0, clenenieDph: 0, kv: 0, rad: 0, rozpisanych: 0, rozpis: 0 };
+  return { dokladov: 0, predkontacia: 0, clenenieDph: 0, kv: 0, rad: 0, radov: 0, rozpisanych: 0, rozpis: 0 };
 }
 
 export async function zmerajPresnost(
@@ -224,10 +235,14 @@ export async function zmerajPresnost(
   if (!deliciDatum) throw new HttpError(409, 'not_enough_data', 'V korpuse nie sú doklady s dátumom.');
 
   // Kódy pre čitateľný zoznam rozdielov — účtovník číta kódy, nie id.
-  const kod = new Map((await database.query<{ id: string; code: string } & Record<string, unknown>>(
-    'SELECT id, code FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2',
+  const polozky = (await database.query<{ id: string; code: string; external_id: string | null } & Record<string, unknown>>(
+    'SELECT id, code, external_id FROM code_list_items WHERE tenant_id=$1 AND organization_id=$2',
     [input.tenantId, input.organizationId],
-  )).rows.map((row) => [row.id, row.code.trim()]));
+  )).rows;
+  const kod = new Map(polozky.map((row) => [row.id, row.code.trim()]));
+  // Rad sa porovnáva identifikátorom z POHODY, nie id riadku ani kódom: ten istý
+  // rad môže mať v číselníku iné id a dva rady rovnakú predponu.
+  const externeId = new Map(polozky.map((row) => [row.id, row.external_id]));
 
   const vsetky = await nacitajDoklady(database, input, deliciDatum);
   if (vsetky.length === 0) {
@@ -241,12 +256,17 @@ export async function zmerajPresnost(
     const skore = vysledok[doklad.agenda] ?? (vysledok[doklad.agenda] = prazdneSkore());
     skore.dokladov += 1;
     if (doklad.rozpisany) skore.rozpisanych += 1;
+    if (doklad.radExternalId) skore.radov += 1;
 
     const context: AiSuggestionDocumentContext = {
       documentType: DRUH_PODLA_AGENDY[doklad.agenda].typ,
       podtyp: DRUH_PODLA_AGENDY[doklad.agenda].podtyp,
+      pokladnaTyp: DRUH_PODLA_AGENDY[doklad.agenda].pokladnaTyp,
       supplierName: doklad.supplierName,
       supplierIco: doklad.supplierIco,
+      // Krajina rozhoduje o tuzemskom či zahraničnom rade (aj o cudzej dani) —
+      // v ostrej prevádzke ju doklad nesie, meranie bez nej meralo naslepo.
+      supplierKrajina: doklad.krajina,
       // Na vydanej faktúre je protistranou ODBERATEĽ a číta sa z iného poľa
       // (accountingSuggestionService.ts:1462). Korpus drží protistranu vždy v
       // supplier_name_normalized — aj pri FV, kde je to zákazník —, takže bez
@@ -256,7 +276,7 @@ export async function zmerajPresnost(
       // ako jeho chybu. V ostrej prevádzke odberateľ nechýba, prišiel by
       // z dokladu — merali sme teda niečo, čo sa v produkte nedeje.
       ...(DRUH_PODLA_AGENDY[doklad.agenda].typ === 'FV'
-        ? { odberatel: { nazov: doklad.supplierName, ico: doklad.supplierIco } }
+        ? { odberatel: { nazov: doklad.supplierName, ico: doklad.supplierIco, krajina: doklad.krajina } }
         : {}),
       datumVystavenia: doklad.datum,
       lineDescriptions: doklad.polozky.map((polozka) => polozka.popis),
@@ -287,9 +307,9 @@ export async function zmerajPresnost(
       predkontacia: Boolean(navrh?.predkontacia_id) && navrh!.predkontacia_id === doklad.predkontaciaId,
       clenenieDph: !doklad.clenenieDphId || navrh?.clenenie_dph_id === doklad.clenenieDphId,
       kv: !doklad.clenenieKvKod || navrh?.clenenie_kv_kod === doklad.clenenieKvKod,
-      // Rad sa neporovnáva proti korpusu — ten ho nedrží ako id. Berie sa, či
-      // ho návrh vôbec určil; presnosť radu meria vlastný test.
-      rad: Boolean(navrh?.ciselny_rad_id),
+      // Rad sa porovnáva s radom, do ktorého doklad v POHODE naozaj padol. Kým
+      // sa porovnávalo len „nejaký rad je", bol rad 100 % v každej firme o ničom.
+      rad: Boolean(doklad.radExternalId) && externeId.get(navrh?.ciselny_rad_id ?? '') === doklad.radExternalId,
       // Rozpis: navrhol ho tam, kde ho účtovník naozaj urobil?
       rozpis: doklad.rozpisany === Array.isArray(navrh?.riadky) && (navrh?.riadky?.length ?? 0) > 0,
     };
@@ -310,7 +330,7 @@ export async function zmerajPresnost(
         dovod: navrh?.reason ?? null,
       });
     }
-    if (!sedi.predkontacia || !sedi.clenenieDph || !sedi.kv) {
+    if (!sedi.predkontacia || !sedi.clenenieDph || !sedi.kv || (doklad.radExternalId && !sedi.rad)) {
       rozdiely.push({
         doklad: doklad.dokladCislo, agenda: doklad.agenda, datum: doklad.datum,
         dodavatel: doklad.supplierName,
@@ -319,11 +339,13 @@ export async function zmerajPresnost(
           predkontacia: kod.get(doklad.predkontaciaId ?? '') ?? null,
           clenenieDph: kod.get(doklad.clenenieDphId ?? '') ?? null,
           kv: doklad.clenenieKvKod ?? null,
+          rad: doklad.radKod ?? null,
         },
         navrh: {
           predkontacia: kod.get(navrh?.predkontacia_id ?? '') ?? null,
           clenenieDph: kod.get(navrh?.clenenie_dph_id ?? '') ?? null,
           kv: navrh?.clenenie_kv_kod ?? null,
+          rad: kod.get(navrh?.ciselny_rad_id ?? '') ?? null,
         },
         rozpisany: doklad.rozpisany,
       });
@@ -339,4 +361,78 @@ export async function zmerajPresnost(
       JSON.stringify(vysledok), JSON.stringify(rozdiely.slice(0, 200)), trvanieMs],
   );
   return { id, deliciDatum, vzorka: merane.length, vysledok, rozdiely, trvanieMs };
+}
+
+export interface RadyVysledok {
+  /** Od akého dátumu sa meralo; null = história rad dokladu nenesie vôbec. */
+  od: string | null;
+  podlaAgendy: Record<string, { dokladov: number; spravne: number; prazdne: number }>;
+  rozdiely: Array<{
+    doklad: string; agenda: string; datum: string; protistrana: string | null;
+    skutocne: string | null; navrh: string | null;
+  }>;
+}
+
+/**
+ * Presnosť výberu číselného radu — bez AI. Rad je výpočet z histórie, nie
+ * úsudok modelu, takže sa dá premerať na KAŽDOM doklade zadarmo, nie na vzorke
+ * zo zmerajPresnost. Doklad dostane rad len z toho, čo firma vedela pred jeho
+ * dátumom, a porovná sa s radom, do ktorého ho účtovník v POHODE naozaj dal.
+ * ponytail: história roka sa číta pre každý doklad znova (n²) — pri firmách
+ * s desaťtisícmi dokladov ročne načítať rok raz a filtrovať v pamäti.
+ */
+export async function zmerajRady(
+  database: Database,
+  input: { tenantId: string; organizationId: string },
+  moznosti: { od?: string } = {},
+): Promise<RadyVysledok> {
+  // Predvolene od 1. januára posledného roka, ktorý rad dokladu nesie: staršie
+  // roky majú v POHODE iné rady a výber by sa meral na tom, čo firma nerobí.
+  const od = moznosti.od ?? (await database.query<{ od: string | null } & Record<string, unknown>>(
+    `SELECT make_date(max(extract(year FROM datum))::int, 1, 1)::text AS od
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND rad_external_id IS NOT NULL`,
+    [input.tenantId, input.organizationId],
+  )).rows[0]?.od ?? null;
+  const vysledok: RadyVysledok = { od, podlaAgendy: {}, rozdiely: [] };
+  if (!od) return vysledok;
+
+  const doklady = (await database.query<Record<string, any>>(
+    `SELECT DISTINCT ON (agenda, doklad_cislo)
+            agenda, doklad_cislo, datum::text AS datum, supplier_ico, supplier_name_normalized,
+            krajina, rad_external_id, rad_kod
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND rad_external_id IS NOT NULL
+        AND doklad_cislo IS NOT NULL AND datum >= $3::date AND agenda=ANY($4::text[])
+      ORDER BY agenda, doklad_cislo, coalesce(riadok_index, 0)`,
+    [input.tenantId, input.organizationId, od, Object.keys(DRUH_PODLA_AGENDY)],
+  )).rows.sort((prvy, druhy) => prvy.datum.localeCompare(druhy.datum));
+  const rady = new Map((await database.query<{ id: string; code: string; external_id: string | null } & Record<string, unknown>>(
+    `SELECT id, code, external_id FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady'`,
+    [input.tenantId, input.organizationId],
+  )).rows.map((row) => [row.id, row]));
+
+  for (const doklad of doklady) {
+    const druh = DRUH_PODLA_AGENDY[doklad.agenda];
+    const navrh = await resolveSeriesDefault(
+      database, input, druh.typ, doklad.datum, druh.podtyp,
+      { ico: doklad.supplier_ico ?? undefined, nazov: doklad.supplier_name_normalized ?? undefined, krajina: doklad.krajina ?? undefined },
+      doklad.datum, druh.pokladnaTyp,
+    );
+    const skore = vysledok.podlaAgendy[doklad.agenda] ??= { dokladov: 0, spravne: 0, prazdne: 0 };
+    skore.dokladov += 1;
+    const rad = navrh ? rady.get(navrh) : undefined;
+    if (!rad) skore.prazdne += 1;
+    if (rad && rad.external_id === doklad.rad_external_id) {
+      skore.spravne += 1;
+    } else if (vysledok.rozdiely.length < 50) {
+      vysledok.rozdiely.push({
+        doklad: doklad.doklad_cislo, agenda: doklad.agenda, datum: doklad.datum,
+        protistrana: doklad.supplier_name_normalized ?? doklad.supplier_ico ?? null,
+        skutocne: doklad.rad_kod ?? null, navrh: rad?.code.trim() ?? null,
+      });
+    }
+  }
+  return vysledok;
 }

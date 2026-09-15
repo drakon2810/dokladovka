@@ -61,6 +61,20 @@ describe('agendaRadu', () => {
     expect(radyPreTyp(rady, { typ: 'FP', podtyp: 'bezna' }).map((i) => i.id)).toEqual(['f']);
     expect(radyPreTyp(rady, { typ: 'FP', podtyp: 'zalohova' }).map((i) => i.id)).toEqual(['z']);
   });
+
+  // ROFA: rad „FP20" prečítaný z decembrových dokladov 2025 sa ponúkal aj
+  // faktúre z roku 2026 vedľa skutočného FP202.
+  it('rad iného účtovného roka sa dokladu neponúkne', () => {
+    const rady = [
+      { id: 'stary', agenda: 'prijate_faktury', uctovnyRok: '2025' },
+      { id: 'novy', agenda: 'prijate_faktury', uctovnyRok: '2026' },
+      { id: 'bezRoka', agenda: 'prijate_faktury' },
+    ];
+    expect(radyPreTyp(rady, bezny('FP'), '2026').map((i) => i.id)).toEqual(['novy', 'bezRoka']);
+    // Bez roka dokladu sa nefiltruje; bez radu nového roka ostanú rady agendy.
+    expect(radyPreTyp(rady, bezny('FP')).map((i) => i.id)).toEqual(['stary', 'novy', 'bezRoka']);
+    expect(radyPreTyp(rady.slice(0, 2), bezny('FP'), '2027').map((i) => i.id)).toEqual(['stary', 'novy']);
+  });
 });
 
 describe('kvKodyPreTyp', () => {

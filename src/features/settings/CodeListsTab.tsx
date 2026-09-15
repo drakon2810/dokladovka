@@ -94,6 +94,7 @@ function PredvoleneRady({ organizationId }: { organizationId: string }) {
   const { data } = useDataQuery();
   const [busy, setBusy] = useState(false);
   const rady = (data?.codeLists.ciselneRady ?? []).filter((item) => item.orgId === organizationId && item.active);
+  const rokRadov = rady.reduce((najnovsi, item) => ((item.uctovnyRok ?? '') > najnovsi ? item.uctovnyRok! : najnovsi), '');
   const predvolby = (data?.seriesDefaults ?? []).filter((item) => item.organizationId === organizationId);
   const ulozene = new Map(predvolby.map((item) => [item.documentType, item.ciselnyRadId]));
   const ulozenaPokladna = predvolby.find((item) => item.documentType === 'PD')?.pokladnaKod ?? '';
@@ -144,7 +145,11 @@ function PredvoleneRady({ organizationId }: { organizationId: string }) {
         {/* Predvoľby sa nastavujú pre bežné doklady; dobropis a ťarchopis
             zdieľajú agendu faktúr a zálohová má vlastnú, ktorá predvoľbu nemá. */}
         {(Object.keys(AGENDA_PRE_TYP) as DocumentType[]).map((typ) => {
-          const ponuka = rady.filter((item) => item.agenda === agendaRadu({ typ, podtyp: 'bezna' }));
+          // Predvoľba platí pre nové doklady, teda pre rady najnovšieho roka —
+          // rad minulého roka prečítaný zo starých dokladov (ROFA „FP20") by sa
+          // inak dal nastaviť ako predvolený. Už uložený ostáva viditeľný.
+          const ponuka = rady.filter((item) => item.agenda === agendaRadu({ typ, podtyp: 'bezna' })
+            && (!item.uctovnyRok || item.uctovnyRok === rokRadov || item.id === ulozene.get(typ)));
           return (
             <label key={typ} className="flex items-center gap-2 text-sm">
               <span className="w-40 shrink-0 text-ink-soft">{TYP_LABEL[typ]}</span>
@@ -614,7 +619,7 @@ function CodeListEditor({
                     <td className="tnum py-1 pr-2 text-xs">{item.kod}</td>
                     <td className="py-1 text-xs">
                       {item.nazov}
-                      {item.source === 'pohoda' && (
+                      {item.source !== 'manual' && (
                         <span className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">
                           {t('nast.cis.zPohody')}
                         </span>
@@ -681,7 +686,8 @@ function CodeListTable({
             </tr>
           )}
           {items.map((item) => {
-            const synchronized = item.source === 'pohoda';
+            // Rad prečítaný z dokladov je tiež z POHODY — ručná úprava by ho od nej odtrhla.
+            const synchronized = item.source !== 'manual';
             const tooltip = synchronized ? t('nast.cis.synchronizovana') : undefined;
             return (
               <tr
