@@ -308,20 +308,28 @@ export function trebaDruhyHlas(verdikt: DphVerdikt): boolean {
  * dôvod meniť zaúčtovanie, ale sú dôvod, aby sa na doklad pozrel človek.
  */
 export function zluc(prvy: DphVerdikt, druhy: DphVerdikt): DphVerdikt {
-  if (prvy.verdikt === druhy.verdikt && prvy.odporucaneClenenieKod === druhy.odporucaneClenenieKod) {
+  // Zhoda je celý návrh — verdikt, členenie AJ sekcia KV. Sekcia sa doteraz
+  // neporovnávala: hlasy „B2" a „KN" prešli ako zhoda, výsledok niesol sekciu
+  // prvého s istotou druhého a rozpor o riadku kontrolného výkazu sa tváril
+  // ako potvrdený (audit R5). null a chýbajúca hodnota sú to isté „nič".
+  const navrh = (hlas: DphVerdikt) => `${hlas.odporucaneClenenieKod ?? 'ponechať'}${hlas.odporucanaKvSekcia ? `, KV ${hlas.odporucanaKvSekcia}` : ''}`;
+  if (prvy.verdikt === druhy.verdikt
+    && (prvy.odporucaneClenenieKod ?? null) === (druhy.odporucaneClenenieKod ?? null)
+    && (prvy.odporucanaKvSekcia ?? null) === (druhy.odporucanaKvSekcia ?? null)) {
     return { ...prvy, istota: Math.max(prvy.istota, druhy.istota) };
   }
   // Pri nezhode sa verdikt označí ako neistý, ale kandidát sa NEZAHADZUJE.
   // Predtým tu ostalo prázdno a účtovník videl „Kontrola si nie je istá" bez
   // jediného kódu — pochybnosť bez východiska, s ktorou sa nedalo nič urobiť.
   // Ponúkne sa návrh istejšieho z dvoch hlasov a dôvod pomenuje oba, nech je
-  // vidieť, v čom sa rozišli.
+  // vidieť, v čom sa rozišli. Oba návrhy (aj so sekciou KV) idú na začiatok —
+  // orezanie na 400 znakov by inak druhú sekciu odrezalo za dlhým dôvodom.
   const istejsi = prvy.istota >= druhy.istota ? prvy : druhy;
   return {
     verdikt: 'neisty',
     odporucaneClenenieKod: istejsi.odporucaneClenenieKod,
     odporucanaKvSekcia: istejsi.odporucanaKvSekcia,
-    dovod: `Dve nezávislé kontroly sa nezhodli. Prvá navrhuje ${prvy.odporucaneClenenieKod ?? 'ponechať'}: ${prvy.dovod} Druhá navrhuje ${druhy.odporucaneClenenieKod ?? 'ponechať'}: ${druhy.dovod}`.slice(0, 400),
+    dovod: `Dve nezávislé kontroly sa nezhodli: prvá navrhuje ${navrh(prvy)}, druhá ${navrh(druhy)}. Prvá: ${prvy.dovod} Druhá: ${druhy.dovod}`.slice(0, 400),
     istota: Math.min(prvy.istota, druhy.istota),
   };
 }

@@ -476,6 +476,9 @@ function najcastejsiRad(doklady: DokladRadu[]): { id: string; podiel: number } {
  * júl), iná má jeden rad — a podiel to rozsúdi bez pravidla pre konkrétnu firmu.
  * null = firma rady delí podľa mesiaca, no tento mesiac ešte nemá doklad
  * a rad sa podľa názvu nájsť nedá.
+ *
+ * rozhodny = vybraný rad drží skupina aspoň piatich dokladov, v ktorej má
+ * 90 % a viac. Len taká história smie prebiť nastavenie účtovníka.
  */
 async function vyberRadZDokladov(
   tx: Queryable,
@@ -484,7 +487,7 @@ async function vyberRadZDokladov(
   doklady: DokladRadu[],
   novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number },
   rok: number,
-): Promise<string | null> {
+): Promise<{ rad: string | null; rozhodny: boolean }> {
   // Mesačná firma: aspoň dva mesiace s tromi a viac dokladmi, každý takmer celý
   // v jednom rade a tie rady navzájom rôzne. Jeden rad na celý rok ani delenie
   // podľa krajiny tak nevyzerá.
@@ -497,7 +500,7 @@ async function vyberRadZDokladov(
     // Nový mesiac nemá z čoho počítať — rad mu dá už len názov. Hádať podľa
     // iného mesiaca nesmieme: POHODA by pridelila číslo z cudzieho radu.
     const rady = await radyMesiaca(tx, input, agenda, novy.mesiac, rok);
-    return rady.length === 1 ? rady[0] : null;
+    return { rad: rady.length === 1 ? rady[0] : null, rozhodny: false };
   }
 
   // Poradie = prednosť pri rovnakom podiele. Mesiac ide pred protistranu:
@@ -517,13 +520,17 @@ async function vyberRadZDokladov(
     },
     { doklady, minimum: 1 },
   ];
+  const rady = skupiny.filter((skupina) => skupina.doklady.length >= skupina.minimum)
+    .map((skupina) => ({ ...najcastejsiRad(skupina.doklady), pocet: skupina.doklady.length }));
   let vybrany: { id: string; podiel: number } | undefined;
-  for (const skupina of skupiny) {
-    if (skupina.doklady.length < skupina.minimum) continue;
-    const rad = najcastejsiRad(skupina.doklady);
-    if (!vybrany || rad.podiel > vybrany.podiel) vybrany = rad;
-  }
-  return vybrany?.id ?? null;
+  for (const rad of rady) if (!vybrany || rad.podiel > vybrany.podiel) vybrany = rad;
+  // Rozhodnosť sa pýta, či rad nesie AKÁKOĽVEK dosť veľká jednotná skupina, nie
+  // len víťazná: dva doklady protistrany so 100 % vyhrajú nad 150 dokladmi
+  // s 95 % v tom istom rade, a ten rad je pritom rozhodný.
+  return {
+    rad: vybrany?.id ?? null,
+    rozhodny: rady.some((rad) => rad.id === vybrany?.id && rad.pocet >= 5 && rad.podiel >= 0.9),
+  };
 }
 
 /**
@@ -540,7 +547,7 @@ async function vyberRadZDokladov(
  * a prenesie na rad nového roka s rovnakým názvom — POHODA rady zakladá každý
  * rok nanovo, názov ostáva.
  *
- * undefined = z histórie sa nedá povedať nič, null = nechať prázdne.
+ * undefined = z histórie sa nedá povedať nič, rad null = nechať prázdne.
  */
 async function radZHistorie(
   tx: Queryable,
@@ -550,7 +557,7 @@ async function radZHistorie(
   datum: string,
   protistrana: { nazov?: string; ico?: string; icDph?: string; krajina?: string } | undefined,
   doDatumu: string | undefined,
-): Promise<string | null | undefined> {
+): Promise<{ rad: string | null; rozhodny: boolean } | undefined> {
   if (agendy.length === 0) return undefined;
   const rok = Number(datum.slice(0, 4));
   // Doklad = jeden riadok na číslo dokladu; rad bez aktívneho riadku
@@ -582,7 +589,7 @@ async function radZHistorie(
 
   const minulehoRoka = await doklady(rok - 1);
   if (minulehoRoka.length === 0) return undefined;
-  const minulyRad = await vyberRadZDokladov(tx, input, agenda, minulehoRoka, novy, rok - 1);
+  const minulyRad = (await vyberRadZDokladov(tx, input, agenda, minulehoRoka, novy, rok - 1)).rad;
   if (!minulyRad) return undefined;
   const novyRad = await tx.query<{ id: string } & Record<string, unknown>>(
     `SELECT n.id
@@ -594,7 +601,9 @@ async function radZHistorie(
       WHERE s.tenant_id=$1 AND s.organization_id=$2 AND s.id=$3`,
     [input.tenantId, input.organizationId, minulyRad, String(rok)],
   );
-  return novyRad.rows.length === 1 ? novyRad.rows[0].id : undefined;
+  // Rad prenesený z minulého roka nie je rozhodný: doklady tohto druhu v roku
+  // dokladu ešte nie sú a nastavenie účtovníka sa nimi prebiť nesmie.
+  return novyRad.rows.length === 1 ? { rad: novyRad.rows[0].id, rozhodny: false } : undefined;
 }
 
 /**
@@ -620,27 +629,41 @@ export async function resolveSeriesDefault(
   const agenda = agendaRadu(documentType, podtyp);
   if (!agenda) return undefined;
 
-  // Nastavenie účtovníka je predvoľba BEŽNÉHO dokladu — kľúčom je len typ, takže
-  // platilo aj pre dobropis a zálohovú: Shenzhen by dobropisu nikdy nedal rad
-  // „Prijaté dopropisy" a zálohová dostávala rad z agendy bežných faktúr.
-  if (!podtyp || podtyp === 'bezna') {
-    const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
-      `SELECT d.ciselny_rad_id
-         FROM organization_series_defaults d
-         JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true AND c.agenda=$4
-        WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type=$3`,
-      [input.tenantId, input.organizationId, documentType ?? '', agenda],
-    );
-    if (explicit.rows[0]) return explicit.rows[0].ciselny_rad_id;
-  }
-
   // Rok dokladu: dátum vystavenia, pri meraní dátum, po ktorý sa história drží.
   const datum = [datumVystavenia, doDatumu].map((hodnota) => hodnota?.trim() ?? '')
     .find((hodnota) => /^\d{4}-\d{2}-\d{2}/.test(hodnota)) ?? new Date().toISOString().slice(0, 10);
   const rok = Number(datum.slice(0, 4));
   const agendy = agendyHistorieRadu(documentType, podtyp, pokladnaTyp);
   const zHistorie = await radZHistorie(tx, input, agenda, agendy, datum, protistrana, doDatumu);
-  if (zHistorie !== undefined) return zHistorie;
+
+  // Nastavenie účtovníka je predvoľba BEŽNÉHO dokladu — kľúčom je len typ, takže
+  // platilo aj pre dobropis a zálohovú: Shenzhen by dobropisu nikdy nedal rad
+  // „Prijaté dopropisy" a zálohová dostávala rad z agendy bežných faktúr.
+  //
+  // A platí len rad roka dokladu, ktorému história jasne neodporuje. Krížový
+  // replay našiel dve firmy s 0 % správnych radov: rad „2611" bez jediného
+  // dokladu proti 151 prijatým faktúram v inom rade a „26HP Hotovostný príjem"
+  // na výdavkových dokladoch (tam rozhodne história smeru — agendy sú podľa
+  // pokladnaTyp). Kde história rozhodná nie je, nastavenie účtovníka platí.
+  if (!podtyp || podtyp === 'bezna') {
+    const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
+      `SELECT d.ciselny_rad_id
+         FROM organization_series_defaults d
+         JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true AND c.agenda=$4
+          AND (c.accounting_year IS NULL OR c.accounting_year=$5)
+        WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type=$3`,
+      [input.tenantId, input.organizationId, documentType ?? '', agenda, String(rok)],
+    );
+    const nastavenie = explicit.rows[0]?.ciselny_rad_id;
+    if (nastavenie) {
+      if (!zHistorie?.rozhodny || zHistorie.rad === nastavenie) return nastavenie;
+      console.info('[ciselny-rad] rozhodná história prebila nastavenie účtovníka', {
+        organizationId: input.organizationId, documentType, pokladnaTyp, nastavenie, zHistorie: zHistorie.rad,
+      });
+      return zHistorie.rad;
+    }
+  }
+  if (zHistorie !== undefined) return zHistorie.rad;
   const maHistoriuRadov = agendy.length > 0 && (await tx.query(
     `SELECT 1 FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[]) AND rad_external_id IS NOT NULL

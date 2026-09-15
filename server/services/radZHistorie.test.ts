@@ -108,14 +108,63 @@ describe('číselný rad z histórie firmy', () => {
       'SELECT source, ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0]).toMatchObject({ source: 'decision_memory', ciselny_rad_id: faktury });
 
-    // Nastavenie účtovníka pre FP platí bežnej faktúre, dobropisu nie.
+    // Nastavenie účtovníka pre FP platí len bežnej faktúre — dobropis s tromi
+    // dokladmi (história nie je rozhodná) ho nesmie prevziať. Bežnú faktúru tu
+    // drží päť dokladov v jednom rade, tie nastavenie bez dokladov prebijú.
     await database.query(
       `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id)
        VALUES ($1,$2,'FP',$3)`,
       [kde.organizationId, kde.tenantId, iny],
     );
-    expect(await resolveSeriesDefault(database, kde, 'FP', '2026-04-01', 'bezna', {})).toBe(iny);
+    expect(await resolveSeriesDefault(database, kde, 'FP', '2026-04-01', 'bezna', {})).toBe(faktury);
     expect(await resolveSeriesDefault(database, kde, 'FP', '2026-04-01', 'dobropis', {})).toBe(dobropisy);
+  }, 90_000);
+
+  // Krížový replay: dve firmy mali 0 % správnych radov, lebo nastavenie
+  // účtovníka vyhralo nad jasnou históriou — rad „2611" bez jediného dokladu
+  // proti 151 prijatým faktúram v inom rade.
+  it('nastavenie účtovníka ustúpi len rozhodnej histórii', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const nastavenie = async (typ: string, radId: string) => database.query(
+      `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (organization_id,document_type) DO UPDATE SET ciselny_rad_id=excluded.ciselny_rad_id`,
+      [kde.organizationId, kde.tenantId, typ, radId],
+    );
+
+    const prazdny = await rad('2611', 'Prijaté faktúry 2611', 'prijate_faktury', '2026');
+    const skutocny = await rad('2610', 'Prijaté faktúry', 'prijate_faktury', '2026');
+    for (let index = 1; index <= 10; index += 1) await doklad('FP', skutocny, '2026-02-10', `dodavatel ${index}`);
+    await nastavenie('FP', prazdny);
+    expect(await resolveSeriesDefault(database, kde, 'FP', '2026-04-01', 'bezna', {})).toBe(skutocny);
+    // Nastavenie, s ktorým história súhlasí, ostáva.
+    await nastavenie('FP', skutocny);
+    expect(await resolveSeriesDefault(database, kde, 'FP', '2026-04-01', 'bezna', {})).toBe(skutocny);
+
+    // Slabá história (tri doklady) explicitné nastavenie neprebije.
+    const vydany = await rad('2621', 'Vydané faktúry', 'vydane_faktury', '2026');
+    const nastavenyVydany = await rad('2622', 'Vydané faktúry export', 'vydane_faktury', '2026');
+    for (const den of ['10', '11', '12']) await doklad('FV', vydany, `2026-02-${den}`, `zakaznik ${den}`);
+    await nastavenie('FV', nastavenyVydany);
+    expect(await resolveSeriesDefault(database, kde, 'FV', '2026-04-01', 'bezna', {})).toBe(nastavenyVydany);
+
+    // Nastavenie z minulého účtovného roka novému roku rad nedá.
+    const oz25 = await rad('OZ25', 'Ostatné záväzky', 'ostatni_zavazky', '2025');
+    const oz26 = await rad('OZ26', 'Ostatné záväzky', 'ostatni_zavazky', '2026');
+    await nastavenie('OZ', oz25);
+    expect(await resolveSeriesDefault(database, kde, 'OZ', '2026-04-01', 'bezna', {})).toBe(oz26);
+
+    // Pokladňa: nastavenie „Hotovostný príjem" nepatrí výdavkovému dokladu,
+    // ktorého výdavková história ide jasne do iného radu.
+    const prijem = await rad('26HP', '26HP Hotovostný príjem', 'pokladna', '2026');
+    const vydaj = await rad('26HV', '26HV Hotovostný výdaj', 'pokladna', '2026');
+    for (const den of ['10', '11', '12', '13', '14', '15']) {
+      await doklad('PPD', prijem, `2026-03-${den}`);
+      await doklad('VPD', vydaj, `2026-03-${den}`);
+    }
+    await nastavenie('PD', prijem);
+    expect(await resolveSeriesDefault(database, kde, 'PD', '2026-04-01', 'bezna', {}, undefined, 'expense')).toBe(vydaj);
+    expect(await resolveSeriesDefault(database, kde, 'PD', '2026-04-01', 'bezna', {}, undefined, 'receipt')).toBe(prijem);
   }, 90_000);
 
   it('mesačná firma: rad mesiaca, nový mesiac len podľa názvu, inak prázdne', async () => {
