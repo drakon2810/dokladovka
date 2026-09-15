@@ -2918,3 +2918,85 @@ describe('členenie DPH podľa účtu, keď firma iné nemala', () => {
     expect(navrh.clenenie_dph_id).toBe(pn);
   }, 90_000);
 });
+
+// ROFA SLOVENSKO: na vydaných faktúrach mala sebakontrola DPH 0 zo 4 a KV 0 zo 4.
+// Model navrhol UD so sekciou KN. KN je jediná zlá sekcia, ktorú zákonná
+// kontrola prepustí na každom doklade, a kvPreClenenie sa na návrh modelu ani
+// nepozrelo. Potom pravidlo „odpočet + KN" — písané pre PRIJATÉ faktúry — vzalo
+// UD za odpočtové a prepísalo ho na členenie bez nároku. Jedna chyba ťahala druhú.
+describe('vydaná faktúra so sekciou KN od modelu', () => {
+  async function navrhFv(historiaA1: number) {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const tovar = randomUUID();
+    const ud = randomUUID();
+    const un = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda)
+       VALUES ($1,$2,$3,'predkontacie','604100 - tovar','604100 - tovar','pohoda','vydane_faktury')`,
+      [tovar, ...kde],
+    );
+    for (const [id, kod, nazov] of [
+      [ud, 'UD', 'Tuzemské plnenia'],
+      [un, 'UN', 'Nezahrňovať do priznania DPH'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$5,'pohoda')`,
+        [id, ...kde, kod, nazov],
+      );
+    }
+    for (let index = 0; index < historiaA1; index += 1) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+           line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,
+           clenenie_kv_kod,riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'FV',$4,'2026-03-10','vurup','chemikalie','604100 - tovar',$5,'UD',$6,'A1',0,'mdb',$7)`,
+        [randomUUID(), ...kde, `2026FV${index}`, tovar, ud, randomUUID()],
+      );
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FV','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,1230,'EUR')`,
+      [documentId, ...kde],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: tovar, clenenieDphId: ud, clenenieKvKod: 'KN',
+        ciselnyRadId: null, confidence: 0.8, reason: 'Predaj chemikálií', riadky: null,
+      })),
+    };
+    await maybeAiAccountingSuggestion(
+      database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId },
+      {
+        documentType: 'FV', totalAmount: 1230, currency: 'EUR',
+        odberatel: { nazov: 'VÚRUP, a.s.', ico: '31347701' },
+        lineDescriptions: ['laboratórne chemikálie'], polozky: [{ popis: 'laboratórne chemikálie', suma: 1230 }],
+      },
+      parser,
+    );
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT clenenie_dph_id, clenenie_kv_kod FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0];
+    return { navrh, ud, un };
+  }
+
+  it('KN od modelu ustúpi prevažujúcej praxi firmy — doklad ostane vo výkaze', async () => {
+    const { navrh, ud } = await navrhFv(8);
+    expect(navrh.clenenie_kv_kod).toBe('A1');
+    expect(navrh.clenenie_dph_id).toBe(ud);
+  }, 90_000);
+
+  // Firma bez histórie vydaných faktúr: prax nemá čím KN nahradiť. Sekcia ostane
+  // na účtovníkovi, ale UD sa nesmie zmeniť na členenie bez nároku — pravidlo
+  // o odpočte na vydanú faktúru nepatrí.
+  it('bez histórie ostane UD — pravidlo o odpočte sa vydanej faktúry netýka', async () => {
+    const { navrh, ud } = await navrhFv(0);
+    expect(navrh.clenenie_dph_id).toBe(ud);
+  }, 90_000);
+});

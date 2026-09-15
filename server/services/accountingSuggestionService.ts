@@ -2201,7 +2201,7 @@ export async function maybeAiAccountingSuggestion(
     }
   }
 
-  const kvKod = validated.clenenie_dph_id
+  let kvKod = validated.clenenie_dph_id
     ? kvPreDruh(await kvPreClenenie(
         database, input, validated.clenenie_dph_id, HISTORIA_AGENDY[typ] ?? [],
         kvPreDruh(pravidlo.kvKod, druhDokladu) ?? kvPreDruh(naDoklade.clenenieKvKod, druhDokladu)
@@ -2215,6 +2215,30 @@ export async function maybeAiAccountingSuggestion(
       ), druhDokladu)
     : undefined;
 
+  // KN proti praxi firmy. Zo všetkých zlých sekcií, ktoré zdroj návrhu donesie,
+  // prežije práve KN: B2 na vydanej faktúre zákonná kontrola (kvPreDruh)
+  // odmietne, ale KN je prípustné na KAŽDOM doklade. Model ho preto vie podstrčiť
+  // a nič ho nezastaví — kvPreClenenie, ktoré pozná prax firmy, sa na návrh
+  // modelu ani nepozrie, lebo sekcia už „je".
+  //
+  // ROFA: všetkých osem chýb v sekcii KV bolo KN — na vydaných faktúrach, hoci
+  // UD tam firma zaraďuje do A1 v 327 prípadoch z 329. Doklad s KN do
+  // kontrolného výkazu vôbec nevstúpi, takže ide o chýbajúci riadok výkazu, nie
+  // o preklep.
+  //
+  // Prepisuje sa LEN KN a len prevažujúcou praxou (tie isté prahy ako
+  // v kvPreClenenie, 90 % a tri riadky). Kľúčom je členenie, nie agenda sama:
+  // PN na prijatej faktúre firma legitímne dáva do KN, a to ostane.
+  if (kvKod === 'KN' && validated.clenenie_dph_id && !pravidlo.kvKod && !naDoklade.clenenieKvKod) {
+    const prax = kvPreDruh(await kvPreClenenie(
+      database, input, validated.clenenie_dph_id, HISTORIA_AGENDY[typ] ?? [], undefined,
+    ), druhDokladu);
+    if (prax && prax !== 'KN') {
+      console.info(`[ai-navrh] ${input.documentId}: sekcia KN proti praxi firmy — prepisujem na ${prax}`);
+      kvKod = prax;
+    }
+  }
+
   // Odpočet a KN sa vylučujú. Sekcia KN znamená „do kontrolného výkazu nejde"
   // a prijatá faktúra sa doň nedostane jedine vtedy, keď sa daň neodpočítava:
   // § 78a zaraďuje do B2 práve plnenie s odpočtom. Model túto dvojicu vrátil na
@@ -2225,10 +2249,16 @@ export async function maybeAiAccountingSuggestion(
   //
   // Beží až po účte: keď členenie opravil už účet, tu nie je čo riešiť. Toto je
   // poistka pre účet, ku ktorému firma históriu ešte nemá.
+  //
+  // LEN pre prijaté doklady. Na vydanej faktúre odpočet neexistuje — UD je daň
+  // na výstupe — ale clenenieVyzeraNaOdpocet o strane dokladu nič nevie a UD
+  // označí za odpočtové. Pravidlo potom vydanú faktúru „opravilo" na členenie
+  // bez nároku: ROFA mala na vydaných faktúrach DPH 0 zo 4, v logu doslova
+  // „členenie UD uplatňuje odpočet, ale sekcia KV je KN — prepisujem".
   const zvoleneClenenie = validated.clenenie_dph_id
     ? vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)
     : undefined;
-  if (kvKod === 'KN' && zvoleneClenenie && clenenieVyzeraNaOdpocet(zvoleneClenenie)
+  if (typ !== 'FV' && kvKod === 'KN' && zvoleneClenenie && clenenieVyzeraNaOdpocet(zvoleneClenenie)
     && !pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
     // Členenie z profilu klienta, inak to, ktorým firma na tejto agende
     // neodpočítava najčastejšie. Keď nemá ani jedno, nemáme čím nahradiť
