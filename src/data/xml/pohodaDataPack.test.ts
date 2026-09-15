@@ -141,21 +141,72 @@ describe('summarizeVat', () => {
       { sadzba: 5, zaklad: 40, dph: 2 },
       { sadzba: 0, zaklad: 10, dph: 0 },
     ]);
-    expect(t.zaklad23).toBe(150);
-    expect(t.dph23).toBe(34.5);
-    expect(t.zaklad19).toBe(200);
-    expect(t.dph19).toBe(38);
-    expect(t.zaklad5).toBe(40);
-    expect(t.dph5).toBe(2);
-    expect(t.zaklad0).toBe(10);
+    expect(t.zakladHigh).toBe(150);
+    expect(t.dphHigh).toBe(34.5);
+    expect(t.zakladLow).toBe(200);
+    expect(t.dphLow).toBe(38);
+    expect(t.zakladThird).toBe(40);
+    expect(t.dphThird).toBe(2);
+    expect(t.zakladNone).toBe(10);
   });
 
   // Rakúska faktúra (20 %) nepatrí do žiadneho slovenského koša. Daň sa
   // predtým zahodila a doklad odchádzal do POHODY nižší o ňu.
   it('cudzia sadzba ide celá do nezdaniteľnej sumy', () => {
     const t = summarizeVat([{ sadzba: 20, zaklad: 89, dph: 17.8 }]);
-    expect(t.zaklad0).toBe(106.8);
-    expect(t.zaklad23).toBe(0);
+    expect(t.zakladNone).toBe(106.8);
+    expect(t.zakladHigh).toBe(0);
+  });
+
+  // Zhoda so serverom (server/pohodaXml.test.ts, R2): kôš určuje dátum plnenia.
+  it('v roku 2024 je 20 % základná a 10 % znížená sadzba; 23 % vtedy neexistovalo', () => {
+    const t = summarizeVat([
+      { sadzba: 20, zaklad: 100, dph: 20 },
+      { sadzba: 10, zaklad: 50, dph: 5 },
+      { sadzba: 23, zaklad: 10, dph: 2.3 },
+    ], '2024-12-01');
+    expect(t.zakladHigh).toBe(100);
+    expect(t.dphHigh).toBe(20);
+    expect(t.zakladLow).toBe(50);
+    expect(t.dphLow).toBe(5);
+    expect(t.zakladNone).toBe(12.3);
+  });
+});
+
+describe('buildDataPack — slovenská sadzba DPH podľa dátumu plnenia', () => {
+  const doklad2024 = (dodavatel = mkDoc().extracted.dodavatel) => mkDoc({
+    extracted: {
+      ...mkDoc().extracted, dodavatel, datumVystavenia: '2024-12-01', datumDodania: '2024-12-01',
+      rozpisDph: [{ sadzba: 20, zaklad: 100, dph: 20 }], sumaSpolu: 120,
+      polozky: [{ id: 'li-1', popis: 'Služba', mnozstvo: 1, sadzbaDph: 20, sumaBezDph: 100, sumaDph: 20, sumaSpolu: 120 }],
+    },
+  } as Partial<DocumentItem>);
+
+  it('20 % v roku 2024 ide do základnej sadzby, nie do nezdaniteľnej sumy', () => {
+    const xml = buildDataPack(ORG, [doklad2024()], CODE_LISTS);
+    expect(xml).toContain('<inv:rateVAT>high</inv:rateVAT>');
+    expect(xml).toContain('<typ:priceVAT>20.00</typ:priceVAT>');
+    expect(xml).toContain('<typ:priceHigh>100.00</typ:priceHigh>');
+    expect(xml).toContain('<typ:priceHighVAT>20.00</typ:priceHighVAT>');
+    expect(xml).toContain('<typ:priceNone>0.00</typ:priceNone>');
+  });
+
+  it('zahraničný dodávateľ s 20 % ostáva cudzia daň', () => {
+    const xml = buildDataPack(ORG, [doklad2024({ nazov: 'ASFINAG', icDph: 'ATU12345678', krajina: 'AT' })], CODE_LISTS);
+    expect(xml).toContain('<inv:rateVAT>none</inv:rateVAT>');
+    expect(xml).toContain('<typ:priceNone>120.00</typ:priceNone>');
+  });
+});
+
+describe('buildDataPack — číselník položky mimo exportu', () => {
+  // Zhoda so serverom (R3): neznáme ID položky nesmie potichu zdediť hlavičku.
+  it('neznáma predkontácia položky export zastaví', () => {
+    const doc = mkDoc();
+    doc.extracted.polozky = [{
+      id: 'li-1', popis: 'Služba', mnozstvo: 1, sadzbaDph: 23, sumaBezDph: 100, sumaDph: 23, sumaSpolu: 123,
+      ucto: { predkontaciaId: 'zmazana' },
+    }];
+    expect(() => buildDataPack(ORG, [doc], CODE_LISTS)).toThrow(/Položka 1 dokladu doc-1 .*mimo aktívneho číselníka/);
   });
 });
 

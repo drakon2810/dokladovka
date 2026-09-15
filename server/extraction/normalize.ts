@@ -698,6 +698,8 @@ function validIban(value: string): boolean {
 export function validateNormalizedExtraction(
   normalized: NormalizedExtraction,
   organization: { ico: string; dic?: string; icDph?: string },
+  /** Podtyp dokladu (bezna, dobropis, …) — rozhoduje, či smie byť suma záporná. */
+  podtyp?: string,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const extracted = normalized.extracted as any;
@@ -785,9 +787,15 @@ export function validateNormalizedExtraction(
   if (!vydana && normalizedIdentifier(supplier.ico) === orgIco && buyerIco && buyerIco !== orgIco) {
     issues.push({ code: 'supplier_buyer_may_be_inverted', severity: 'warning', message: 'Dodávateľ a odberateľ môžu byť zamenení' });
   }
-  // BV: „celková suma" je konečný zostatok výpisu — záporný zostatok je legálny.
-  if (!Number.isFinite(normalized.totalAmount) || (normalized.totalAmount < 0 && normalized.documentType !== 'BV')) issues.push({ code: 'invalid_total', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nie je platná' });
   const rows = extracted.rozpisDph as Array<{ sadzba: number; zaklad: number; dph: number }>;
+  // Záporná celková suma je legálna na výpise (konečný zostatok) a na dobropise,
+  // ktorý peniaze vracia. Dobropis však musí niesť rozpis DPH — bez neho záporné
+  // číslo nemá čím potvrdiť. Znamienko aj súčet potom strážia kontroly nižšie:
+  // riadok so základom a daňou opačného znamienka padne na invalid_vat_row,
+  // rozpis či položky s iným súčtom na total_mismatch a line_items_total_mismatch.
+  // Sumy sa nikdy neotáčajú cez abs() — z dobropisu by sa stala faktúra.
+  const zapornaSumaPovolena = normalized.documentType === 'BV' || (podtyp === 'dobropis' && rows.length > 0);
+  if (!Number.isFinite(normalized.totalAmount) || (normalized.totalAmount < 0 && !zapornaSumaPovolena)) issues.push({ code: 'invalid_total', field: 'sumaSpolu', severity: 'error', message: 'Celková suma nie je platná' });
   // Dodávateľ počíta daň po RIADKOCH a každý zaokrúhli na centy, takže pri
   // mnohých riadkoch sa rozdiel proti „sadzba zo súčtu základov" nasčíta celkom
   // legálne. PACCAR 26002838: 10 splátok po 1 391,19 × 23 % = 319,9737, doklad

@@ -268,32 +268,68 @@ export function skIbanAccount(iban: string | undefined): { accountNo: string; ba
 }
 
 interface VatTotals {
-  zaklad23: number;
-  dph23: number;
-  zaklad19: number;
-  dph19: number;
-  zaklad5: number;
-  dph5: number;
-  zaklad0: number;
+  zakladHigh: number;
+  dphHigh: number;
+  zakladLow: number;
+  dphLow: number;
+  zakladThird: number;
+  dphThird: number;
+  zakladNone: number;
 }
 
-export function summarizeVat(rows: VatBreakdownRow[]): VatTotals {
-  const t: VatTotals = { zaklad23: 0, dph23: 0, zaklad19: 0, dph19: 0, zaklad5: 0, dph5: 0, zaklad0: 0 };
+/**
+ * Slovenské sadzby DPH podľa dátumu zdaniteľného plnenia. Zhoda so
+ * SK_SADZBY_DPH v server/pohodaXml.ts — tam je zdôvodnenie aj to, prečo sa
+ * neposiela percentVAT.
+ */
+const SK_SADZBY_DPH: ReadonlyArray<{ od: string; high: number; low: number; third?: number }> = [
+  { od: '2025-01-01', high: 23, low: 19, third: 5 },
+  { od: '2023-01-01', high: 20, low: 10, third: 5 },
+  { od: '2011-01-01', high: 20, low: 10 },
+];
+
+/**
+ * Dodávateľ účtujúci VLASTNÚ, nie slovenskú daň. Zhoda s jeCudziDodavatel
+ * v server/services/dphAdvisor.ts, podľa ktorého sa rozhoduje aj na serveri.
+ */
+function jeCudziDodavatel(dodavatel: { icDph?: string; krajina?: string }): boolean {
+  const krajina = (dodavatel.krajina ?? '').trim().toUpperCase();
+  const prefix = (dodavatel.icDph ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 2);
+  return krajina !== '' && krajina !== 'SK' && prefix !== 'SK';
+}
+
+/**
+ * Sadzba DPH → POHODA rateVAT pre deň plnenia; bez dátumu platia súčasné
+ * sadzby. „none" je nulová sadzba, cudzia daň aj sadzba, ktorú Slovensko v ten
+ * deň nemalo. Zhoda so server/pohodaXml.ts.
+ */
+function vatRateName(sadzba: number | undefined, datum?: string, cudzia = false): 'high' | 'low' | 'third' | 'none' {
+  const obdobie = SK_SADZBY_DPH.find((riadok) => !datum || riadok.od <= datum);
+  if (cudzia || !obdobie || !sadzba) return 'none';
+  if (sadzba === obdobie.high) return 'high';
+  if (sadzba === obdobie.low) return 'low';
+  if (sadzba === obdobie.third) return 'third';
+  return 'none';
+}
+
+export function summarizeVat(rows: VatBreakdownRow[], datum?: string, cudzia = false): VatTotals {
+  const t: VatTotals = { zakladHigh: 0, dphHigh: 0, zakladLow: 0, dphLow: 0, zakladThird: 0, dphThird: 0, zakladNone: 0 };
   for (const row of rows) {
-    if (row.sadzba === 23) {
-      t.zaklad23 += row.zaklad;
-      t.dph23 += row.dph;
-    } else if (row.sadzba === 19) {
-      t.zaklad19 += row.zaklad;
-      t.dph19 += row.dph;
-    } else if (row.sadzba === 5) {
-      t.zaklad5 += row.zaklad;
-      t.dph5 += row.dph;
+    const sadzba = vatRateName(row.sadzba, datum, cudzia);
+    if (sadzba === 'high') {
+      t.zakladHigh += row.zaklad;
+      t.dphHigh += row.dph;
+    } else if (sadzba === 'low') {
+      t.zakladLow += row.zaklad;
+      t.dphLow += row.dph;
+    } else if (sadzba === 'third') {
+      t.zakladThird += row.zaklad;
+      t.dphThird += row.dph;
     } else {
-      // Sadzba mimo slovenských (rakúskych 20 %, českých 21 %) je cudzia daň —
-      // POHODA ju nemá kam zaradiť a odpočítať sa nedá, preto ide do
-      // nezdaniteľnej sumy CELÁ. Pri sadzbe 0 je dph nula, tam sa nič nemení.
-      t.zaklad0 += row.zaklad + row.dph;
+      // Cudzia daň (rakúskych 20 %, českých 21 %) a sadzba, ktorú Slovensko
+      // v deň plnenia nemalo — POHODA ju nemá kam zaradiť a odpočítať sa nedá,
+      // preto ide do nezdaniteľnej sumy CELÁ. Pri sadzbe 0 je dph nula.
+      t.zakladNone += row.zaklad + row.dph;
     }
   }
   return t;
@@ -306,14 +342,6 @@ export interface DataPackCodeLists {
   strediska?: CodeListItem[];
 }
 
-/** Sadzba DPH → POHODA rateVAT. Zhodné s rozdelením súhrnu (23→high, 19→low, 5→third). */
-function vatRateName(sadzba: number | undefined): 'high' | 'low' | 'third' | 'none' {
-  if (sadzba === 23) return 'high';
-  if (sadzba === 19) return 'low';
-  if (sadzba === 5) return 'third';
-  return 'none';
-}
-
 /**
  * Riadky <inv:invoiceDetail> z položiek dokladu. Zaúčtovanie, členenie DPH aj
  * členenie KV položky s návratom na hlavičku — rovnako ako server
@@ -323,15 +351,25 @@ function invoiceDetailLines(
   polozky: DocumentLineItem[] | undefined,
   kodOf: (list: CodeListItem[], id: string | undefined) => string | undefined,
   codeLists: DataPackCodeLists,
-  header: { accounting?: string; clenenie?: string; kv?: string },
+  header: { docId: string; accounting?: string; clenenie?: string; kv?: string; datum?: string; cudzia: boolean },
 ): string[] {
   if (!polozky || polozky.length === 0) return [];
   const lines = ['      <inv:invoiceDetail>'];
-  for (const item of polozky) {
+  for (const [index, item] of polozky.entries()) {
     const eff = lineItemEffective(item);
+    const sadzba = vatRateName(item.sadzbaDph, header.datum, header.cudzia);
     // Cudzia daň sa do POHODY ako DPH poslať nedá (rateVAT „none") — celá suma
     // preto ide do ceny bez dane, rovnako ako v súhrne dokladu a na serveri.
-    const cudziaDan = vatRateName(item.sadzbaDph) === 'none' && (eff.dph ?? 0) !== 0;
+    const cudziaDan = sadzba === 'none' && (eff.dph ?? 0) !== 0;
+    // Vyplnené ID mimo aktívneho číselníka nie je „ako doklad" — tichý návrat na
+    // hlavičku by zaúčtoval položku inak, než ju účtovník schválil. Zhoda so
+    // server/pohodaXml.ts.
+    const kodPolozky = (list: CodeListItem[], id: string | undefined, nazov: string): string | undefined => {
+      if (!id) return undefined;
+      const kod = kodOf(list, id);
+      if (!kod) throw new Error(`Položka ${index + 1} dokladu ${header.docId} má ${nazov} mimo aktívneho číselníka organizácie`);
+      return kod;
+    };
     const mnozstvo = Number(item.mnozstvo) || 1;
     // Položka, ktorá nesie LEN celkovú sumu (pokuta — ani sadzba, ani základ),
     // mala základ 0 a do POHODY odišla za 0,00 €: POHODA počíta cenu položky
@@ -343,16 +381,16 @@ function invoiceDetailLines(
     const unitPrice = cudziaDan
       ? Math.round(((eff.spolu ?? 0) / mnozstvo) * 100) / 100
       : item.jednotkovaCenaBezDph ?? bezDph;
-    const accounting = kodOf(codeLists.predkontacie, item.ucto?.predkontaciaId) ?? header.accounting;
-    const clenenie = kodOf(codeLists.cleneniaDph, item.ucto?.clenenieDphId) ?? header.clenenie;
-    const centre = kodOf(codeLists.strediska ?? [], item.ucto?.strediskoId);
+    const accounting = kodPolozky(codeLists.predkontacie, item.ucto?.predkontaciaId, 'predkontáciu') ?? header.accounting;
+    const clenenie = kodPolozky(codeLists.cleneniaDph, item.ucto?.clenenieDphId, 'členenie DPH') ?? header.clenenie;
+    const centre = kodPolozky(codeLists.strediska ?? [], item.ucto?.strediskoId, 'stredisko');
     lines.push('        <inv:invoiceItem>');
     lines.push(`          <inv:text>${escapeXml(clamp(item.popis, 90))}</inv:text>`);
     lines.push(`          <inv:quantity>${escapeXml(String(item.mnozstvo ?? 1))}</inv:quantity>`);
     if (item.jednotka) lines.push(`          <inv:unit>${escapeXml(clamp(item.jednotka, 10))}</inv:unit>`);
     lines.push('          <inv:coefficient>1.0</inv:coefficient>');
     lines.push('          <inv:payVAT>false</inv:payVAT>');
-    lines.push(`          <inv:rateVAT>${vatRateName(item.sadzbaDph)}</inv:rateVAT>`);
+    lines.push(`          <inv:rateVAT>${sadzba}</inv:rateVAT>`);
     // Rovnako ako server (pohodaXml.ts): zľava ide s cenou pred zľavou, pri cudzej dani nie.
     const zlava = !cudziaDan && (item.zlavaPercent ?? 0) > 0 ? item.zlavaPercent : 0;
     lines.push(`          <inv:discountPercentage>${zlava ? String(zlava) : '0.0'}</inv:discountPercentage>`);
@@ -406,7 +444,11 @@ export function buildDataPack(
                 c.active,
             )?.kod
           : undefined;
-      const vat = summarizeVat(doc.extracted.rozpisDph);
+      // Kôš DPH podľa dátumu plnenia; cudzia daň podľa dodávateľa (vydaná faktúra
+      // nesie vždy našu, slovenskú daň). Zhoda so server/pohodaXml.ts.
+      const datumPlnenia = doc.extracted.datumDodania ?? doc.extracted.datumVystavenia;
+      const cudzia = doc.typ !== 'FV' && jeCudziDodavatel(doc.extracted.dodavatel);
+      const vat = summarizeVat(doc.extracted.rozpisDph, datumPlnenia, cudzia);
       const predkontacia = kodOf(codeLists.predkontacie, doc.ucto.predkontaciaId);
       // Text dokladu = názov vybranej predkontácie (zhoda so server/pohodaXml.ts).
       const predkontaciaNazov = codeLists.predkontacie.find(
@@ -428,13 +470,13 @@ export function buildDataPack(
       const numberRequested = doc.ucto.cisloVPohode?.trim() || `${rad}${String(index + 1).padStart(4, '0')}`;
       const d = doc.extracted;
       const currencyLines = [
-        `          <typ:priceHigh>${formatXmlAmount(vat.zaklad23)}</typ:priceHigh>`,
-        `          <typ:priceHighVAT>${formatXmlAmount(vat.dph23)}</typ:priceHighVAT>`,
-        `          <typ:priceLow>${formatXmlAmount(vat.zaklad19)}</typ:priceLow>`,
-        `          <typ:priceLowVAT>${formatXmlAmount(vat.dph19)}</typ:priceLowVAT>`,
-        `          <typ:price3>${formatXmlAmount(vat.zaklad5)}</typ:price3>`,
-        `          <typ:price3VAT>${formatXmlAmount(vat.dph5)}</typ:price3VAT>`,
-        `          <typ:priceNone>${formatXmlAmount(vat.zaklad0)}</typ:priceNone>`,
+        `          <typ:priceHigh>${formatXmlAmount(vat.zakladHigh)}</typ:priceHigh>`,
+        `          <typ:priceHighVAT>${formatXmlAmount(vat.dphHigh)}</typ:priceHighVAT>`,
+        `          <typ:priceLow>${formatXmlAmount(vat.zakladLow)}</typ:priceLow>`,
+        `          <typ:priceLowVAT>${formatXmlAmount(vat.dphLow)}</typ:priceLowVAT>`,
+        `          <typ:price3>${formatXmlAmount(vat.zakladThird)}</typ:price3>`,
+        `          <typ:price3VAT>${formatXmlAmount(vat.dphThird)}</typ:price3VAT>`,
+        `          <typ:priceNone>${formatXmlAmount(vat.zakladNone)}</typ:priceNone>`,
       ];
       if (doc.typ === 'PD') {
         if (!doc.ucto.pokladnaKod?.trim() || !doc.ucto.pokladnaTyp) {
@@ -516,7 +558,7 @@ export function buildDataPack(
         d.polozky,
         kodOf,
         codeLists,
-        { accounting: predkontacia, clenenie, kv: doc.ucto.clenenieKvKod },
+        { docId: doc.id, accounting: predkontacia, clenenie, kv: doc.ucto.clenenieKvKod, datum: datumPlnenia, cudzia },
       ));
       lines.push('      <inv:invoiceSummary>');
       lines.push('        <inv:homeCurrency>');

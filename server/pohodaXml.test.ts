@@ -857,4 +857,94 @@ describe('buildServerDataPack — bankový výpis (bnk:bank)', () => {
     expect(() => buildServerDataPack({ id: 'pack-bv-7', ico: '35761571', documents: [nerozpoznana], codeLists: bankCodeLists }))
       .toThrow(/mimo aktívneho číselníka/);
   });
+
+  it('stredisko pohybu mimo číselníka export zastaví, nezahodí ho potichu', () => {
+    const doc = bankDocument({
+      polozky: [{ id: 'm1', popis: 'Poplatok', sumaSpolu: -1, ucto: { predkontaciaId: 'p1', strediskoId: 'zmazane-stredisko' } }],
+    });
+    expect(() => buildServerDataPack({ id: 'pack-bv-8', ico: '35761571', documents: [doc], codeLists: bankCodeLists }))
+      .toThrow(/Pohyb 1 výpisu doc-bv má stredisko mimo aktívneho číselníka/);
+  });
+});
+
+// Audit R3: položka s ID, ktoré v exportnom číselníku nie je (zmazaná či
+// deaktivovaná predkontácia, ID inej firmy), sa potichu zaúčtovala podľa
+// hlavičky — účtovník schválil jedno a do POHODY odišlo iné.
+describe('buildServerDataPack — číselník položky mimo exportu (R3)', () => {
+  const sPolozkou = (ucto: Record<string, string>) => invoiceDocument({
+    polozky: [{ id: 'li-1', popis: 'Synthetic', mnozstvo: 1, sadzbaDph: 23, sumaBezDph: 70, sumaDph: 16.1, sumaSpolu: 86.1, ucto }],
+  });
+
+  for (const pole of ['predkontaciaId', 'clenenieDphId', 'strediskoId', 'cinnostId', 'zakazkaId']) {
+    it(`neznáme ${pole} položky export zastaví s menom dokladu a položky`, () => {
+      expect(() => buildServerDataPack({ id: 'pack-r3', ico: '35761571', documents: [sPolozkou({ [pole]: 'UNKNOWN' })], codeLists }))
+        .toThrow(/Položka 1 dokladu doc-1 .*mimo aktívneho číselníka/);
+    });
+  }
+
+  it('prázdne pole položky znamená „ako hlavička"', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-r3-ok', ico: '35761571', documents: [sPolozkou({ predkontaciaId: '', clenenieDphId: '' })], codeLists,
+    });
+    const polozka = xml.slice(xml.indexOf('<inv:invoiceItem>'));
+    expect(polozka).toContain('<inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>');
+    expect(polozka).toContain('<inv:classificationVAT><typ:ids>PD</typ:ids></inv:classificationVAT>');
+  });
+});
+
+// Audit R2: slovenská faktúra s plnením 1. 12. 2024 (základ 100, DPH 20 %)
+// odišla ako cudzia daň — rateVAT none a celých 120 v priceNone, takže odpočet
+// v POHODE zmizol. Do konca roka 2024 bolo 20 % slovenskou základnou sadzbou.
+describe('buildServerDataPack — slovenská sadzba DPH podľa dátumu plnenia (R2)', () => {
+  const sk = { nazov: 'Dodavatel s.r.o.', ico: '31386946', krajina: 'SK' };
+  const doklad = (datum: string, sadzba: number, dph: number, dodavatel: Record<string, unknown> = sk, datumVystavenia = datum) =>
+    invoiceDocument({
+      dodavatel, datumVystavenia, datumDodania: datum,
+      rozpisDph: [{ sadzba, zaklad: 100, dph }],
+      sumaSpolu: 100 + dph,
+      polozky: [{ id: 'li-1', popis: 'Synthetic', mnozstvo: 1, sadzbaDph: sadzba, sumaBezDph: 100, sumaDph: dph, sumaSpolu: 100 + dph }],
+    });
+  const xmlOf = (document: ReturnType<typeof invoiceDocument>) =>
+    buildServerDataPack({ id: 'pack-r2', ico: '35761571', documents: [document], codeLists });
+
+  it('20 % v roku 2024 je základná sadzba s rozdeleným základom a daňou', () => {
+    const xml = xmlOf(doklad('2024-12-01', 20, 20));
+    expect(xml).toContain('<inv:rateVAT>high</inv:rateVAT>');
+    expect(xml).toContain('<typ:price>100.00</typ:price>');
+    expect(xml).toContain('<typ:priceVAT>20.00</typ:priceVAT>');
+    expect(xml).toContain('<typ:priceHigh>100.00</typ:priceHigh>');
+    expect(xml).toContain('<typ:priceHighVAT>20.00</typ:priceHighVAT>');
+    expect(xml).toContain('<typ:priceNone>0.00</typ:priceNone>');
+    // Percento si POHODA dosadí k dateTax sama; percentVAT patrí historickým sadzbám.
+    expect(xml).not.toContain('percentVAT');
+  });
+
+  it('10 % v 2024 je znížená sadzba a 5 % od roku 2023 tretia', () => {
+    const nizka = xmlOf(doklad('2024-06-15', 10, 10));
+    expect(nizka).toContain('<inv:rateVAT>low</inv:rateVAT>');
+    expect(nizka).toContain('<typ:priceLow>100.00</typ:priceLow>');
+    expect(nizka).toContain('<typ:priceLowVAT>10.00</typ:priceLowVAT>');
+    const tretia = xmlOf(doklad('2023-03-01', 5, 5));
+    expect(tretia).toContain('<inv:rateVAT>third</inv:rateVAT>');
+    expect(tretia).toContain('<typ:price3VAT>5.00</typ:price3VAT>');
+  });
+
+  it('sadzbu určuje dátum plnenia, nie vystavenia', () => {
+    const xml = xmlOf(doklad('2024-12-20', 20, 20, sk, '2025-01-10'));
+    expect(xml).toContain('<inv:rateVAT>high</inv:rateVAT>');
+    expect(xml).toContain('<typ:priceHighVAT>20.00</typ:priceHighVAT>');
+  });
+
+  it('sadzba, ktorú Slovensko v deň plnenia nemalo, ostáva nezdaniteľná', () => {
+    const xml = xmlOf(doklad('2024-12-01', 23, 23));
+    expect(xml).toContain('<inv:rateVAT>none</inv:rateVAT>');
+    expect(xml).toContain('<typ:priceNone>123.00</typ:priceNone>');
+  });
+
+  it('zahraničný dodávateľ s 20 % v roku 2024 je stále cudzia daň', () => {
+    const xml = xmlOf(doklad('2024-12-01', 20, 20, { nazov: 'ASFINAG', icDph: 'ATU12345678', krajina: 'AT' }));
+    expect(xml).toContain('<inv:rateVAT>none</inv:rateVAT>');
+    expect(xml).toContain('<typ:priceNone>120.00</typ:priceNone>');
+    expect(xml).toContain('<typ:priceHigh>0.00</typ:priceHigh>');
+  });
 });
