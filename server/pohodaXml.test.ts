@@ -741,6 +741,14 @@ describe('buildServerDataPack — poradie elementov podľa XSD', () => {
     expect(xml).toContain('<inv:classificationKVDPH><typ:ids>A1</typ:ids></inv:classificationKVDPH>');
   });
 
+  it('dobropis s pôvodným číslom dokladu sedí so schémou', () => {
+    const document = invoiceDocument({ cisloObjednavky: 'OBJ-1', povodnyDoklad: { cislo: 'FA-2024-118' } });
+    const dobropis = { ...document, snapshot: { ...document.snapshot, podtyp: 'dobropis' } };
+    const xml = buildServerDataPack({ id: 'pack-order-d', ico: '35761571', documents: [dobropis], codeLists: fullCodeLists });
+    expect(xml).toContain('<inv:originalDocumentNumber>FA-2024-118</inv:originalDocumentNumber>');
+    assertOrder(emittedChildren(xml, 'inv', 'invoiceHeader'), xsdSequence('invoice.xsd', 'invoiceHeaderType'));
+  });
+
   it('pokladničný doklad a interný doklad sedia so schémou', () => {
     const voucher = invoiceDocument({ textPolozky: 'Nákup PHM', polozky: [polozka] });
     voucher.snapshot.typ = 'PD';

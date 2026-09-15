@@ -196,6 +196,22 @@ describe('buildDataPack — slovenská sadzba DPH podľa dátumu plnenia', () =>
     expect(xml).toContain('<inv:rateVAT>none</inv:rateVAT>');
     expect(xml).toContain('<typ:priceNone>120.00</typ:priceNone>');
   });
+
+  // Zhoda so serverom (server/pohodaPodtyp.test.ts): dobropis z roku 2025
+  // s 20 % opravuje staršie obdobie — nesmie potichu skončiť v priceNone.
+  it('dobropis so sadzbou zo staršieho obdobia export zastaví', () => {
+    const dobropis = mkDoc({
+      podtyp: 'dobropis',
+      extracted: { ...doklad2024().extracted, datumVystavenia: '2025-02-10', datumDodania: '2025-02-10' },
+    } as Partial<DocumentItem>);
+    expect(() => buildDataPack(ORG, [dobropis], CODE_LISTS)).toThrow(/predchádzajúceho obdobia DPH/);
+    // Rakúske IČ DPH bez krajiny: 20 % je daň dodávateľa, nie stará slovenská sadzba.
+    const bezKrajiny = mkDoc({
+      podtyp: 'dobropis',
+      extracted: { ...doklad2024({ nazov: 'ASFINAG', icDph: 'ATU12345678' }).extracted, datumVystavenia: '2026-03-10', datumDodania: '2026-03-10' },
+    } as Partial<DocumentItem>);
+    expect(buildDataPack(ORG, [bezKrajiny], CODE_LISTS)).toContain('<typ:priceNone>120.00</typ:priceNone>');
+  });
 });
 
 describe('buildDataPack — číselník položky mimo exportu', () => {

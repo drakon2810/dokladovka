@@ -15,6 +15,7 @@ import { lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
+import { t } from '../../i18n/sk';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, pouziNavrhNaPolozky, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
@@ -904,6 +905,17 @@ export function InvoicePanel({
 
             {srcLabel('datumDodania', 'Dátum daň. povinnosti')}
             <DcCell type="date" value={ex.datumDodania ?? ''} display={formatDateSk(ex.datumDodania)} disabled={readOnly} srcClass={srcCls('datumDodania')} onCommit={(raw) => updateExtracted('datumDodania', raw || undefined)} />
+
+            {/* Dobropis a ťarchopis opravujú staršie plnenie: jeho číslo ide do
+                POHODY a jeho dátum plnenia rozhoduje o období DPH opravy. */}
+            {(druhDokladu.podtyp === 'dobropis' || druhDokladu.podtyp === 'tarchopis') && (
+              <>
+                <span className="dk-lbl">{t('detail.povodnyDokladCislo')}</span>
+                <DcCell value={ex.povodnyDoklad?.cislo ?? ''} disabled={readOnly} onCommit={(raw) => updateExtracted('povodnyDoklad', { ...ex.povodnyDoklad, cislo: raw || undefined })} />
+                <span className="dk-lbl">{t('detail.povodnyDokladDatum')}</span>
+                <DcCell type="date" value={ex.povodnyDoklad?.datumPlnenia ?? ''} display={formatDateSk(ex.povodnyDoklad?.datumPlnenia)} disabled={readOnly} onCommit={(raw) => updateExtracted('povodnyDoklad', { ...ex.povodnyDoklad, datumPlnenia: raw || undefined })} />
+              </>
+            )}
 
             <span className="dk-lbl">Predkontácia</span>
             {precoWrap('predkontacia',

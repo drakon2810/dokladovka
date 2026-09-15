@@ -404,6 +404,8 @@ export interface DocumentExtractedData {
   pociatocnyZostatok?: number;
   cisloObjednavky?: string;
   cisloDodaciehoListu?: string;
+  /** Dobropis/ťarchopis: opravovaný doklad — jeho dátum plnenia určuje obdobie DPH opravy. */
+  povodnyDoklad?: { cislo?: string; datumPlnenia?: string };
   variabilnySymbol?: string;
   konstantnySymbol?: string;
   specifickySymbol?: string;

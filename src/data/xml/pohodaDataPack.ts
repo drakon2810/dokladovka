@@ -312,6 +312,13 @@ function vatRateName(sadzba: number | undefined, datum?: string, cudzia = false)
   return 'none';
 }
 
+/** Sadzba, ktorá v deň plnenia neplatí, no platila skôr. Zhoda so server/pohodaXml.ts. */
+function sadzbaZoStarsiehoObdobia(sadzba: number | undefined, datum: string): boolean {
+  const rate = Number(sadzba);
+  return vatRateName(rate, datum, false) === 'none'
+    && SK_SADZBY_DPH.some((riadok) => riadok.od <= datum && [riadok.high, riadok.low, riadok.third].includes(rate));
+}
+
 export function summarizeVat(rows: VatBreakdownRow[], datum?: string, cudzia = false): VatTotals {
   const t: VatTotals = { zakladHigh: 0, dphHigh: 0, zakladLow: 0, dphLow: 0, zakladThird: 0, dphThird: 0, zakladNone: 0 };
   for (const row of rows) {
@@ -448,6 +455,17 @@ export function buildDataPack(
       // nesie vždy našu, slovenskú daň). Zhoda so server/pohodaXml.ts.
       const datumPlnenia = doc.extracted.datumDodania ?? doc.extracted.datumVystavenia;
       const cudzia = doc.typ !== 'FV' && jeCudziDodavatel(doc.extracted.dodavatel);
+      // Dobropis so sadzbou zo staršieho obdobia DPH export zastaví — zhoda so
+      // server/pohodaXml.ts, tam je zdôvodnenie.
+      const krajinaIcDph = vatCountryIds(doc.extracted.dodavatel?.icDph);
+      const historicka = (doc.podtyp === 'dobropis' || doc.podtyp === 'tarchopis') && !cudzia
+        && (!krajinaIcDph || krajinaIcDph === 'SK')
+        ? [...doc.extracted.rozpisDph.map((row) => row.sadzba), ...(doc.extracted.polozky ?? []).map((item) => item.sadzbaDph)]
+          .find((sadzba) => sadzbaZoStarsiehoObdobia(sadzba, datumPlnenia))
+        : undefined;
+      if (historicka !== undefined) {
+        throw new Error(`Doklad ${doc.id} (${doc.podtyp === 'dobropis' ? 'dobropis' : 'ťarchopis'}) má sadzbu DPH ${historicka} %, ktorá k dátumu plnenia ${datumPlnenia} na Slovensku neplatí: opravuje plnenie z predchádzajúceho obdobia DPH. Zaúčtujte ho v POHODE ručne s historickou sadzbou.`);
+      }
       const vat = summarizeVat(doc.extracted.rozpisDph, datumPlnenia, cudzia);
       const predkontacia = kodOf(codeLists.predkontacie, doc.ucto.predkontaciaId);
       // Text dokladu = názov vybranej predkontácie (zhoda so server/pohodaXml.ts).

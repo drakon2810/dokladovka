@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { EXTRACTION_SCHEMA_VERSION, fromWireResult } from './contract.js';
 import { cenaBezDane, normalizeExtractionResult, validateNormalizedExtraction } from './normalize.js';
 import { round2 } from '../../src/lib/validate.js';
 import { splitPostalAddress } from '../pohodaXml.js';
@@ -1014,5 +1015,33 @@ describe('záporná suma dobropisu', () => {
 
   it('záporný dobropis bez rozpisu DPH nemá čím sumu potvrdiť', () => {
     expect(kody(doklad(-123, []), 'dobropis')).toContain('invalid_total');
+  });
+});
+
+// Dobropis opravuje plnenie, ktoré mohlo patriť do iného obdobia DPH. Číslo
+// a dátum plnenia opravovaného dokladu sa doteraz nikde nečítali, takže export
+// nemal ako zistiť, ktorou sadzbou sa oprava účtuje.
+describe('pôvodný doklad dobropisu', () => {
+  const strana = { nazov: null, ico: null, dic: null, icDph: null, adresa: null, ulica: null, psc: null, obec: null, krajina: null };
+  const wire = (originalDocumentNumber: string | null, originalTaxDate: string | null) => ({
+    schemaVersion: EXTRACTION_SCHEMA_VERSION, documentType: 'FP',
+    supplier: { ...strana, nazov: 'Dodávateľ SK', iban: null, bic: null }, buyer: strana,
+    invoiceNumber: 'DOB-1', orderNumber: null, deliveryNoteNumber: null, originalDocumentNumber,
+    variableSymbol: null, constantSymbol: null, specificSymbol: null,
+    issueDate: '2025-02-10', taxDate: '2025-02-10', servicePeriodEnd: null, originalTaxDate, dueDate: null, currency: 'EUR',
+    statementNumber: null, documentSummary: null,
+    accountCode: null, vatClassificationCode: null, vatControlStatementCode: null, numberSeriesCode: null,
+    lineItems: [], vatBreakdown: [], additionalDocuments: [],
+    totalWithoutVat: null, totalVat: null, totalAmount: '-120',
+    fieldConfidence: [], evidence: [], warnings: [],
+  });
+
+  it('číslo a dátum plnenia opravovaného dokladu prejdú do extracted.povodnyDoklad', () => {
+    const normalized = normalizeExtractionResult(fromWireResult(wire('FA-2024-118', '2024-12-15')), 'doc-1', '2025-02-10');
+    expect(normalized.extracted.povodnyDoklad).toEqual({ cislo: 'FA-2024-118', datumPlnenia: '2024-12-15' });
+  });
+
+  it('bežná faktúra pôvodný doklad nemá', () => {
+    expect(normalizeExtractionResult(fromWireResult(wire(null, null)), 'doc-1', '2025-02-10').extracted.povodnyDoklad).toBeUndefined();
   });
 });
