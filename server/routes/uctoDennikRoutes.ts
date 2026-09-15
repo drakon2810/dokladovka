@@ -27,7 +27,7 @@ export function registerUctoDennikRoutes(app: FastifyInstance, database: Databas
     await requireOrganizationAccess(database, auth, id);
     const { xml } = dennikSchema.parse(request.body);
     const { riadky, preskocene } = parseDennik(xml);
-    const vysledok = await ulozDennik(database, { tenantId: auth.tenantId, organizationId: id, riadky });
+    const vysledok = await database.transaction((tx) => ulozDennik(tx, { tenantId: auth.tenantId, organizationId: id, riadky }));
     await writeAudit(database, {
       tenantId: auth.tenantId, organizationId: id, actorType: 'user', actorId: auth.userId,
       action: 'ucto_dennik.imported', entityType: 'organization', entityId: id,

@@ -108,11 +108,11 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
     const mena = DOKLADY[druh];
     const header = doklad[mena.header];
     if (!header || typeof header !== 'object') continue;
-    const lineText = text(header.text);
+    const textHlavicky = text(header.text);
     const predkontacia = refIds(header.accounting);
     const clenenieDph = refIds(header.classificationVAT);
-    // Doklad bez textu alebo bez zaúčtovania korpusu nič nepovie.
-    if (!lineText || (!predkontacia && !clenenieDph)) continue;
+    const polozky = asArray(doklad[mena.detail]?.[mena.item])
+      .filter((polozka: unknown): polozka is Record<string, unknown> => Boolean(polozka) && typeof polozka === 'object');
     const adresa = header.partnerIdentity?.address;
     const spolocne = {
       agenda: agendaDokladu(druh, header) as HistoryRow['agenda'],
@@ -127,10 +127,17 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
       krajina: (text(adresa?.country?.ids) ?? /^[A-Za-z]{2}/.exec(text(adresa?.icDph) ?? '')?.[0])?.toUpperCase(),
     };
     const kvHlavicky = platnyKvKod(refIds(header.classificationKVDPH));
-    rows.push({
-      ...spolocne, lineText, riadokIndex: 0,
-      predkontaciaKod: predkontacia, clenenieDphKod: clenenieDph, clenenieKvKod: kvHlavicky,
-    });
+    // Hlavička bez textu alebo bez zaúčtovania doteraz zahodila celý doklad aj
+    // s položkami (F11) — a práve v nich býva rozúčtovanie. Hlavičkový riadok
+    // ide do korpusu, keď má zaúčtovanie; bez vlastného textu si požičia text
+    // prvej položky. Položky sa čítajú vždy. Rovnako to robí agent.
+    const lineText = textHlavicky ?? polozky.map((polozka) => text(polozka.text)).find(Boolean);
+    if (lineText && (predkontacia || clenenieDph)) {
+      rows.push({
+        ...spolocne, lineText, riadokIndex: 0,
+        predkontaciaKod: predkontacia, clenenieDphKod: clenenieDph, clenenieKvKod: kvHlavicky,
+      });
+    }
 
     // Položky s VLASTNÝM zaúčtovaním — tie, kde sa účtovník rozhodol inak než
     // na hlavičke. Text smie chýbať: na reálnom exporte ALPINY je bez textu 18
@@ -141,8 +148,6 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
     // (daňová časť 80 %)" za 52,68 drží hlavičkové zaúčtovanie a do korpusu by
     // nepadla, takže by v ňom ostala len nedaňová časť za 13,17 a pomer by
     // z nej nikto nevyčítal. Pri nerozúčtovanom doklade sa nič nepridáva.
-    const polozky = asArray(doklad[mena.detail]?.[mena.item])
-      .filter((polozka: unknown): polozka is Record<string, unknown> => Boolean(polozka) && typeof polozka === 'object');
     const rozuctovany = polozky.some((polozka) => {
       const itemPredkontacia = refIds(polozka.accounting);
       const itemClenenie = refIds(polozka.classificationVAT);
@@ -169,19 +174,26 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
       if (!rozuctovany && !vlastnyText && !itemPredkontacia && !itemClenenie) continue;
       if (!rozuctovany && !vlastnyText
         && itemPredkontacia === predkontacia && itemClenenie === clenenieDph) continue;
+      // Text sa dedí len z VLASTNÉHO textu hlavičky — text inej položky by
+      // riadok opísal cudzím nákupom. Bez textu a bez zaúčtovania (hlavička
+      // ho nemá a položka tiež nie) riadok nemá čo naučiť.
+      const riadokText = text(polozka.text) ?? textHlavicky;
+      const kodPredkontacie = itemPredkontacia ?? predkontacia;
+      const kodClenenia = itemClenenie ?? clenenieDph;
+      if (!riadokText || (!kodPredkontacie && !kodClenenia)) continue;
       const ceny = polozka.homeCurrency as Record<string, unknown> | undefined;
       const suma = Number(text(ceny?.price) ?? Number.NaN);
       const sumaDph = Number(text(ceny?.priceVAT) ?? Number.NaN);
       rows.push({
         ...spolocne,
-        lineText: text(polozka.text) ?? lineText,
+        lineText: riadokText,
         riadokIndex: poradie,
         // Bez súm sa pomer rozúčtovania nedá prečítať a krátenie dane (PHM 50 %)
         // z podielu základu vôbec nevyplýva.
         ...(Number.isFinite(suma) ? { suma } : {}),
         ...(Number.isFinite(sumaDph) ? { sumaDph } : {}),
-        predkontaciaKod: itemPredkontacia ?? predkontacia,
-        clenenieDphKod: itemClenenie ?? clenenieDph,
+        predkontaciaKod: kodPredkontacie,
+        clenenieDphKod: kodClenenia,
         clenenieKvKod: platnyKvKod(refIds(polozka.classificationKVDPH)) ?? kvHlavicky,
       });
     }

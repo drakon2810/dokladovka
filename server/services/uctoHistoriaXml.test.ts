@@ -114,6 +114,35 @@ describe('doklady s položkami z POHODY', () => {
       expect(rows.map((row) => row.riadokIndex)).toEqual([0]);
     });
 
+    // F11: hlavička bez textu dokladu zobrala aj všetky položky, hoci práve
+    // tie nesú rozúčtovanie (PHM-Nadspotreba / PN). Rovnaký prípad drží agent.
+    const bezTextuHlavicky = (hlavickaKody: boolean) => {
+      const xml = doklad(
+        `<inv:invoiceItem><inv:text>Natural 95 (nedaňová časť 20 %)</inv:text>
+          <inv:accounting><typ:ids>PHM-Nadspotreba</typ:ids></inv:accounting>
+          <inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT></inv:invoiceItem>
+        <inv:invoiceItem><inv:text>Nafta</inv:text></inv:invoiceItem>`,
+      ).replace('<inv:text>Importné colné služby a administratívne poplatky</inv:text>', '');
+      // Prvé accounting…classificationVAT v súbore je hlavičkové.
+      return hlavickaKody ? xml : xml.replace(/<inv:accounting>.*?<\/inv:classificationVAT>/s, '');
+    };
+
+    it('položky dokladu bez textu hlavičky neprepadnú', () => {
+      const { rows } = parseHistoriaXml(bezTextuHlavicky(true));
+      // Hlavička si požičia text prvej položky, položky idú ako pri každom doklade.
+      expect(rows.map((row) => [row.riadokIndex, row.lineText, row.predkontaciaKod, row.clenenieDphKod])).toEqual([
+        [0, 'Natural 95 (nedaňová časť 20 %)', '518900 ost.sl.-tuz.', 'PN'],
+        [1, 'Natural 95 (nedaňová časť 20 %)', 'PHM-Nadspotreba', 'PN'],
+        [2, 'Nafta', '518900 ost.sl.-tuz.', 'PN'],
+      ]);
+    });
+
+    it('hlavička bez zaúčtovania nezoberie položky so zaúčtovaním', () => {
+      const { rows } = parseHistoriaXml(bezTextuHlavicky(false));
+      // Nafta bez vlastného kódu nemá čo zdediť — do korpusu by prišla bez zaúčtovania.
+      expect(rows.map((row) => [row.riadokIndex, row.predkontaciaKod])).toEqual([[1, 'PHM-Nadspotreba']]);
+    });
+
     it('krajinu bez adresy prečíta z predpony IČ DPH', () => {
       const { rows } = parseHistoriaXml(doklad(polozka('<inv:text>Clo</inv:text>'))
         .replace('<typ:numberRequested>', '<typ:id>9</typ:id><typ:ids>26FP</typ:ids><typ:numberRequested>')

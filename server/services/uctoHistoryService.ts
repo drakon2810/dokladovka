@@ -58,6 +58,13 @@ export const historyRowSchema = z.object({
   radKod: z.string().trim().max(50).optional(),
   /** Krajina protistrany (ISO) — firmy delia rady na tuzemské a zahraničné. */
   krajina: z.string().trim().max(10).optional(),
+  /**
+   * Natívne id dokladu a položky v POHODE (inv:id, „jen pro export"). Číslo,
+   * dátum aj poradie položky sa v POHODE dajú zmeniť, id nie — spolu s
+   * databázou je to identita riadka. Posiela ich len Mostík so stagingom.
+   */
+  dokladId: z.number().int().positive().optional(),
+  polozkaId: z.number().int().positive().optional(),
 }).strict();
 
 export type HistoryRow = z.infer<typeof historyRowSchema>;
@@ -110,11 +117,26 @@ interface ResolvedRow {
   radExternalId?: string | null;
   radKod?: string | null;
   krajina?: string | null;
+  dokladId?: number | null;
+  polozkaId?: number | null;
   hash: string;
 }
 
 /** Kľúč idempotencie importu — pozri komentár v tele. */
-function riadokHash(row: ResolvedRow, poradie: number): string {
+function riadokHash(row: ResolvedRow, poradie: number, zdrojDatabaza: string | undefined): string {
+  // Natívne id POHODY je pevná identita: presun dobropisu z FP do FP-D ani
+  // prehodené položky ho nezmenia. Platí len v jednej databáze (ročníku),
+  // preto je databáza v odtlačku. Položka bez vlastného id by s id dokladu
+  // kolidovala so svojou hlavičkou — tá ide po starom.
+  // Id je jedinečné len v tabuľke agendy POHODY: faktúra, pokladničný a interný
+  // doklad môžu mať to isté id. Tabuľka sa berie z agendy — FP aj FP-D sú faktúry.
+  // Meno databázy bez ohľadu na veľkosť písmen: mServer a POHODA CLI ho píšu rôzne.
+  if (row.dokladId && (row.riadokIndex ? row.polozkaId : true)) {
+    const tabulka = row.agenda === 'PPD' || row.agenda === 'VPD' ? 'voucher' : row.agenda === 'INT' ? 'intDoc' : 'invoice';
+    return createHash('sha256')
+      .update(['pohoda', (zdrojDatabaza ?? '').toLowerCase(), tabulka, row.dokladId, row.polozkaId ?? 0].join('|'))
+      .digest('hex').slice(0, 32);
+  }
   // Odtlačok PÔVODU riadka, nie obsahu: opakovaný import tej istej histórie nič
   // nezduplikuje, ale dve rovnaké položky dvoch rôznych faktúr ostanú dve. Pre
   // analýzu je početnosť hlavný signál — zlučovanie podľa obsahu by z „1240×
@@ -151,18 +173,36 @@ async function kodyNaId(
  * vidí aj prax, ktorá už v aktívnych číselníkoch nie je.
  */
 export async function importUctoHistory(
-  database: Database,
+  database: Queryable,
   input: {
     tenantId: string;
     organizationId: string;
     rows: HistoryRow[];
     source: 'mdb' | 'agent';
+    /** Databáza POHODY, z ktorej prenos prišiel (publikácia prenosu Mostíka). */
+    zdrojDatabaza?: string;
   },
 ): Promise<{ imported: number; duplicates: number; bezKodu: number }> {
   const { tenantId, organizationId } = input;
   const idPreKod = await kodyNaId(database, tenantId, organizationId);
   const id = (kind: string, kod: string | undefined) =>
     (kod ? idPreKod.get(`${kind}:${kod.trim()}`) ?? null : null);
+
+  // Ručné XML a .mdb natívne id nepoznajú a odtlačok skladajú z agendy, čísla,
+  // dátumu a poradia. Riadok, ktorý už prišiel z publikácie Mostíka, sa preto
+  // prepíše pod svojím odtlačkom — inak by ručné nahratie tej istej histórie
+  // zdvojilo korpus až do ďalšieho prenosu.
+  const nativne = new Map<string, string>();
+  const cisla = input.zdrojDatabaza ? [] : [...new Set(input.rows.flatMap((row) => (row.dokladCislo ? [row.dokladCislo] : [])))];
+  if (cisla.length > 0) {
+    const result = await database.query<{ riadok_hash: string; kluc: string } & Record<string, unknown>>(
+      `SELECT riadok_hash, agenda || '|' || doklad_cislo || '|' || coalesce(datum::text, '') || '|' || coalesce(riadok_index::text, '') AS kluc
+         FROM ucto_historia
+        WHERE tenant_id=$1 AND organization_id=$2 AND pohoda_doklad_id IS NOT NULL AND doklad_cislo = ANY($3::text[])`,
+      [tenantId, organizationId, cisla],
+    );
+    for (const row of result.rows) nativne.set(row.kluc, row.riadok_hash);
+  }
 
   const resolved: ResolvedRow[] = [];
   let bezKodu = 0;
@@ -192,46 +232,69 @@ export async function importUctoHistory(
       radExternalId: row.radExternalId || null,
       radKod: row.radKod || null,
       krajina: row.krajina?.toUpperCase() || null,
+      dokladId: row.dokladId ?? null,
+      polozkaId: row.polozkaId ?? null,
       hash: '',
     };
     if (!base.predkontaciaKod && !base.clenenieDphKod) {
       bezKodu += 1;
       continue; // riadok bez zaúčtovania sa nemá čo učiť
     }
-    base.hash = riadokHash(base, row.riadokIndex ?? resolved.length);
+    base.hash = nativne.get(`${base.agenda}|${base.dokladCislo}|${base.datum ?? ''}|${base.riadokIndex ?? ''}`)
+      ?? riadokHash(base, row.riadokIndex ?? resolved.length, input.zdrojDatabaza);
     resolved.push(base);
   }
 
+  // Po 1000 riadkov v jednom INSERT-e: 25 000 samostatných príkazov trvalo pri
+  // publikácii prenosu desiatky sekúnd a agent čaká na odpoveď najviac 120 s.
+  // Jeden príkaz nesmie zasiahnuť ten istý riadok dvakrát — pri rovnakom
+  // odtlačku vyhráva posledný, ako pri postupnom prepise.
+  const naVlozenie = [...new Map(resolved.map((row) => [row.hash, row])).values()];
+  const STLPCOV = 28;
   let imported = 0;
-  for (const row of resolved) {
-    const result = await database.query(
+  for (let od = 0; od < naVlozenie.length; od += 1000) {
+    const cast = naVlozenie.slice(od, od + 1000);
+    const result = await database.query<{ vlozeny: boolean } & Record<string, unknown>>(
       `INSERT INTO ucto_historia
         (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_ico,supplier_name_normalized,
          line_text_normalized,suma,suma_dph,sadzba_dph,predkontacia_kod,predkontacia_id,clenenie_dph_kod,
          clenenie_dph_id,clenenie_kv_kod,stredisko_kod,stredisko_id,source,riadok_hash,riadok_index,
-         rad_external_id,rad_kod,krajina)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+         rad_external_id,rad_kod,krajina,zdroj_databaza,pohoda_doklad_id,pohoda_polozka_id)
+       VALUES ${cast.map((_, r) => `(${Array.from({ length: STLPCOV }, (__, s) => `$${r * STLPCOV + s + 1}`).join(',')})`).join(',')}
        -- Prepis, nie DO NOTHING: korpus je zrkadlo POHODY a import, ktorý
        -- prinesie viac (sumy pribudli neskôr), musí riadok doplniť. xmax=0
        -- rozlíši skutočný vklad od prepisu, inak by boli duplicity vždy nula.
-       -- Rad a krajinu doplní, ale nezmaže: import .mdb ani starší Mostík ich
-       -- nepozná a prepis by zahodil to, čo priniesol novší prenos.
+       -- Text, partner a stredisko sa prepisujú: účtovník ich v POHODE opravil
+       -- a odtlačok sa tým nemení. Rad, krajinu, sadzbu, DPH a pôvod doplní,
+       -- ale nezmaže: import .mdb, ručné XML ani starší Mostík ich nepoznajú
+       -- a prepis by zahodil to, čo priniesol novší prenos. Stredisko je
+       -- dvojica kód+id — id Bratislavy pri kóde KE by klamalo.
        ON CONFLICT (organization_id, riadok_hash) DO UPDATE SET
-         suma=excluded.suma, suma_dph=excluded.suma_dph, sadzba_dph=excluded.sadzba_dph,
+         agenda=excluded.agenda, doklad_cislo=excluded.doklad_cislo, datum=excluded.datum,
+         supplier_ico=excluded.supplier_ico, supplier_name_normalized=excluded.supplier_name_normalized,
+         line_text_normalized=excluded.line_text_normalized,
+         suma=excluded.suma,
+         suma_dph=coalesce(excluded.suma_dph, ucto_historia.suma_dph),
+         sadzba_dph=coalesce(excluded.sadzba_dph, ucto_historia.sadzba_dph),
          predkontacia_kod=excluded.predkontacia_kod, predkontacia_id=excluded.predkontacia_id,
          clenenie_dph_kod=excluded.clenenie_dph_kod, clenenie_dph_id=excluded.clenenie_dph_id,
          clenenie_kv_kod=excluded.clenenie_kv_kod, riadok_index=excluded.riadok_index,
+         stredisko_kod=CASE WHEN excluded.stredisko_kod IS NULL THEN ucto_historia.stredisko_kod ELSE excluded.stredisko_kod END,
+         stredisko_id=CASE WHEN excluded.stredisko_kod IS NULL THEN ucto_historia.stredisko_id ELSE excluded.stredisko_id END,
          rad_external_id=coalesce(excluded.rad_external_id, ucto_historia.rad_external_id),
          rad_kod=coalesce(excluded.rad_kod, ucto_historia.rad_kod),
-         krajina=coalesce(excluded.krajina, ucto_historia.krajina)
+         krajina=coalesce(excluded.krajina, ucto_historia.krajina),
+         zdroj_databaza=coalesce(excluded.zdroj_databaza, ucto_historia.zdroj_databaza),
+         pohoda_doklad_id=coalesce(excluded.pohoda_doklad_id, ucto_historia.pohoda_doklad_id),
+         pohoda_polozka_id=coalesce(excluded.pohoda_polozka_id, ucto_historia.pohoda_polozka_id)
        RETURNING (xmax = 0) AS vlozeny`,
-      [randomUUID(), tenantId, organizationId, row.agenda, row.dokladCislo, row.datum,
+      cast.flatMap((row) => [randomUUID(), tenantId, organizationId, row.agenda, row.dokladCislo, row.datum,
         row.supplierIco, row.supplierName, row.lineText, row.suma, row.sumaDph, row.sadzbaDph,
         row.predkontaciaKod, row.predkontaciaId, row.clenenieDphKod, row.clenenieDphId,
         row.clenenieKvKod, row.strediskoKod, row.strediskoId, input.source, row.hash, row.riadokIndex,
-        row.radExternalId, row.radKod, row.krajina],
+        row.radExternalId, row.radKod, row.krajina, input.zdrojDatabaza ?? null, row.dokladId, row.polozkaId]),
     );
-    if ((result.rows[0] as { vlozeny?: boolean } | undefined)?.vlozeny) imported += 1;
+    imported += result.rows.filter((row) => row.vlozeny).length;
   }
   await doplnRokRadovZDokladov(database, tenantId, organizationId);
   return { imported, duplicates: resolved.length - imported, bezKodu };
@@ -373,7 +436,7 @@ export async function historyStats(
  * deaktiváciou, ktorá čistí len rady so source='pohoda'.
  */
 export async function ulozRadyZDokladov(
-  database: Database,
+  database: Queryable,
   input: { tenantId: string; organizationId: string; series: readonly {
     externalId: string; kod: string; agenda: string; posledneCislo?: string | null;
   }[] },
@@ -385,30 +448,30 @@ export async function ulozRadyZDokladov(
   for (const rad of input.series) if (!podlaId.has(rad.externalId)) podlaId.set(rad.externalId, rad);
   let nove = 0;
   let aktualizovane = 0;
-  await database.transaction(async (tx) => {
-    for (const rad of podlaId.values()) {
-      // Názov z dokladu nezistíme — POHODA v ňom posiela len identifikátor
-      // a prefix. V ponuke sa tak rad ukáže pod vlastným kódom.
-      const result = await tx.query(
-        `INSERT INTO code_list_items
-           (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, last_number, synced_at)
-         VALUES ($1,$2,$3,'ciselneRady',$4,$4,'pohoda_doklad',true,$5,$6,$7,now())
-         ON CONFLICT (tenant_id, organization_id, external_id) WHERE kind = 'ciselneRady' AND external_id IS NOT NULL
-         DO UPDATE
-            SET last_number=coalesce(excluded.last_number, code_list_items.last_number),
-                code=excluded.code, name=excluded.name, agenda=excluded.agenda,
-                active=true, synced_at=now(), updated_at=now()
-          WHERE code_list_items.source='pohoda_doklad'
-         RETURNING (xmax = 0) AS vlozeny`,
-        [randomUUID(), input.tenantId, input.organizationId, rad.kod,
-          rad.externalId, rad.agenda, rad.posledneCislo ?? null],
-      );
-      // Rad, ktorý už v číselníku je, WHERE odfiltruje — nevráti sa nič a je to
-      // v poriadku: číselník má prednosť.
-      if (result.rowCount === 0) continue;
-      if (result.rows[0]?.vlozeny) nove += 1; else aktualizovane += 1;
-    }
-  });
+  // Transakciu drží volajúci — publikácia prenosu potrebuje rady v tej istej
+  // transakcii ako korpus, z ktorého sa im dopĺňa rok.
+  for (const rad of podlaId.values()) {
+    // Názov z dokladu nezistíme — POHODA v ňom posiela len identifikátor
+    // a prefix. V ponuke sa tak rad ukáže pod vlastným kódom.
+    const result = await database.query(
+      `INSERT INTO code_list_items
+         (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, last_number, synced_at)
+       VALUES ($1,$2,$3,'ciselneRady',$4,$4,'pohoda_doklad',true,$5,$6,$7,now())
+       ON CONFLICT (tenant_id, organization_id, external_id) WHERE kind = 'ciselneRady' AND external_id IS NOT NULL
+       DO UPDATE
+          SET last_number=coalesce(excluded.last_number, code_list_items.last_number),
+              code=excluded.code, name=excluded.name, agenda=excluded.agenda,
+              active=true, synced_at=now(), updated_at=now()
+        WHERE code_list_items.source='pohoda_doklad'
+       RETURNING (xmax = 0) AS vlozeny`,
+      [randomUUID(), input.tenantId, input.organizationId, rad.kod,
+        rad.externalId, rad.agenda, rad.posledneCislo ?? null],
+    );
+    // Rad, ktorý už v číselníku je, WHERE odfiltruje — nevráti sa nič a je to
+    // v poriadku: číselník má prednosť.
+    if (result.rowCount === 0) continue;
+    if (result.rows[0]?.vlozeny) nove += 1; else aktualizovane += 1;
+  }
   await doplnRokRadovZDokladov(database, input.tenantId, input.organizationId);
   return { nove, aktualizovane };
 }

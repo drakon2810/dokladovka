@@ -661,6 +661,8 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
         'note_templates', 'email_templates', 'approval_rules', 'organization_dph_profiles',
         'organization_accounting_profiles', 'organization_bank_accounts', 'organization_documents',
         'pohoda_company_links', 'agent_sync_runs', 'assistant_threads', 'organization_memberships',
+        // Denník nemá ON DELETE CASCADE — bez neho zlyhalo mazanie každej firmy s denníkom.
+        'ucto_dennik',
       ]) {
         await tx.query(`DELETE FROM ${table} WHERE tenant_id=$1 AND organization_id=$2`, scope);
       }
