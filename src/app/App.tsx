@@ -42,7 +42,14 @@ function AppShell() {
   // Správca platformy nemá firmy ani doklady — celá aplikácia je pre neho jedna
   // obrazovka s globálnymi pravidlami (bez navigácie a bez snapshotu tenanta).
   if (session.user.role === 'superadmin') return <GlobalRulesPage />;
-  return <Layout />;
+  // Ochrana nad celým shellom. Layout sám počíta z dokladov (odznaky, zvonček)
+  // a keď spadne tam, ochrana okolo stránky v ňom nepomôže — ostala by biela
+  // plocha. S touto aspoň hláška s textom chyby a tlačidlom obnoviť.
+  return (
+    <ErrorBoundary>
+      <Layout />
+    </ErrorBoundary>
+  );
 }
 
 /**

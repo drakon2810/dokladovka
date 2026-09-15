@@ -19,8 +19,8 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
        WHERE o.tenant_id=$1 AND m.user_id=$2 ORDER BY o.name`, [auth.tenantId, auth.userId],
     );
     const organizationIds = organizations.rows.map((row) => row.id as string);
-    const inScope = async (table: string, order = 'created_at DESC') => database.query<Record<string, any>>(
-      `SELECT * FROM ${table} WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ORDER BY ${order}`,
+    const inScope = async (table: string, order = 'created_at DESC', podmienka = '') => database.query<Record<string, any>>(
+      `SELECT * FROM ${table} WHERE tenant_id=$1 AND organization_id=ANY($2::text[]) ${podmienka} ORDER BY ${order}`,
       [auth.tenantId, organizationIds],
     );
     // Nezaradené karanténne e-maily (tenant_id IS NULL) patria do snapshotu
@@ -38,7 +38,13 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       inScope('document_queues', 'name'),
       inScope('organization_bank_accounts', 'label'),
       inScope('organization_email_aliases'),
-      inScope('documents'),
+      // Náhradné doklady merania presnosti sem nepatria. Meranie ich na pár
+      // sekúnd vloží do tej istej tabuľky, lebo návrh zaúčtovania číta doklad
+      // podľa id — ale sú to len kostry (dodávateľ, položky, dátum; žiadny
+      // rozpis DPH ani suma). UI s nimi nepočíta a spadlo na nich: počas
+      // sebakontroly na štyridsiatich dokladoch chytil takmer každý poll
+      // snapshotu aspoň jeden, a celá aplikácia ostala biela.
+      inScope('documents', 'created_at DESC', "AND coalesce(source->>'meranie', '') <> 'true'"),
       database.query<Record<string, any>>(
         `SELECT * FROM inbound_emails
           WHERE (tenant_id=$1 AND organization_id=ANY($2::text[]))

@@ -108,6 +108,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
        WHERE d.tenant_id=$1 AND m.user_id=$2
          AND ($3::text IS NULL OR d.organization_id=$3)
          AND ($4::text IS NULL OR d.status=$4)
+         -- Náhradné doklady merania presnosti — rovnaký dôvod ako v snapshote.
+         AND coalesce(d.source->>'meranie', '') <> 'true'
        ORDER BY d.created_at DESC LIMIT 500`,
       [auth.tenantId, auth.userId, query.organizationId ?? null, query.status ?? null],
     );

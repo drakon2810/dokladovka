@@ -9,6 +9,7 @@ import { setCurrentOrg } from '../data/api';
 import { useDataQuery } from '../data/query';
 import { t } from '../i18n/sk';
 import { OrgDot, ToastViewport } from '../components/ui';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { PripravaFirmyModal, KROKY, hotovychKrokov, usePripravaOrgId, otvorPripravu, zavriPripravu } from '../features/onboarding/PripravaFirmyModal';
 import { showToast } from '../components/toast';
 import { OrganizationFormModal } from '../features/settings/OrganizationsTab';
@@ -876,7 +877,12 @@ export function Layout() {
           </header>
         </div>
         <main className={`min-w-0 flex-1 ${onDocumentDetail ? 'px-6 pb-6 pt-3' : 'p-6'}`}>
-          <Outlet />
+          {/* Chyba jednej stránky nesmie zhasnúť celú aplikáciu. Bočná navigácia
+              ostane a účtovník odíde inam. Kľúč podľa cesty: raz spadnutá
+              ochrana by inak ukazovala chybu aj na každej ďalšej stránke. */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
 
