@@ -1,3 +1,5 @@
+import { jeCudziDodavatel } from './services/dphAdvisor.js';
+
 export function escapeXml(value: unknown): string {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -127,12 +129,43 @@ function amount(value: unknown): string {
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
-/** Sadzba DPH → POHODA rateVAT. Zhodné s rozdelením súhrnu (23→high, 19→low, 5→third). */
-function vatRateName(sadzba: unknown): 'high' | 'low' | 'third' | 'none' {
+/**
+ * Slovenské sadzby DPH podľa dátumu zdaniteľného plnenia (§ 27 zákona o DPH):
+ * od 1. 1. 2025 základná 23 %, znížené 19 % a 5 %; predtým základná 20 %
+ * a znížená 10 %, k nim od 1. 1. 2023 aj 5 % (štátom podporované nájomné
+ * bývanie). Rozhoduje deň plnenia, nie vystavenia — decembrová dodávka
+ * fakturovaná v januári 2025 nesie ešte 20 %. Bez dátumu sa 20 % z roku 2024
+ * tvárilo ako cudzia daň a odpočet v POHODE zmizol (audit R2).
+ *
+ * POHODA dostáva len kategóriu high/low/third, percentVAT neposielame: percento
+ * si ku kategórii dosadí z vlastnej tabuľky sadzieb podľa dateTax, ktorý ide
+ * z toho istého dátumu. percentVAT je podľa invoice.xsd „historická sadzba",
+ * patrí k historyHigh/historyLow a POHODA ho prijme, len keď ho klient povolil
+ * v Globálnom nastavení — inak by import spadol.
+ *
+ * ponytail: plnenie pred rokom 2011 (vtedy 19 % a 10 %) dostane „none"; riadok
+ * tabuľky pridať, keď taký doklad príde. Zhoda so src/data/xml/pohodaDataPack.ts.
+ */
+const SK_SADZBY_DPH: ReadonlyArray<{ od: string; high: number; low: number; third?: number }> = [
+  { od: '2025-01-01', high: 23, low: 19, third: 5 },
+  { od: '2023-01-01', high: 20, low: 10, third: 5 },
+  { od: '2011-01-01', high: 20, low: 10 },
+];
+
+type SadzbaPohody = 'high' | 'low' | 'third' | 'none';
+
+/**
+ * Sadzba DPH → POHODA rateVAT pre deň plnenia. „none" je nulová sadzba, cudzia
+ * daň (jeCudziDodavatel — to isté rozhodnutie ako pri normalizácii extrakcie)
+ * a sadzba, ktorú Slovensko v ten deň nemalo (rakúskych 20 % v roku 2026).
+ */
+function vatRateName(sadzba: unknown, datum: string, cudzia: boolean): SadzbaPohody {
   const rate = Number(sadzba);
-  if (rate === 23) return 'high';
-  if (rate === 19) return 'low';
-  if (rate === 5) return 'third';
+  const obdobie = SK_SADZBY_DPH.find((riadok) => riadok.od <= datum);
+  if (cudzia || !obdobie || !rate) return 'none';
+  if (rate === obdobie.high) return 'high';
+  if (rate === obdobie.low) return 'low';
+  if (rate === obdobie.third) return 'third';
   return 'none';
 }
 
@@ -175,23 +208,33 @@ const DETAIL_TAGS = {
  * Položkový rozpis dokladu (SPEC — rozpis na položky) pre invoice/voucher/intDoc.
  * Každá dimenzia položky (zaúčtovanie, členenia, stredisko, činnosť, zákazka) sa
  * pri prázdnej hodnote vracia na hlavičku — prázdne pole v editore znamená
- * „ako doklad", nie „bez hodnoty".
+ * „ako doklad", nie „bez hodnoty". Vyplnené ID, ktoré v exportnom číselníku
+ * nie je (zmazané, deaktivované, inej firmy), je naopak chyba: tichý návrat na
+ * hlavičku by zaúčtoval položku inak, než ju účtovník schválil (audit R3).
  * Vráti prázdny reťazec, ak doklad nemá položky (vtedy sa importuje len súhrn).
  */
 function documentDetailXml(
   polozky: unknown,
-  header: { accounting: string; classificationVat: string; kv?: string; centre?: string; activity?: string; contract?: string },
+  header: { accounting?: string; classificationVat?: string; kv?: string; centre?: string; activity?: string; contract?: string },
   codeLists: PohodaCodeLookup,
+  doklad: { id: string; sadzbaDph: (sadzba: unknown) => SadzbaPohody },
   tag: (typeof DETAIL_TAGS)[keyof typeof DETAIL_TAGS],
 ): string {
   if (!Array.isArray(polozky) || polozky.length === 0) return '';
   const { ns } = tag;
-  const items = polozky.map((item: any) => {
+  const items = polozky.map((item: any, index: number) => {
     const { bezDph, dph, spolu, unitPrice } = lineItemAmounts(item);
-    // Cudzia daň (sadzba mimo slovenských) sa do POHODY nedá poslať ako DPH —
-    // rateVAT je „none". Poslať k nej priceVAT by znamenalo doklad nižší o daň,
-    // preto ide celá suma do ceny bez dane, rovnako ako v súhrne dokladu.
-    const cudziaDan = vatRateName(item.sadzbaDph) === 'none' && dph !== 0;
+    const sadzba = doklad.sadzbaDph(item.sadzbaDph);
+    // Cudzia daň (sadzba mimo slovenských v deň plnenia) sa do POHODY nedá
+    // poslať ako DPH — rateVAT je „none". Poslať k nej priceVAT by znamenalo
+    // doklad nižší o daň, preto ide celá suma do ceny bez dane, ako v súhrne.
+    const cudziaDan = sadzba === 'none' && dph !== 0;
+    const kod = (ciselnik: Map<string, string> | undefined, idPolozky: string | undefined, nazov: string, zHlavicky?: string) => {
+      if (!idPolozky) return zHlavicky;
+      const hodnota = ciselnik?.get(idPolozky);
+      if (!hodnota) throw new Error(`Položka ${index + 1} dokladu ${doklad.id} má ${nazov} mimo aktívneho číselníka organizácie`);
+      return hodnota;
+    };
     const mnozstvo = Number.isFinite(Number(item.mnozstvo)) && Number(item.mnozstvo) !== 0 ? Number(item.mnozstvo) : 1;
     const cena = cudziaDan ? spolu : bezDph;
     const cenaDph = cudziaDan ? 0 : dph;
@@ -199,12 +242,12 @@ function documentDetailXml(
     // Zľava ide s cenou pred zľavou. Pri cudzej dani je cena za jednotku už
     // z celkovej sumy, zľava by sa odpočítala druhýkrát.
     const zlava = !cudziaDan && Number(item.zlavaPercent) > 0 ? Number(item.zlavaPercent) : 0;
-    const accounting = codeLists.predkontacie.get(item.ucto?.predkontaciaId ?? '') ?? header.accounting;
-    const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
+    const accounting = kod(codeLists.predkontacie, item.ucto?.predkontaciaId, 'predkontáciu', header.accounting);
+    const classificationVat = kod(codeLists.cleneniaDph, item.ucto?.clenenieDphId, 'členenie DPH', header.classificationVat);
     const kv = item.ucto?.clenenieKvKod || header.kv;
-    const centre = codeLists.strediska.get(item.ucto?.strediskoId ?? '') ?? header.centre;
-    const activity = codeLists.cinnosti?.get(item.ucto?.cinnostId ?? '') ?? header.activity;
-    const contract = codeLists.zakazky?.get(item.ucto?.zakazkaId ?? '') ?? header.contract;
+    const centre = kod(codeLists.strediska, item.ucto?.strediskoId, 'stredisko', header.centre);
+    const activity = kod(codeLists.cinnosti, item.ucto?.cinnostId, 'činnosť', header.activity);
+    const contract = kod(codeLists.zakazky, item.ucto?.zakazkaId, 'zákazku', header.contract);
     const lines = [
       // Text položky má v schéme 90 znakov, merná jednotka 10.
       `        <${ns}:text>${escapeXml(clamp(item.popis, 90))}</${ns}:text>`,
@@ -213,7 +256,7 @@ function documentDetailXml(
       ...(item.jednotka ? [`        <${ns}:unit>${escapeXml(clamp(item.jednotka, 10))}</${ns}:unit>`] : []),
       `        <${ns}:coefficient>1.0</${ns}:coefficient>`,
       `        <${ns}:payVAT>false</${ns}:payVAT>`,
-      `        <${ns}:rateVAT>${vatRateName(item.sadzbaDph)}</${ns}:rateVAT>`,
+      `        <${ns}:rateVAT>${sadzba}</${ns}:rateVAT>`,
       `        <${ns}:discountPercentage>${zlava ? String(zlava) : '0.0'}</${ns}:discountPercentage>`,
       `        <${ns}:homeCurrency>`,
       `          <typ:unitPrice>${amount(cenaZaJednotku)}</typ:unitPrice>`,
@@ -474,7 +517,12 @@ function bankDataPackItems(
     if (vlastnaId && !vlastna) throw new Error(`Pohyb ${index + 1} výpisu ${id} má predkontáciu mimo aktívneho číselníka organizácie`);
     const accounting = vlastna ?? headerAccounting;
     if (!accounting) throw new Error(`Pohyb ${index + 1} výpisu ${id} nemá predkontáciu`);
-    const itemCentre = codeLists.strediska.get(pohyb.ucto?.strediskoId ?? '') ?? centre;
+    // Stredisko pohybu platí to isté: nastavené, no nerozpoznané ID sa nesmie
+    // potichu zahodiť v prospech hlavičkového.
+    const vlastneStrediskoId = pohyb.ucto?.strediskoId;
+    const vlastneStredisko = vlastneStrediskoId ? codeLists.strediska.get(vlastneStrediskoId) : undefined;
+    if (vlastneStrediskoId && !vlastneStredisko) throw new Error(`Pohyb ${index + 1} výpisu ${id} má stredisko mimo aktívneho číselníka organizácie`);
+    const itemCentre = vlastneStredisko ?? centre;
     const datePayment = isoDate(pohyb.datumPlatby) ?? dateStatement;
     const paymentAccount = skIbanAccount(pohyb.protiucetIban);
     const text = clamp(pohyb.popis || pohyb.protistrana || 'Bankový pohyb', 96);
@@ -546,29 +594,43 @@ export function buildServerDataPack(input: {
     const numberXml = cisloVPohode
       ? `<typ:numberRequested>${escapeXml(cisloVPohode)}</typ:numberRequested>`
       : `<typ:ids>${escapeXml(numberSeries ?? '')}</typ:ids>`;
-    if (!accounting || !classificationVat || !numberSeries) {
+    // Zálohová faktúra sa neúčtuje a do DPH nevstupuje — invoice.xsd pri
+    // classificationVAT píše, že sa pri zálohovej nepoužíva. Predkontácia a
+    // členenie DPH preto smú chýbať a XML ich vtedy vynechá; inak by doklad
+    // prešiel len s vymysleným zaúčtovaním (audit R4). Nastavené, no neplatné ID
+    // je chyba aj na zálohovej a číselný rad je povinný vždy.
+    const zalohova = snapshot.podtyp === 'zalohova' && (snapshot.typ === 'FP' || snapshot.typ === 'FV');
+    const chybaCiselnika = (idZUcta: string | undefined, kod: string | undefined) => Boolean(idZUcta || !zalohova) && !kod;
+    if (chybaCiselnika(snapshot.ucto.predkontaciaId, accounting) || chybaCiselnika(snapshot.ucto.clenenieDphId, classificationVat) || !numberSeries) {
       throw new Error(`Doklad ${id} nemá platné aktívne číselníky organizácie`);
     }
+    // Dátum vystavenia je povinný — bez neho sa doklad odmietne hneď pri vytvorení
+    // prenosu s jasnou hláškou, nie až XSD chybou agenta o hodinu neskôr.
+    const issueDate = isoDate(extracted.datumVystavenia);
+    if (!issueDate) throw new Error(`Doklad ${id} nemá platný dátum vystavenia (očakáva sa RRRR-MM-DD)`);
+    const deliveryDate = isoDate(extracted.datumDodania);
+    const taxDate = deliveryDate ?? issueDate;
+    const dueDate = isoDate(extracted.datumSplatnosti) ?? issueDate;
+    // Kôš DPH podľa dňa plnenia (SK_SADZBY_DPH), ten istý deň ide do dateTax.
+    // Cudziu daň určuje dodávateľ rovnako ako pri normalizácii extrakcie;
+    // vydaná faktúra nesie vždy našu, slovenskú daň.
+    const cudzia = snapshot.typ !== 'FV' && jeCudziDodavatel(supplier);
+    const sadzbaDph = (sadzba: unknown) => vatRateName(sadzba, taxDate, cudzia);
     const rows = Array.isArray(extracted.rozpisDph) ? extracted.rozpisDph : [];
-    const base23 = rows.filter((row: any) => Number(row.sadzba) === 23).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0);
-    const vat23 = rows.filter((row: any) => Number(row.sadzba) === 23).reduce((sum: number, row: any) => sum + Number(row.dph || 0), 0);
-    const base19 = rows.filter((row: any) => Number(row.sadzba) === 19).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0);
-    const vat19 = rows.filter((row: any) => Number(row.sadzba) === 19).reduce((sum: number, row: any) => sum + Number(row.dph || 0), 0);
-    const base5 = rows.filter((row: any) => Number(row.sadzba) === 5).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0);
-    const vat5 = rows.filter((row: any) => Number(row.sadzba) === 5).reduce((sum: number, row: any) => sum + Number(row.dph || 0), 0);
-    // Sadzba, ktorú slovenská POHODA nepozná (rakúskych 20 %, českých 21 %), je
-    // cudzia daň: nie je čo odpočítať, do priznania nevstúpi a rozdeliť ju na
-    // základ a DPH nemá kam. Ide preto CELÁ do priceNone — bez toho by z
-    // rakúskej faktúry vypadla úplne a doklad by prišiel do POHODY nulový.
-    const cudziaDan = rows.filter((row: any) => ![23, 19, 5, 0].includes(Number(row.sadzba)));
-    const base0 = rows.filter((row: any) => Number(row.sadzba) === 0).reduce((sum: number, row: any) => sum + Number(row.zaklad || 0), 0)
-      + cudziaDan.reduce((sum: number, row: any) => sum + Number(row.zaklad || 0) + Number(row.dph || 0), 0);
-    const currency = `<typ:priceHigh>${amount(base23)}</typ:priceHigh>
-        <typ:priceHighVAT>${amount(vat23)}</typ:priceHighVAT>
-        <typ:priceLow>${amount(base19)}</typ:priceLow>
-        <typ:priceLowVAT>${amount(vat19)}</typ:priceLowVAT>
-        <typ:price3>${amount(base5)}</typ:price3>
-        <typ:price3VAT>${amount(vat5)}</typ:price3VAT>
+    const sucet = (kategoria: SadzbaPohody, pole: 'zaklad' | 'dph') => rows
+      .filter((row: any) => sadzbaDph(row.sadzba) === kategoria)
+      .reduce((sum: number, row: any) => sum + Number(row[pole] || 0), 0);
+    // Sadzba mimo slovenských v deň plnenia (rakúskych 20 % v roku 2026, českých
+    // 21 %) je cudzia daň: nie je čo odpočítať, do priznania nevstúpi a rozdeliť
+    // ju na základ a DPH nemá kam. Ide preto CELÁ do priceNone — bez toho by
+    // z rakúskej faktúry vypadla úplne a doklad by prišiel do POHODY nulový.
+    const base0 = sucet('none', 'zaklad') + sucet('none', 'dph');
+    const currency = `<typ:priceHigh>${amount(sucet('high', 'zaklad'))}</typ:priceHigh>
+        <typ:priceHighVAT>${amount(sucet('high', 'dph'))}</typ:priceHighVAT>
+        <typ:priceLow>${amount(sucet('low', 'zaklad'))}</typ:priceLow>
+        <typ:priceLowVAT>${amount(sucet('low', 'dph'))}</typ:priceLowVAT>
+        <typ:price3>${amount(sucet('third', 'zaklad'))}</typ:price3>
+        <typ:price3VAT>${amount(sucet('third', 'dph'))}</typ:price3VAT>
         <typ:priceNone>${amount(base0)}</typ:priceNone>`;
     // POHODA má na doklade JEDNU stranu partnera a je to vždy protistrana:
     // na prijatých dokladoch dodávateľ, na VYDANEJ faktúre odberateľ (zákazník).
@@ -577,13 +639,6 @@ export function buildServerDataPack(input: {
     const vydana = snapshot.typ === 'FV';
     const protistrana = vydana ? (extracted.odberatel ?? {}) : supplier;
     const partner = partnerAddressXml(protistrana);
-    // Dátum vystavenia je povinný — bez neho sa doklad odmietne hneď pri vytvorení
-    // prenosu s jasnou hláškou, nie až XSD chybou agenta o hodinu neskôr.
-    const issueDate = isoDate(extracted.datumVystavenia);
-    if (!issueDate) throw new Error(`Doklad ${id} nemá platný dátum vystavenia (očakáva sa RRRR-MM-DD)`);
-    const deliveryDate = isoDate(extracted.datumDodania);
-    const taxDate = deliveryDate ?? issueDate;
-    const dueDate = isoDate(extracted.datumSplatnosti) ?? issueDate;
     // Analytické dimenzie hlavičky. Editor ich ponúka pri každom doklade, do
     // POHODY sa však doteraz posielali len z položiek — hlavičkové sa zahadzovali.
     const centre = input.codeLists.strediska.get(snapshot.ucto.strediskoId ?? '');
@@ -639,7 +694,7 @@ export function buildServerDataPack(input: {
         ${extracted.variabilnySymbol ? `<vch:symPar>${escapeXml(clamp(extracted.variabilnySymbol, 20))}</vch:symPar>` : ''}
         ${dimensionsXml('vch')}
         ${snapshot.ucto.poznamka ? `<vch:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</vch:note>` : ''}
-      </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.voucher)}
+      </vch:voucherHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, { id, sadzbaDph }, DETAIL_TAGS.voucher)}
       <vch:voucherSummary><vch:homeCurrency>
         ${currency}
       </vch:homeCurrency></vch:voucherSummary>${dokumentyXml('vch')}
@@ -669,7 +724,7 @@ export function buildServerDataPack(input: {
         <int:partnerIdentity>${partner}</int:partnerIdentity>
         ${dimensionsXml('int')}
         ${snapshot.ucto.poznamka ? `<int:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</int:note>` : ''}
-      </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.intDoc)}
+      </int:intDocHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, { id, sadzbaDph }, DETAIL_TAGS.intDoc)}
       <int:intDocSummary><int:homeCurrency>
         ${mzdyCurrency}
       </int:homeCurrency></int:intDocSummary>${dokumentyXml('int')}
@@ -699,8 +754,8 @@ export function buildServerDataPack(input: {
         <inv:dateTax>${taxDate}</inv:dateTax>
         <inv:dateDue>${dueDate}</inv:dateDue>
         ${deliveryDate && !vydana ? `<inv:dateDelivery>${deliveryDate}</inv:dateDelivery>` : ''}
-        <inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>
-        <inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>
+        ${accounting ? `<inv:accounting><typ:ids>${escapeXml(accounting)}</typ:ids></inv:accounting>` : ''}
+        ${classificationVat ? `<inv:classificationVAT><typ:ids>${escapeXml(classificationVat)}</typ:ids></inv:classificationVAT>` : ''}
         ${snapshot.ucto.clenenieKvKod ? `<inv:classificationKVDPH><typ:ids>${escapeXml(snapshot.ucto.clenenieKvKod)}</typ:ids></inv:classificationKVDPH>` : ''}
         ${headerText ? `<inv:text>${escapeXml(clamp(headerText, 240))}</inv:text>` : ''}
         <inv:partnerIdentity>${partner}</inv:partnerIdentity>
@@ -712,7 +767,7 @@ export function buildServerDataPack(input: {
         ${paymentAccount ? `<inv:paymentAccount><typ:accountNo>${escapeXml(paymentAccount.accountNo)}</typ:accountNo><typ:bankCode>${escapeXml(paymentAccount.bankCode)}</typ:bankCode></inv:paymentAccount>` : ''}
         ${dimensionsXml('inv')}
         ${snapshot.ucto.poznamka ? `<inv:note>${escapeXml(clamp(snapshot.ucto.poznamka, 240))}</inv:note>` : ''}
-      </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, DETAIL_TAGS.invoice)}
+      </inv:invoiceHeader>${documentDetailXml(extracted.polozky, { accounting, classificationVat, kv: snapshot.ucto.clenenieKvKod, ...headerDims }, input.codeLists, { id, sadzbaDph }, DETAIL_TAGS.invoice)}
       <inv:invoiceSummary><inv:homeCurrency>
         ${currency}
       </inv:homeCurrency></inv:invoiceSummary>${dokumentyXml('inv')}

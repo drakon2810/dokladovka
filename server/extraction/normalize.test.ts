@@ -971,3 +971,48 @@ describe('jednotková cena, ktorú doklad tlačí s daňou', () => {
     expect(cenaBezDane(1.7289, 0, 56.42, 69.4)).toBe(1.7289);
   });
 });
+
+// Audit F04: dobropis vracia peniaze, takže jeho základ, DPH aj celková suma
+// bývajú záporné. Kontrola „záporná suma je neplatná" platila pre všetko okrem
+// výpisu a správny dobropis sa preto nedal schváliť (invalid_total).
+describe('záporná suma dobropisu', () => {
+  const doklad = (
+    sumaSpolu: number,
+    rozpisDph: Array<{ sadzba: number; zaklad: number; dph: number }>,
+    polozky: unknown[] = [],
+  ) => ({
+    documentType: 'FP' as const,
+    extracted: {
+      dodavatel: { nazov: 'Dodávateľ SK', ico: '12345678', icDph: 'SK2020123456' },
+      odberatel: { ico: '87654321' },
+      cisloFaktury: 'DOB-1', datumVystavenia: '2026-07-01', datumDodania: '2026-07-01', datumSplatnosti: '2026-07-15',
+      mena: 'EUR', rozpisDph, sumaSpolu, polozky,
+    },
+    fieldConfidence: {}, confidence: 1, totalAmount: sumaSpolu, currency: 'EUR',
+  });
+  const vratenie = {
+    popis: 'Vrátenie tovaru', mnozstvo: -1, jednotkovaCenaBezDph: 100, sadzbaDph: 23,
+    sumaBezDph: -100, sumaDph: -23, sumaSpolu: -123,
+  };
+  const kody = (normalized: ReturnType<typeof doklad>, podtyp?: string) =>
+    validateNormalizedExtraction(normalized, { ico: '87654321' }, podtyp).map((issue) => issue.code);
+
+  it('dobropis so zápornými položkami a rozpisom DPH prejde', () => {
+    expect(kody(doklad(-123, [{ sadzba: 23, zaklad: -100, dph: -23 }], [vratenie]), 'dobropis')).toEqual([]);
+  });
+
+  it('bežná faktúra so zápornou sumou ostáva chybou', () => {
+    const zaporna = doklad(-123, [{ sadzba: 23, zaklad: -100, dph: -23 }], [vratenie]);
+    expect(kody(zaporna, 'bezna')).toContain('invalid_total');
+    expect(kody(zaporna)).toContain('invalid_total');
+  });
+
+  it('dobropis, ktorého rozpis nesedí so znamienkom sumy, neprejde', () => {
+    expect(kody(doklad(-123, [{ sadzba: 23, zaklad: 100, dph: 23 }]), 'dobropis')).toContain('total_mismatch');
+    expect(kody(doklad(-123, [{ sadzba: 23, zaklad: -100, dph: 23 }]), 'dobropis')).toContain('invalid_vat_row');
+  });
+
+  it('záporný dobropis bez rozpisu DPH nemá čím sumu potvrdiť', () => {
+    expect(kody(doklad(-123, []), 'dobropis')).toContain('invalid_total');
+  });
+});

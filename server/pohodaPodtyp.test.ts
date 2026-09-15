@@ -49,3 +49,37 @@ describe('invoiceType podľa druhu dokladu', () => {
     });
   }
 });
+
+// Audit R4: zálohová faktúra sa neúčtuje a do DPH nevstupuje — invoice.xsd pri
+// classificationVAT výslovne píše, že sa pri zálohovej nepoužíva. Export ju bez
+// predkontácie a členenia DPH napriek tomu odmietol, takže prejsť mohla len
+// s vymysleným zaúčtovaním.
+describe('zálohová faktúra bez zaúčtovania (R4)', () => {
+  const sUcto = (typ: string, podtyp: string, ucto: Record<string, string>) => {
+    const zaklad = doklad(typ, podtyp);
+    return { ...zaklad, snapshot: { ...zaklad.snapshot, ucto } };
+  };
+  const build = (document: ReturnType<typeof sUcto>) =>
+    buildServerDataPack({ id: 'pack', ico: '35761571', documents: [document], codeLists });
+
+  it('prejde bez predkontácie a členenia DPH, číselný rad ostáva', () => {
+    const xml = build(sUcto('FP', 'zalohova', { ciselnyRadId: 'r1' }));
+    expect(xml).toContain('<inv:invoiceType>receivedAdvanceInvoice</inv:invoiceType>');
+    expect(xml).toContain('<inv:number><typ:ids>26FP</typ:ids></inv:number>');
+    expect(xml).not.toContain('<inv:accounting>');
+    expect(xml).not.toContain('<inv:classificationVAT>');
+  });
+
+  it('bez číselného radu padá aj zálohová', () => {
+    expect(() => build(sUcto('FV', 'zalohova', {}))).toThrow(/nemá platné aktívne číselníky/);
+  });
+
+  it('nastavená, no neplatná predkontácia zálohovej je chyba, nie „bez zaúčtovania"', () => {
+    expect(() => build(sUcto('FP', 'zalohova', { ciselnyRadId: 'r1', predkontaciaId: 'zmazana' })))
+      .toThrow(/nemá platné aktívne číselníky/);
+  });
+
+  it('bežná faktúra bez predkontácie a členenia padá ako doteraz', () => {
+    expect(() => build(sUcto('FP', 'bezna', { ciselnyRadId: 'r1' }))).toThrow(/nemá platné aktívne číselníky/);
+  });
+});
