@@ -124,6 +124,43 @@ describe('AI kontext druhu dokladu', () => {
     expect(druhy.zakladnaAgenda).toBeUndefined();
   }, 90_000);
 
+  // Celé doklady nesmú priniesť prax iného druhu: dobropis ide do C2 a opačným
+  // smerom, takže doklad bežnej faktúry s rovnakým číslom a textom preň nie je dôkaz.
+  it('doklady: dobropis vidí len FP-D, bez nich FP s príznakom; bežná faktúra FP-D nevidí', async () => {
+    const { database, seeded, kde, kod, doklad } = await pripravFirmu();
+    const pred = await kod('predkontacie', '518/321');
+    const historia = (agenda: string) => database.query(
+      `INSERT INTO ucto_historia (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,predkontacia_kod,riadok_index,source,riadok_hash)
+       VALUES ($1,$2,$3,$4,'26001','2026-01-15','servis s.r.o.','oprava vozidla','518/321',0,'mdb',$5)`,
+      [randomUUID(), ...kde, agenda, randomUUID()],
+    );
+    const volaj = async (podtyp: string) => {
+      const documentId = await doklad(podtyp, { dodavatel: { nazov: 'Servis s.r.o.' }, polozky: [{ popis: 'oprava vozidla' }] });
+      const parser = {
+        create: vi.fn().mockResolvedValue(aiOdpoved({
+          predkontaciaId: pred, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: null,
+          confidence: 0.8, reason: 'Oprava', riadky: null,
+        })),
+      };
+      await maybeAiAccountingSuggestion(database, testConfig(),
+        { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Servis s.r.o.' },
+        { documentType: 'FP', podtyp, supplierName: 'Servis s.r.o.', totalAmount: 100, currency: 'EUR',
+          lineDescriptions: ['oprava vozidla'] }, parser);
+      return payloadVolania(parser);
+    };
+    const agendy = (payload: any) => (payload.doklady ?? []).map((item: { agenda: string }) => item.agenda);
+
+    await historia('FP');
+    const prvy = await volaj('dobropis');
+    expect(agendy(prvy)).toEqual(['FP']);
+    expect(prvy.zakladnaAgenda).toBe(true);
+
+    await historia('FP-D');
+    expect(agendy(await volaj('dobropis'))).toEqual(['FP-D']);
+    expect(agendy(await volaj('bezna'))).toEqual(['FP']);
+  }, 90_000);
+
   it('rozpis riadka za 15. položkou prežije a index mimo stropu nie', async () => {
     const { database, seeded, kod, doklad } = await pripravFirmu();
     const hlavicka = await kod('predkontacie', '518/321');
