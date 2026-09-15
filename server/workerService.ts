@@ -968,6 +968,10 @@ async function spracujNavrh(
       } catch (error) {
         console.warn('[dph-audit] kontrola zlyhala', error);
       }
+      // Kontrola smie trvať dve volania modelu. Bez obnovy zámku by job s AI
+      // návrhom prekročil okno zaseknutého behu (2× timeout) a druhý worker by
+      // ho spustil súbežne.
+      await database.query(`UPDATE processing_jobs SET locked_at=now() WHERE id=$1 AND status='running'`, [job.id]);
       // Tie isté hranice ako po extrakcii: výpis má vlastný návrh po pohyboch
       // a doklad v karanténe môže patriť inej firme.
       if (doklad.document_type !== 'BV' && doklad.status !== 'karantena') {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HttpError } from './http.js';
 import { buildServerDataPack, type PohodaCodeLookup } from './pohodaXml.js';
 
 // POHODA nemá pre dobropis vlastnú agendu — má vlastnú hodnotu invoiceType
@@ -109,11 +110,20 @@ describe('dobropis plnenia zo staršieho obdobia DPH', () => {
   it('dobropis aj ťarchopis so sadzbou z minulého obdobia export zastavia s vysvetlením', () => {
     expect(() => build(sDanou('dobropis', slovensky, '2025-02-10', 20))).toThrow(/predchádzajúceho obdobia DPH/);
     expect(() => build(sDanou('tarchopis', slovensky, '2025-03-01', 10))).toThrow(/historickou sadzbou/);
+    // Obyčajná chyba by v exporte aj Mostíku skončila ako „Nastala neočakávaná
+    // chyba" — účtovník by sa nedozvedel, ktorý doklad dávku blokuje.
+    let chyba: unknown;
+    try { build(sDanou('dobropis', slovensky, '2025-02-10', 20)); } catch (error) { chyba = error; }
+    expect(chyba).toBeInstanceOf(HttpError);
+    expect(chyba).toMatchObject({ statusCode: 409, code: 'export_historicka_sadzba' });
   });
 
   it('cudzia daň ostáva cudzou — rozhoduje dodávateľ, nie podtyp', () => {
     expect(build(sDanou('bezna', rakusky, '2026-03-10', 20))).toContain('<typ:priceNone>-120.00</typ:priceNone>');
     expect(build(sDanou('dobropis', rakusky, '2026-03-10', 20))).toContain('<typ:priceNone>-120.00</typ:priceNone>');
+    // Krajina chýba, IČ DPH je rakúske: nie je to stará slovenská sadzba.
+    const { krajina: _krajina, ...bezKrajiny } = rakusky;
+    expect(build(sDanou('dobropis', bezKrajiny, '2026-03-10', 20))).toContain('<typ:priceNone>-120.00</typ:priceNone>');
   });
 
   it('dobropis nesie číslo opravovaného dokladu, bežná faktúra nie', () => {

@@ -457,7 +457,9 @@ export function buildDataPack(
       const cudzia = doc.typ !== 'FV' && jeCudziDodavatel(doc.extracted.dodavatel);
       // Dobropis so sadzbou zo staršieho obdobia DPH export zastaví — zhoda so
       // server/pohodaXml.ts, tam je zdôvodnenie.
+      const krajinaIcDph = vatCountryIds(doc.extracted.dodavatel?.icDph);
       const historicka = (doc.podtyp === 'dobropis' || doc.podtyp === 'tarchopis') && !cudzia
+        && (!krajinaIcDph || krajinaIcDph === 'SK')
         ? [...doc.extracted.rozpisDph.map((row) => row.sadzba), ...(doc.extracted.polozky ?? []).map((item) => item.sadzbaDph)]
           .find((sadzba) => sadzbaZoStarsiehoObdobia(sadzba, datumPlnenia))
         : undefined;

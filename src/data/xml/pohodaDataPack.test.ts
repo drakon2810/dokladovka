@@ -205,6 +205,12 @@ describe('buildDataPack — slovenská sadzba DPH podľa dátumu plnenia', () =>
       extracted: { ...doklad2024().extracted, datumVystavenia: '2025-02-10', datumDodania: '2025-02-10' },
     } as Partial<DocumentItem>);
     expect(() => buildDataPack(ORG, [dobropis], CODE_LISTS)).toThrow(/predchádzajúceho obdobia DPH/);
+    // Rakúske IČ DPH bez krajiny: 20 % je daň dodávateľa, nie stará slovenská sadzba.
+    const bezKrajiny = mkDoc({
+      podtyp: 'dobropis',
+      extracted: { ...doklad2024({ nazov: 'ASFINAG', icDph: 'ATU12345678' }).extracted, datumVystavenia: '2026-03-10', datumDodania: '2026-03-10' },
+    } as Partial<DocumentItem>);
+    expect(buildDataPack(ORG, [bezKrajiny], CODE_LISTS)).toContain('<typ:priceNone>120.00</typ:priceNone>');
   });
 });
 

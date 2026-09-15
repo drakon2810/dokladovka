@@ -1,3 +1,4 @@
+import { HttpError } from './http.js';
 import { jeCudziDodavatel } from './services/dphAdvisor.js';
 
 export function escapeXml(value: unknown): string {
@@ -634,9 +635,15 @@ export function buildServerDataPack(input: {
     // historyHigh/historyLow + percentVAT, len keď to klient povolil v Globálnom
     // nastavení — doplniť po overení importu v testovacej POHODE.
     const oprava = snapshot.podtyp === 'dobropis' || snapshot.podtyp === 'tarchopis';
+    // Cudzie IČ DPH bez vyplnenej krajiny: jeCudziDodavatel ho berie ako tuzemca,
+    // no 20 % takého dodávateľa je jeho daň, nie stará slovenská sadzba.
+    const krajinaIcDph = vatCountryIds(supplier.icDph);
+    const strazitSadzbu = oprava && !cudzia && (!krajinaIcDph || krajinaIcDph === 'SK');
     const sadzbaDph = (sadzba: unknown) => {
-      if (oprava && !cudzia && sadzbaZoStarsiehoObdobia(sadzba, taxDate)) {
-        throw new Error(`Doklad ${id} (${snapshot.podtyp === 'dobropis' ? 'dobropis' : 'ťarchopis'}) má sadzbu DPH ${Number(sadzba)} %, ktorá k dátumu plnenia ${taxDate} na Slovensku neplatí: opravuje plnenie z predchádzajúceho obdobia DPH. Zaúčtujte ho v POHODE ručne s historickou sadzbou.`);
+      if (strazitSadzbu && sadzbaZoStarsiehoObdobia(sadzba, taxDate)) {
+        // HttpError: 409 s textom dôjde až k účtovníkovi v exporte aj v Mostíku,
+        // obyčajná chyba by skončila ako „Nastala neočakávaná chyba".
+        throw new HttpError(409, 'export_historicka_sadzba', `Doklad ${id} (${snapshot.podtyp === 'dobropis' ? 'dobropis' : 'ťarchopis'}) má sadzbu DPH ${Number(sadzba)} %, ktorá k dátumu plnenia ${taxDate} na Slovensku neplatí: opravuje plnenie z predchádzajúceho obdobia DPH. Zaúčtujte ho v POHODE ručne s historickou sadzbou.`);
       }
       return vatRateName(sadzba, taxDate, cudzia);
     };

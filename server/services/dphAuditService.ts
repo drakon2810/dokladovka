@@ -258,12 +258,16 @@ export class DphAuditor {
  * pri návrhu zaúčtovania (agendyHistorieRadu): dobropis z FP-D, pokladnica
  * z VPD/PPD podľa smeru. Dobropis učený z bežných faktúr by zdedil zvyk, ktorý
  * oprava nemá, a agendu „PD" korpus vôbec nevedie.
- * ponytail: druh bez histórie (prvý dobropis firmy) zvyk nemá a zladenie je
- * naprázdno; ústup na agendy typu ako agendyKorpusu, keď to začne chýbať.
+ * Druh bez histórie (prvý dobropis firmy) ustúpi na agendy typu ako
+ * agendyKorpusu — inak by zladenie PNnevymer → PN nebežalo a karta ukázala
+ * rozpor, ktorý do priznania zapisuje to isté.
  */
-function agendyPraxe(documentType: string, podtyp?: string, pokladnaTyp?: string): string[] {
-  if (documentType !== 'PD') return [agendaHistorie(documentType, podtyp)];
-  return pokladnaTyp === 'receipt' ? ['PPD'] : pokladnaTyp === 'expense' ? ['VPD'] : ['VPD', 'PPD'];
+function agendyPraxe(documentType: string, podtyp?: string, pokladnaTyp?: string): { druhu: string[]; zakladne: string[] } {
+  if (documentType !== 'PD') return { druhu: [agendaHistorie(documentType, podtyp)], zakladne: [documentType] };
+  return {
+    druhu: pokladnaTyp === 'receipt' ? ['PPD'] : pokladnaTyp === 'expense' ? ['VPD'] : ['VPD', 'PPD'],
+    zakladne: ['VPD', 'PPD'],
+  };
 }
 
 /** Číselník firmy pre audit — kód a zákonný popis, nič viac. */
@@ -282,13 +286,20 @@ export async function nacitajCiselnikPreAudit(
     [tenantId, organizationId],
   );
   // Zvyk firmy rozhoduje len tam, kde sa dva kódy správajú rovnako.
-  const historia = await database.query<{ kod: string; pocet: string }>(
-    `SELECT clenenie_dph_kod AS kod, count(*)::text AS pocet FROM ucto_historia
-      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[]) AND clenenie_dph_kod IS NOT NULL
-      GROUP BY 1`,
-    [tenantId, organizationId, agendyPraxe(documentType, podtyp, pokladnaTyp)],
+  // Druh „má históriu" podľa akéhokoľvek riadku, aj bez kódu — ako agendyKorpusu.
+  const { druhu, zakladne } = agendyPraxe(documentType, podtyp, pokladnaTyp);
+  const historia = await database.query<{ agenda: string; kod: string | null; pocet: string }>(
+    `SELECT agenda, clenenie_dph_kod AS kod, count(*)::text AS pocet FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+      GROUP BY 1, 2`,
+    [tenantId, organizationId, [...new Set([...druhu, ...zakladne])]],
   );
-  const prax = new Map(historia.rows.map((row) => [row.kod.trim(), Number(row.pocet)]));
+  const agendy = historia.rows.some((row) => druhu.includes(row.agenda)) ? druhu : zakladne;
+  const prax = new Map<string, number>();
+  for (const row of historia.rows) {
+    if (!row.kod || !agendy.includes(row.agenda)) continue;
+    prax.set(row.kod.trim(), (prax.get(row.kod.trim()) ?? 0) + Number(row.pocet));
+  }
 
   return {
     prax,
@@ -418,11 +429,18 @@ export async function posudADulozDph(
   }
   finalny = bezPrazdnehoNavrhu(finalny, input.navrhnuteClenenieKod, input.navrhnutaKvSekcia);
 
+  // Zapíše sa len k dokladu, ktorý je stále posúdeným druhom. Volanie modelu
+  // trvá sekundy: zmena druhu medzitým verdikt zmazala a bežiaci job ďalší
+  // nezaradí, opakovaná extrakcia zas posudzuje beh, ktorý na doklade nie je.
   await database.query(
     `INSERT INTO dph_audit
       (document_id,tenant_id,organization_id,posudene_clenenie_kod,posudena_kv_sekcia,verdikt,
        odporucane_clenenie_kod,odporucana_kv_sekcia,dovod,istota,model)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     SELECT $1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::text,$9::text,$10::numeric,$11::text
+      WHERE EXISTS (
+        SELECT 1 FROM documents
+         WHERE id=$1 AND tenant_id=$2 AND document_type=$12 AND podtyp=coalesce($13::text, 'bezna')
+           AND ($14::text IS NULL OR accounting->>'pokladnaTyp'=$14))
      ON CONFLICT (document_id) DO UPDATE SET
        posudene_clenenie_kod=excluded.posudene_clenenie_kod,
        posudena_kv_sekcia=excluded.posudena_kv_sekcia,
@@ -435,7 +453,8 @@ export async function posudADulozDph(
     [input.documentId, input.tenantId, input.organizationId,
       input.navrhnuteClenenieKod ?? null, input.navrhnutaKvSekcia ?? null,
       finalny.verdikt, finalny.odporucaneClenenieKod, finalny.odporucanaKvSekcia,
-      finalny.dovod, finalny.istota, config.openai.accountingModel],
+      finalny.dovod, finalny.istota, config.openai.accountingModel,
+      input.documentType, input.podtyp ?? null, input.pokladnaTyp ?? null],
   );
   return finalny;
 }
