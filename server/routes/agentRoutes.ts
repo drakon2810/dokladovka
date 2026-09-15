@@ -19,6 +19,7 @@ import { klucPolozky, konfliktPolozky, osvojRadBezIdentifikatora } from './codeL
 import { historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
 import { importujAdresar } from '../services/partnerService.js';
 import { parseDennik, ulozDennik } from '../services/uctoDennikService.js';
+import { publikaciaSchema, publikujImport, ulozDavku } from '../services/pohodaImportService.js';
 
 interface AgentAuth extends Record<string, unknown> {
   id: string;
@@ -105,6 +106,13 @@ const releaseSchema = z.object({
 });
 
 type ReleaseInput = z.infer<typeof releaseSchema>;
+
+// Dávka prenosu do stagingu (Mostík s historiaProtokol 2). Bez importId ide
+// dávka po starom rovno do živých tabuliek — tak posiela Mostík do 0.17.
+const davkaImportu = { importId: z.string().uuid().optional(), davka: z.number().int().min(0).optional() };
+const importIdSDavkou = (body: { importId?: string; davka?: number }) =>
+  (body.importId === undefined) === (body.davka === undefined);
+const importIdSDavkouChyba = { message: 'importId a davka sa posielajú spolu', path: ['davka'] };
 
 async function publishRelease(database: Database, body: ReleaseInput): Promise<void> {
   await database.transaction(async (tx) => {
@@ -310,7 +318,10 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
               l.db_name AS "dbName", l.accounting_year AS "uctovnyRok",
               COALESCE(l.preferred_year, 'latest') AS "preferredYear",
               (l.code_list_sync_requested_at IS NOT NULL) AS "syncRequested",
-              (l.training_sync_requested_at IS NOT NULL) AS "trainingSyncRequested"
+              (l.training_sync_requested_at IS NOT NULL) AS "trainingSyncRequested",
+              -- Server prijíma dávky do stagingu a publikáciu. Mostík 0.18 podľa
+              -- toho vyberie protokol; starší server pole nemá a agent ostane pri 1.
+              2 AS "historiaProtokol"
          FROM organizations o
          LEFT JOIN pohoda_company_links l ON l.organization_id=o.id AND l.tenant_id=o.tenant_id
         WHERE o.tenant_id=$1 AND o.archived=false ORDER BY o.name`, [agent.tenant_id],
@@ -325,7 +336,9 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       organizationId: z.string().uuid(),
       kind: syncRunKind,
       state: z.enum(['ok', 'error']),
-      itemCount: z.number().int().min(0).max(20_000),
+      // Korpus histórie ALPINY má ~22 000 riadkov a strop 20 000 ho odmietal
+      // — úspešná synchronizácia sa na serveri nezapísala vôbec. Stĺpec je integer.
+      itemCount: z.number().int().min(0).max(10_000_000),
       durationMs: z.number().int().min(0).max(86_400_000),
       errorCode: z.string().max(200).optional(),
     }).strict().parse(request.body);
@@ -431,9 +444,18 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       done: z.boolean().default(true),
       /** Prvá dávka úplného prenosu — hromadne načítaná pamäť sa postaví nanovo. */
       reset: z.boolean().optional(),
-    }).strict().parse(request.body);
+      ...davkaImportu,
+    }).strict().refine(importIdSDavkou, importIdSDavkouChyba).parse(request.body);
     const organization = await database.query('SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    // Dávka prenosu ide len do stagingu; reset aj done sa ignorujú — pamäť sa
+    // vymení až publikáciou a žiadosť o sync zmaže agent po všetkých troch.
+    if (body.importId !== undefined) {
+      return ulozDavku(database, {
+        tenantId: agent.tenant_id, organizationId: id, druh: 'pamat', importId: body.importId, davka: body.davka!,
+        obsah: { rows: body.rows }, pocet: body.rows.length, agentVersion: agent.agent_version,
+      });
+    }
     // Iba source='import', teda to, čo sa hromadne načítalo. Rozhodnutia, ktoré
     // účtovník sám schválil v appke, majú source='approved' a ostávajú — sú to
     // tie cennejšie. Bez resetu by staré riadky ostali s podtypom 'bezna' a
@@ -503,36 +525,45 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   app.put('/api/agent/organizations/:id/ucto-history', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const body = historyImportSchema.parse(request.body);
+    const body = historyImportSchema.extend(davkaImportu).strict().refine(importIdSDavkou, importIdSDavkouChyba).parse(request.body);
     const organization = await database.query(
       'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
-    // Prvá dávka úplného prenosu korpus zahodí: agent posiela CELÚ históriu,
-    // takže je to zrkadlo POHODY, nie hromada, čo len rastie. Bez toho by po
-    // rozdelení agend (dobropis FP → FP-D) vznikol iný hash a doklady by sa
-    // zdvojili — pôvodné pod FP a tie isté ešte raz pod FP-D.
-    if (body.reset) {
-      const zmazane = await database.query(
-        'DELETE FROM ucto_historia WHERE tenant_id=$1 AND organization_id=$2', [agent.tenant_id, id]);
-      console.info(`[ucto-historia] ${id}: reset pred prenosom, zahodených ${zmazane.rowCount ?? 0} riadkov`);
-    }
-    const result = body.rows.length > 0
-      ? await importUctoHistory(database, {
-          tenantId: agent.tenant_id, organizationId: id, rows: body.rows, source: 'mdb',
-        })
-      : { imported: 0, duplicates: 0, bezKodu: 0 };
-    // Číselné rady z dokladov: jediná cesta k radom, ktoré POHODA do číselníka
-    // nedá (bez vyplneného Obdobia ich jej vlastná schéma nevie zapísať).
-    const rady = await ulozRadyZDokladov(database, {
-      tenantId: agent.tenant_id, organizationId: id, series: body.series ?? [],
-    });
-    if (rady.nove > 0) {
-      await writeAudit(database, {
-        tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
-        action: 'agent.series_from_documents', entityType: 'organization', entityId: id,
-        correlationId: request.id, metadata: rady,
+    if (body.importId !== undefined) {
+      return ulozDavku(database, {
+        tenantId: agent.tenant_id, organizationId: id, druh: 'historia', importId: body.importId, davka: body.davka!,
+        obsah: { rows: body.rows, series: body.series ?? [] }, pocet: body.rows.length, agentVersion: agent.agent_version,
       });
     }
+    const { result, rady } = await database.transaction(async (tx) => {
+      // Prvá dávka úplného prenosu korpus zahodí: agent posiela CELÚ históriu,
+      // takže je to zrkadlo POHODY, nie hromada, čo len rastie. Bez toho by po
+      // rozdelení agend (dobropis FP → FP-D) vznikol iný hash a doklady by sa
+      // zdvojili — pôvodné pod FP a tie isté ešte raz pod FP-D.
+      if (body.reset) {
+        const zmazane = await tx.query(
+          'DELETE FROM ucto_historia WHERE tenant_id=$1 AND organization_id=$2', [agent.tenant_id, id]);
+        console.info(`[ucto-historia] ${id}: reset pred prenosom, zahodených ${zmazane.rowCount ?? 0} riadkov`);
+      }
+      const result = body.rows.length > 0
+        ? await importUctoHistory(tx, {
+            tenantId: agent.tenant_id, organizationId: id, rows: body.rows, source: 'mdb',
+          })
+        : { imported: 0, duplicates: 0, bezKodu: 0 };
+      // Číselné rady z dokladov: jediná cesta k radom, ktoré POHODA do číselníka
+      // nedá (bez vyplneného Obdobia ich jej vlastná schéma nevie zapísať).
+      const rady = await ulozRadyZDokladov(tx, {
+        tenantId: agent.tenant_id, organizationId: id, series: body.series ?? [],
+      });
+      if (rady.nove > 0) {
+        await writeAudit(tx, {
+          tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
+          action: 'agent.series_from_documents', entityType: 'organization', entityId: id,
+          correlationId: request.id, metadata: rady,
+        });
+      }
+      return { result, rady };
+    });
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
     return { ...result, rady };
   });
@@ -546,12 +577,22 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const { xml } = z.object({ xml: z.string().min(1).max(28_000_000) }).strict().parse(request.body);
+    const body = z.object({ xml: z.string().min(1).max(28_000_000), ...davkaImportu })
+      .strict().refine(importIdSDavkou, importIdSDavkouChyba).parse(request.body);
     const organization = await database.query(
       'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
-    const { riadky, preskocene } = parseDennik(xml);
-    const vysledok = await ulozDennik(database, { tenantId: agent.tenant_id, organizationId: id, riadky });
+    // Rozoberá sa hneď aj pri dávke do stagingu: zlé XML má padnúť na tejto
+    // strane (400), nie až pri publikácii celého roka.
+    const { riadky, preskocene } = parseDennik(body.xml);
+    if (body.importId !== undefined) {
+      return ulozDavku(database, {
+        tenantId: agent.tenant_id, organizationId: id, druh: 'dennik', importId: body.importId, davka: body.davka!,
+        // Počet = všetky proviozky strany; toľko ich napočítal aj agent.
+        obsah: { riadky, preskocene }, pocet: riadky.length + preskocene, agentVersion: agent.agent_version,
+      });
+    }
+    const vysledok = await database.transaction((tx) => ulozDennik(tx, { tenantId: agent.tenant_id, organizationId: id, riadky }));
     await writeAudit(database, {
       tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
       action: 'ucto_dennik.imported', entityType: 'organization', entityId: id,
@@ -559,6 +600,23 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
     return { ...vysledok, preskocene };
+  });
+
+  // Publikácia prenosu: overí manifest (všetky dávky, počet riadkov, stav
+  // každej agendy POHODY) a živé dáta vymení v jednej transakcii. Agent ju po
+  // timeoute zopakuje — publikovaný prenos vráti ten istý výsledok.
+  app.post('/api/agent/organizations/:id/importy/:importId/publikuj', async (request) => {
+    const agent = await requireAgent(request, database);
+    const { id, importId } = z.object({ id: z.string().uuid(), importId: z.string().uuid() }).parse(request.params);
+    const body = publikaciaSchema.parse(request.body);
+    const organization = await database.query(
+      'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
+    if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const vysledok = await publikujImport(database, {
+      tenantId: agent.tenant_id, organizationId: id, importId, agentId: agent.id, correlationId: request.id, body,
+    });
+    await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
+    return vysledok;
   });
 
   // Originálny sken dokladu pre agenta — po úspešnom prenose ho uloží do

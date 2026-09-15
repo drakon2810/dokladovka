@@ -59,6 +59,27 @@ describe('DELETE /api/organizations/:id', () => {
       [randomUUID(), seeded.tenantId, seeded.organizationId],
     );
 
+    // Denník, korpus histórie a rozpracovaný prenos z Mostíka. Denník nemá
+    // ON DELETE CASCADE — bez neho v zozname mazanie padalo na cudzom kľúči.
+    await database.query(
+      `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,ucet_md,ucet_dal)
+       VALUES ($1,$2,$3,'9001','Prijaté faktúry','501200','321100')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO ucto_historia (id,tenant_id,organization_id,agenda,line_text_normalized,source,riadok_hash)
+       VALUES ($1,$2,$3,'FP','tonery','mdb','h1')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId],
+    );
+    const importId = randomUUID();
+    await database.query(
+      `INSERT INTO pohoda_importy (id,tenant_id,organization_id,druh) VALUES ($1,$2,$3,'historia')`,
+      [importId, seeded.tenantId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO pohoda_import_davky (import_id,davka,obsah,pocet) VALUES ($1,0,'{"rows":[]}'::jsonb,0)`, [importId],
+    );
+
     const deleted = await app.inject({ method: 'DELETE', url: `/api/organizations/${seeded.organizationId}`, headers });
     expect(deleted.statusCode, deleted.body).toBe(204);
 
@@ -68,6 +89,8 @@ describe('DELETE /api/organizations/:id', () => {
       ['partners', 'organization_id'], ['inbound_attachments', 'organization_id'], ['inbound_emails', 'organization_id'],
       ['organization_email_aliases', 'organization_id'], ['document_queues', 'organization_id'],
       ['pohoda_company_links', 'organization_id'], ['organization_memberships', 'organization_id'],
+      ['ucto_dennik', 'organization_id'], ['ucto_historia', 'organization_id'], ['pohoda_importy', 'organization_id'],
+      ['pohoda_import_davky', 'import_id'],
     ] as const) {
       const rows = await database.query(`SELECT 1 FROM ${table} WHERE ${column}=$1`, [seeded.organizationId]);
       expect(rows.rowCount, `${table} nie je vyčistená`).toBe(0);

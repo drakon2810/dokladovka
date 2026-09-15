@@ -124,21 +124,31 @@ public static class PohodaXml
     /// Číta históriu, v POHODE nič nemení. Na rozdiel od BuildInvoiceListRequest,
     /// ktorý plní pamäť dodávateľov a preto berie len prijaté faktúry.
     /// </summary>
+    // Požiadavky histórie v poradí dataPackItemov h01, h02… Podľa poradia sa
+    // odpoveď (responsePackItem id) páruje späť na agendu do manifestu prenosu.
+    //
+    // Ostatné záväzky (commitment) nie sú v HistoryInvoiceTypes zámerne —
+    // tam ide o typy, ktoré majú vlastnú agendu korpusu. OZ vzniká až pri
+    // parsovaní ako zvyšok agendy FA, ale dopyt naň sa musí poslať zvlášť,
+    // inak POHODA žiadne nevráti. Presne to sa aj dialo: komentár sľuboval
+    // ostatné záväzky, korpus ich nemal ani jeden a analýza pre agendu OZ
+    // nenašla nič — nie preto, že by ich firma neúčtovala.
+    // ponytail: jedna požiadavka bez stránkovania na databázu (stačí všetkým 8
+    //   firmám). Keď firma narazí na parts alebo timeout, stránkovať agendy
+    //   cez ftr:idFrom ako denník.
+    private static readonly (string Poziadavka, string? Agenda, string Xml)[] HistoryRequests =
+    [
+        .. HistoryInvoiceTypes.Append((Type: "commitment", Agenda: "OZ")).Select(item => (item.Type, (string?)item.Agenda,
+            $"""<lst:listInvoiceRequest version="2.0" invoiceType="{item.Type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest>""")),
+        // Pokladňa nesie príjem aj výdaj (PPD/VPD) — agenda sa určí až z dokladu.
+        ("voucher", null, """<lst:listVoucherRequest version="2.0" voucherVersion="2.0"><lst:requestVoucher/></lst:listVoucherRequest>"""),
+        ("intDoc", "INT", """<lst:listIntDocRequest version="2.0" intDocVersion="2.0"><lst:requestIntDoc/></lst:listIntDocRequest>"""),
+    ];
+
     public static string BuildHistoryListRequest(string ico, string requestId)
     {
-        var items = new List<string>();
-        // Ostatné záväzky (commitment) nie sú v HistoryInvoiceTypes zámerne —
-        // tam ide o typy, ktoré majú vlastnú agendu korpusu. OZ vzniká až pri
-        // parsovaní ako zvyšok agendy FA, ale dopyt naň sa musí poslať zvlášť,
-        // inak POHODA žiadne nevráti. Presne to sa aj dialo: komentár sľuboval
-        // ostatné záväzky, korpus ich nemal ani jeden a analýza pre agendu OZ
-        // nenašla nič — nie preto, že by ich firma neúčtovala.
-        foreach (var (type, _) in HistoryInvoiceTypes.Append(("commitment", "OZ")))
-        {
-            items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listInvoiceRequest version="2.0" invoiceType="{type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest></dat:dataPackItem>""");
-        }
-        items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listVoucherRequest version="2.0" voucherVersion="2.0"><lst:requestVoucher/></lst:listVoucherRequest></dat:dataPackItem>""");
-        items.Add($"""  <dat:dataPackItem id="h{items.Count + 1:D2}" version="2.0"><lst:listIntDocRequest version="2.0" intDocVersion="2.0"><lst:requestIntDoc/></lst:listIntDocRequest></dat:dataPackItem>""");
+        var items = HistoryRequests.Select((request, index) =>
+            $"""  <dat:dataPackItem id="h{index + 1:D2}" version="2.0">{request.Xml}</dat:dataPackItem>""");
         return $"""
 <?xml version="1.0" encoding="Windows-1250"?>
 <dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export historie pre uctovny profil"
@@ -193,6 +203,11 @@ public static class PohodaXml
         var document = XDocument.Parse(xml, LoadOptions.None);
         var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
         if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
+        // Chyba položky (napr. chýbajúce právo) nesmie vyzerať ako prázdna strana
+        // — slučka by skončila a denník by sa ohlásil ako úspešne prenesený.
+        if (root.Elements().Any(node => IsStormware(node) && node.Name.LocalName == "responsePackItem"
+            && node.Attribute("state")?.Value is { } stav && stav != "ok"))
+            throw new InvalidOperationException($"POHODA vrátila chybu denníka: {ErrorNote(root)}");
         var polozky = document.Descendants()
             .Where(node => IsStormware(node) && node.Name.LocalName == "accountingItem")
             .ToArray();
@@ -241,7 +256,12 @@ public static class PohodaXml
         /// <summary>Krajina protistrany (ISO kód). Firma rady delí aj podľa nej
         /// („Prijaté faktúry SK" proti „zahraničné") a bez nej sa to z histórie
         /// nedá vyčítať.</summary>
-        string? Krajina = null);
+        string? Krajina = null,
+        /// <summary>Natívne id dokladu a položky v POHODE (inv:id). Číslo, dátum
+        /// aj poradie položky sa dajú zmeniť, id nie — server z nich skladá
+        /// identitu riadka. Starý server ich nepozná, posielajú sa len v protokole 2.</summary>
+        long? DokladId = null,
+        long? PolozkaId = null);
 
     /// <summary>
     /// Číselný rad prečítaný z DOKLADU, nie z číselníka. POHODA rad, ktorý nemá
@@ -253,12 +273,16 @@ public static class PohodaXml
     /// </summary>
     public sealed record SeriesRow(string ExternalId, string Kod, string Agenda, string? PosledneCislo);
 
-    public sealed record ParsedHistory(IReadOnlyList<HistoryRow> Rows, IReadOnlyList<string> Warnings, IReadOnlyList<SeriesRow> Series);
+    /// <summary>Agendy = manifest prenosu po požiadavkách (h01…): stav, počty
+    /// a preskočené podľa dôvodu. ProgramVersion a Kluc sú z hlavičky odpovede.</summary>
+    public sealed record ParsedHistory(
+        IReadOnlyList<HistoryRow> Rows, IReadOnlyList<string> Warnings, IReadOnlyList<SeriesRow> Series,
+        IReadOnlyList<ImportAgenda> Agendy, string? ProgramVersion, string? Kluc);
 
     /// <summary>
-    /// Rozloží odpoveď na BuildHistoryListRequest na riadky korpusu. Doklad bez
-    /// textu alebo bez predkontácie aj členenia sa preskočí — pre analýzu nenesie
-    /// signál. Duplicity sa NEZLUČUJÚ: početnosť je pre analýzu hlavný signál
+    /// Rozloží odpoveď na BuildHistoryListRequest na riadky korpusu. Hlavička bez
+    /// textu alebo bez predkontácie aj členenia sa preskočí, jej položky nie.
+    /// Duplicity sa NEZLUČUJÚ: početnosť je pre analýzu hlavný signál
     /// a odtlačok riadka na serveri ich rozlíši podľa čísla dokladu.
     /// </summary>
     /// <summary>Záznam adresára POHODY — to, čo účtovník o firme raz zadal.</summary>
@@ -321,18 +345,29 @@ public static class PohodaXml
         var rows = new List<HistoryRow>();
         var series = new Dictionary<string, SeriesRow>(StringComparer.Ordinal);
 
+        // Počty po responsePackItem (h01…) — z nich je manifest prenosu.
+        var pocty = new Dictionary<string, PoctyPoziadavky>(StringComparer.Ordinal);
+
         foreach (var (element, headerName, agenda) in HistoryDocuments(document))
         {
+            var idPoziadavky = element.Ancestors().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "responsePackItem")?.Attribute("id")?.Value ?? string.Empty;
+            if (!pocty.TryGetValue(idPoziadavky, out var pocet)) pocty[idPoziadavky] = pocet = new PoctyPoziadavky();
+            pocet.Dokladov++;
             var header = element.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == headerName);
-            if (header is null) continue;
-            // Rad sa zbiera PRED preskočením dokladu nižšie: doklad bez textu
+            if (header is null)
+            {
+                pocet.Preskoc("bezHlavicky");
+                continue;
+            }
+            // Rad sa zbiera PRED preskočením hlavičky nižšie: doklad bez textu
             // alebo bez predkontácie pre korpus signál nenesie, ale svoj číselný
             // rad má rovnako platný ako každý iný.
             var (radExternalId, radKod) = ZozbierajRad(series, header, headerName);
-            var lineText = Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value);
+            var textHlavicky = VlastnyText(header);
             var predkontacia = RefIds(header, "accounting");
             var clenenieDph = RefIds(header, "classificationVAT");
-            if (lineText is null || (predkontacia is null && clenenieDph is null)) continue;
+            var polozky = DetailItems(element, headerName).ToArray();
+            pocet.Poloziek += polozky.Length;
             var partner = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "partnerIdentity");
             var dokladCislo = Trimmed(FindText(header, "numberRequested") ?? FindText(header, "number"));
             var datum = IsoDate(FindText(header, "date"));
@@ -341,14 +376,28 @@ public static class PohodaXml
             var agendaDokladu = agenda(header);
             var strediskoHlavicky = RefIds(header, "centre");
             var krajina = KrajinaPartnera(partner);
-            // Sadzba na hlavičke sa nedáva: doklad ich máva viac (5 % aj 19 %
-            // na jednom bločku) a jedna hodnota by klamala. Nesú ju položky.
-            rows.Add(new HistoryRow(
-                agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, lineText,
-                predkontacia, clenenieDph,
-                ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")), 0,
-                StrediskoKod: strediskoHlavicky,
-                RadExternalId: radExternalId, RadKod: radKod, Krajina: krajina));
+            var dokladId = NativeId(header);
+            // Hlavička bez textu alebo bez zaúčtovania doteraz zahodila celý doklad
+            // aj s položkami (F11) — a práve v nich býva rozúčtovanie, napríklad
+            // „Natural 95 (nedaňová časť 20 %)" s PHM-Nadspotreba / PN. Hlavičkový
+            // riadok ide do korpusu, keď má zaúčtovanie; bez vlastného textu si
+            // požičia text prvej položky. Položky sa čítajú vždy. Rovnako to robí
+            // ručná cesta na serveri (uctoHistoriaXml.ts).
+            var lineText = textHlavicky ?? polozky.Select(dvojica => VlastnyText(dvojica.Item)).FirstOrDefault(text => text is not null);
+            if (predkontacia is null && clenenieDph is null) pocet.Preskoc("hlavickaBezKodu");
+            else if (lineText is null) pocet.Preskoc("hlavickaBezTextu");
+            else
+            {
+                // Sadzba na hlavičke sa nedáva: doklad ich máva viac (5 % aj 19 %
+                // na jednom bločku) a jedna hodnota by klamala. Nesú ju položky.
+                rows.Add(new HistoryRow(
+                    agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, lineText,
+                    predkontacia, clenenieDph,
+                    ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")), 0,
+                    StrediskoKod: strediskoHlavicky,
+                    RadExternalId: radExternalId, RadKod: radKod, Krajina: krajina, DokladId: dokladId));
+                pocet.Riadkov++;
+            }
 
             // Položky dokladu. POHODA ich v odpovedi posiela celé (invoiceItem
             // má text, accounting aj classificationVAT), korpus z nich doteraz
@@ -368,14 +417,14 @@ public static class PohodaXml
             // 95 (daňová časť 80 %)" za 52,68 drží hlavičkové zaúčtovanie
             // a inak by v korpuse ostalo len osamotené „13,17 nedaňové",
             // z ktorého pomer nikto nevyčíta.
-            var rozuctovany = DetailItems(element, headerName).Any(dvojica =>
+            var rozuctovany = polozky.Any(dvojica =>
             {
                 var itemPredkontacia = RefIds(dvojica.Item, "accounting");
                 var itemClenenie = RefIds(dvojica.Item, "classificationVAT");
                 return (itemPredkontacia is not null || itemClenenie is not null)
                     && !(itemPredkontacia == predkontacia && itemClenenie == clenenieDph);
             });
-            foreach (var (item, poradie) in DetailItems(element, headerName))
+            foreach (var (item, poradie) in polozky)
             {
                 var itemPredkontacia = RefIds(item, "accounting");
                 var itemClenenie = RefIds(item, "classificationVAT");
@@ -390,11 +439,14 @@ public static class PohodaXml
                 // destinácia, tuzemsko/zahraničie, s § 69 aj bez).
                 // Bez vlastného textu ide o čistý duplikát hlavičky a preskočí sa;
                 // korpus tak rastie o texty, nie o zopakované zaúčtovanie.
-                var maVlastnyText = Trimmed(item.Elements()
-                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value) is not null;
-                if (!rozuctovany && !maVlastnyText && itemPredkontacia is null && itemClenenie is null) continue;
-                if (!rozuctovany && !maVlastnyText
-                    && itemPredkontacia == predkontacia && itemClenenie == clenenieDph) continue;
+                var vlastnyText = VlastnyText(item);
+                if (!rozuctovany && vlastnyText is null
+                    && ((itemPredkontacia is null && itemClenenie is null)
+                        || (itemPredkontacia == predkontacia && itemClenenie == clenenieDph)))
+                {
+                    pocet.Preskoc("polozkaDuplikatHlavicky");
+                    continue;
+                }
                 // Text položky smie chýbať. Na reálnom exporte ALPINY je bez textu
                 // 18 zo 68 rozúčtovaných položiek — a sú medzi nimi tie
                 // najvýrečnejšie: faktúra Print-Office má prázdny text presne na
@@ -402,14 +454,27 @@ public static class PohodaXml
                 // mimo kontrolného výkazu. Preskočiť ich znamená prísť práve
                 // o dôkaz rozúčtovania. Namiesto toho sa berie text hlavičky —
                 // ten účtovník pri položke aj tak vidí.
-                var itemText = Trimmed(item.Elements()
-                    .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value)
-                    ?? lineText;
+                // Dedí sa len VLASTNÝ text hlavičky — text inej položky by riadok
+                // opísal cudzím nákupom. Bez textu či bez zaúčtovania (hlavička ho
+                // nemá a položka tiež nie) riadok nemá čo naučiť.
+                var itemText = vlastnyText ?? textHlavicky;
+                var kodPredkontacie = itemPredkontacia ?? predkontacia;
+                var kodClenenia = itemClenenie ?? clenenieDph;
+                if (itemText is null)
+                {
+                    pocet.Preskoc("polozkaBezTextu");
+                    continue;
+                }
+                if (kodPredkontacie is null && kodClenenia is null)
+                {
+                    pocet.Preskoc("polozkaBezKodu");
+                    continue;
+                }
                 var ceny = item.Elements()
                     .FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "homeCurrency");
                 rows.Add(new HistoryRow(
                     agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, itemText,
-                    itemPredkontacia ?? predkontacia, itemClenenie ?? clenenieDph,
+                    kodPredkontacie, kodClenenia,
                     ZakladnaKvSekcia(RefIds(item, "classificationKVDPH"))
                         ?? ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")),
                     poradie,
@@ -418,7 +483,9 @@ public static class PohodaXml
                     SadzbaDph: SadzbaDph(item),
                     StrediskoKod: RefIds(item, "centre") ?? strediskoHlavicky,
                     // Rad aj krajina patria dokladu, položka ich dedí z hlavičky.
-                    RadExternalId: radExternalId, RadKod: radKod, Krajina: krajina));
+                    RadExternalId: radExternalId, RadKod: radKod, Krajina: krajina,
+                    DokladId: dokladId, PolozkaId: NativeId(item)));
+                pocet.Riadkov++;
             }
         }
 
@@ -426,8 +493,57 @@ public static class PohodaXml
             .Where(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value != "ok")
             .Select(item => FindText(item, "note") ?? item.Attribute("note")?.Value ?? "POHODA nevrátila časť dokladov.")
             .ToArray();
-        return new ParsedHistory(rows, warnings, series.Values.ToArray());
+        // Manifest: každá odoslaná požiadavka so stavom a počtami. Celkový počet
+        // záznamov POHODA nevracia — dôkazom úplnosti je len stav a absencia parts.
+        var agendy = HistoryRequests.Select((poziadavka, index) =>
+        {
+            var id = $"h{index + 1:D2}";
+            var polozka = root.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("id")?.Value == id);
+            var pocet = pocty.GetValueOrDefault(id) ?? new PoctyPoziadavky();
+            var poznamka = Trimmed(polozka?.Attribute("note")?.Value);
+            return new ImportAgenda(
+                poziadavka.Poziadavka, poziadavka.Agenda, StavPoziadavky(polozka),
+                poznamka is { Length: > 1000 } ? poznamka[..1000] : poznamka,
+                pocet.Dokladov, pocet.Poloziek, pocet.Riadkov, pocet.Preskocene);
+        }).ToArray();
+        return new ParsedHistory(rows, warnings, series.Values.ToArray(), agendy,
+            Trimmed(root.Attribute("programVersion")?.Value), Trimmed(root.Attribute("key")?.Value));
     }
+
+    private sealed class PoctyPoziadavky
+    {
+        public int Dokladov { get; set; }
+        public int Poloziek { get; set; }
+        public int Riadkov { get; set; }
+        public Dictionary<string, int> Preskocene { get; } = new(StringComparer.Ordinal);
+        public void Preskoc(string dovod) => Preskocene[dovod] = Preskocene.GetValueOrDefault(dovod) + 1;
+    }
+
+    /// <summary>
+    /// Stav požiadavky v odpovedi: chýbajúca je chyba, inak stav položky,
+    /// potom stav zoznamu a nakoniec rdc:parts — POHODA vrátila len časť
+    /// záznamov a zvyšok rozdelila do ďalších súborov.
+    /// </summary>
+    private static string StavPoziadavky(XElement? polozka)
+    {
+        if (polozka is null) return "chyba";
+        if (polozka.Attribute("state")?.Value is { } stav && stav != "ok") return stav;
+        var zoznam = polozka.Elements().FirstOrDefault(IsStormware);
+        if (zoznam?.Attribute("state")?.Value is { } stavZoznamu && stavZoznamu != "ok") return stavZoznamu;
+        return zoznam?.Elements().Any(node => IsStormware(node) && node.Name.LocalName == "parts") == true ? "parts" : "ok";
+    }
+
+    /// <summary>
+    /// Natívne id záznamu POHODY — LEN priame dieťa „id". FindText hľadá
+    /// v potomkoch a vrátil by typ:id číselného radu (number/typ:id) či
+    /// predkontácie, teda id niečoho iného.
+    /// </summary>
+    private static long? NativeId(XElement element) =>
+        long.TryParse(element.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "id")?.Value.Trim(),
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) && id > 0 ? id : null;
+
+    private static string? VlastnyText(XElement element) =>
+        Trimmed(element.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "text")?.Value);
 
     // Agenda číselníka podľa typu dokladu. POZOR, je to iný slovník než agendy
     // korpusu (FP/FV/OZ…): rad sa v ponuke filtruje presnou zhodou s agendou,

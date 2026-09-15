@@ -25,11 +25,12 @@ public sealed class AgentCycleRunner
     private const int TrainingMaxAttempts = 3;
     private readonly Dictionary<string, int> _trainingSyncAttempts = new(StringComparer.Ordinal);
 
-    public AgentCycleRunner(AgentSettings settings, AgentSecrets secrets, IAgentLog log)
+    // handler: test podstrčí jeden HTTP handler cloudu aj mServeru a prejde celý cyklus bez siete.
+    public AgentCycleRunner(AgentSettings settings, AgentSecrets secrets, IAgentLog log, HttpMessageHandler? handler = null)
     {
         _settings = settings;
         _log = log;
-        _backend = new BackendClient(settings.CloudBaseUrl, secrets.AgentToken, log);
+        _backend = new BackendClient(settings.CloudBaseUrl, secrets.AgentToken, log, handler);
         _validator = new PohodaSchemaValidator(settings.SchemaDirectory);
         _pendingJobs = new PendingJobStore();
         _stateStore = new RuntimeStateStore();
@@ -55,7 +56,7 @@ public sealed class AgentCycleRunner
                 var secret = secretByEndpoint.TryGetValue(endpoint.Id, out var value)
                     ? value
                     : throw new InvalidOperationException($"Chýbajú prihlasovacie údaje pre mServer {endpoint.Id}.");
-                return endpoint.IsCli ? new PohodaCliClient(endpoint, secret, log) : new MServerClient(endpoint, secret, log);
+                return endpoint.IsCli ? new PohodaCliClient(endpoint, secret, log) : new MServerClient(endpoint, secret, log, handler);
             },
             StringComparer.OrdinalIgnoreCase);
     }
@@ -320,6 +321,9 @@ public sealed class AgentCycleRunner
             return;
         }
         var stopwatch = Stopwatch.StartNew();
+        // Protokol 2: každý druh ide do stagingu pod vlastným importId a živé dáta
+        // sa vymenia až publikáciou — výpadok uprostred nechá celú starú históriu.
+        var protokol2 = organization.HistoriaProtokol >= 2;
         try
         {
             var requestXml = PohodaXml.BuildInvoiceListRequest(organization.Ico, $"trening-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
@@ -336,37 +340,75 @@ public sealed class AgentCycleRunner
             var batches = parsed.Items.Count == 0
                 ? new List<TrainingDecision[]> { Array.Empty<TrainingDecision>() }
                 : parsed.Items.Chunk(2000).ToList();
+            var importId = Guid.NewGuid();
             for (var index = 0; index < batches.Count; index++)
             {
+                if (protokol2)
+                {
+                    await _backend.UploadTrainingDecisionsAsync(
+                        organization.OrganizationId, batches[index], null, null, importId, index, cancellationToken);
+                    continue;
+                }
                 // Prvá dávka nesie reset: hromadne načítaná pamäť sa postaví z tohto
                 // prenosu. Rozhodnutia schválené účtovníkom v appke ostávajú.
                 var result = await _backend.UploadTrainingDecisionsAsync(
-                    organization.OrganizationId, batches[index], index == batches.Count - 1, index == 0, cancellationToken);
+                    organization.OrganizationId, batches[index], index == batches.Count - 1, index == 0, null, null, cancellationToken);
                 imported += result.Imported;
                 duplicates += result.Duplicates;
                 rejected += result.Rejected;
+            }
+            if (protokol2)
+            {
+                // Kódy sa prekladajú až pri publikácii — odmietnuté riadky pozná len jej odpoveď.
+                var publikovane = await _backend.PublishImportAsync(
+                    organization.OrganizationId, importId, "pamat", batches.Count, parsed.Items.Count,
+                    new ImportManifest(target.Company.DatabaseName, RokDatabazy(target), null, null,
+                    [
+                        new ImportAgenda("listInvoice", "FP", parsed.Warnings.Count == 0 ? "ok" : "error", null,
+                            parsed.Items.Count, 0, parsed.Items.Count, new Dictionary<string, int>()),
+                    ]),
+                    cancellationToken);
+                (imported, duplicates, rejected) = (publikovane.Imported, publikovane.Duplicates, publikovane.Rejected);
             }
             // Korpus histórie pre účtovný profil ide tou istou žiadosťou o sync —
             // účtovník tak nemusí nosiť .mdb ručne, hoci agent databázu firmy vidí.
             // Zlyhanie tu nesmie zhodiť tréning vyššie: pamäť dodávateľov je
             // dôležitejšia a už je nahratá.
-            try { await SyncUctoHistoryAsync(organization, target, cancellationToken); }
-            catch (Exception error) { _log.Error("ucto_history_sync_failed", error, new { organization.OrganizationId }); }
+            var historiaOk = await SkusAsync(organization.OrganizationId, "uctovnyProfil", "ucto_history_sync_failed",
+                () => SyncUctoHistoryAsync(organization, target, cancellationToken), cancellationToken);
 
             // Denník je tretí pohľad na tie isté doklady: hlavička hovorí, ako
             // sa doklad zaúčtoval, položky ako sa rozúčtoval, denník na aké
             // účty to nakoniec padlo. Zlyhanie ho nesmie zhodiť zvyšok.
-            try { await SyncUctoDennikAsync(organization, target, cancellationToken); }
-            catch (Exception error) { _log.Error("ucto_dennik_sync_failed", error, new { organization.OrganizationId }); }
+            var dennikOk = await SkusAsync(organization.OrganizationId, "uctovnyDennik", "ucto_dennik_sync_failed",
+                () => SyncUctoDennikAsync(organization, target, cancellationToken), cancellationToken);
+
+            var zlyhanie = !historiaOk ? "uctovnyProfil" : !dennikOk ? "uctovnyDennik" : null;
+            if (protokol2)
+            {
+                if (zlyhanie is not null)
+                {
+                    // Žiadosť o sync ostáva — celý prenos sa zopakuje ďalším cyklom,
+                    // kým nevyprší počet pokusov.
+                    await HandleTrainingSyncFailureAsync(organization.OrganizationId, zlyhanie, (int)stopwatch.ElapsedMilliseconds, cancellationToken);
+                    return;
+                }
+                // Dávky do stagingu žiadosť nemažú. Zmaže ju až prázdne done=true
+                // po všetkých troch publikáciách, rovnako ako pri vzdaní sa.
+                await _backend.UploadTrainingDecisionsAsync(
+                    organization.OrganizationId, Array.Empty<TrainingDecision>(), true, null, null, null, cancellationToken);
+            }
 
             _trainingSyncAttempts.Remove(organization.OrganizationId);
             // Nič neprešlo a všetko odmietnuté = pravdepodobne chýbajú číselníky —
             // do telemetrie ide error, nech to nevyzerá ako úspešná synchronizácia.
+            // Rovnako keď zlyhala história alebo denník: tréning „ok" by na serveri
+            // vyzeral ako úplný prenos.
             var allRejected = rejected > 0 && imported == 0 && duplicates == 0;
+            var chyba = zlyhanie ?? (allRejected ? "rows_rejected" : null);
             await TrySendSyncResultAsync(new AgentSyncResult(
-                organization.OrganizationId, "treningAi", allRejected ? "error" : "ok",
-                Math.Min(parsed.Items.Count, 20_000), (int)stopwatch.ElapsedMilliseconds,
-                allRejected ? "rows_rejected" : null), cancellationToken);
+                organization.OrganizationId, "treningAi", chyba is null ? "ok" : "error",
+                parsed.Items.Count, (int)stopwatch.ElapsedMilliseconds, chyba), cancellationToken);
             _log.Info("training_synced", new { organization.OrganizationId, rows = parsed.Items.Count, imported, duplicates, rejected, durationMs = stopwatch.ElapsedMilliseconds, warnings = parsed.Warnings.Count });
         }
         catch (Exception error)
@@ -389,8 +431,9 @@ public sealed class AgentCycleRunner
         var stopwatch = Stopwatch.StartNew();
         // Rok berie pripojená databáza — POHODA má na účtovný rok vlastný súbor,
         // takže filter na iný rok by z nej nevrátil nič.
-        var rok = int.TryParse(target.Company.Year, out var zDatabazy) && zDatabazy > 1990
-            ? zDatabazy : DateTimeOffset.UtcNow.Year;
+        var rok = RokDatabazy(target);
+        var protokol2 = organization.HistoriaProtokol >= 2;
+        var importId = Guid.NewGuid();
         // Stránkovanie: strana má 10 000 proviozok (strop schémy). Server riadky
         // upsertuje podľa externého id, takže prekrytie strán nič nezdvojí.
         // Prázdnu stranu server odmietne (dennik_bez_proviozok), preto sa na ňu
@@ -401,7 +444,9 @@ public sealed class AgentCycleRunner
         const int maxStran = 50;
         long? idFrom = null;
         var ulozenych = 0;
+        var proviozok = 0;
         var strany = 0;
+        var dokoncene = false;
         for (; strany < maxStran; strany++)
         {
             var requestXml = PohodaXml.BuildDennikRequest(
@@ -411,14 +456,34 @@ public sealed class AgentCycleRunner
             var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
                 requestXml, $"dennik-{organization.OrganizationId}", false, cancellationToken);
             var (pocet, najvyssie) = PohodaXml.CitajStranuDennika(response);
-            if (pocet == 0) break;
-            var result = await _backend.UploadUctoDennikAsync(organization.OrganizationId, response, cancellationToken);
-            ulozenych += result.Ulozenych;
+            if (pocet == 0) { dokoncene = true; break; }
+            if (protokol2) await _backend.UploadUctoDennikAsync(organization.OrganizationId, response, importId, strany, cancellationToken);
+            else ulozenych += (await _backend.UploadUctoDennikAsync(organization.OrganizationId, response, null, null, cancellationToken)).Ulozenych;
+            proviozok += pocet;
             // Neúplná strana je posledná. A keby POHODA idFrom ignorovala a vrátila
             // tie isté riadky znova, najvyššie id sa nepohne — to je tiež koniec.
-            if (pocet < PohodaXml.DennikStrana || najvyssie is null || (idFrom is not null && najvyssie < idFrom)) { strany++; break; }
+            if (pocet < PohodaXml.DennikStrana || najvyssie is null || (idFrom is not null && najvyssie < idFrom)) { strany++; dokoncene = true; break; }
             idFrom = najvyssie + 1;
         }
+        // Strop strán: zvyšok roka sa neprenesie — nesmie to vyzerať ako úplný denník.
+        var chyba = dokoncene ? null : "agenda:dennik:cap";
+        if (protokol2 && strany > 0)
+        {
+            try
+            {
+                var publikovane = await _backend.PublishImportAsync(
+                    organization.OrganizationId, importId, "dennik", strany, proviozok,
+                    new ImportManifest(target.Company.DatabaseName, rok, null, null,
+                    [
+                        new ImportAgenda("listAccountancy", null, dokoncene ? "ok" : "cap", $"strany: {strany}",
+                            0, 0, proviozok, new Dictionary<string, int>()),
+                    ]),
+                    cancellationToken);
+                ulozenych = publikovane.Ulozenych;
+            }
+            catch (BackendApiException error) when (chyba is not null) { throw new NeuplnyExportException(chyba, error); }
+        }
+        else if (chyba is not null) throw new NeuplnyExportException(chyba);
         await TrySendSyncResultAsync(new AgentSyncResult(
             organization.OrganizationId, "uctovnyDennik", "ok",
             ulozenych, (int)stopwatch.ElapsedMilliseconds, null), cancellationToken);
@@ -447,33 +512,59 @@ public sealed class AgentCycleRunner
         var response = await _mServers[target.Endpoint.Id].PostXmlAsync(
             requestXml, $"historia-{organization.OrganizationId}", false, cancellationToken);
         var parsed = PohodaXml.ParseHistoryRows(response);
+        // Neúplná agenda (chyba položky, chýbajúca v odpovedi, parts) — kód ide
+        // do telemetrie. V protokole 2 publikáciu odmietne server.
+        var chybaAgendy = parsed.Agendy.FirstOrDefault(agenda => agenda.Stav != "ok") is { } zla
+            ? $"agenda:{zla.Agenda ?? zla.Poziadavka}:{zla.Stav}" : null;
         // Aj prenos bez použiteľných riadkov korpusu môže niesť číselné rady —
         // rad z dokladu je jediná cesta k radom, ktoré POHODA do číselníka nedá.
         if (parsed.Rows.Count == 0 && parsed.Series.Count == 0)
         {
             _log.Info("ucto_history_empty", new { organization.OrganizationId, warnings = parsed.Warnings.Count });
+            if (chybaAgendy is not null) throw new NeuplnyExportException(chybaAgendy);
             return;
         }
+        var protokol2 = organization.HistoriaProtokol >= 2;
+        var importId = Guid.NewGuid();
         var imported = 0;
         var duplicates = 0;
         // Dávky po 2 000 riadkov — server berie najviac 20 000 na požiadavku
         // a bodyLimit je 30 MB; história býva rádovo väčšia než pamäť.
-        var prvaDavka = true;
         // Bez riadkov korpusu treba aj tak jednu dávku — nesie číselné rady.
         var davky = parsed.Rows.Count > 0
-            ? parsed.Rows.Chunk(2000)
+            ? parsed.Rows.Chunk(2000).ToArray()
             : new[] { Array.Empty<PohodaXml.HistoryRow>() };
-        foreach (var batch in davky)
+        for (var davka = 0; davka < davky.Length; davka++)
         {
+            // Rady idú len s prvou dávkou.
+            var series = davka == 0 ? parsed.Series : Array.Empty<PohodaXml.SeriesRow>();
+            if (protokol2)
+            {
+                await _backend.UploadUctoHistoryAsync(organization.OrganizationId, davky[davka], null, series, importId, davka, cancellationToken);
+                continue;
+            }
             // Prvá dávka nesie reset — server korpus zahodí a postaví z tohto
-            // prenosu. Až potom sa dávky pripájajú. Rady idú tiež len s ňou.
+            // prenosu. Až potom sa dávky pripájajú. Natívne id starý server
+            // (strict schéma) nepozná, preto sa neposielajú.
             var result = await _backend.UploadUctoHistoryAsync(
-                organization.OrganizationId, batch, prvaDavka,
-                prvaDavka ? parsed.Series : Array.Empty<PohodaXml.SeriesRow>(), cancellationToken);
-            prvaDavka = false;
+                organization.OrganizationId, davky[davka].Select(row => row with { DokladId = null, PolozkaId = null }).ToArray(),
+                davka == 0, series, null, null, cancellationToken);
             imported += result.Imported;
             duplicates += result.Duplicates;
         }
+        if (protokol2)
+        {
+            try
+            {
+                var publikovane = await _backend.PublishImportAsync(
+                    organization.OrganizationId, importId, "historia", davky.Length, parsed.Rows.Count,
+                    new ImportManifest(target.Company.DatabaseName, RokDatabazy(target), parsed.ProgramVersion, parsed.Kluc, parsed.Agendy),
+                    cancellationToken);
+                (imported, duplicates) = (publikovane.Imported, publikovane.Duplicates);
+            }
+            catch (BackendApiException error) when (chybaAgendy is not null) { throw new NeuplnyExportException(chybaAgendy, error); }
+        }
+        else if (chybaAgendy is not null) throw new NeuplnyExportException(chybaAgendy);
         await TrySendSyncResultAsync(new AgentSyncResult(
             organization.OrganizationId, "uctovnyProfil", "ok",
             parsed.Rows.Count, (int)stopwatch.ElapsedMilliseconds, null), cancellationToken);
@@ -499,7 +590,7 @@ public sealed class AgentCycleRunner
         try
         {
             // Prázdny prenos iba uzatvára žiadosť — pamäť sa nemaže.
-            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, cancellationToken);
+            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, null, null, cancellationToken);
             _trainingSyncAttempts.Remove(organizationId);
             _log.Info("training_sync_abandoned", new { organizationId, attempts, errorCode });
         }
@@ -712,9 +803,38 @@ public sealed class AgentCycleRunner
 
     private async Task TrySendSyncResultAsync(AgentSyncResult result, CancellationToken cancellationToken)
     {
-        try { await _backend.SendSyncResultAsync(result, cancellationToken); }
+        // Server do 0.17 berie najviac 20 000 — väčší počet odmietol a úspešný
+        // prenos veľkej histórie sa na serveri nezapísal vôbec.
+        try { await _backend.SendSyncResultAsync(result with { ItemCount = Math.Min(result.ItemCount, 20_000) }, cancellationToken); }
         catch (Exception error) { _log.Error("sync_metric_failed", error, new { result.OrganizationId, result.Kind }); }
     }
+
+    // Zlyhanie histórie či denníka nezhodí zvyšok synchronizácie, ale ide do
+    // telemetrie. Doteraz bolo len v lokálnom logu a na serveri vyzeral neúplný
+    // prenos rovnako ako úspešný.
+    private async Task<bool> SkusAsync(string organizationId, string kind, string logEvent, Func<Task> synchronizacia, CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            await synchronizacia();
+            return true;
+        }
+        catch (Exception error)
+        {
+            _log.Error(logEvent, error, new { organizationId });
+            await TrySendSyncResultAsync(new AgentSyncResult(organizationId, kind, "error", 0, (int)stopwatch.ElapsedMilliseconds,
+                error is NeuplnyExportException ? error.Message : error.GetType().Name), cancellationToken);
+            return false;
+        }
+    }
+
+    private static int RokDatabazy((MServerEndpointSettings Endpoint, MServerCompany Company) target) =>
+        int.TryParse(target.Company.Year, out var rok) && rok > 1990 ? rok : DateTimeOffset.UtcNow.Year;
+
+    /// <summary>POHODA vrátila neúplný export (chyba agendy, parts, strop strán).
+    /// Message je kód pre telemetriu, napr. „agenda:FP-T:error".</summary>
+    private sealed class NeuplnyExportException(string kod, Exception? inner = null) : Exception(kod, inner);
 }
 
 public sealed class AgentWorker(IAgentLog log) : BackgroundService

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
 import { writeAudit } from '../audit.js';
 import type { ServerConfig } from '../config.js';
-import type { Database } from '../db/database.js';
+import type { Database, Queryable } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { BEZ_PREDKONTACIA_SQL, normalizeName, platnyKvKod } from '../services/accountingSuggestionService.js';
 
@@ -155,6 +155,18 @@ function cistePravidlo(
  */
 export async function importTrainingRows(
   database: Database,
+  input: Parameters<typeof ulozTreningoveRiadky>[1],
+): Promise<Awaited<ReturnType<typeof ulozTreningoveRiadky>>> {
+  return database.transaction((tx) => ulozTreningoveRiadky(tx, input));
+}
+
+/**
+ * Jadro importTrainingRows nad transakciou volajúceho. Publikácia prenosu
+ * z Mostíka ním plní pamäť v tej istej transakcii, v ktorej starú zmazala —
+ * inak by medzi zmazaním a vložením bola pamäť prázdna aj pre návrhy.
+ */
+export async function ulozTreningoveRiadky(
+  tx: Queryable,
   input: {
     tenantId: string;
     organizationId: string;
@@ -164,7 +176,7 @@ export async function importTrainingRows(
   },
 ): Promise<{ imported: number; duplicates: number; rejected: Array<{ index: number; dovod: string }> }> {
   const { tenantId, organizationId } = input;
-  const codeLists = await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
+  const codeLists = await tx.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
     `SELECT id, kind, code FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
         AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')`,
@@ -236,50 +248,48 @@ export async function importTrainingRows(
   let imported = 0;
   let duplicates = 0;
   if (resolved.length > 0) {
-    await database.transaction(async (tx) => {
-      // Súbežný import (agent + ručný import v prehliadači) sa serializuje per
-      // organizácia — dedup cez NOT EXISTS by inak pod READ COMMITTED prepustil
-      // duplicitné riadky (ucto_decisions nemá unikátny index pre importy).
-      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ai_training:${tenantId}:${organizationId}`]);
-      for (const row of resolved) {
-        // Opakovaný import toho istého súboru nezakladá duplicity.
-        const result = await tx.query(
-          `INSERT INTO ucto_decisions
-            (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
-             predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type,podtyp)
-           SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import','FP',$12
-            WHERE NOT EXISTS (
-              SELECT 1 FROM ucto_decisions
-               WHERE tenant_id=$2 AND organization_id=$3 AND source='import'
-                 AND supplier_ico IS NOT DISTINCT FROM $4
-                 AND supplier_name_normalized IS NOT DISTINCT FROM $5
-                 AND line_text_normalized IS NOT DISTINCT FROM $6
-                 AND predkontacia_id IS NOT DISTINCT FROM $7
-                 AND clenenie_dph_id IS NOT DISTINCT FROM $8
-                 AND ciselny_rad_id IS NOT DISTINCT FROM $9
-                 AND stredisko_id IS NOT DISTINCT FROM $10
-                 AND clenenie_kv_kod IS NOT DISTINCT FROM $11
-                 -- Bez podtypu by sa dobropis a faktúra s rovnakým textom
-                 -- a účtom zlúčili do jedného riadku a druh by sa stratil.
-                 AND podtyp IS NOT DISTINCT FROM $12)`,
-          [randomUUID(), tenantId, organizationId, row.supplierIco, row.supplierName, row.lineText,
-            row.predkontaciaId, row.clenenieDphId, row.ciselnyRadId, row.strediskoId, row.clenenieKvKod,
-            row.podtyp ?? 'bezna'],
-        );
-        if (result.rowCount > 0) imported += 1;
-        else duplicates += 1;
-      }
-      await writeAudit(tx, {
-        tenantId,
-        organizationId,
-        actorType: input.actor.type,
-        actorId: input.actor.id,
-        action: 'ai_training.imported',
-        entityType: 'organization',
-        entityId: organizationId,
-        correlationId: input.correlationId,
-        metadata: { imported, duplicates, rejected: rejected.length },
-      });
+    // Súbežný import (agent + ručný import v prehliadači) sa serializuje per
+    // organizácia — dedup cez NOT EXISTS by inak pod READ COMMITTED prepustil
+    // duplicitné riadky (ucto_decisions nemá unikátny index pre importy).
+    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ai_training:${tenantId}:${organizationId}`]);
+    for (const row of resolved) {
+      // Opakovaný import toho istého súboru nezakladá duplicity.
+      const result = await tx.query(
+        `INSERT INTO ucto_decisions
+          (id,tenant_id,organization_id,document_id,supplier_ico,supplier_name_normalized,line_text_normalized,
+           predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type,podtyp)
+         SELECT $1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,'import','FP',$12
+          WHERE NOT EXISTS (
+            SELECT 1 FROM ucto_decisions
+             WHERE tenant_id=$2 AND organization_id=$3 AND source='import'
+               AND supplier_ico IS NOT DISTINCT FROM $4
+               AND supplier_name_normalized IS NOT DISTINCT FROM $5
+               AND line_text_normalized IS NOT DISTINCT FROM $6
+               AND predkontacia_id IS NOT DISTINCT FROM $7
+               AND clenenie_dph_id IS NOT DISTINCT FROM $8
+               AND ciselny_rad_id IS NOT DISTINCT FROM $9
+               AND stredisko_id IS NOT DISTINCT FROM $10
+               AND clenenie_kv_kod IS NOT DISTINCT FROM $11
+               -- Bez podtypu by sa dobropis a faktúra s rovnakým textom
+               -- a účtom zlúčili do jedného riadku a druh by sa stratil.
+               AND podtyp IS NOT DISTINCT FROM $12)`,
+        [randomUUID(), tenantId, organizationId, row.supplierIco, row.supplierName, row.lineText,
+          row.predkontaciaId, row.clenenieDphId, row.ciselnyRadId, row.strediskoId, row.clenenieKvKod,
+          row.podtyp ?? 'bezna'],
+      );
+      if (result.rowCount > 0) imported += 1;
+      else duplicates += 1;
+    }
+    await writeAudit(tx, {
+      tenantId,
+      organizationId,
+      actorType: input.actor.type,
+      actorId: input.actor.id,
+      action: 'ai_training.imported',
+      entityType: 'organization',
+      entityId: organizationId,
+      correlationId: input.correlationId,
+      metadata: { imported, duplicates, rejected: rejected.length },
     });
   }
   return { imported, duplicates, rejected };

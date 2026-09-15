@@ -117,7 +117,8 @@ export function parseDennik(xml: string): { riadky: DennikRiadok[]; preskocene: 
  * dvojica na práve jednu predkontáciu iba v 55 % proviozok.
  */
 export async function ulozDennik(
-  database: Database,
+  // Transakciu drží volajúci — publikácia prenosu maže rok a ukladá v jednej.
+  database: Queryable,
   input: { tenantId: string; organizationId: string; riadky: readonly DennikRiadok[] },
 ): Promise<{ ulozenych: number; sJednouPredkontaciou: number; sViacerymi: number; bezPredkontacie: number }> {
   const predkontacie = await database.query<{ code: string; ucet_md: string; ucet_dal: string } & Record<string, unknown>>(
@@ -135,30 +136,37 @@ export async function ulozDennik(
   let sJednou = 0;
   let sViacerymi = 0;
   let bez = 0;
-  await database.transaction(async (tx: Queryable) => {
-    for (const riadok of input.riadky) {
-      const kandidati = podlaUctov.get(`${riadok.ucetMd}/${riadok.ucetDal}`) ?? [];
-      if (kandidati.length === 1) sJednou += 1;
-      else if (kandidati.length > 1) sViacerymi += 1;
-      else bez += 1;
-      await tx.query(
-        `INSERT INTO ucto_dennik
-          (id,tenant_id,organization_id,externalny_id,agenda,doklad_cislo,datum,text,suma,
-           ucet_md,ucet_dal,partner_ico,partner_nazov,stredisko_kod,cinnost_kod,zakazka_kod,predkontacia_kody)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::text[])
-         ON CONFLICT (organization_id, externalny_id) DO UPDATE SET
-           agenda=excluded.agenda, doklad_cislo=excluded.doklad_cislo, datum=excluded.datum,
-           text=excluded.text, suma=excluded.suma, ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal,
-           partner_ico=excluded.partner_ico, partner_nazov=excluded.partner_nazov,
-           stredisko_kod=excluded.stredisko_kod, cinnost_kod=excluded.cinnost_kod,
-           zakazka_kod=excluded.zakazka_kod, predkontacia_kody=excluded.predkontacia_kody`,
-        [randomUUID(), input.tenantId, input.organizationId, riadok.externalnyId, riadok.agenda,
-          riadok.dokladCislo ?? null, riadok.datum ?? null, riadok.text ?? null, riadok.suma ?? null,
-          riadok.ucetMd, riadok.ucetDal, riadok.partnerIco ?? null, riadok.partnerNazov ?? null,
-          riadok.strediskoKod ?? null, riadok.cinnostKod ?? null, riadok.zakazkaKod ?? null, kandidati],
-      );
-    }
-  });
+  const kandidatiRiadka = (riadok: DennikRiadok) => podlaUctov.get(`${riadok.ucetMd}/${riadok.ucetDal}`) ?? [];
+  for (const riadok of input.riadky) {
+    const kandidati = kandidatiRiadka(riadok);
+    if (kandidati.length === 1) sJednou += 1;
+    else if (kandidati.length > 1) sViacerymi += 1;
+    else bez += 1;
+  }
+  // Po 1000 proviozok v jednom INSERT-e — ročný denník po jednej trval pri
+  // publikácii prenosu desiatky sekúnd. Jeden príkaz nesmie zasiahnuť tú istú
+  // proviozku dvakrát (prekryté strany), vyhráva posledná.
+  const naVlozenie = [...new Map(input.riadky.map((riadok) => [riadok.externalnyId, riadok])).values()];
+  const STLPCOV = 17;
+  for (let od = 0; od < naVlozenie.length; od += 1000) {
+    const cast = naVlozenie.slice(od, od + 1000);
+    await database.query(
+      `INSERT INTO ucto_dennik
+        (id,tenant_id,organization_id,externalny_id,agenda,doklad_cislo,datum,text,suma,
+         ucet_md,ucet_dal,partner_ico,partner_nazov,stredisko_kod,cinnost_kod,zakazka_kod,predkontacia_kody)
+       VALUES ${cast.map((_, r) => `(${Array.from({ length: STLPCOV }, (__, s) => `$${r * STLPCOV + s + 1}${s === STLPCOV - 1 ? '::text[]' : ''}`).join(',')})`).join(',')}
+       ON CONFLICT (organization_id, externalny_id) DO UPDATE SET
+         agenda=excluded.agenda, doklad_cislo=excluded.doklad_cislo, datum=excluded.datum,
+         text=excluded.text, suma=excluded.suma, ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal,
+         partner_ico=excluded.partner_ico, partner_nazov=excluded.partner_nazov,
+         stredisko_kod=excluded.stredisko_kod, cinnost_kod=excluded.cinnost_kod,
+         zakazka_kod=excluded.zakazka_kod, predkontacia_kody=excluded.predkontacia_kody`,
+      cast.flatMap((riadok) => [randomUUID(), input.tenantId, input.organizationId, riadok.externalnyId, riadok.agenda,
+        riadok.dokladCislo ?? null, riadok.datum ?? null, riadok.text ?? null, riadok.suma ?? null,
+        riadok.ucetMd, riadok.ucetDal, riadok.partnerIco ?? null, riadok.partnerNazov ?? null,
+        riadok.strediskoKod ?? null, riadok.cinnostKod ?? null, riadok.zakazkaKod ?? null, kandidatiRiadka(riadok)]),
+    );
+  }
   return { ulozenych: input.riadky.length, sJednouPredkontaciou: sJednou, sViacerymi, bezPredkontacie: bez };
 }
 

@@ -1,6 +1,7 @@
 ﻿using Dokladovka.Agent;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace Dokladovka.Agent.Tests;
@@ -1015,6 +1016,181 @@ public sealed class AgentTests
         Assert.Equal((3, 250L), PohodaXml.CitajStranuDennika(strana));
     }
 
+    // Chyba položky denníka (chýbajúce právo) vyzerala ako prázdna strana:
+    // slučka skončila a denník sa ohlásil ako úspešne prenesený.
+    [Fact]
+    public void DennikChybaPolozkyNieJePrazdnaStrana()
+    {
+        const string strana = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="dennik" state="error" note="Chýba právo na účtovný denník." />
+            </rsp:responsePack>
+            """;
+        Assert.Contains("Chýba právo", Assert.Throws<InvalidOperationException>(() => PohodaXml.CitajStranuDennika(strana)).Message, StringComparison.Ordinal);
+    }
+
+    // Starý server pole historiaProtokol nemá: agent musí poslať presne to, čo
+    // doteraz — strict schéma by nový kľúč odmietla (400) a prenos by padal.
+    [Fact]
+    public async Task Protokol1PosielaPrenosBezNovychKlucov()
+    {
+        var poziadavky = await SpustiCyklusAsync(Organizacie(null), poziadavka => OdpovedPohody(poziadavka));
+        static string[] Kluce(string telo) => JsonDocument.Parse(telo).RootElement.EnumerateObject().Select(property => property.Name).ToArray();
+
+        var historia = Assert.Single(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/ucto-history", StringComparison.Ordinal));
+        Assert.Equal(["rows", "reset", "series"], Kluce(historia.Telo));
+        var polozka = JsonDocument.Parse(historia.Telo).RootElement.GetProperty("rows")[1];
+        Assert.DoesNotContain(polozka.EnumerateObject(), property => property.Name is "dokladId" or "polozkaId");
+        Assert.Equal(["rows", "done", "reset"], Kluce(Assert.Single(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/training-decisions", StringComparison.Ordinal)).Telo));
+        Assert.Equal(["xml"], Kluce(Assert.Single(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/ucto-dennik", StringComparison.Ordinal)).Telo));
+        Assert.DoesNotContain(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/publikuj", StringComparison.Ordinal));
+        Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "treningAi"));
+    }
+
+    // Protokol 2: každý druh má vlastný importId na každej dávke, reset sa
+    // neposiela a živé dáta vymení až publikácia s manifestom. Žiadosť o sync
+    // zmaže prázdne done=true až po všetkých troch publikáciách.
+    [Fact]
+    public async Task Protokol2PosielaImportIdNaDavkachAManifestPriPublikacii()
+    {
+        var poziadavky = await SpustiCyklusAsync(Organizacie(2), poziadavka => OdpovedPohody(poziadavka));
+        var davky = poziadavky
+            .Where(poziadavka => poziadavka.Metoda == "PUT" && (poziadavka.Cesta.EndsWith("/training-decisions", StringComparison.Ordinal)
+                || poziadavka.Cesta.EndsWith("/ucto-history", StringComparison.Ordinal) || poziadavka.Cesta.EndsWith("/ucto-dennik", StringComparison.Ordinal)))
+            .Select(poziadavka => (poziadavka.Cesta, Telo: JsonDocument.Parse(poziadavka.Telo).RootElement))
+            .ToArray();
+        Assert.Equal(4, davky.Length);
+        var zaver = davky[^1];
+        Assert.EndsWith("/training-decisions", zaver.Cesta, StringComparison.Ordinal);
+        Assert.False(zaver.Telo.TryGetProperty("importId", out _));
+        Assert.True(zaver.Telo.GetProperty("done").GetBoolean());
+        foreach (var davka in davky[..^1])
+        {
+            Assert.Equal(0, davka.Telo.GetProperty("davka").GetInt32());
+            Assert.False(davka.Telo.TryGetProperty("reset", out _), davka.Cesta);
+        }
+        var importIds = davky[..^1].Select(davka => davka.Telo.GetProperty("importId").GetString()!).ToArray();
+        Assert.Equal(3, importIds.Distinct().Count());
+        var polozka = davky[1].Telo.GetProperty("rows")[1];
+        Assert.Equal((10L, 11L), (polozka.GetProperty("dokladId").GetInt64(), polozka.GetProperty("polozkaId").GetInt64()));
+
+        var publikacie = poziadavky.Where(poziadavka => poziadavka.Cesta.EndsWith("/publikuj", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(importIds.Select(id => $"/api/agent/organizations/org-1/importy/{id}/publikuj"), publikacie.Select(poziadavka => poziadavka.Cesta));
+        var tela = publikacie.Select(poziadavka => JsonDocument.Parse(poziadavka.Telo).RootElement).ToArray();
+        Assert.Equal(["pamat", "historia", "dennik"], tela.Select(telo => telo.GetProperty("druh").GetString()!));
+        Assert.All(tela, telo => Assert.Equal("StwPh_12345678_2026", telo.GetProperty("manifest").GetProperty("databaza").GetString()));
+        var historia = tela[1];
+        Assert.Equal("1|2|12", $"{historia.GetProperty("davok").GetInt32()}|{historia.GetProperty("pocet").GetInt32()}|{historia.GetProperty("manifest").GetProperty("agendy").GetArrayLength()}");
+        Assert.Equal(2026, tela[2].GetProperty("manifest").GetProperty("rok").GetInt32());
+        Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "treningAi"));
+    }
+
+    // Výnimka histórie išla doteraz len do lokálneho logu a tréning sa ohlásil
+    // ako ok — na serveri neúplný prenos vyzeral rovnako ako úspešný.
+    [Fact]
+    public async Task ChybaHistorieIdeDoTelemetrieATreningNieJeOk()
+    {
+        var poziadavky = await SpustiCyklusAsync(Organizacie(2), poziadavka => OdpovedPohody(poziadavka,
+            """<rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="error" note="Databáza je zamknutá."/>"""));
+        Assert.Equal("error|InvalidOperationException", VysledokTelemetrie(poziadavky, "uctovnyProfil"));
+        Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "uctovnyDennik"));
+        Assert.Equal("error|uctovnyProfil", VysledokTelemetrie(poziadavky, "treningAi"));
+        // Žiadosť o sync ostáva — celý prenos sa zopakuje ďalším cyklom.
+        Assert.DoesNotContain(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/training-decisions", StringComparison.Ordinal) && !poziadavka.Telo.Contains("importId", StringComparison.Ordinal));
+    }
+
+    private static string Organizacie(int? protokol) =>
+        $$"""[{"organizationId":"org-1","ico":"12345678","nazov":"Firma","dbName":null,"uctovnyRok":null,"preferredYear":"latest","syncRequested":false,"trainingSyncRequested":true{{(protokol is null ? "" : $",\"historiaProtokol\":{protokol}")}}}]""";
+
+    private static string VysledokTelemetrie(IEnumerable<(string Metoda, string Cesta, string Telo)> poziadavky, string kind)
+    {
+        var vysledok = poziadavky.Where(poziadavka => poziadavka.Cesta == "/api/agent/sync-results")
+            .Select(poziadavka => JsonDocument.Parse(poziadavka.Telo).RootElement)
+            .Last(telo => telo.GetProperty("kind").GetString() == kind);
+        return $"{vysledok.GetProperty("state").GetString()}|{(vysledok.TryGetProperty("errorCode", out var kod) ? kod.GetString() : null)}";
+    }
+
+    private const string PrazdnaOdpoved = """<rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok"/>""";
+
+    private static string OdpovedPohody(string poziadavka, string? historia = null)
+    {
+        const string hlavicka = """<rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" xmlns:acu="http://www.stormware.cz/schema/version_2/accountancy.xsd" version="2.0" state="ok">""";
+        if (poziadavka.Contains("note=\"Export historie zauctovani\"", StringComparison.Ordinal))
+        {
+            return hlavicka + """
+                <rsp:responsePackItem id="t01" state="ok"><lst:listInvoice version="2.0"><lst:invoice version="2.0"><inv:invoiceHeader>
+                  <inv:invoiceType>receivedInvoice</inv:invoiceType><inv:text>Tonery</inv:text>
+                  <inv:partnerIdentity><typ:address><typ:company>Print-Office s.r.o.</typ:company></typ:address></inv:partnerIdentity>
+                  <inv:accounting><typ:ids>501/321</typ:ids></inv:accounting>
+                </inv:invoiceHeader></lst:invoice></lst:listInvoice></rsp:responsePackItem></rsp:responsePack>
+                """;
+        }
+        if (poziadavka.Contains("note=\"Export historie pre uctovny profil\"", StringComparison.Ordinal))
+        {
+            return historia ?? hlavicka + """
+                <rsp:responsePackItem id="h01" state="ok"><lst:listInvoice version="2.0" state="ok"><lst:invoice version="2.0">
+                  <inv:invoiceHeader><inv:id>10</inv:id><inv:invoiceType>receivedInvoice</inv:invoiceType>
+                    <inv:number><typ:id>615</typ:id><typ:ids>DF260</typ:ids><typ:numberRequested>DF260169</typ:numberRequested></inv:number>
+                    <inv:date>2026-07-16</inv:date><inv:text>Tonery</inv:text><inv:accounting><typ:ids>501/321</typ:ids></inv:accounting>
+                  </inv:invoiceHeader>
+                  <inv:invoiceDetail><inv:invoiceItem><inv:id>11</inv:id><inv:text>Toner HP</inv:text></inv:invoiceItem></inv:invoiceDetail>
+                </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+                """ + string.Concat(Enumerable.Range(2, 11).Select(index => $"""<rsp:responsePackItem id="h{index:D2}" state="ok"/>""")) + "</rsp:responsePack>";
+        }
+        if (poziadavka.Contains("note=\"Export uctovneho dennika\"", StringComparison.Ordinal))
+        {
+            return hlavicka + """
+                <rsp:responsePackItem id="dennik" state="ok"><lst:listAccountancy version="2.0"><lst:accountancy version="2.0">
+                  <acu:accountingItem><acu:id>100</acu:id></acu:accountingItem>
+                </lst:accountancy></lst:listAccountancy></rsp:responsePackItem></rsp:responsePack>
+                """;
+        }
+        return PrazdnaOdpoved;
+    }
+
+    /// <summary>Jeden cyklus agenta proti podstrčenému cloudu aj mServeru. Vráti požiadavky na cloud.</summary>
+    private static async Task<List<(string Metoda, string Cesta, string Telo)>> SpustiCyklusAsync(string organizacie, Func<string, string> pohoda)
+    {
+        var poziadavky = new List<(string Metoda, string Cesta, string Telo)>();
+        var handler = new DelegateHandler(async request =>
+        {
+            var telo = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync();
+            var cesta = request.RequestUri!.AbsolutePath;
+            if (request.RequestUri.Port == 444)
+            {
+                var xml = request.Method == HttpMethod.Get
+                    ? "<status><company>Firma</company><databaseName>StwPh_12345678_2026</databaseName><year>2026</year><period>1-12</period></status>"
+                    : pohoda(telo);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(xml, Encoding.UTF8, "text/xml") };
+            }
+            lock (poziadavky) poziadavky.Add((request.Method.Method, cesta, telo));
+            var (status, json) = cesta switch
+            {
+                "/api/agent/organizations" => (HttpStatusCode.OK, organizacie),
+                "/api/agent/export-queue" => (HttpStatusCode.OK, "[]"),
+                "/api/agent/latest" => (HttpStatusCode.NotFound, "{}"),
+                _ when cesta.EndsWith("/training-decisions", StringComparison.Ordinal) => (HttpStatusCode.OK, """{"imported":1,"duplicates":0,"rejected":0}"""),
+                _ when cesta.EndsWith("/publikuj", StringComparison.Ordinal) => (HttpStatusCode.OK, """{"imported":1,"duplicates":0,"rejected":0,"ulozenych":1}"""),
+                _ => (HttpStatusCode.OK, "{}"),
+            };
+            return new HttpResponseMessage(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        });
+        var previous = Environment.GetEnvironmentVariable("DOKLADOVKA_AGENT_DATA_DIR");
+        var temporary = Path.Combine(Path.GetTempPath(), $"dokladovka-cyklus-{Guid.NewGuid():N}");
+        Environment.SetEnvironmentVariable("DOKLADOVKA_AGENT_DATA_DIR", temporary);
+        try
+        {
+            var secrets = new AgentSecrets { AgentToken = "token", MServers = [new MServerSecret { EndpointId = "one", UserName = "user", Password = "password" }] };
+            await new AgentCycleRunner(Settings("http://localhost:3001"), secrets, new NullLog(), handler).RunOnceAsync(CancellationToken.None);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOKLADOVKA_AGENT_DATA_DIR", previous);
+            try { Directory.Delete(temporary, recursive: true); } catch { }
+        }
+        return poziadavky;
+    }
+
     private static async Task<HttpRequestMessage> CopyAsync(HttpRequestMessage source)
     {
         var copy = new HttpRequestMessage(source.Method, source.RequestUri);
@@ -1388,15 +1564,7 @@ public sealed class DocumentFolderTests
     [Fact]
     public void ParseHistoryRows_SediSoServerovymParserom()
     {
-        var koren = AppContext.BaseDirectory;
-        while (koren is not null && !File.Exists(Path.Combine(koren, "server", "services", "__fixtures__", "pohoda-doklady-s-polozkami.xml")))
-        {
-            koren = Path.GetDirectoryName(koren);
-        }
-        Assert.NotNull(koren);
-        var xml = File.ReadAllText(Path.Combine(koren!, "server", "services", "__fixtures__", "pohoda-doklady-s-polozkami.xml"));
-
-        var rows = PohodaXml.ParseHistoryRows(xml).Rows;
+        var rows = PohodaXml.ParseHistoryRows(ServerovaFixtura()).Rows;
         var printOffice = rows.Where(row => row.DokladCislo == "DF260169").ToArray();
         Assert.Equal(
             new[]
@@ -1470,5 +1638,111 @@ public sealed class DocumentFolderTests
             // Zaúčtovanie sa dedí z hlavičky — položka o ňom nič nové nehovorí.
             Assert.Equal("518900 ost.sl.-tuz.", rows[1].PredkontaciaKod);
         }
+    }
+
+    // Natívne id POHODY (inv:id) je identita dokladu aj položky — číslo, dátum
+    // ani poradie ňou nie sú. Číta sa LEN priame dieťa: number/typ:id je id
+    // číselného radu (615) a accounting/typ:id id predkontácie.
+    [Fact]
+    public void ParseHistoryRows_CitaNativneIdDokladuAPolozky()
+    {
+        var printOffice = PohodaXml.ParseHistoryRows(ServerovaFixtura()).Rows.Where(row => row.DokladCislo == "DF260169").ToArray();
+        Assert.Equal(new long?[] { 54393, 54393, 54393, 54393 }, printOffice.Select(row => row.DokladId));
+        Assert.Equal(new long?[] { null, 50075, 50076, 50077 }, printOffice.Select(row => row.PolozkaId));
+
+        const string bezId = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="ok"><lst:listInvoice version="2.0"><lst:invoice version="2.0">
+                <inv:invoiceHeader><inv:invoiceType>receivedInvoice</inv:invoiceType>
+                  <inv:number><typ:id>615</typ:id><typ:ids>DF260</typ:ids><typ:numberRequested>DF260169</typ:numberRequested></inv:number>
+                  <inv:accounting><typ:id>271</typ:id><typ:ids>repre</typ:ids></inv:accounting><inv:text>Repre</inv:text></inv:invoiceHeader>
+                <inv:invoiceDetail><inv:invoiceItem><inv:text>Kava</inv:text><inv:accounting><typ:id>764</typ:id><typ:ids>repre</typ:ids></inv:accounting></inv:invoiceItem></inv:invoiceDetail>
+              </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var riadky = PohodaXml.ParseHistoryRows(bezId).Rows;
+        Assert.Equal(2, riadky.Count);
+        Assert.All(riadky, row => Assert.True(row.DokladId is null && row.PolozkaId is null));
+    }
+
+    // F11: hlavička bez textu zahodila celý doklad aj s položkami — a práve
+    // v nich bolo rozúčtovanie. Rovnaké dva prípady drží server v uctoHistoriaXml.test.ts.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ParseHistoryRows_PolozkyHlavickyBezTextuNeprepadnu(bool hlavickaMaZauctovanie)
+    {
+        var zauctovanie = hlavickaMaZauctovanie
+            ? "<inv:accounting><typ:ids>518900 ost.sl.-tuz.</typ:ids></inv:accounting><inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT>"
+            : string.Empty;
+        var xml = $"""
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="ok"><lst:listInvoice version="2.0" state="ok"><lst:invoice version="2.0">
+                <inv:invoiceHeader><inv:invoiceType>receivedInvoice</inv:invoiceType>
+                  <inv:number><typ:numberRequested>2026345</typ:numberRequested></inv:number>{zauctovanie}
+                </inv:invoiceHeader>
+                <inv:invoiceDetail>
+                  <inv:invoiceItem><inv:text>Natural 95 (nedaňová časť 20 %)</inv:text>
+                    <inv:accounting><typ:ids>PHM-Nadspotreba</typ:ids></inv:accounting><inv:classificationVAT><typ:ids>PN</typ:ids></inv:classificationVAT></inv:invoiceItem>
+                  <inv:invoiceItem><inv:text>Nafta</inv:text></inv:invoiceItem>
+                </inv:invoiceDetail>
+              </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var parsed = PohodaXml.ParseHistoryRows(xml);
+        var riadky = parsed.Rows.Select(row => $"{row.RiadokIndex}|{row.LineText}|{row.PredkontaciaKod}|{row.ClenenieDphKod}").ToArray();
+        var preskocene = parsed.Agendy[0].Preskocene.OrderBy(dvojica => dvojica.Key, StringComparer.Ordinal).Select(dvojica => $"{dvojica.Key}={dvojica.Value}");
+        if (hlavickaMaZauctovanie)
+        {
+            // Hlavička si požičia text prvej položky, položky idú ako pri každom doklade.
+            Assert.Equal(
+                ["0|Natural 95 (nedaňová časť 20 %)|518900 ost.sl.-tuz.|PN", "1|Natural 95 (nedaňová časť 20 %)|PHM-Nadspotreba|PN", "2|Nafta|518900 ost.sl.-tuz.|PN"],
+                riadky);
+            Assert.Empty(preskocene);
+        }
+        else
+        {
+            // Nafta nemá čo zdediť; každý preskočený riadok má dôvod, takže neúplná
+            // história sa dá odlíšiť od prázdnej.
+            Assert.Equal(["1|Natural 95 (nedaňová časť 20 %)|PHM-Nadspotreba|PN"], riadky);
+            Assert.Equal(["hlavickaBezKodu=1", "polozkaBezKodu=1"], preskocene);
+        }
+        Assert.Equal($"1|2|{riadky.Length}", $"{parsed.Agendy[0].Dokladov}|{parsed.Agendy[0].Poloziek}|{parsed.Agendy[0].Riadkov}");
+    }
+
+    // Manifest prenosu: POHODA nevracia celkový počet záznamov, úplnosť dokazuje
+    // len stav každej požiadavky. Chyba položky, požiadavka bez odpovede a delenie
+    // na časti (rdc:parts) nesmú vyzerať ako úplná agenda.
+    [Fact]
+    public void ParseHistoryRows_ManifestPoznaChybuChybajucuPoziadavkuAParts()
+    {
+        const string response = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:rdc="http://www.stormware.cz/schema/version_2/documentresponse.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0" state="ok" programVersion="14301.4 SQL" key="a36b615a">
+              <rsp:responsePackItem id="h01" state="ok"><lst:listInvoice version="2.0" state="ok"><lst:invoice version="2.0">
+                <inv:invoiceHeader><inv:invoiceType>receivedInvoice</inv:invoiceType><inv:text>Tonery</inv:text><inv:accounting><typ:ids>501/321</typ:ids></inv:accounting></inv:invoiceHeader>
+              </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+              <rsp:responsePackItem id="h02" state="error" note="Používateľ nemá právo na dobropisy." />
+              <rsp:responsePackItem id="h03" state="ok"><lst:listInvoice version="2.0" state="ok"><rdc:parts><rdc:part>h03-2.xml</rdc:part></rdc:parts></lst:listInvoice></rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var parsed = PohodaXml.ParseHistoryRows(response);
+        Assert.Equal("14301.4 SQL|a36b615a", $"{parsed.ProgramVersion}|{parsed.Kluc}");
+        // Každá odoslaná požiadavka má v manifeste miesto — aj tá bez odpovede.
+        Assert.Equal(12, parsed.Agendy.Count);
+        Assert.Equal(
+            ["receivedInvoice|FP|ok|1|1|", "receivedCreditNotice|FP-D|error|0|0|Používateľ nemá právo na dobropisy.", "receivedDebitNote|FP-T|parts|0|0|", "receivedAdvanceInvoice|FP-Z|chyba|0|0|"],
+            parsed.Agendy.Take(4).Select(agenda => $"{agenda.Poziadavka}|{agenda.Agenda}|{agenda.Stav}|{agenda.Dokladov}|{agenda.Riadkov}|{agenda.Poznamka}"));
+        Assert.Equal("intDoc|INT|chyba", $"{parsed.Agendy[11].Poziadavka}|{parsed.Agendy[11].Agenda}|{parsed.Agendy[11].Stav}");
+    }
+
+    private static string ServerovaFixtura()
+    {
+        var koren = AppContext.BaseDirectory;
+        while (koren is not null && !File.Exists(Path.Combine(koren, "server", "services", "__fixtures__", "pohoda-doklady-s-polozkami.xml")))
+        {
+            koren = Path.GetDirectoryName(koren);
+        }
+        Assert.NotNull(koren);
+        return File.ReadAllText(Path.Combine(koren!, "server", "services", "__fixtures__", "pohoda-doklady-s-polozkami.xml"));
     }
 }
