@@ -3,23 +3,26 @@ import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
-import type { Database } from '../db/database.js';
+import type { Database, Queryable } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { jeBezPredkontacia, platnyKvKod, pocetZhodSlov } from './accountingSuggestionService.js';
 import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.js';
-import { prepocitajPravidla, variantyRozpisu, type RozpisVariant } from './uctoPravidlaService.js';
+import { DOKLAD_KLUC_SQL, MIN_ZHODA, prepocitajPravidla, variantyRozpisu, type RozpisVariant } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { overPravnuStranku } from './uctoPravnaKontrola.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
-// Kľúčová vlastnosť: ÚČET NEVYMÝŠĽA MODEL. Prevažujúcu predkontáciu/členenie
-// spočíta SQL z reálnej histórie; model iba zoskupuje texty do kategórií,
-// pomenúva ich, píše slovník a výnimky. Čokoľvek, čo model vráti mimo kódov
-// z podkladu, sa zahodí — halucinovaný účet sa tak do profilu nedostane.
+// Kľúčová vlastnosť: ÚČET NEVYMÝŠĽA MODEL. Model iba zoskupuje texty do
+// kategórií, pomenúva ich, píše slovník a výnimky. Kódy kategórie sa určia až
+// po všetkých dávkach, deterministicky nad celým korpusom: spoločná kombinácia
+// účet/DPH/KV textov, ktoré kategória pokrýva. Kým kódy vyberal model po
+// dávkach, prešla aj kategória 518/PN/B2 poskladaná z dvoch textov, z ktorých
+// ani jeden tak účtovaný nebol — a kódy záviseli od toho, ktorá dávka bola prvá.
 
 export interface AgregovanyText {
   text: string;
+  /** Počet dokladov, nie riadkov — 40-položková faktúra neváži 40× viac. */
   pocet: number;
   agendy: string[];
   kombinacie: Array<{ predkontaciaKod: string; clenenieDphKod: string; clenenieKvKod: string; pocet: number }>;
@@ -52,19 +55,27 @@ export function ocistiSlovnik(slova: string[]): string[] {
 }
 
 export async function agregujHistoriu(
-  database: Database,
+  database: Queryable,
   tenantId: string,
   organizationId: string,
 ): Promise<AgregovanyText[]> {
+  // Počítajú sa DOKLADY: riadok bez čísla (preklopená pamäť) je doklad sám.
+  // Preklopené rozhodnutia (source='decisions') sú kópie faktúr, ktoré agenda
+  // s číslovanými dokladmi z POHODY už má — tam by každú faktúru zrátali dvakrát.
   const result = await database.query<Record<string, any>>(
-    `SELECT line_text_normalized AS text,
+    `WITH cislovane AS (
+       SELECT DISTINCT agenda FROM ucto_historia
+        WHERE tenant_id=$1 AND organization_id=$2 AND doklad_cislo IS NOT NULL
+     )
+     SELECT line_text_normalized AS text,
             coalesce(predkontacia_kod,'') AS pk,
             coalesce(clenenie_dph_kod,'') AS dph,
             coalesce(clenenie_kv_kod,'') AS kv,
             agenda,
-            count(*) AS pocet
+            count(DISTINCT ${DOKLAD_KLUC_SQL}) AS pocet
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2
+        AND NOT (source='decisions' AND agenda IN (SELECT agenda FROM cislovane))
       GROUP BY 1,2,3,4,5`,
     [tenantId, organizationId],
   );
@@ -78,6 +89,8 @@ export async function agregujHistoriu(
       podlaTextu.set(text, zaznam);
     }
     const pocet = Number(row.pocet);
+    // ponytail: doklad s tým istým textom na dvoch zaúčtovaniach (rez PHM)
+    // sa v počte textu zráta dvakrát; presne by to dal druhý dopyt po textoch.
     zaznam.pocet += pocet;
     if (!zaznam.agendy.includes(row.agenda)) zaznam.agendy.push(row.agenda);
     const existujuca = zaznam.kombinacie.find((item) =>
@@ -86,13 +99,73 @@ export async function agregujHistoriu(
     else zaznam.kombinacie.push({ predkontaciaKod: row.pk, clenenieDphKod: row.dph, clenenieKvKod: row.kv, pocet });
   }
 
+  // Remízy podľa textu: poradie rozhoduje o zložení dávok a nesmie závisieť
+  // od toho, v akom poradí riadky vráti databáza.
+  const kombinacia = (item: AgregovanyText['kombinacie'][number]) =>
+    `${item.predkontaciaKod}/${item.clenenieDphKod}/${item.clenenieKvKod}`;
   const vsetky = [...podlaTextu.values()]
-    .map((zaznam) => ({ ...zaznam, kombinacie: zaznam.kombinacie.sort((a, b) => b.pocet - a.pocet) }))
-    .sort((a, b) => b.pocet - a.pocet);
+    .map((zaznam) => ({
+      ...zaznam,
+      kombinacie: zaznam.kombinacie.sort((a, b) => b.pocet - a.pocet || kombinacia(a).localeCompare(kombinacia(b))),
+    }))
+    .sort((a, b) => b.pocet - a.pocet || a.text.localeCompare(b.text));
   if (vsetky.length > MAX_TEXTOV) {
     console.warn(`[ucto-profil] ${vsetky.length - MAX_TEXTOV} najzriedkavejších textov sa do analýzy nedostalo (strop ${MAX_TEXTOV})`);
   }
   return vsetky.slice(0, MAX_TEXTOV);
+}
+
+/** Kódy, počet a agendy kategórie odvodené z korpusu, nie z modelu. */
+export interface KodyKategorie {
+  predkontaciaKod: string | null;
+  clenenieDphKod: string | null;
+  clenenieKvKod: string | null;
+  konflikt: string | null;
+  pocet: number;
+  agendy: string[];
+}
+
+/**
+ * Kódy kategórie: spoločná kombinácia účet/DPH/KV cez VŠETKY texty, ktoré
+ * kategória slovníkom pokrýva. Kombinácia s prevahou MIN_ZHODA sa zapíše celá;
+ * bez prevahy ostanú kódy prázdne a konflikt pomenuje dve najčastejšie —
+ * kategória, ktorá nevie, ako sa druh plnenia účtuje, nesmie tváriť, že vie.
+ * Nezávisí od poradia dávok ani od toho, čo model napísal do kódov.
+ *
+ * ponytail: doklad s viacerými pokrytými textami sa v kategórii zráta viackrát;
+ * presné by bolo priradenie dokladu ku kategórii, ako to robí rozpis kategórie.
+ */
+export function zjednotKody(slovnik: unknown, texty: AgregovanyText[]): KodyKategorie {
+  const pokryte = texty.filter((item) => pocetZhodSlov(slovnik, item.text) > 0);
+  const sucty = new Map<string, AgregovanyText['kombinacie'][number]>();
+  for (const text of pokryte) {
+    for (const item of text.kombinacie) {
+      const kluc = JSON.stringify([item.predkontaciaKod, item.clenenieDphKod, item.clenenieKvKod]);
+      const sucet = sucty.get(kluc) ?? { ...item, pocet: 0 };
+      sucet.pocet += item.pocet;
+      sucty.set(kluc, sucet);
+    }
+  }
+  const [prva, druha] = [...sucty.entries()]
+    .sort(([klucA, a], [klucB, b]) => b.pocet - a.pocet || (klucA < klucB ? -1 : klucA > klucB ? 1 : 0))
+    .map(([, sucet]) => sucet);
+  const spolu = [...sucty.values()].reduce((sucet, item) => sucet + item.pocet, 0);
+  const agendy = [...new Set(pokryte.flatMap((item) => item.agendy))].sort();
+  if (prva && prva.pocet >= spolu * MIN_ZHODA) {
+    return {
+      predkontaciaKod: prva.predkontaciaKod || null,
+      clenenieDphKod: prva.clenenieDphKod || null,
+      clenenieKvKod: platnyKvKod(prva.clenenieKvKod) ?? null,
+      konflikt: null, pocet: spolu, agendy,
+    };
+  }
+  const popis = (item: AgregovanyText['kombinacie'][number]) =>
+    `${item.predkontaciaKod || '—'} / ${item.clenenieDphKod || '—'} / ${item.clenenieKvKod || '—'} (${item.pocet} dokl.)`;
+  return {
+    predkontaciaKod: null, clenenieDphKod: null, clenenieKvKod: null,
+    konflikt: prva ? `Firma tento druh plnenia účtuje nejednotne: ${popis(prva)}${druha ? ` alebo ${popis(druha)}` : ''}.` : null,
+    pocet: spolu, agendy,
+  };
 }
 
 const kategoriaSchema = z.object({
@@ -128,18 +201,30 @@ export interface AnalyzaVysledok {
   kategorii: number;
   textov: number;
   davok: number;
-  /** Dávky, ktoré model nestihol (120 s strop) alebo odmietol. */
+  /** Dávky, ktoré model nestihol (120 s strop), odmietol alebo vrátil mimo schémy. */
   zlyhanychDavok: number;
   pokrytieRiadkov: number;
   /** Pravidlá protistrán — počítajú sa z toho istého korpusu, ale bez modelu. */
   pravidiel?: number;
   sRozpisom?: number;
+  konfliktov?: number;
+  zmienRezimu?: number;
+  kategoriiZmenenych?: number;
+  kategoriiSRozpisom?: number;
 }
 
 /**
- * Spustí jednorazovú analýzu a prepíše kategórie organizácie. Dávky idú
+ * Spustí jednorazovú analýzu a obnoví kategórie organizácie. Dávky idú
  * sekvenčne a každá ďalšia vidí názvy už vytvorených kategórií — model tak
  * spája rovnaké plnenia naprieč dávkami bez zvláštneho zlučovacieho kroku.
+ *
+ * Nič sa nezapisuje, kým nedobehnú všetky dávky: kategórie, vektory, kódy,
+ * pravidlá aj rozpis sa vymenia v JEDNEJ transakcii. Kým sa ukladalo po každej
+ * dávke, návrh počas 26-minútovej analýzy videl polovičný profil bez rozpisu
+ * a otvorená obrazovka dostala na PATCH 404, lebo kategórie dostali nové id.
+ *
+ * ponytail: pád procesu uprostred behu zahodí zaplatené dávky (zlyhaná dávka
+ *   už nie); keby sa to stávalo, patrí sem priebežný stav v processing_jobs.payload.
  */
 export async function analyzujUctovnyProfil(
   database: Database,
@@ -164,58 +249,15 @@ export async function analyzujUctovnyProfil(
     maxRetries: 1,
   }).responses as unknown as ProfileParser);
 
-  const idPreKod = new Map((await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
-    `SELECT id, kind, code FROM code_list_items
-      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')`,
-    [input.tenantId, input.organizationId],
-  )).rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
-
-  const kategorie = new Map<string, z.infer<typeof kategoriaSchema> & { pocet: number; agendy: string[] }>();
-
-  // Zápis celej mapy — analýza je prepočet profilu, nie prírastok. Volá sa po
-  // KAŽDEJ dávke: jeden model má 120 s strop a nula opakovaní, takže jediná
-  // pomalá dávka z deviatich predtým zahodila všetkých osem zaplatených pred
-  // ňou. Firma s 1 217 textami sa takto nikdy nedopočítala.
-  // Vektory sa dopĺňajú až po poslednej dávke (viď nižšie): uloz() prepisuje
-  // celú mapu po každej dávke, takže embedovanie vnútri by tú istú kategóriu
-  // zaplatilo raz za dávku. Do vtedy ostávajú NULL = dnešné lexikálne správanie.
-  const vektory = new Map<string, number[]>();
-  const uloz = async () => {
-    await database.transaction(async (tx) => {
-      await tx.query('DELETE FROM ucto_kategorie WHERE tenant_id=$1 AND organization_id=$2',
-        [input.tenantId, input.organizationId]);
-      for (const kategoria of kategorie.values()) {
-        await tx.query(
-          `INSERT INTO ucto_kategorie
-            (id,tenant_id,organization_id,nazov,popis,slovnik,predkontacia_kod,predkontacia_id,
-             clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,vynimky,agendy,pocet,konflikt,
-             vektor,vektor_model)
-           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,
-             $16::jsonb,$17)`,
-          [randomUUID(), input.tenantId, input.organizationId, kategoria.nazov, kategoria.popis,
-            JSON.stringify(kategoria.slovnik), kategoria.predkontaciaKod,
-            kategoria.predkontaciaKod ? idPreKod.get(`predkontacie:${kategoria.predkontaciaKod}`) ?? null : null,
-            kategoria.clenenieDphKod,
-            kategoria.clenenieDphKod ? idPreKod.get(`cleneniaDph:${kategoria.clenenieDphKod}`) ?? null : null,
-            kategoria.clenenieKvKod, JSON.stringify(kategoria.vynimky), JSON.stringify(kategoria.agendy),
-            kategoria.pocet, kategoria.konflikt,
-            // Kľúčom je OBSAH, nie id: randomUUID() beží v tomto cykle, takže
-            // tá istá kategória má po každej dávke iné id.
-            vektory.has(kategoria.nazov) ? JSON.stringify(vektory.get(kategoria.nazov)) : null,
-            vektory.has(kategoria.nazov) ? config.openai.embeddingModel : null],
-        );
-      }
-    });
-  };
+  // Účty, ktoré sa v korpuse naozaj vyskytujú — výnimka s iným účtom neprejde.
+  const povoleneUcty = new Set(texty.flatMap((item) => item.kombinacie.map((k) => k.predkontaciaKod)).filter(Boolean));
+  const kategorie = new Map<string, Pick<z.infer<typeof kategoriaSchema>, 'nazov' | 'popis' | 'slovnik' | 'vynimky'>>();
 
   let davok = 0;
   let zlyhanychDavok = 0;
   for (let start = 0; start < texty.length; start += DAVKA) {
     const davka = texty.slice(start, start + DAVKA);
     davok += 1;
-    // Kódy, ktoré sa v tejto dávke reálne vyskytujú — mimo nich model nesmie ísť.
-    const povoleneUcty = new Set(davka.flatMap((item) => item.kombinacie.map((k) => k.predkontaciaKod)).filter(Boolean));
-    const povoleneDph = new Set(davka.flatMap((item) => item.kombinacie.map((k) => k.clenenieDphKod)).filter(Boolean));
 
     let response: { output_parsed?: unknown };
     try {
@@ -242,90 +284,93 @@ export async function analyzujUctovnyProfil(
       });
     } catch (cause) {
       // Vypršaný alebo odmietnutý model zhodí dávku, nie celú analýzu —
-      // predchádzajúce dávky sú už uložené a účtovník dostane, čo sa stihlo.
+      // účtovník dostane, čo sa stihlo.
       zlyhanychDavok += 1;
       console.warn(`[ucto-profil] dávka ${davok} zlyhala: ${cause instanceof Error ? cause.message : String(cause)}`);
       continue;
     }
-    if (!response.output_parsed) {
+    // Odpoveď, ktorá prešla API, ale nie schémou (napr. heslo dlhšie než 40
+    // znakov), je zlyhaná dávka — výnimka odtiaľto by zahodila celý beh.
+    const parsed = davkaSchema.safeParse(response.output_parsed);
+    if (!parsed.success) {
       zlyhanychDavok += 1;
+      console.warn(`[ucto-profil] dávka ${davok} mimo schémy: ${response.output_parsed ? parsed.error.message.slice(0, 200) : 'prázdna odpoveď'}`);
       continue;
     }
-    const parsed = davkaSchema.parse(response.output_parsed);
-    // Koľko riadkov histórie kategória naozaj pokrýva, sa NEODHADUJE: spočíta
-    // sa deterministicky cez jej vlastný slovník. Toto číslo rozhoduje, či sa
-    // návrh z kategórie smie predvyplniť, takže odhad by bol nebezpečný.
-    const pokryteTexty = (kategoria: z.infer<typeof kategoriaSchema>) => davka
-      .filter((item) => pocetZhodSlov(kategoria.slovnik, item.text) > 0);
-    const pokrytie = (kategoria: z.infer<typeof kategoriaSchema>) =>
-      pokryteTexty(kategoria).reduce((sum, item) => sum + item.pocet, 0);
-    // Agendy kategórie sú agendy textov, ktoré NAOZAJ pokrýva — nie všetko, čo
-    // sa náhodou ocitlo v tej istej dávke. Inak by každá kategória tvrdila, že
-    // patrí do všetkých agend, a rozdelenie profilu podľa agend by nič nefiltrovalo.
-    const agendyKategorie = (kategoria: z.infer<typeof kategoriaSchema>) =>
-      [...new Set(pokryteTexty(kategoria).flatMap((item) => item.agendy))];
-    for (const kategoria of parsed.kategorie) {
-      const cistyUcet = kategoria.predkontaciaKod && povoleneUcty.has(kategoria.predkontaciaKod)
-        ? kategoria.predkontaciaKod : null;
-      const cisteDph = kategoria.clenenieDphKod && povoleneDph.has(kategoria.clenenieDphKod)
-        ? kategoria.clenenieDphKod : null;
+    for (const kategoria of parsed.data.kategorie) {
       const nazov = kategoria.nazov.trim();
       if (!nazov) continue;
       const existujuca = kategorie.get(nazov.toLocaleLowerCase('sk'));
       if (existujuca) {
-        // Rovnaká kategória z ďalšej dávky len dopĺňa slovník, počty a agendy.
+        // Rovnaká kategória z ďalšej dávky len dopĺňa slovník; kódy, počty
+        // a agendy sa aj tak počítajú až nad celým korpusom.
         existujuca.slovnik = ocistiSlovnik([...new Set([...existujuca.slovnik, ...kategoria.slovnik])]).slice(0, 30);
-        existujuca.pocet += pokrytie(kategoria);
-        existujuca.agendy = [...new Set([...existujuca.agendy, ...agendyKategorie(kategoria)])];
-        existujuca.konflikt ??= kategoria.konflikt;
         continue;
       }
       kategorie.set(nazov.toLocaleLowerCase('sk'), {
-        ...kategoria,
         nazov,
+        popis: kategoria.popis,
         slovnik: ocistiSlovnik(kategoria.slovnik),
-        predkontaciaKod: cistyUcet,
-        clenenieDphKod: cisteDph,
-        clenenieKvKod: platnyKvKod(kategoria.clenenieKvKod ?? undefined) ?? null,
         vynimky: kategoria.vynimky.filter((vynimka) =>
           vynimka.predkontaciaKod === null || povoleneUcty.has(vynimka.predkontaciaKod)),
-        pocet: pokrytie(kategoria),
-        agendy: agendyKategorie(kategoria),
       });
     }
-    // Zaplatené dávky sú v databáze hneď, nie až po poslednej.
-    await uloz();
     console.info(`[ucto-profil] dávka ${davok}/${Math.ceil(texty.length / DAVKA)} — ${kategorie.size} kategórií`);
   }
 
-  // Sémantické vektory až tu: jedno dávkové volanie na celý profil namiesto
-  // jedného na kategóriu a dávku. Zlyhanie nie je chyba analýzy — kategórie sú
-  // uložené a bez vektora sa vyberajú lexikálne, presne ako doteraz.
+  // Sémantické vektory: jedno dávkové volanie na celý profil. Zlyhanie nie je
+  // chyba analýzy — bez vektora sa kategória vyberá lexikálne, ako doteraz.
   const zoznam = [...kategorie.values()];
-  if (zoznam.length > 0) {
-    const vysledok = await vytvorVektory(
-      config,
-      zoznam.map((kategoria) => textPreVektor(kategoria.nazov, kategoria.popis, kategoria.slovnik)),
-      injectedEmbedder,
-    );
-    if (vysledok) {
-      zoznam.forEach((kategoria, index) => vektory.set(kategoria.nazov, vysledok[index]));
-      await uloz();
-      console.info(`[ucto-profil] vektory pre ${vysledok.length} kategórií (${config.openai.embeddingModel})`);
-    }
-  }
+  const vektory = zoznam.length > 0
+    ? await vytvorVektory(config, zoznam.map((kategoria) => textPreVektor(kategoria.nazov, kategoria.popis, kategoria.slovnik)), injectedEmbedder)
+    : undefined;
+  if (vektory) console.info(`[ucto-profil] vektory pre ${vektory.length} kategórií (${config.openai.embeddingModel})`);
 
-  // Pravidlá protistrán sa počítajú z toho istého korpusu, len bez modelu.
-  // Bežia tu, nie na vlastnom tlačidle: účtovník má stlačiť jedno.
-  const pravidla = await prepocitajPravidla(database, input);
-  // Kategória hovorí o DRUHU plnenia, takže jej rozpis platí aj pre dodávateľa,
-  // ktorého firma nikdy nemala — to pravidlo protistrany nedokáže.
-  const kategoriaRozpis = await doplnRozpisKategorii(database, input);
+  const prepocet = await database.transaction(async (tx) => {
+    // Zámok PRED kategóriami: prepočet ide pravidlá → kategórie, analýza naopak.
+    await zamkniPrax(tx, input);
+    // Kategória sa páruje menom, ktoré jej dal model (kluc), takže si drží id.
+    // Pole, ktoré upravil účtovník (rucne_polia), analýza neprepíše, a zmazaná
+    // kategória (active=false) ostane zmazaná. Vektor patrí k názvu, popisu
+    // a slovníku — keď ich upravil človek, nový vektor by opisoval iný význam.
+    for (const [index, kategoria] of zoznam.entries()) {
+      const vektor = vektory?.[index];
+      await tx.query(
+        `INSERT INTO ucto_kategorie
+          (id,tenant_id,organization_id,kluc,nazov,popis,slovnik,vynimky,vektor,vektor_model)
+         VALUES ($1,$2,$3,lower($4::text),$4::text,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9)
+         ON CONFLICT (organization_id, kluc) WHERE kluc IS NOT NULL DO UPDATE SET
+           nazov=CASE WHEN 'nazov'=ANY(ucto_kategorie.rucne_polia) THEN ucto_kategorie.nazov ELSE excluded.nazov END,
+           popis=CASE WHEN 'popis'=ANY(ucto_kategorie.rucne_polia) THEN ucto_kategorie.popis ELSE excluded.popis END,
+           slovnik=CASE WHEN 'slovnik'=ANY(ucto_kategorie.rucne_polia) THEN ucto_kategorie.slovnik ELSE excluded.slovnik END,
+           vynimky=excluded.vynimky,
+           vektor=CASE WHEN ucto_kategorie.rucne_polia && ARRAY['nazov','popis','slovnik'] THEN ucto_kategorie.vektor ELSE excluded.vektor END,
+           vektor_model=CASE WHEN ucto_kategorie.rucne_polia && ARRAY['nazov','popis','slovnik'] THEN ucto_kategorie.vektor_model ELSE excluded.vektor_model END`,
+        [randomUUID(), input.tenantId, input.organizationId, kategoria.nazov, kategoria.popis,
+          JSON.stringify(kategoria.slovnik), JSON.stringify(kategoria.vynimky),
+          vektor ? JSON.stringify(vektor) : null, vektor ? config.openai.embeddingModel : null],
+      );
+    }
+    // Kategória, ktorú tento beh nevytvoril, zmizne len keď ju nikto neupravil
+    // ani nezmazal — a len po behu bez zlyhanej dávky: jej texty mohli byť
+    // práve v dávke, ktorú model nestihol.
+    if (zlyhanychDavok === 0) {
+      await tx.query(
+        `DELETE FROM ucto_kategorie
+          WHERE tenant_id=$1 AND organization_id=$2 AND active AND cardinality(rucne_polia)=0
+            AND (kluc IS NULL OR kluc <> ALL(SELECT lower(nazov) FROM unnest($3::text[]) AS nazov))`,
+        [input.tenantId, input.organizationId, zoznam.map((kategoria) => kategoria.nazov)],
+      );
+    }
+    // Korpus sa načíta znova až tu: `texty` sú spred dávok a história mohla
+    // medzitým prísť nová — kódy kategórií by sa vrátili k starej.
+    return prepocitajPrax(tx, input);
+  });
+
   // Právna kontrola dvojice členenie + sekcia KV. Zlyhanie ju nesmie zhodiť —
   // profil je hotový a poznámka je navyše, nie podmienka.
-  let pravna = { overenych: 0, sporne: 0 };
   try {
-    pravna = await overPravnuStranku(database, config, input);
+    await overPravnuStranku(database, config, input);
   } catch (chyba) {
     console.warn('[ucto-profil] právna kontrola zlyhala:', chyba instanceof Error ? chyba.message : chyba);
   }
@@ -336,8 +381,88 @@ export async function analyzujUctovnyProfil(
     davok,
     zlyhanychDavok,
     pokrytieRiadkov: texty.reduce((sum, item) => sum + item.pocet, 0),
-    ...pravidla,
+    ...prepocet,
   };
+}
+
+/**
+ * Kódy, počty a agendy existujúcich kategórií z aktuálneho korpusu — bez
+ * modelu. Pole, ktoré upravil účtovník, ostáva jeho.
+ */
+export async function prepocitajKategorie(
+  database: Queryable,
+  input: { tenantId: string; organizationId: string },
+): Promise<{ kategoriiZmenenych: number }> {
+  const kategorie = (await database.query<Record<string, any>>(
+    `SELECT id, slovnik, rucne_polia, predkontacia_kod, predkontacia_id, clenenie_dph_kod, clenenie_dph_id,
+            clenenie_kv_kod, konflikt
+       FROM ucto_kategorie WHERE tenant_id=$1 AND organization_id=$2 AND active=true ORDER BY id`,
+    [input.tenantId, input.organizationId],
+  )).rows;
+  if (kategorie.length === 0) return { kategoriiZmenenych: 0 };
+  const korpus = await agregujHistoriu(database, input.tenantId, input.organizationId);
+  const idPreKod = new Map((await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
+    `SELECT id, kind, code FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')`,
+    [input.tenantId, input.organizationId],
+  )).rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
+
+  const idKodu = (kind: string, kod: string | null) => (kod ? idPreKod.get(`${kind}:${kod.trim()}`) ?? null : null);
+
+  let zmenenych = 0;
+  for (const row of kategorie) {
+    const kody = zjednotKody(row.slovnik, korpus);
+    // Počet zmien je len hlásenie — stačí mu stav z úvodného čítania.
+    const rucne = new Set<string>(row.rucne_polia ?? []);
+    const iny = (pole: string, nove: string | null, stare: string | null) => !rucne.has(pole) && nove !== stare;
+    if (iny('predkontaciaKod', kody.predkontaciaKod, row.predkontacia_kod) || iny('clenenieDphKod', kody.clenenieDphKod, row.clenenie_dph_kod)
+      || iny('clenenieKvKod', kody.clenenieKvKod, row.clenenie_kv_kod) || kody.konflikt !== row.konflikt) zmenenych += 1;
+    // Ručné pole sa rozhoduje v SQL nad AKTUÁLNYM riadkom, nie nad úvodným
+    // čítaním: PATCH účtovníka, ktorý prišiel počas agregácie korpusu, by
+    // inak prepočet prepísal a zmrazil v rucne_polia nesprávnu hodnotu.
+    await database.query(
+      `UPDATE ucto_kategorie SET
+         predkontacia_kod=CASE WHEN 'predkontaciaKod'=ANY(rucne_polia) THEN predkontacia_kod ELSE $2 END,
+         predkontacia_id=CASE WHEN 'predkontaciaKod'=ANY(rucne_polia) THEN predkontacia_id ELSE $3 END,
+         clenenie_dph_kod=CASE WHEN 'clenenieDphKod'=ANY(rucne_polia) THEN clenenie_dph_kod ELSE $4 END,
+         clenenie_dph_id=CASE WHEN 'clenenieDphKod'=ANY(rucne_polia) THEN clenenie_dph_id ELSE $5 END,
+         clenenie_kv_kod=CASE WHEN 'clenenieKvKod'=ANY(rucne_polia) THEN clenenie_kv_kod ELSE $6 END,
+         pocet=$7, agendy=$8::jsonb, konflikt=$9
+        WHERE id=$1`,
+      [row.id, kody.predkontaciaKod, idKodu('predkontacie', kody.predkontaciaKod), kody.clenenieDphKod,
+        idKodu('cleneniaDph', kody.clenenieDphKod), kody.clenenieKvKod, kody.pocet, JSON.stringify(kody.agendy), kody.konflikt],
+    );
+  }
+  return { kategoriiZmenenych: zmenenych };
+}
+
+/**
+ * Zapisovatelia praxe jednej firmy (koniec analýzy, job prepocet_praxe, skript
+ * prepocitajPrax) idú za sebou. Súbežne sa zrážali: dva prepočty na unikátnom
+ * kľúči ucto_pravidla (druhý DELETE nevidí riadky, ktoré prvý práve vložil)
+ * a analýza s prepočtom v deadlocku na opačnom poradí tabuliek. Zámok patrí
+ * transakcii, uvoľní ho COMMIT aj ROLLBACK; v tej istej transakcii sa smie brať znova.
+ */
+async function zamkniPrax(tx: Queryable, input: { tenantId: string; organizationId: string }) {
+  await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ucto_prax:${input.tenantId}:${input.organizationId}`]);
+}
+
+/**
+ * Prax firmy z aktuálneho korpusu bez jediného volania modelu: pravidlá
+ * protistrán, kódy kategórií a ich rozpis. Beží po publikácii histórie aj na
+ * konci analýzy; transakciu drží volajúci, aby sa všetko vymenilo naraz.
+ */
+export async function prepocitajPrax(
+  database: Queryable,
+  input: { tenantId: string; organizationId: string },
+) {
+  await zamkniPrax(database, input);
+  const pravidla = await prepocitajPravidla(database, input);
+  const { kategoriiZmenenych } = await prepocitajKategorie(database, input);
+  // Kategória hovorí o DRUHU plnenia, takže jej rozpis platí aj pre dodávateľa,
+  // ktorého firma nikdy nemala — to pravidlo protistrany nedokáže.
+  const { kategoriiSRozpisom } = await doplnRozpisKategorii(database, input);
+  return { ...pravidla, kategoriiZmenenych, kategoriiSRozpisom };
 }
 
 export interface UctoKategoria {
@@ -352,6 +477,7 @@ export interface UctoKategoria {
   clenenieKvKod?: string;
   vynimky: Array<{ podmienka: string; predkontaciaKod: string | null }>;
   agendy: string[];
+  /** Počet dokladov, ktoré kategória pokrýva. */
   pocet: number;
   konflikt?: string;
   /**
@@ -436,7 +562,7 @@ export async function updateUctoKategoria(
   if (zmena.slovnik !== undefined) pridaj('slovnik=', JSON.stringify(zmena.slovnik), '::jsonb');
   // Vektor vznikol z názvu, popisu a slovníka — po ich zmene by ukazoval na
   // pôvodný význam. NULL znamená „vyberaj lexikálne", teda presne to, čo
-  // účtovník práve upravil; ďalšia analýza vektor prepočíta.
+  // účtovník práve upravil.
   if (zmena.nazov !== undefined || zmena.popis !== undefined || zmena.slovnik !== undefined) {
     polia.push('vektor=NULL', 'vektor_model=NULL');
   }
@@ -473,6 +599,10 @@ export async function updateUctoKategoria(
   }
 
   if (polia.length === 0) throw new HttpError(400, 'empty_update', 'Niet čo upraviť');
+  // Upravené pole patrí odteraz účtovníkovi: ďalšia analýza ani prepočet po
+  // prenose histórie ho neprepíšu (predtým analýza zmazala všetky úpravy).
+  hodnoty.push(Object.entries(zmena).filter(([, hodnota]) => hodnota !== undefined).map(([pole]) => pole));
+  polia.push(`rucne_polia=ARRAY(SELECT DISTINCT pole FROM unnest(rucne_polia || $${hodnoty.length}::text[]) AS pole ORDER BY 1)`);
   const result = await database.query<Record<string, any>>(
     `UPDATE ucto_kategorie SET ${polia.join(', ')}, updated_at=now()
       WHERE tenant_id=$1 AND organization_id=$2 AND id=$3 AND active=true

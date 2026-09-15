@@ -2829,7 +2829,11 @@ describe('doklady histórie idú do promptu celé', () => {
 // zostal na 0,8 — účtovník musel klikať pri každom. Keď firma robí to isté
 // v deviatich dokladoch z desiatich, chráni to už len pred pohodlím.
 describe('istota pri ustálenom pravidle protistrany', () => {
-  async function priprava(dokladov: number, zhoda: number) {
+  async function priprava(
+    dokladov: number,
+    zhoda: number,
+    moznosti: { dph?: { pravidlo: string; navrh: string }; konflikt?: boolean } = {},
+  ) {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
@@ -2840,11 +2844,23 @@ describe('istota pri ustálenom pravidle protistrany', () => {
        VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`,
       [predkontacia, ...kde],
     );
+    const clenenia = new Map<string, string>();
+    for (const kod of moznosti.dph ? ['PD', 'PN'] : []) {
+      clenenia.set(kod, randomUUID());
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
+        [clenenia.get(kod), ...kde, kod],
+      );
+    }
+    const variant = (clenenieDphKod: string, pocet: number) =>
+      ({ predkontaciaKod: '518/321', clenenieDphKod, tvar: [], dokladov: pocet, od: '2025-01-05', do: '2025-12-20' });
     await database.query(
       `INSERT INTO ucto_pravidla
-        (id,tenant_id,organization_id,agenda,protistrana,dokladov,zhoda,predkontacia_kod,rozpis)
-       VALUES ($1,$2,$3,'FP','preprava s.r.o.',$4,$5,'518/321','[]'::jsonb)`,
-      [randomUUID(), ...kde, dokladov, zhoda],
+        (id,tenant_id,organization_id,agenda,protistrana,dokladov,zhoda,predkontacia_kod,clenenie_dph_kod,rozpis,konflikt,varianty)
+       VALUES ($1,$2,$3,'FP','preprava s.r.o.',$4,$5,'518/321',$6,'[]'::jsonb,$7,$8::jsonb)`,
+      [randomUUID(), ...kde, dokladov, zhoda, moznosti.dph?.pravidlo ?? null, moznosti.konflikt === true,
+        JSON.stringify(moznosti.konflikt ? [variant('PD', 30), variant('PN', 28)] : [])],
     );
     const documentId = randomUUID();
     await database.query(
@@ -2854,8 +2870,8 @@ describe('istota pri ustálenom pravidle protistrany', () => {
     );
     const parser = {
       create: vi.fn().mockResolvedValue(aiOdpoved({
-        predkontaciaId: predkontacia, clenenieDphId: null, clenenieKvKod: null,
-        ciselnyRadId: null, confidence: 0.99, reason: 'Preprava',
+        predkontaciaId: predkontacia, clenenieDphId: moznosti.dph ? clenenia.get(moznosti.dph.navrh) : null,
+        clenenieKvKod: null, ciselnyRadId: null, confidence: 0.99, reason: 'Preprava',
       })),
     };
     await maybeAiAccountingSuggestion(
@@ -2867,9 +2883,10 @@ describe('istota pri ustálenom pravidle protistrany', () => {
       },
       parser,
     );
-    return (await database.query<Record<string, any>>(
+    const navrh = (await database.query<Record<string, any>>(
       'SELECT confidence, reason FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0];
+    return { ...navrh, prompt: JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text) };
   }
 
   it('pri 58 zo 60 pustí návrh nad hranicu a povie prečo', async () => {
@@ -2881,6 +2898,85 @@ describe('istota pri ustálenom pravidle protistrany', () => {
   it('pri 6 z 10 ostáva pod hranicou — to je zvyk, nie pravidlo', async () => {
     const navrh = await priprava(10, 6);
     expect(Number(navrh.confidence)).toBeLessThan(0.9);
+  }, 90_000);
+
+  // Zhoda len v účte by s istotou 0.95 predvyplnila odpočet, aký firma
+  // u protistrany neuplatňuje: pravidlo A/PD, model A/PN.
+  it('pravidlo A/PD a návrh A/PN ostáva pod hranicou, A/PD nad ňou', async () => {
+    expect(Number((await priprava(60, 58, { dph: { pravidlo: 'PD', navrh: 'PN' } })).confidence)).toBeLessThan(0.9);
+    expect(Number((await priprava(60, 58, { dph: { pravidlo: 'PD', navrh: 'PD' } })).confidence)).toBeGreaterThanOrEqual(0.9);
+  }, 120_000);
+
+  it('pravidlo s viacerými praxami ide modelu s podobami a istotu nedvíha', async () => {
+    const navrh = await priprava(60, 58, { konflikt: true });
+    expect(Number(navrh.confidence)).toBeLessThan(0.9);
+    expect(navrh.prompt.pravidlo).toMatchObject({
+      konflikt: true,
+      varianty: [{ clenenieDphKod: 'PD', dokladov: 30, od: '2025-01-05' }, { clenenieDphKod: 'PN', dokladov: 28 }],
+    });
+  }, 90_000);
+});
+
+// Reťaz účet → členenie → sekcia KV skladá hlavičku z troch samostatných
+// väčšín. Účet A firma účtuje vždy s PD a KN, ale PD nesie na iných účtoch B2:
+// návrh dostal A/PD/B2, akú firma nikdy nemala, a denník ju predvyplnil.
+describe('kombinácia hlavičky, ktorú firma ešte nemala', () => {
+  it('polia nemení, ale doklad nepredvyplní a povie prečo', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const [ucet, iny, pd] = [randomUUID(), randomUUID(), randomUUID()];
+    for (const [id, kind, kod] of [[ucet, 'predkontacie', 'A-oprava'], [iny, 'predkontacie', 'B-material'], [pd, 'cleneniaDph', 'PD']]) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, ...kde, kind, kod],
+      );
+    }
+    // Účet A: päť dokladov, vždy PD a KN. PD na inom účte: 50 dokladov s B2.
+    await database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,line_text_normalized,
+         predkontacia_id,predkontacia_kod,clenenie_dph_id,clenenie_dph_kod,clenenie_kv_kod,riadok_index,source,riadok_hash)
+       SELECT 'h' || n, $1, $2, 'FP', 'D' || n, '2026-03-10',
+              CASE WHEN n <= 5 THEN 'servis s.r.o.' ELSE 'stavebniny s.r.o.' END,
+              CASE WHEN n <= 5 THEN 'oprava vozidla' ELSE 'stavebny material ' || n END,
+              CASE WHEN n <= 5 THEN $3 ELSE $4 END, CASE WHEN n <= 5 THEN 'A-oprava' ELSE 'B-material' END,
+              $5, 'PD', CASE WHEN n <= 5 THEN 'KN' ELSE 'B2' END, 0, 'mdb', 'hash' || n
+         FROM generate_series(1, 55) AS n`,
+      [...kde, ucet, iny, pd],
+    );
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, ...kde],
+    );
+    // Model trafí účet a členenie ani sekciu nepovie — doplní ich reťaz.
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.99, reason: 'Oprava vozidla',
+      })),
+    };
+    await maybeAiAccountingSuggestion(
+      database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Servis s.r.o.' },
+      {
+        documentType: 'FP', supplierName: 'Servis s.r.o.', totalAmount: 100, currency: 'EUR',
+        lineDescriptions: ['oprava vozidla'], polozky: [{ popis: 'oprava vozidla', suma: 100 }],
+      },
+      parser,
+    );
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, confidence, reason FROM accounting_suggestions WHERE document_id=$1',
+      [documentId],
+    )).rows[0];
+    // Polia ostávajú, ako ich reťaz dala — zriedkavá operácia nie je chyba.
+    expect(navrh).toMatchObject({ predkontacia_id: ucet, clenenie_dph_id: pd, clenenie_kv_kod: 'B2' });
+    expect(Number(navrh.confidence)).toBeLessThan(0.9);
+    expect(navrh.reason).toContain('ešte nepoužila');
   }, 90_000);
 });
 

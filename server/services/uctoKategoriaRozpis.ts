@@ -1,4 +1,4 @@
-import type { Database, Queryable } from '../db/database.js';
+import type { Queryable } from '../db/database.js';
 import { pocetZhodSlov } from './accountingSuggestionService.js';
 import { odvodRozpisVarianty, MIN_DOKLADOV, type RozpisVariant, type RozpisRiadok } from './uctoPravidlaService.js';
 
@@ -17,9 +17,12 @@ import { odvodRozpisVarianty, MIN_DOKLADOV, type RozpisVariant, type RozpisRiado
  * zhody slovníka s textom hlavičky, najviac zhodných slov vyhráva. Dva rôzne
  * spôsoby priradenia by znamenali, že kategória sľubuje jedno a pri doklade
  * platí druhé.
+ *
+ * Transakciu drží volajúci: rozpis sa mení spolu s kategóriami a pravidlami,
+ * aby návrh nikdy nevidel nové kategórie so starým rozpisom.
  */
 export async function doplnRozpisKategorii(
-  database: Database,
+  database: Queryable,
   input: { tenantId: string; organizationId: string },
 ): Promise<{ kategoriiSRozpisom: number }> {
   const kategorie = (await database.query<Record<string, any>>(
@@ -77,17 +80,15 @@ export async function doplnRozpisKategorii(
   }
 
   let sRozpisom = 0;
-  await database.transaction(async (tx: Queryable) => {
-    for (const kategoria of kategorie) {
-      const jejDoklady = podlaKategorie.get(kategoria.id) ?? [];
-      // Podôb môže byť viac: kategória hovorí o DRUHU plnenia a ten istý druh
-      // sa dá kupovať doma aj v cudzine, každé s iným tvarom rozpisu.
-      const rozpis: RozpisVariant[] = jejDoklady.length >= MIN_DOKLADOV
-        ? odvodRozpisVarianty(jejDoklady) : [];
-      if (rozpis.length > 0) sRozpisom += 1;
-      await tx.query('UPDATE ucto_kategorie SET rozpis=$1::jsonb WHERE id=$2',
-        [JSON.stringify(rozpis), kategoria.id]);
-    }
-  });
+  for (const kategoria of kategorie) {
+    const jejDoklady = podlaKategorie.get(kategoria.id) ?? [];
+    // Podôb môže byť viac: kategória hovorí o DRUHU plnenia a ten istý druh
+    // sa dá kupovať doma aj v cudzine, každé s iným tvarom rozpisu.
+    const rozpis: RozpisVariant[] = jejDoklady.length >= MIN_DOKLADOV
+      ? odvodRozpisVarianty(jejDoklady) : [];
+    if (rozpis.length > 0) sRozpisom += 1;
+    await database.query('UPDATE ucto_kategorie SET rozpis=$1::jsonb WHERE id=$2',
+      [JSON.stringify(rozpis), kategoria.id]);
+  }
   return { kategoriiSRozpisom: sRozpisom };
 }

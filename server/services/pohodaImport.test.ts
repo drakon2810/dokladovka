@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { MemoryObjectStorage } from '../storage.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { processNextJob } from '../workerService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -110,6 +111,37 @@ describe('prenos z Mostíka cez staging a publikáciu', () => {
     const malymi = await publikuj(znova, { ...telo, manifest: { ...manifest(), databaza: DATABAZA.toLowerCase() } });
     expect(malymi.statusCode, malymi.body).toBe(200);
     expect(await zivy()).toHaveLength(4);
+  }, 120_000);
+
+  // Po novom prenose ostávali pravidlá aj kategórie zo starej histórie, kým
+  // niekto nezaplatil novú analýzu. Prepočet praxe je deterministický a lacný.
+  it('publikácia histórie zaradí prepočet praxe a worker ho spraví bez AI', async () => {
+    const { database, agent, publikuj, sql } = await priprav();
+    await agent('PUT', 'code-lists', { kind: 'predkontacie', items: [{ kod: '518/321', nazov: '518/321' }] });
+    // Kategória z minulej analýzy — kódy ešte nemá.
+    await sql(`INSERT INTO ucto_kategorie (id,tenant_id,organization_id,nazov,slovnik,kluc)
+      SELECT 'kat-preprava', tenant_id, id, 'Preprava', '["preprava"]'::jsonb, 'preprava' FROM organizations WHERE id=$1`);
+    const importId = randomUUID();
+    const rows = [1, 2, 3].map((n) => ({
+      agenda: 'FP', dokladCislo: `FP2600${n}`, datum: `2026-0${n}-01`, lineText: 'Preprava', supplierName: 'Preprava s.r.o.',
+      predkontaciaKod: '518/321', clenenieDphKod: 'PD', riadokIndex: 0, dokladId: n,
+    }));
+    expect((await agent('PUT', 'ucto-history', { importId, davka: 0, reset: true, rows })).statusCode).toBe(200);
+    const telo = { druh: 'historia', davok: 1, pocet: 3, manifest: manifest() };
+    expect((await publikuj(importId, telo)).statusCode).toBe(200);
+    // Zopakovaná publikácia nezaloží druhý čakajúci prepočet.
+    expect((await publikuj(importId, telo)).statusCode).toBe(200);
+    const joby = () => sql(`SELECT status FROM processing_jobs WHERE organization_id=$1 AND kind='prepocet_praxe'`);
+    expect(await joby()).toEqual([{ status: 'queued' }]);
+    expect(await sql('SELECT 1 FROM ucto_pravidla WHERE organization_id=$1')).toEqual([]);
+
+    // testConfig nemá kľúč OpenAI — keby prepočet volal model, job by zlyhal.
+    expect(await processNextJob(database, testConfig(), 'test-worker')).toBe(true);
+    expect(await joby()).toEqual([{ status: 'succeeded' }]);
+    expect(await sql('SELECT dokladov, predkontacia_kod, konflikt FROM ucto_pravidla WHERE organization_id=$1'))
+      .toEqual([{ dokladov: 3, predkontacia_kod: '518/321', konflikt: false }]);
+    expect(await sql('SELECT id, predkontacia_kod, clenenie_dph_kod, pocet FROM ucto_kategorie WHERE organization_id=$1'))
+      .toEqual([{ id: 'kat-preprava', predkontacia_kod: '518/321', clenenie_dph_kod: 'PD', pocet: 3 }]);
   }, 120_000);
 
   it('neúplný alebo nahradený prenos živé dáta nezmení', async () => {

@@ -30,7 +30,7 @@ import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.
 import { matchStatementPayments } from './services/paymentService.js';
 import { doplnZKartyPartnera, upsertPartnerZDokladu } from './services/partnerService.js';
 import { profilPreKlasifikaciu } from './services/firemnyProfilService.js';
-import { analyzujUctovnyProfil } from './services/uctoProfileService.js';
+import { analyzujUctovnyProfil, prepocitajPrax } from './services/uctoProfileService.js';
 import { zmerajPresnost } from './services/uctoPresnostService.js';
 import { opravSkDanoveCisla } from './services/skTaxIdsService.js';
 import type { ObjectStorage } from './storage.js';
@@ -43,7 +43,7 @@ interface JobRow extends Record<string, unknown> {
   attachment_id: string;
   document_id?: string;
   correlation_id: string;
-  kind: 'extract_document' | 'reprocess_document' | typeof ANALYZA_KIND | typeof NAVRH_KIND;
+  kind: 'extract_document' | 'reprocess_document' | typeof ANALYZA_KIND | typeof NAVRH_KIND | typeof PREPOCET_PRAXE_KIND;
   attempts: number;
   max_attempts: number;
   payload: { mockExtraction?: MockExtractionHints; vzorka?: number };
@@ -65,6 +65,13 @@ export const ANALYZA_KIND = 'ucto_analyza';
  * a s prázdnym payloadom. Zakladá ho zmena druhu dokladu (spracujNavrh).
  */
 export const NAVRH_KIND = 'navrh_zauctovania';
+
+/**
+ * Prepočet praxe firmy po publikácii histórie: pravidlá protistrán, kódy
+ * kategórií a rozpis — bez modelu. Bez neho ostávali po novom prenose pravidlá
+ * aj kategórie zo starej histórie, kým niekto nezaplatil novú analýzu.
+ */
+export const PREPOCET_PRAXE_KIND = 'prepocet_praxe';
 
 /**
  * Ako dlho smie job bežať, kým ho iný bežec vyhlási za zaseknutý. Extrakcia je
@@ -941,6 +948,30 @@ async function spracujAnalyzu(database: Database, config: ServerConfig, job: Job
   }
 }
 
+/** Prepočet praxe (PREPOCET_PRAXE_KIND) — jedna transakcia, žiadne volanie AI. */
+async function spracujPrepocetPraxe(database: Database, job: JobRow): Promise<void> {
+  try {
+    const vysledok = await database.transaction((tx) => prepocitajPrax(tx, {
+      tenantId: job.tenant_id, organizationId: job.organization_id,
+    }));
+    await database.query(
+      `UPDATE processing_jobs SET status='succeeded', locked_at=NULL, locked_by=NULL,
+              error_code=NULL, error_message=NULL, payload=payload || $1::jsonb, updated_at=now()
+        WHERE id=$2`,
+      [JSON.stringify({ vysledok }), job.id],
+    );
+  } catch (chyba) {
+    // Deterministický prepočet nad tými istými dátami padne znova rovnako —
+    // nasledujúca publikácia histórie založí nový.
+    await database.query(
+      `UPDATE processing_jobs SET status='failed', locked_at=NULL, locked_by=NULL,
+              error_code='prepocet_zlyhal', error_message=$1, updated_at=now()
+        WHERE id=$2`,
+      [(chyba instanceof Error ? chyba.message : String(chyba)).slice(0, 500), job.id],
+    );
+  }
+}
+
 /**
  * Nový návrh zaúčtovania pre uložený doklad (NAVRH_KIND).
  *
@@ -1043,6 +1074,10 @@ export async function processNextJob(
   }
   if (job.kind === NAVRH_KIND) {
     await spracujNavrh(database, config, job, dependencies);
+    return true;
+  }
+  if (job.kind === PREPOCET_PRAXE_KIND) {
+    await spracujPrepocetPraxe(database, job);
     return true;
   }
   const jobStartedAt = performance.now();
