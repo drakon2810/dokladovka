@@ -94,7 +94,8 @@ export function registerUctoProfileRoutes(
   app.post('/api/organizations/:id/ucto-presnost', async (request) => {
     const { auth, organizationId } = await pristup(request, true);
     const body = z.object({
-      vzorka: z.number().int().min(1).max(500).optional(),
+      // Bez vzorky by režim bez AI meral celé okno v jednej požiadavke (minúty).
+      vzorka: z.number().int().min(1).max(500).default(150),
       deliciDatum: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       rezim: z.enum(['bez_ai', 'ai']).default('bez_ai'),
       maxAiVolani: z.number().int().min(1).max(500).optional(),

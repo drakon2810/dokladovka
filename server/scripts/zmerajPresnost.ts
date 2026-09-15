@@ -15,6 +15,9 @@ import {
  *   docker compose exec -T -e PGOPTIONS='-c default_transaction_read_only=on' api node build/server/scripts/zmerajPresnost.js --rezim bez_ai
  * Voľby: --rezim bez_ai|ai  --okno test|validacia  --vzorka N  --max-volani N  --kategorie
  * Režim ai stojí peniaze a posiela texty dokladov do OpenAI — len so súhlasom.
+ * --max-volani je rozpočet CELÉHO behu (predvolene 100), nie na firmu; delí sa
+ * rovnomerne a nevyčerpaný zvyšok prejde na ďalšie firmy. S --kategorie volá
+ * režim ai aj embeddingy OpenAI; režim bez_ai nikdy.
  */
 const { values } = parseArgs({
   options: {
@@ -36,18 +39,25 @@ try {
   const firmy = (await database.query<{ id: string; tenant_id: string; name: string } & Record<string, unknown>>(
     'SELECT id, tenant_id, name FROM organizations WHERE archived=false ORDER BY name',
   )).rows;
-  for (const firma of firmy) {
+  const sAi = values.rezim === 'ai';
+  let zostatok = values['max-volani'] ? Number(values['max-volani']) : 100;
+  if (sAi) console.error(`Režim ai: najviac ${zostatok} volaní modelu spolu pre ${firmy.length} firiem.`);
+  for (const [poradie, firma] of firmy.entries()) {
+    if (sAi && zostatok <= 0) {
+      console.error(`Rozpočet volaní vyčerpaný — ${firmy.length - poradie} firiem sa nemeralo.`);
+      break;
+    }
     try {
-      behy.push({
-        firma: firma.name,
-        vysledok: await zmerajPresnost(database, config, { tenantId: firma.tenant_id, organizationId: firma.id }, {
-          rezim: values.rezim as RezimMerania,
-          okno: values.okno as OknoMerania,
-          vzorka: values.vzorka ? Number(values.vzorka) : undefined,
-          maxAiVolani: values['max-volani'] ? Number(values['max-volani']) : undefined,
-          kategorie: values.kategorie,
-        }),
+      const vysledok = await zmerajPresnost(database, config, { tenantId: firma.tenant_id, organizationId: firma.id }, {
+        rezim: values.rezim as RezimMerania,
+        okno: values.okno as OknoMerania,
+        vzorka: values.vzorka ? Number(values.vzorka) : undefined,
+        // Podiel zo zvyšku rozpočtu; vzorka ho nikdy neprekročí (vyberVzorku).
+        maxAiVolani: sAi ? Math.ceil(zostatok / (firmy.length - poradie)) : undefined,
+        kategorie: values.kategorie,
       });
+      if (sAi) zostatok -= vysledok.vzorka;
+      behy.push({ firma: firma.name, vysledok });
     } catch (chyba) {
       // Firma bez dát (409) nesmie zastaviť ostatné.
       if (!(chyba instanceof HttpError)) throw chyba;

@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
+import { zmerajPresnost } from '../services/uctoPresnostService.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { MemoryObjectStorage } from '../storage.js';
+
+vi.mock('../services/uctoPresnostService.js', async (importOriginal) => {
+  const povodny = await importOriginal<typeof import('../services/uctoPresnostService.js')>();
+  return { ...povodny, zmerajPresnost: vi.fn(povodny.zmerajPresnost) };
+});
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -36,9 +42,11 @@ describe('POST ucto-presnost', () => {
     const headers = { cookie: String(login.headers['set-cookie']).split(';')[0], 'x-csrf-token': login.json().csrfToken };
     const url = `/api/organizations/${seeded.organizationId}/ucto-presnost`;
 
-    const meranie = await app.inject({ method: 'POST', url, headers, payload: { vzorka: 10 } });
+    const meranie = await app.inject({ method: 'POST', url, headers, payload: {} });
     expect(meranie.statusCode, meranie.body).toBe(200);
     expect(meranie.json()).toMatchObject({ rezim: 'bez_ai', metodika: 2 });
+    // Synchrónna cesta bez vzorky nesmie merať celé okno — pri tisíckach dokladov sú to minúty.
+    expect(vi.mocked(zmerajPresnost).mock.calls[0][3]).toMatchObject({ vzorka: 150, uloz: true });
 
     const behy = await app.inject({ method: 'GET', url, headers });
     const beh = behy.json().behy[0];

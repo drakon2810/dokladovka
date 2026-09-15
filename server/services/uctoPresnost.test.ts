@@ -159,6 +159,39 @@ describe('meranie presnosti zaúčtovania', () => {
     expect(vysledok.doklady[0]).toMatchObject({ zdrzanie: 'bez_zauctovania', navrh: null });
     expect(vysledok.rozdiely).toEqual([]);
   }, 60_000);
+
+  // Samotné členenie DPH bez účtu nie je zaúčtovanie — tvar ani rozpis sa za návrh rátať nesmú.
+  it('návrh bez predkontácie je zdržanie, nie zlý tvar', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const predkontacia = await kod('predkontacie', '518/321');
+    const pd = await kod('cleneniaDph', 'PD');
+    const iny = await kod('predkontacie', '501/321');
+    const doklad = { doklad_cislo: '26FP001', datum: '2026-08-20', suma_dph: 20, sadzba_dph: 20 };
+    await riadok({ ...doklad, predkontacia_id: predkontacia, clenenie_dph_id: pd });
+    await riadok({ ...doklad, riadok_index: 1, predkontacia_id: predkontacia, clenenie_dph_id: pd });
+    await riadok({ ...doklad, riadok_index: 2, line_text_normalized: 'ine', predkontacia_id: iny, clenenie_dph_id: pd });
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: null, clenenieDphId: pd, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.5, reason: 'Len DPH',
+      })),
+    };
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { rezim: 'ai', deliciDatum: '2026-08-01' }, parser);
+    expect(vysledok.doklady[0]).toMatchObject({ zdrzanie: 'bez_predkontacie', navrh: null });
+    expect(vysledok.vysledok.FP).toMatchObject({
+      zdrzanie: 1, chybajuciRozpis: 0, rozpisanych: 1, tvar: { spravne: 0, znamych: 1, navrhnutych: 0 },
+    });
+  }, 60_000);
+
+  // Zmluva s promptom: režim bez AI číta dennik[].tejProtistrany. Keď sa kľúč
+  // premenuje, každý doklad bez pravidla ticho skončí ako „bez dôkazu".
+  it('bez AI odpovie z denníka protistrany, keď pravidlo ešte nie je', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const predkontacia = await kod('predkontacie', '518/321');
+    await riadok({ doklad_cislo: '26FP001', datum: '2026-02-15', predkontacia_id: predkontacia, predkontacia_kod: '518/321' });
+    await riadok({ doklad_cislo: '26FP090', datum: '2026-08-20', predkontacia_id: predkontacia, predkontacia_kod: '518/321' });
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
+    expect(vysledok.vysledok.FP.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
+  }, 60_000);
 });
 
 // Neskorší doklad ani nič, čo vzniklo po dátume dokladu, nesmie zmeniť to, čo
@@ -170,8 +203,9 @@ describe('bez úniku budúcnosti', () => {
     const p501 = await kod('predkontacie', '501/321');
     const pd = await kod('cleneniaDph', 'PD');
     const pn = await kod('cleneniaDph', 'PN');
-    const r1 = await kod('ciselneRady', 'R1', { agenda: 'prijate_faktury', accounting_year: '2026' });
-    await kod('ciselneRady', 'R2', { agenda: 'prijate_faktury', accounting_year: '2026' });
+    await kod('ciselneRady', 'R1', { agenda: 'prijate_faktury', accounting_year: '2026' });
+    // R2 pri rovnosti použití prehráva s R1 poradím kódu — budúce použitie ho musí prevážiť, ak unikne.
+    const r2 = await kod('ciselneRady', 'R2', { agenda: 'prijate_faktury', accounting_year: '2026' });
     const kody = { predkontacia_id: p518, predkontacia_kod: '518/321', clenenie_dph_id: pd, clenenie_dph_kod: 'PD', clenenie_kv_kod: 'B2' };
     for (const [index, cislo] of ['26FP001', '26FP002', '26FP003'].entries()) {
       await riadok({ doklad_cislo: cislo, datum: `2026-0${index + 1}-15`, ...kody });
@@ -183,9 +217,10 @@ describe('bez úniku budúcnosti', () => {
        VALUES ($1,'global','Staré pravidlo','platí','accounting','2026-01-01')`, [randomUUID()],
     );
 
+    // Sekciu KV model nedá: doplní ju prax firmy (kvPreClenenie), ktorá tiež musí stáť k dátumu.
     const parser = {
       create: vi.fn().mockResolvedValue(aiOdpoved({
-        predkontaciaId: p518, clenenieDphId: pd, clenenieKvKod: 'B2', ciselnyRadId: null, confidence: 0.8, reason: 'Preprava',
+        predkontaciaId: p518, clenenieDphId: pd, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.8, reason: 'Preprava',
       })),
     };
     const zmeraj = async () => {
@@ -202,9 +237,11 @@ describe('bez úniku budúcnosti', () => {
       doklad_cislo: '26FP020', datum: '2026-05-10', predkontacia_id: p501, predkontacia_kod: '501/321',
       clenenie_dph_id: pn, clenenie_dph_kod: 'PN', clenenie_kv_kod: 'KN',
     });
+    // Tá istá DPH s inou sekciou: bez delenia časom by prax PD prestala byť jednoznačná.
+    await riadok({ doklad_cislo: '26FP021', datum: '2026-05-11', ...kody, clenenie_kv_kod: 'B3' });
     await vloz('ucto_decisions', {
       supplier_name_normalized: 'preprava s.r.o.', line_text_normalized: 'preprava tovaru', predkontacia_id: p501,
-      clenenie_dph_id: pn, clenenie_kv_kod: 'KN', ciselny_rad_id: r1, document_type: 'FP', source: 'import',
+      clenenie_dph_id: pn, clenenie_kv_kod: 'KN', ciselny_rad_id: r2, document_type: 'FP', source: 'import',
       created_at: '2026-06-01',
     });
     await vloz('accounting_rules', {
@@ -221,6 +258,8 @@ describe('bez úniku budúcnosti', () => {
 
     expect(potom.prompt).toEqual(predtym.prompt);
     expect(potom.doklad).toEqual(predtym.doklad);
+    // Sekcia prišla z praxe firmy a rad z počtu použití — oba zdroje sa teda naozaj pýtali.
+    expect(predtym.doklad?.navrh).toMatchObject({ kv: 'B2', rad: 'R1' });
     expect(predtym.prompt.kategorie).toEqual([]);
     expect(predtym.prompt.pravidla).toContain('Staré pravidlo');
     expect(predtym.prompt.pravidla).not.toContain('Nové pravidlo');
@@ -419,6 +458,19 @@ describe('vzorka a interval', () => {
     expect(new Set(vzorka.map((doklad) => doklad.agenda))).toEqual(new Set(['FP', 'FV-D', 'PPD']));
     // Poradie vstupu (napr. iný import) výber nemení.
     expect(new Set(vyberVzorku([...doklady].reverse(), 10))).toEqual(new Set(vzorka));
+  });
+
+  // Vzorka je strop platených volaní: kvóta „aspoň jeden na agendu" ju nesmie prekročiť.
+  it('vzorka nikdy neprekročí rozpočet, ani keď je agend viac než miest', () => {
+    const agendy = (velkosti: Record<string, number>) => Object.entries(velkosti)
+      .flatMap(([agenda, pocet]) => Array.from({ length: pocet }, (_, index) => ({ agenda, dokladCislo: `${agenda}${index}` })));
+    const trojica = vyberVzorku(agendy({ FP: 90, FV: 5, OZ: 5 }), 10);
+    expect(trojica).toHaveLength(10);
+    expect(new Set(trojica.map((doklad) => doklad.agenda))).toEqual(new Set(['FP', 'FV', 'OZ']));
+    expect(vyberVzorku(agendy({ FP: 10, FV: 10, OZ: 10, INT: 10 }), 2)).toHaveLength(2);
+    // Viac agend než miest: rozpočet vyhrá a vypadnú najmenšie.
+    expect(new Set(vyberVzorku(agendy({ FP: 10, FV: 5, OZ: 3 }), 2).map((doklad) => doklad.agenda)))
+      .toEqual(new Set(['FP', 'FV']));
   });
 
   it('interval spoľahlivosti obopína podiel a je opakovateľný', () => {

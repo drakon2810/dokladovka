@@ -257,8 +257,11 @@ export function intervalSpolahlivosti(
  * Vzorka pre režim AI: kvóta po agendách podľa podielu (dolná celá časť, aspoň
  * jeden doklad), zvyšok podľa najväčšieho zvyšku; v agende rozhoduje
  * md5(agenda|doklad_cislo). Poradie tak nezávisí od dátumu importu a nový
- * doklad v korpuse nepremieša celú vzorku. Agenda nikdy nevypadne — kým sa
+ * doklad v korpuse nepremieša celú vzorku. Agenda nevypadne — kým sa
  * vzorka orezávala na konci, malé FV-D či PPD sa do merania nedostali vôbec.
+ * Vzorka je však strop platených volaní: keď „aspoň jeden" kvóty prekročí,
+ * prebytok vrátia najväčšie agendy; pri viac agendách než miestach vypadnú
+ * najmenšie a manifest ich vymenuje.
  */
 export function vyberVzorku<T extends { agenda: string; dokladCislo: string }>(doklady: T[], vzorka: number): T[] {
   if (doklady.length <= vzorka) return doklady;
@@ -272,6 +275,15 @@ export function vyberVzorku<T extends { agenda: string; dokladCislo: string }>(d
     return { agenda, skupina, kolko: Math.min(skupina.length, Math.max(1, Math.floor(presne))), zvysok: presne % 1 };
   });
   let volne = vzorka - kvoty.reduce((spolu, kvota) => spolu + kvota.kolko, 0);
+  while (volne < 0) {
+    // Z viacdokladových kvót uberá najväčšia agenda; keď má každá už len jeden
+    // doklad, vypadne najmenšia.
+    const najvacsia = kvoty.filter((kvota) => kvota.kolko > 0).sort((a, b) => (b.kolko - a.kolko)
+      || (a.kolko > 1 ? b.skupina.length - a.skupina.length : a.skupina.length - b.skupina.length)
+      || a.agenda.localeCompare(b.agenda))[0];
+    najvacsia.kolko -= 1;
+    volne += 1;
+  }
   for (const kvota of [...kvoty].sort((a, b) => (b.zvysok - a.zvysok) || a.agenda.localeCompare(b.agenda))) {
     if (volne <= 0) break;
     if (kvota.kolko < kvota.skupina.length) {
@@ -451,6 +463,9 @@ const lokalnyParser = {
   },
 };
 
+/** Embedder bez vektorov: vytvorVektory vráti undefined a kategórie ostanú lexikálne. */
+const bezVektorov = { create: async () => ({ data: [] as Array<{ embedding: number[] }> }) };
+
 /** Riadky a posledný import po agendách — beh, počas ktorého agent korpus prepísal, sa pozná. */
 async function odtlacokKorpusu(database: Database, input: { tenantId: string; organizationId: string }) {
   return (await database.query<Record<string, unknown>>(
@@ -556,11 +571,14 @@ export async function zmerajPresnost(
         },
       }, {
         parser: rezim === 'ai' ? injectedParser : lokalnyParser,
+        // Bez AI nikdy nevolá OpenAI ani pre kategórie: prázdny embedder = len lexikálna zhoda.
+        ...(rezim === 'ai' ? {} : { embedder: bezVektorov }),
         bezWebu: true,
         sKategoriami: moznosti.kategorie,
       });
-      if ('navrh' in vysledok) navrh = vysledok.navrh;
-      else zdrzanie = vysledok.zdrzanie;
+      // Samotné členenie DPH bez účtu nie je zaúčtovanie — zdržanie, nie zlý tvar.
+      if ('navrh' in vysledok && vysledok.navrh.predkontacia_id) navrh = vysledok.navrh;
+      else zdrzanie = 'zdrzanie' in vysledok ? vysledok.zdrzanie : 'bez_predkontacie';
       for (const [pole, kluc] of [['vstup', 'input_tokens'], ['vystup', 'output_tokens'], ['spolu', 'total_tokens']] as const) {
         tokeny[pole] += Number(vysledok.usage?.[kluc] ?? 0);
       }
@@ -602,7 +620,12 @@ export async function zmerajPresnost(
     okna: { validacia: { od: okna.p60, doVylucne: hranica }, test: { od: hranica, doVratane: okna.dnes } },
     asOf: 'datum_dokladu',
     kategorie: moznosti.kategorie ? 'horna_hranica' : 'vylucene',
+    // Embeddingy OpenAI len v režime ai s kategóriami; nerátajú sa do maxAiVolani ani do tokenov.
+    embeddingy: rezim === 'ai' && moznosti.kategorie ? 'openai' : null,
     vylucene: moznosti.kategorie ? [] : ['ucto_kategorie'],
+    // Agendy, na ktoré rozpočet vzorky nestačil (viac agend než miest).
+    vynechaneAgendy: [...new Set(vsetky.map((doklad) => doklad.agenda))]
+      .filter((agenda) => !merane.some((doklad) => doklad.agenda === agenda)),
     aktualnyStav: ['code_list_items', 'dph_profil', 'organization_series_defaults', 'partners'],
     polozky: 'riadky POHODY po zaúčtovaní — tvar a DPH sú horná hranica',
     webSearch: false,
