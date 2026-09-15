@@ -2005,10 +2005,13 @@ export async function maybeAiAccountingSuggestion(
   // nemusí — a jeden to naozaj nerobil: workerService pri návrhu po extrakcii
   // posielal len meno a IČO, takže karta sa nemala podľa čoho nájsť a oprava
   // vyššie bežala naprázdno. Doklad ich má vždy, tak nech na volajúcom nezáleží.
-  const dodavatelDokladu = (await database.query<{ strana: { ico?: string; icDph?: string; iban?: string } | null }>(
-    `SELECT extracted->$3 AS strana FROM documents WHERE id=$1 AND tenant_id=$2`,
+  const riadokDokladu = (await database.query<{
+    strana: { ico?: string; icDph?: string; iban?: string } | null; pokladna_typ: string | null;
+  }>(
+    `SELECT extracted->$3 AS strana, accounting->>'pokladnaTyp' AS pokladna_typ FROM documents WHERE id=$1 AND tenant_id=$2`,
     [input.documentId, input.tenantId, documentContext.documentType === 'FV' ? 'odberatel' : 'dodavatel'],
-  )).rows[0]?.strana ?? {};
+  )).rows[0];
+  const dodavatelDokladu = riadokDokladu?.strana ?? {};
   const kartaProtistrany = await najdiPartnera(database, input.tenantId, input.organizationId, {
     ...protistranaZDokladu,
     ico: protistranaZDokladu.ico || dodavatelDokladu.ico,
@@ -2026,7 +2029,10 @@ export async function maybeAiAccountingSuggestion(
     database, input, documentContext.documentType, documentContext.datumVystavenia,
     documentContext.podtyp,
     { ...protistranaKontextu, icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina },
-    documentContext.historiaDoDatumu, documentContext.pokladnaTyp);
+    documentContext.historiaDoDatumu,
+    // Worker smer pokladne do kontextu neposiela, doklad ho má v zaúčtovaní —
+    // bez neho by výdavkový doklad počítal rady aj z príjmových.
+    documentContext.pokladnaTyp ?? (riadokDokladu?.pokladna_typ ?? undefined));
   // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];

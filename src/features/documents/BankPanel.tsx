@@ -5,7 +5,7 @@
 // (dk-* triedy), tabuľka pohybov je vlastná — stĺpce faktúry sem nesedia.
 import { useMemo, useState } from 'react';
 import type {
-  CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentType, DocumentUcto,
+  CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPodtyp, DocumentType, DocumentUcto,
 } from '../../data/types';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { bankovePredkontacie } from '../../data/pohoda/agendas';
@@ -38,7 +38,7 @@ interface BankPanelProps {
   onExport?: () => void;
   exportDisabledReason?: string;
   /** Podtyp bankový výpis nemá — posiela sa 'bezna', aby signatúra sedela. */
-  setTyp: (typ: DocumentType, podtyp: 'bezna') => void;
+  setTyp: (typ: DocumentType, podtyp: DocumentPodtyp) => void;
   updateUcto: (patch: Partial<DocumentUcto>) => void;
   updateExtracted: <K extends keyof DocumentExtractedData>(key: K, value: DocumentExtractedData[K]) => void;
   /** Predvolená pokladňa firmy — pri prepnutí na PD sa predvyplní ako v InvoicePanel. */
@@ -166,7 +166,7 @@ export function BankPanel({
                 if (option.pokladnaTyp && option.pokladnaTyp !== ucto.pokladnaTyp) patch.pokladnaTyp = option.pokladnaTyp;
                 if (option.typ === 'PD' && !ucto.pokladnaKod?.trim() && predvolenaPokladna) patch.pokladnaKod = predvolenaPokladna;
                 if (Object.keys(patch).length > 0) updateUcto(patch);
-                setTyp(option.typ, 'bezna');
+                setTyp(option.typ, option.podtyp ?? 'bezna');
               }}
             />
 

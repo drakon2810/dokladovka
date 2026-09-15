@@ -366,7 +366,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
             (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, last_number, iban, mena, pokladna_kod, synced_at)
            VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
            ON CONFLICT ${konfliktPolozky(body.kind, item)}
-           DO UPDATE SET name=excluded.name, source='pohoda', active=true, external_id=excluded.external_id,
+           -- code sa prepisuje: rad s tým istým identifikátorom si v POHODE mohol zmeniť predponu.
+           DO UPDATE SET code=excluded.code, name=excluded.name, source='pohoda', active=true, external_id=excluded.external_id,
                          agenda=excluded.agenda, accounting_year=excluded.accounting_year,
                          ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal, last_number=excluded.last_number,
                          iban=excluded.iban, mena=excluded.mena,

@@ -14,7 +14,7 @@ import { classifyXml } from '../inbound/xmlClassifier.js';
 import { detectedMimeType, safeName } from '../inbound/attachmentMime.js';
 import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
-import { forgetUctoDecision, rebuildAccountingSuggestion, recordUctoDecision, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
+import { forgetUctoDecision, protistranaDokladu, rebuildAccountingSuggestion, recordUctoDecision, resolveSeriesDefault, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
 import { posudDph } from '../services/dphAdvisor.js';
 import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
@@ -202,7 +202,9 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       dodavatel?: { nazov?: string; ico?: string; icDph?: string; iban?: string }; textPolozky?: string;
     } | undefined;
     const accounting = body.accounting ?? document.accounting;
-    const druhZmeneny = documentType !== document.document_type || podtyp !== document.podtyp;
+    // Smer pokladne je tiež druh: príjmový a výdavkový doklad majú každý svoj rad.
+    const druhZmeneny = documentType !== document.document_type || podtyp !== document.podtyp
+      || (documentType === 'PD' && accounting.pokladnaTyp !== document.accounting.pokladnaTyp);
     const saved = await database.transaction(async (tx) => {
       const result = await tx.query<Record<string, unknown>>(
         `UPDATE documents SET document_type=$1, extracted=$2::jsonb, accounting=$3::jsonb,
@@ -212,40 +214,48 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           id, auth.tenantId, body.expectedVersion, podtyp],
       );
       if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
-      if (!druhZmeneny) return result.rows[0];
-      // Iný druh dokladu = iná agenda radu, sekcia KV aj predkontácie. Návrh
-      // spravený pre pôvodný druh by pri schválení meral opravy voči nesprávnemu
-      // vzoru a ponúkal rad, ktorý k dokladu nepatrí.
-      await rebuildAccountingSuggestion(tx, {
-        tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
-        supplierIco: extracted?.dodavatel?.ico, supplierName: extracted?.dodavatel?.nazov,
-        supplierIcDph: extracted?.dodavatel?.icDph, supplierIban: extracted?.dodavatel?.iban,
-      });
+      // Rad pre nový druh — návrh k dokladu byť nemusí, tak sa drží aj tu.
+      let radNovehoDruhu: string | null = null;
+      if (druhZmeneny) {
+        // Iný druh dokladu = iná agenda radu. Prepočíta sa LEN rad v návrhu:
+        // celá prestavba návrhu by AI analýzu (predkontácia, DPH, dôvod) prepísala
+        // slabším návrhom z pamäte a AI by ju už nikto znova nepustil.
+        radNovehoDruhu = await resolveSeriesDefault(
+          tx, { tenantId: auth.tenantId, organizationId: document.organization_id }, documentType,
+          (extracted as { datumVystavenia?: string } | undefined)?.datumVystavenia, podtyp,
+          protistranaDokladu(documentType, extracted), undefined, accounting.pokladnaTyp) ?? null;
+        await tx.query(
+          'UPDATE accounting_suggestions SET ciselny_rad_id=$1, updated_at=now() WHERE document_id=$2 AND tenant_id=$3',
+          [radNovehoDruhu, id, auth.tenantId],
+        );
+      }
       if (accounting.ciselnyRadId) return result.rows[0];
-      // Editor pri zmene druhu rad vymaže — ten starý patril inej agende. Nový
-      // sa doplní z návrhu pre nový druh v tej istej verzii, inak by doklad
+      // Editor pri zmene druhu rad vymaže — ten starý patril inej agende. Doplní
+      // sa v tej istej verzii, a to aj keď sa druh vrátil na pôvodný (prepnutie
+      // tam a späť rad z konceptu zmazalo — vtedy z návrhu), inak by doklad
       // ostal bez radu a účtovník by ho hľadal ručne.
       const doplneny = await tx.query<Record<string, unknown>>(
-        `UPDATE documents d SET accounting = d.accounting || jsonb_build_object('ciselnyRadId', s.ciselny_rad_id)
-           FROM accounting_suggestions s
-          WHERE d.id=$1 AND d.tenant_id=$2 AND s.document_id=d.id AND s.ciselny_rad_id IS NOT NULL
+        `UPDATE documents d SET accounting = d.accounting || jsonb_build_object('ciselnyRadId', r.rad)
+           FROM (SELECT CASE WHEN $3::boolean THEN $4::text
+                             ELSE (SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1) END AS rad) r
+          WHERE d.id=$1 AND d.tenant_id=$2 AND r.rad IS NOT NULL
           RETURNING d.*`,
-        [id, auth.tenantId],
+        [id, auth.tenantId, druhZmeneny, radNovehoDruhu],
       );
       return doplneny.rows[0] ?? result.rows[0];
     });
     // Prepnutie typu je oprava kroku „čo je to za papier". Doteraz sa nikam
     // nezapisovala a ďalší rovnaký doklad spravil tú istú chybu — pamäť
-    // rozhodnutí drží iba zaúčtovanie, teda krok PO určení typu. Podtyp ide
-    // v tom istom stĺpci („FP:dobropis"), aby sa klasifikácia učila aj dobropisy.
-    if (druhZmeneny) {
-      const druh = (typ: string, pod: string) => (pod === 'bezna' ? typ : `${typ}:${pod}`);
+    // rozhodnutí drží iba zaúčtovanie, teda krok PO určení typu. Podtyp sa sem
+    // nepíše: oprava sa ukladá k dodávateľovi (pri FV je ním sama firma) a jeden
+    // dobropis by klasifikáciu naučil, že dobropisom je všetko od neho.
+    if (documentType !== document.document_type) {
       await zapisOpravuTypu(database, {
         tenantId: auth.tenantId,
         organizationId: document.organization_id,
         documentId: id,
-        povodnyTyp: druh(document.document_type, document.podtyp),
-        novyTyp: druh(documentType, podtyp),
+        povodnyTyp: String(document.document_type),
+        novyTyp: documentType,
         userId: auth.userId,
         dodavatel: extracted?.dodavatel?.nazov,
         text: extracted?.textPolozky,

@@ -75,10 +75,11 @@ describe('podtyp dokladu', () => {
     const ulozeny = await database.query<{ podtyp: string } & Record<string, unknown>>(
       'SELECT podtyp FROM documents WHERE id=$1', [documentId]);
     expect(ulozeny.rows[0].podtyp).toBe('tarchopis');
-    // Oprava druhu ide do profilu klasifikácie aj s podtypom.
+    // Samotný podtyp nie je oprava typu: ukladá sa k dodávateľovi a jeden
+    // ťarchopis by klasifikáciu naučil, že ťarchopisom je všetko od neho.
     const oprava = await database.query<{ povodny_typ: string; novy_typ: string } & Record<string, unknown>>(
       'SELECT povodny_typ, novy_typ FROM typ_opravy WHERE document_id=$1', [documentId]);
-    expect(oprava.rows).toEqual([{ povodny_typ: 'FP', novy_typ: 'FP:tarchopis' }]);
+    expect(oprava.rows).toEqual([]);
 
     // Ostatný záväzok ťarchopis nemá — podtyp by mu zmenil rad aj sekciu KV.
     const oz = await app.inject({
@@ -122,9 +123,16 @@ describe('podtyp dokladu', () => {
     await app.close();
   }, 60_000);
 
-  it('zmena druhu doplní rad z návrhu pre nový druh', async () => {
+  it('zmena druhu doplní rad pre nový druh a AI návrh nechá tak', async () => {
     const { database, seeded, app, headers } = await pripravAplikaciu();
-    const { documentId, predkontacia, clenenie, radZalohovy } = await pripravDoklad(database, seeded, 'bezna');
+    const { documentId, predkontacia, clenenie, rad, radZalohovy } = await pripravDoklad(database, seeded, 'bezna');
+    // AI analýza dokladu, ktorú by celá prestavba návrhu prepísala slabším
+    // návrhom z pamäte — a nikto by ju už znova nepustil.
+    await database.query(
+      `INSERT INTO accounting_suggestions (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,source,confidence,reason)
+       VALUES ($1,$2,$3,$4,$5,$6,'ai',0.8,'AI analýza dokladu: záloha na tovar')`,
+      [documentId, seeded.tenantId, seeded.organizationId, predkontacia, clenenie, rad],
+    );
 
     // Editor pri zmene druhu starý rad (prijaté faktúry) vymaže.
     const zalohova = await app.inject({
@@ -138,9 +146,21 @@ describe('podtyp dokladu', () => {
     // Jedna verzia — doplnenie radu nie je druhá úprava dokladu.
     expect(zalohova.json().version).toBe(2);
     expect(zalohova.json().accounting.ciselnyRadId).toBe(radZalohovy);
-    const navrh = await database.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
-      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId]);
-    expect(navrh.rows[0]?.ciselny_rad_id).toBe(radZalohovy);
+    const navrh = await database.query<{ ciselny_rad_id: string; source: string; predkontacia_id: string } & Record<string, unknown>>(
+      'SELECT ciselny_rad_id, source, predkontacia_id FROM accounting_suggestions WHERE document_id=$1', [documentId]);
+    expect(navrh.rows[0]).toMatchObject({ ciselny_rad_id: radZalohovy, source: 'ai', predkontacia_id: predkontacia });
+
+    // Prepnutie tam a späť rad z konceptu zmazalo; druh je ako v databáze,
+    // a doklad aj tak nesmie ostať bez radu.
+    const spat = await app.inject({
+      method: 'PATCH', url: `/api/documents/${documentId}`, headers,
+      payload: {
+        documentType: 'FP', podtyp: 'zalohova', expectedVersion: 2,
+        accounting: { predkontaciaId: predkontacia, clenenieDphId: clenenie },
+      },
+    });
+    expect(spat.statusCode, spat.body).toBe(200);
+    expect(spat.json().accounting.ciselnyRadId).toBe(radZalohovy);
 
     await app.close();
   }, 60_000);

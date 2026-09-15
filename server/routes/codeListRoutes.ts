@@ -109,17 +109,17 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           await osvojRadBezIdentifikatora(tx, auth.tenantId, id, kind, item);
           const podlaId = radPodlaId(kind, item);
           const existing = await tx.query<{
-            id: string; name: string; source: string; active: boolean; external_id?: string;
+            id: string; code: string; name: string; source: string; active: boolean; external_id?: string;
             agenda?: string; accounting_year?: string; last_number?: string; kv_section?: string;
             ucet_md?: string; ucet_dal?: string; iban?: string; mena?: string;
           } & Record<string, unknown>>(
-            `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena FROM code_list_items
+            `SELECT id,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena FROM code_list_items
               WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3
                 AND ${podlaId ? 'external_id=$4' : "code=$4 AND (kind <> 'ciselneRady' OR external_id IS NULL)"}`,
             [auth.tenantId, id, kind, podlaId ? item.externalId : item.kod],
           );
           const row = existing.rows[0];
-          const unchanged = row && row.source === 'pohoda' && row.active && row.name === item.nazov
+          const unchanged = row && row.source === 'pohoda' && row.active && row.code === item.kod && row.name === item.nazov
             && (row.external_id ?? undefined) === item.externalId
             && (row.agenda ?? undefined) === item.agenda
             && (row.accounting_year ?? undefined) === item.uctovnyRok
@@ -138,7 +138,7 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
               (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena,synced_at)
              VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
              ON CONFLICT ${konfliktPolozky(kind, item)} DO UPDATE SET
-               name=EXCLUDED.name,source='pohoda',active=true,external_id=EXCLUDED.external_id,
+               code=EXCLUDED.code,name=EXCLUDED.name,source='pohoda',active=true,external_id=EXCLUDED.external_id,
                agenda=EXCLUDED.agenda,accounting_year=EXCLUDED.accounting_year,last_number=EXCLUDED.last_number,
                kv_section=EXCLUDED.kv_section,ucet_md=EXCLUDED.ucet_md,ucet_dal=EXCLUDED.ucet_dal,
                iban=EXCLUDED.iban,mena=EXCLUDED.mena,
