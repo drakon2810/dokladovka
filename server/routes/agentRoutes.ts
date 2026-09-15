@@ -15,6 +15,7 @@ import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from 
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
+import { klucPolozky, konfliktPolozky, osvojRadBezIdentifikatora } from './codeListRoutes.js';
 import { historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
 import { importujAdresar } from '../services/partnerService.js';
 import { parseDennik, ulozDennik } from '../services/uctoDennikService.js';
@@ -352,17 +353,19 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
     const normalized = new Map<string, z.infer<typeof codeListItem>>();
     for (const item of body.items) {
-      if (normalized.has(item.kod)) throw new HttpError(400, 'duplicate_code', `Duplicitný kód ${item.kod}`);
-      normalized.set(item.kod, item);
+      const kluc = klucPolozky(body.kind, item);
+      if (normalized.has(kluc)) throw new HttpError(400, 'duplicate_code', `Duplicitný kód ${item.kod}`);
+      normalized.set(kluc, item);
     }
     const counts = await database.transaction(async (tx) => {
       let insertedOrUpdated = 0;
       for (const item of normalized.values()) {
+        await osvojRadBezIdentifikatora(tx, agent.tenant_id, id, body.kind, item);
         await tx.query(
           `INSERT INTO code_list_items
             (id, tenant_id, organization_id, kind, code, name, source, active, external_id, agenda, accounting_year, ucet_md, ucet_dal, last_number, iban, mena, pokladna_kod, synced_at)
            VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
-           ON CONFLICT (tenant_id, organization_id, kind, code)
+           ON CONFLICT ${konfliktPolozky(body.kind, item)}
            DO UPDATE SET name=excluded.name, source='pohoda', active=true, external_id=excluded.external_id,
                          agenda=excluded.agenda, accounting_year=excluded.accounting_year,
                          ucet_md=excluded.ucet_md, ucet_dal=excluded.ucet_dal, last_number=excluded.last_number,
@@ -370,7 +373,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
                          -- Starší Mostík pole neposiela: vtedy sa uložená pokladňa nezmaže.
                          pokladna_kod=coalesce(excluded.pokladna_kod, code_list_items.pokladna_kod),
                          synced_at=now(), updated_at=now()`,
-          [randomUUID(), agent.tenant_id, id, body.kind, item.kod, item.nazov, item.externalId ?? null, item.agenda ?? null, item.uctovnyRok ?? null,
+          [randomUUID(), agent.tenant_id, id, body.kind, item.kod, item.nazov, item.externalId || null, item.agenda ?? null, item.uctovnyRok ?? null,
             item.ucetMd ?? null, item.ucetDal ?? null, item.posledneCislo ?? null, item.iban ?? null, item.mena ?? null,
             item.pokladnaKod ?? null],
         );
@@ -388,11 +391,16 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       // agenta aj pre ostatné druhy. Staré položky teda ostanú aktívne; to je
       // najviac ponuka navyše, kým zhasnuté predkontácie sú účtovanie mimo
       // prevádzky.
+      // Rad s identifikátorom sa hľadá podľa neho — kód „2026" v dávke by inak
+      // držal pri živote aj zrušený rad s tým istým kódom.
+      const polozky = [...normalized.values()];
       const deactivated = normalized.size === 0 ? 0 : (await tx.query(
         `UPDATE code_list_items SET active=false, updated_at=now()
           WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND source='pohoda' AND active=true
-            AND NOT (code = ANY($4::text[]))`,
-        [agent.tenant_id, id, body.kind, [...normalized.keys()]],
+            AND NOT (CASE WHEN kind='ciselneRady' AND external_id IS NOT NULL
+                          THEN external_id = ANY($5::text[]) ELSE code = ANY($4::text[]) END)`,
+        [agent.tenant_id, id, body.kind, polozky.map((item) => item.kod),
+          polozky.flatMap((item) => (item.externalId ? [item.externalId] : []))],
       )).rowCount;
       await writeAudit(tx, { tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id, action: 'agent.code_lists_synced', entityType: 'organization', entityId: id, correlationId: request.id, metadata: { kind: body.kind, itemCount: normalized.size, deactivated } });
       // Žiadosť „Synchronizovať mostíkom" je vybavená prvým nahratým číselníkom —

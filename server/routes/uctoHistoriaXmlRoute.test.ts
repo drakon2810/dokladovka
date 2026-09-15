@@ -55,6 +55,13 @@ describe('nahratie dokladov s položkami', () => {
     // ktorá má tú istú predkontáciu ako hlavička a v denníku ju nevidno vôbec.
     expect(korpus.rows).toHaveLength(1);
 
+    // Rad a krajina z ručného nahratia sa uložia rovnako ako z agenta.
+    const rady = await database.query<Record<string, unknown>>(
+      `SELECT DISTINCT rad_external_id, rad_kod, krajina FROM ucto_historia WHERE organization_id=$1`,
+      [seeded.organizationId],
+    );
+    expect(rady.rows).toEqual([{ rad_external_id: '615', rad_kod: 'DF260', krajina: 'SK' }]);
+
     await app.close();
   }, 120_000);
 });

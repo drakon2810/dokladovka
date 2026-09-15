@@ -32,6 +32,11 @@ describe('doklady s položkami z POHODY', () => {
     expect(printOffice[0]).toMatchObject({
       agenda: 'FP', supplierIco: '54085292', supplierName: 'Print-Office s.r.o.', datum: '2026-07-16',
     });
+    // Rad presne podľa POHODY (typ:id, typ:ids) a krajina protistrany — na
+    // hlavičke aj na každej položke, rovnako ako ich posiela agent.
+    for (const row of printOffice) {
+      expect(row).toMatchObject({ radExternalId: '615', radKod: 'DF260', krajina: 'SK' });
+    }
 
     // DF260181 Up Déjeuner: rozúčtovanie PHM na 80/20. Doklad je rozúčtovaný,
     // takže sa berú VŠETKY jeho položky — pomer sa číta z dvojice a daňová časť
@@ -107,6 +112,16 @@ describe('doklady s položkami z POHODY', () => {
     it('položku bez vlastného textu nepridáva — bol by to duplikát hlavičky', () => {
       const { rows } = parseHistoriaXml(doklad(polozka('') + polozka('')));
       expect(rows.map((row) => row.riadokIndex)).toEqual([0]);
+    });
+
+    it('krajinu bez adresy prečíta z predpony IČ DPH', () => {
+      const { rows } = parseHistoriaXml(doklad(polozka('<inv:text>Clo</inv:text>'))
+        .replace('<typ:numberRequested>', '<typ:id>9</typ:id><typ:ids>26FP</typ:ids><typ:numberRequested>')
+        .replace('</typ:company>', '</typ:company><typ:icDph>atu12345678</typ:icDph>'));
+      expect(rows.map((row) => [row.radExternalId, row.radKod, row.krajina])).toEqual([
+        ['9', '26FP', 'AT'],
+        ['9', '26FP', 'AT'],
+      ]);
     });
   });
 

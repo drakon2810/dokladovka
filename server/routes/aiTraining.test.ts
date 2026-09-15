@@ -4,6 +4,7 @@ import { buildApp } from '../app.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { MemoryObjectStorage } from '../storage.js';
 import { rebuildAccountingSuggestion, updateRuleFeedback } from '../services/accountingSuggestionService.js';
+import { importTrainingRows } from './aiTrainingRoutes.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -76,6 +77,30 @@ describe('Tréning AI', () => {
     expect(suggestion).toMatchObject({ source: 'decision_memory', predkontacia_id: pred, clenenie_kv_kod: 'B2' });
     expect(Number(suggestion.confidence)).toBeCloseTo(0.95);
   }, 120_000);
+
+  it('kód, ktorý nesie viac číselných radov, rad nepriradí, ale riadok neodmietne', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const pred = randomUUID();
+    for (const [id, kind, code, externalId] of [
+      [pred, 'predkontacie', '518/321', null], [randomUUID(), 'ciselneRady', '26', '578'], [randomUUID(), 'ciselneRady', '26', '580'],
+    ] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,external_id)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda',$6)`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code, externalId],
+      );
+    }
+    const vysledok = await importTrainingRows(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, actor: { type: 'user', id: seeded.userId }, correlationId: 'test',
+      rows: [{ supplierName: 'Pokladňa', lineText: 'Poštovné', predkontaciaKod: '518/321', ciselnyRadKod: '26' }],
+    });
+    expect(vysledok).toMatchObject({ imported: 1, rejected: [] });
+    const rozhodnutie = await database.query<Record<string, unknown>>(
+      'SELECT predkontacia_id, ciselny_rad_id FROM ucto_decisions WHERE organization_id=$1', [seeded.organizationId]);
+    expect(rozhodnutie.rows).toEqual([{ predkontacia_id: pred, ciselny_rad_id: null }]);
+  }, 60_000);
 
   it('AI navrhne pravidlá (len platné ID), potvrdené pravidlo navrhuje podľa kľúčových slov a 3 opravy ho deaktivujú', async () => {
     const database = await createTestDatabase();

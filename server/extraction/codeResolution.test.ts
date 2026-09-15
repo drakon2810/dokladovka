@@ -47,6 +47,12 @@ describe('najdiKod', () => {
     expect(najdiKod(CISELNIK, 'predkontacie', '518100/321')).toBeUndefined();
   });
 
+  it('kód, ktorý nesie viac číselných radov, nevráti žiadny z nich', () => {
+    // Rad „26" v pokladni aj v ostatných záväzkoch — posledný načítaný by bol náhoda.
+    const dvaRady = index([['ciselneRady', '26', 'r-pokladna'], ['ciselneRady', '26', 'r-oz']]);
+    expect(najdiKod(dvaRady, 'ciselneRady', '26')).toBeUndefined();
+  });
+
   it('neznámy alebo prázdny kód nevráti nič', () => {
     expect(najdiKod(CISELNIK, 'predkontacie', 'NEEXISTUJE')).toBeUndefined();
     expect(najdiKod(CISELNIK, 'predkontacie', '')).toBeUndefined();
