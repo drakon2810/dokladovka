@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { PripravenostFirmy, SignalPripravenosti } from '../../data/types';
+import { t } from '../../i18n/sk';
 
 // Analýza čítala prázdny korpus histórie a padala na 409 „primálo riadkov",
 // hoci pamäť mala stovky rozhodnutí — sú to dve tabuľky. Krok 5 preto najprv
@@ -9,16 +11,25 @@ const analyze = vi.fn(async () => ({ kategorii: 12, textov: 0, davok: 1, pokryti
 vi.mock('../../data/api', () => ({
   backfillUctoHistory: (...args: unknown[]) => backfill(...(args as [])),
   analyzeUctoProfil: (...args: unknown[]) => analyze(...(args as [])),
+  nacitajPripravenost: vi.fn(async () => null),
 }));
 vi.mock('../../data/mostik/mostikService', () => ({
   requestMostikTrainingSync: vi.fn(),
   requestMostikCodeListSync: vi.fn(),
 }));
 
-const { KROKY, stavKrokov } = await import('./PripravaFirmyModal');
+const { KROKY, stavKrokov, automatickyKrok, poznamkaPaty, upozorneniePripravenosti } = await import('./PripravaFirmyModal');
 
 const organizacia = { id: 'org-1', nazov: 'Firma', emailAlias: 'a@b.sk' } as never;
 const priprava = { organizationId: 'org-1', mostik: true, ciselniky: 40, pamat: 549, kategorie: 0, schranka: true };
+
+const ok: SignalPripravenosti = { stav: 'ok', dovod: 'ok' };
+const caka: SignalPripravenosti = { stav: 'caka', dovod: 'ciselniky_chybaju' };
+const pripravenost = (
+  stav: PripravenostFirmy['stav'], signaly: Partial<PripravenostFirmy['signaly']>,
+): PripravenostFirmy => ({
+  stav, signaly: { mostik: ok, firma: ok, ciselniky: ok, historia: ok, profil: ok, meranie: ok, ...signaly },
+});
 
 describe('príprava firmy', () => {
   it('analýza najprv preklopí pamäť do histórie', async () => {
@@ -57,5 +68,56 @@ describe('príprava firmy', () => {
 
   it('automatický je práve jeden krok — inak by sa spúšťali cez seba', () => {
     expect(KROKY.filter((krok) => krok.automaticky)).toHaveLength(1);
+  });
+
+  // Prázdne prepojenie z založenia firmy robilo zo snapshotu „Mostík hotový"
+  // a krok 3 sa rozbehol nad agentom, ktorý neexistuje.
+  it('prázdne prepojenie neodomkne číselníky ani ich nespustí', () => {
+    const nova = pripravenost('nepripravena', {
+      mostik: { stav: 'caka', dovod: 'agent_nesparovany' }, firma: { stav: 'caka', dovod: 'caka_na_agenta' },
+      ciselniky: caka, historia: caka, profil: caka, meranie: { stav: 'overit', dovod: 'meranie_chyba' },
+    });
+    const stavy = stavKrokov({ ...priprava, mostik: true, ciselniky: 0, pamat: 0 }, organizacia, nova);
+    expect(stavy).toEqual(['hotovy', 'naRade', 'zamknuty', 'zamknuty', 'zamknuty']);
+    expect(automatickyKrok(stavy, nova)).toBeUndefined();
+  });
+
+  it('číselníky sa samé nesťahujú, kým server nepotvrdí agenta aj databázu firmy', () => {
+    const bezSynchronizacie = pripravenost('nepripravena', {
+      firma: { stav: 'overit', dovod: 'sparovane_bez_synchronizacie' }, ciselniky: caka, historia: caka, profil: caka,
+    });
+    const stavy = stavKrokov({ ...priprava, ciselniky: 0 }, organizacia, bezSynchronizacie);
+    expect(stavy[2]).toBe('naRade');
+    expect(automatickyKrok(stavy, bezSynchronizacie)).toBeUndefined();
+    // Kým sa pripravenosť načítava, nerozbehne sa nič.
+    expect(automatickyKrok(stavy, undefined)).toBeUndefined();
+    const spojena = pripravenost('nepripravena', { ciselniky: caka, historia: caka, profil: caka });
+    expect(automatickyKrok(stavKrokov({ ...priprava, ciselniky: 0 }, organizacia, spojena), spojena)?.cislo).toBe(3);
+  });
+
+  it('krok s výhradou „overiť" je hotový, päta však netvrdí, že je firma pripravená', () => {
+    const overit = pripravenost('overit', {
+      firma: { stav: 'overit', dovod: 'sparovane_bez_synchronizacie', detail: { dbName: 'StwPh_1_2026', uctovnyRok: '2026' } },
+      historia: { stav: 'overit', dovod: 'historia_len_hlavicky' },
+    });
+    expect(stavKrokov({ ...priprava, ciselniky: 0, pamat: 0 }, organizacia, overit)).toEqual(Array(5).fill('hotovy'));
+    expect(KROKY[1].hotovo(priprava, organizacia, overit)).toContain('StwPh_1_2026 · rok 2026');
+    expect(poznamkaPaty(true, overit)).toContain(t('pripravenost.sparovane_bez_synchronizacie'));
+    expect(poznamkaPaty(true, pripravenost('pripravena', {}))).toBe(t('priprava.hotovoPoznamka'));
+  });
+
+  it('bez odpovede servera platia počty zo snapshotu, no „pripravená" sa netvrdí', () => {
+    expect(stavKrokov(priprava, organizacia, null)).toEqual(['hotovy', 'hotovy', 'hotovy', 'hotovy', 'naRade']);
+    expect(automatickyKrok(stavKrokov({ ...priprava, ciselniky: 0 }, organizacia, null), null)?.cislo).toBe(3);
+    expect(poznamkaPaty(true, null)).not.toBe(t('priprava.hotovoPoznamka'));
+  });
+
+  it('upozornenie pri návrhu nesie prvý nesplnený dôvod', () => {
+    expect(upozorneniePripravenosti(pripravenost('pripravena', {}))).toBeUndefined();
+    expect(upozorneniePripravenosti(null)).toBeUndefined();
+    expect(upozorneniePripravenosti(pripravenost('nepripravena', {
+      historia: { stav: 'chyba', dovod: 'historia_neuplna', detail: 'agenda FP: parts' },
+      meranie: { stav: 'overit', dovod: 'meranie_chyba' },
+    }))).toBe(`${t('pripravenost.historia_neuplna')} (agenda FP: parts)`);
   });
 });

@@ -12,6 +12,7 @@ import { registerInboundRoutes } from './routes/inboundRoutes.js';
 import { registerOrganizationRoutes } from './routes/organizationRoutes.js';
 import { registerAgentRoutes } from './routes/agentRoutes.js';
 import { registerDataSnapshotRoutes } from './routes/dataSnapshotRoutes.js';
+import { registerPripravenostRoutes } from './routes/pripravenostRoutes.js';
 import { registerCodeListRoutes } from './routes/codeListRoutes.js';
 import { registerUctoDennikRoutes } from './routes/uctoDennikRoutes.js';
 import { registerOrgDocumentRoutes } from './routes/orgDocumentRoutes.js';
@@ -93,7 +94,8 @@ export async function buildApp(input: {
   registerInboundRoutes(app, input.database, input.storage, input.config);
   registerDocumentRoutes(app, input.database, input.storage, input.config);
   registerAgentRoutes(app, input.database, input.storage, input.config);
-  registerDataSnapshotRoutes(app, input.database);
+  registerDataSnapshotRoutes(app, input.database, input.config);
+  registerPripravenostRoutes(app, input.database, input.config);
   registerCodeListRoutes(app, input.database);
   registerUctoDennikRoutes(app, input.database);
   registerSharePointRoutes(app, input.database, input.config, input.sharePointClient);
