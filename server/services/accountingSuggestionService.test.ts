@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { forgetUctoDecision, maybeAiAccountingSuggestion, mesiacZNazvu, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
@@ -2692,84 +2692,135 @@ describe('číselný rad sa berie podľa protistrany', () => {
 // predošlých dokladov tej istej protistrany. Typický prípad: DPH z cudzieho
 // diaľničného poplatku ide na vlastný nedaňový účet, a v denníku to ako vzor
 // vidieť nie je.
-describe('rozúčtovanie protistrany ide do promptu aj bez denníka', () => {
-  it('pošle položky predošlých dokladov so sumami a v poradí', async () => {
+describe('doklady histórie idú do promptu celé', () => {
+  async function firma() {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
     const kde = [seeded.tenantId, seeded.organizationId];
-
-    const poplatok = randomUUID();
-    const nedanove = randomUUID();
-    for (const [id, code] of [[poplatok, '379700-auto popl.'], [nedanove, '379700-PK-nedaňové']] as const) {
+    const predkontacia = async (code: string): Promise<[string, string]> => {
+      const id = randomUUID();
       await database.query(
         `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
          VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
         [id, ...kde, code],
       );
-    }
-    // Korpus drží kód aj id — dopyt na rozúčtovanie počíta rôzne KÓDY.
-    const riadok = async (index: number, text: string, suma: number, dph: number, predkontacia: [string, string]) =>
-      database.query(
-        `INSERT INTO ucto_historia
-          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
-           line_text_normalized,suma,suma_dph,predkontacia_id,predkontacia_kod,riadok_index,source,riadok_hash)
-         VALUES ($1,$2,$3,'FP','26FP300','2026-05-10','f.a.i. service',$4,$5,$6,$7,$8,$9,'mdb',$10)`,
-        [randomUUID(), ...kde, text, suma, dph, predkontacia[0], predkontacia[1], index, randomUUID()],
-      );
-    const POPLATOK = [poplatok, '379700-auto popl.'] as [string, string];
-    const NEDANOVE = [nedanove, '379700-PK-nedaňové'] as [string, string];
-    await riadok(0, 'dialničná známka', 200, 0, POPLATOK);
-    await riadok(1, 'dialničná známka', 166.67, 0, POPLATOK);
-    await riadok(2, 'dph', 33.33, 0, NEDANOVE);
-
-    // Ponuka sa zužuje až nad 25 predkontáciami — bez výplne by test meral
-    // stav, ktorý v žiadnej reálnej firme nenastane (ALPINA ich má 1141).
-    for (let poradie = 0; poradie < 40; poradie += 1) {
-      await database.query(
-        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
-         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
-        [randomUUID(), ...kde, `vypln-${poradie}`],
-      );
-    }
-
-    const documentId = randomUUID();
-    await database.query(
-      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
-       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,200,'EUR')`,
-      [documentId, ...kde],
-    );
-    const parser = {
-      create: vi.fn().mockResolvedValue(aiOdpoved({
-        predkontaciaId: poplatok, clenenieDphId: null, clenenieKvKod: null,
-        ciselnyRadId: null, confidence: 0.8, reason: 'Diaľničný poplatok',
-      })),
+      return [id, code];
     };
-    await maybeAiAccountingSuggestion(
-      database, testConfig(),
-      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'F.A.I. Service' },
-      {
-        documentType: 'FP', supplierName: 'F.A.I. Service', totalAmount: 200, currency: 'EUR',
-        lineDescriptions: ['dialničná známka', 'dph'],
-        polozky: [{ popis: 'dialničná známka', suma: 166.67 }, { popis: 'dph', suma: 33.33 }],
-      },
-      parser,
+    const riadok = (doklad: { cislo: string; datum: string }, index: number, text: string,
+      suma: number | null, dph: number | null, [id, kod]: [string, string]) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,suma,suma_dph,predkontacia_id,predkontacia_kod,riadok_index,source,riadok_hash)
+       VALUES ($1,$2,$3,'FP',$4,$5,'f.a.i. service',$6,$7,$8,$9,$10,$11,'mdb',$12)`,
+      [randomUUID(), ...kde, doklad.cislo, doklad.datum, text, suma, dph, id, kod, index, randomUUID()],
     );
+    const navrhni = async (predkontaciaId: string,
+      kontext: Omit<Parameters<typeof maybeAiAccountingSuggestion>[3], 'documentType' | 'supplierName'>,
+      pohodaNumber: string | null = null) => {
+      const documentId = randomUUID();
+      await database.query(
+        `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency,pohoda_number)
+         VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,200,'EUR',$4)`,
+        [documentId, ...kde, pohodaNumber],
+      );
+      const parser = {
+        create: vi.fn().mockResolvedValue(aiOdpoved({
+          predkontaciaId, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.8, reason: 'x',
+        })),
+      };
+      const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'F.A.I. Service' };
+      await maybeAiAccountingSuggestion(database, testConfig(), input,
+        { documentType: 'FP', supplierName: 'F.A.I. Service', ...kontext }, parser);
+      return { input, prompt: JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text) };
+    };
+    return { database, seeded, predkontacia, riadok, navrhni };
+  }
 
-    const prompt = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+  it('pošle celý doklad protistrany so sumami a podielmi, zapíše stopu a deterministický návrh ju zruší', async () => {
+    const { database, seeded, predkontacia, riadok, navrhni } = await firma();
+    const POPLATOK = await predkontacia('379700-auto popl.');
+    const NEDANOVE = await predkontacia('379700-PK-nedaňové');
+    const doklad = { cislo: '26FP300', datum: '2026-05-10' };
+    // Vlastný text hlavičky: s textom prvej položky by doklad nebol isto celý.
+    await riadok(doklad, 0, 'diaľničné poplatky', 200, 0, POPLATOK);
+    await riadok(doklad, 1, 'dialničná známka', 166.67, 0, POPLATOK);
+    await riadok(doklad, 2, 'dph', 33.33, 0, NEDANOVE);
+    const prikladId = randomUUID();
+    await database.query(
+      `INSERT INTO ucto_decisions (id,tenant_id,organization_id,supplier_name_normalized,line_text_normalized,predkontacia_id,source,document_type)
+       VALUES ($1,$2,$3,'f.a.i. service','dialničná známka | dph',$4,'import','FP')`,
+      [prikladId, seeded.tenantId, seeded.organizationId, POPLATOK[0]],
+    );
+    const { input, prompt } = await navrhni(POPLATOK[0], {
+      totalAmount: 200, currency: 'EUR',
+      lineDescriptions: ['dialničná známka', 'dph'],
+      polozky: [{ popis: 'dialničná známka', suma: 166.67 }, { popis: 'dph', suma: 33.33 }],
+    });
+
     // Denník je prázdny, takže „rozdelenie" chýba — a napriek tomu má model
     // v ruke, ako sa doklady tejto protistrany rozpisujú.
     expect(prompt.rozdelenie).toBeUndefined();
-    // Dôkaz a ponuka musia sedieť: kód, ktorý model vidí v rozúčtovaní, musí
+    expect(prompt.rozuctovanie).toBeUndefined();
+    // Dôkaz a ponuka musia sedieť: kód, ktorý model vidí v dokladoch, musí
     // mať aj na výber. Inak ho nemôže vrátiť — a keby vrátil, overenie ho zahodí.
-    expect(prompt.ciselniky.predkontacie.map((item: any) => item.id)).toContain(nedanove);
+    expect(prompt.ciselniky.predkontacie.map((item: any) => item.id)).toContain(NEDANOVE[0]);
     // Daňová časť nesie kódy hlavičky — účtovník prehodil len tú nedaňovú,
-    // takže prvý riadok je zdedený. Z rozúčtovania kvôli tomu nevypadáva:
-    // pomer 166,67 : 33,33 sa bez neho prečítať nedá.
-    expect(prompt.rozuctovanie).toEqual([
-      { doklad: '26FP300', riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, predkontaciaKod: '379700-auto popl.', predkontaciaId: poplatok, zdedene: true },
-      { doklad: '26FP300', riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, predkontaciaKod: '379700-PK-nedaňové', predkontaciaId: nedanove },
-    ]);
+    // takže prvý riadok je zdedený. Z dokladu kvôli tomu nevypadáva: pomer
+    // 166,67 : 33,33 sa bez neho prečítať nedá.
+    expect(prompt.doklady).toEqual([{
+      ref: 'FP|26FP300|2026-05-10', agenda: 'FP', datum: '2026-05-10', tejProtistrany: true, podobnost: 1,
+      hlavicka: { text: 'diaľničné poplatky', predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0] },
+      vsetkyPolozky: true,
+      suma: 200,
+      polozky: [
+        { riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, podiel: 0.8334, predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0], zdedene: true },
+        { riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, podiel: 0.1667, predkontaciaKod: NEDANOVE[1], predkontaciaId: NEDANOVE[0] },
+      ],
+    }]);
+
+    // Stopa: presne tie doklady, ktoré odišli modelu, s riadkami korpusu a hashom poslaného JSON-u.
+    const stopaId = async () => (await database.query<Record<string, any>>(
+      'SELECT stopa_id FROM accounting_suggestions WHERE document_id=$1', [input.documentId],
+    )).rows[0]?.stopa_id;
+    const stopa = (await database.query<Record<string, any>>('SELECT * FROM ucto_navrh_stopa WHERE id=$1', [await stopaId()])).rows[0];
+    expect(stopa).toMatchObject({ document_id: input.documentId, as_of: null, agendy: ['FP'], zakladna: false, priklady: [prikladId] });
+    expect(stopa.doklady.map((item: any) => item.ref)).toEqual(prompt.doklady.map((item: any) => item.ref));
+    expect(stopa.doklady[0].hash).toBe(createHash('sha256').update(JSON.stringify(prompt.doklady[0])).digest('hex'));
+    const hashe = (await database.query<Record<string, any>>(
+      'SELECT riadok_hash FROM ucto_historia WHERE organization_id=$1', [seeded.organizationId],
+    )).rows.map((row) => row.riadok_hash);
+    expect(stopa.doklady[0].riadky).toHaveLength(3);
+    expect(hashe).toEqual(expect.arrayContaining(stopa.doklady[0].riadky));
+
+    await rebuildAccountingSuggestion(database, input);
+    expect(await stopaId()).toBeNull();
+  }, 90_000);
+
+  // Predchodca bral najviac 24 riadkov: dvadsaťriadkový doklad vytlačil ďalší
+  // na štyri riadky, ktoré sa tvárili ako doklad rezaný vcelku.
+  it('doklad s 30 položkami príde celý a doklad po návrate z POHODY nevidí sám seba', async () => {
+    const { predkontacia, riadok, navrhni } = await firma();
+    const MATERIAL = await predkontacia('501/321');
+    const REPRE = await predkontacia('513/321');
+    const velky = { cislo: '26FP400', datum: '2026-04-01' };
+    await riadok(velky, 0, 'material a obcerstvenie', null, null, MATERIAL);
+    for (let index = 1; index <= 30; index += 1) {
+      await riadok(velky, index, `polozka ${index}`, index, index * 0.23, index % 3 === 0 ? REPRE : MATERIAL);
+    }
+    // Ten istý doklad po prenose do POHODY a rovnaké číslo o rok skôr — iný doklad.
+    for (const datum of ['2026-06-01', '2025-06-01']) await riadok({ cislo: '26FP500', datum }, 0, 'material', 50, null, MATERIAL);
+
+    const { prompt } = await navrhni(MATERIAL[0],
+      { datumVystavenia: '2026-06-01', totalAmount: 50, currency: 'EUR', lineDescriptions: ['material'] }, '26FP500');
+    const refy = prompt.doklady.map((item: any) => item.ref);
+    expect(refy).toContain('FP|26FP500|2025-06-01');
+    expect(refy).not.toContain('FP|26FP500|2026-06-01');
+    const cely = prompt.doklady.find((item: any) => item.ref === 'FP|26FP400|2026-04-01');
+    expect(cely.polozky).toHaveLength(30);
+    for (const pole of ['podiel', 'podielDph']) {
+      expect(Math.abs(cely.polozky.reduce((spolu: number, polozka: any) => spolu + polozka[pole], 0) - 1)).toBeLessThan(0.001);
+    }
   }, 90_000);
 });
 

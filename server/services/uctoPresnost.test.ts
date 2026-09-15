@@ -75,6 +75,10 @@ describe('meranie presnosti zaúčtovania', () => {
     const vPrompte = (prompt(parser).dennik ?? []).map((riadokDennika: any) => riadokDennika.predkontaciaId);
     expect(vPrompte).not.toContain(ina);
     expect(vPrompte).toContain(spravna);
+    // Celé doklady tiež len spred dátumu: tri rovnaké doklady protistrany sa
+    // zlúčia do najnovšieho — meraný by bol najnovší, keby unikol.
+    expect(prompt(parser).doklady).toEqual([expect.objectContaining({ ref: 'FP|26FP003|2026-03-15', rovnakych: 3 })]);
+    expect(JSON.stringify(prompt(parser).doklady)).not.toContain(ina);
   }, 90_000);
 
   // Na vydanej faktúre je protistranou ODBERATEĽ a návrh ho číta z iného poľa.
@@ -260,6 +264,8 @@ describe('bez úniku budúcnosti', () => {
     expect(potom.doklad).toEqual(predtym.doklad);
     // Sekcia prišla z praxe firmy a rad z počtu použití — oba zdroje sa teda naozaj pýtali.
     expect(predtym.doklad?.navrh).toMatchObject({ kv: 'B2', rad: 'R1' });
+    // Doklady v prompte naozaj sú — rovnosť promptov vyššie teda stráži aj ich.
+    expect(predtym.prompt.doklady).toEqual([expect.objectContaining({ ref: 'FP|26FP003|2026-03-15', rovnakych: 3 })]);
     expect(predtym.prompt.kategorie).toEqual([]);
     expect(predtym.prompt.pravidla).toContain('Staré pravidlo');
     expect(predtym.prompt.pravidla).not.toContain('Nové pravidlo');
@@ -301,7 +307,7 @@ describe('meranie bez zápisov', () => {
     // Lokálny výber odpovedá z pravidla protistrany, ktoré je v prompte.
     expect(bezAi).toMatchObject({ rezim: 'bez_ai', vysledok: { FP: { predkontacia: { spravne: 1, znamych: 1, navrhnutych: 1 } } } });
     expect(znova.doklady).toEqual(bezAi.doklady);
-    for (const tabulka of ['documents', 'accounting_suggestions', 'ucto_presnost']) {
+    for (const tabulka of ['documents', 'accounting_suggestions', 'ucto_navrh_stopa', 'ucto_presnost']) {
       expect((await database.query(`SELECT 1 FROM ${tabulka} WHERE organization_id=$1`, [kde.organizationId])).rowCount).toBe(0);
     }
 
