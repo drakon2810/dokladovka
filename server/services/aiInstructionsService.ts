@@ -59,6 +59,12 @@ export async function nacitajPokyny(
     faza: PokynFaza;
     documentType?: string;
     lineText?: string;
+    /**
+     * Meranie presnosti: len pravidlá napísané pred dátumom dokladu. Pravidlo
+     * pridané po tom, čo účtovník videl chyby merania, by inak ladilo model
+     * priamo na meraných dokladoch.
+     */
+    asOf?: string;
   },
 ): Promise<{ globalne: Pokyn[]; lokalne: Pokyn[] }> {
   const result = await db.query<Record<string, unknown>>(
@@ -66,8 +72,9 @@ export async function nacitajPokyny(
        FROM ai_instructions
       WHERE active = true AND faza IN ($3, 'both')
         AND (scope = 'global' OR (tenant_id = $1 AND organization_id = $2))
+        AND ($4::date IS NULL OR created_at < $4::date)
       ORDER BY (scope = 'organization'), priorita, created_at`,
-    [input.tenantId, input.organizationId, input.faza],
+    [input.tenantId, input.organizationId, input.faza, input.asOf ?? null],
   );
   const vsetky = result.rows.map(mapRow).filter((pokyn) => {
     if (input.documentType && pokyn.typyDokladov.length > 0

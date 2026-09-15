@@ -87,30 +87,36 @@ export function registerUctoProfileRoutes(
     return { pravidla: pravidla.rows };
   });
 
-  // Meranie presnosti: čo by AI navrhla na dokladoch, ktoré účtovník už
-  // zaúčtoval. Beží synchrónne a dlho — sto dokladov je sto volaní modelu.
-  // ponytail: pri väčších vzorkách presunúť do processing_jobs ako extrakciu.
+  // Meranie presnosti: čo by návrh zaúčtovania dal na dokladoch, ktoré účtovník
+  // už zaúčtoval. Predvolene bez AI — zadarmo a opakovateľne. Režim AI je jedno
+  // volanie modelu na doklad a strop drží maxAiVolani.
+  // ponytail: beží synchrónne; pri väčších vzorkách presunúť do processing_jobs ako extrakciu.
   app.post('/api/organizations/:id/ucto-presnost', async (request) => {
     const { auth, organizationId } = await pristup(request, true);
     const body = z.object({
       vzorka: z.number().int().min(1).max(500).optional(),
       deliciDatum: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      rezim: z.enum(['bez_ai', 'ai']).default('bez_ai'),
+      maxAiVolani: z.number().int().min(1).max(500).optional(),
     }).strict().parse(request.body ?? {});
     const vysledok = await zmerajPresnost(database, config, {
       tenantId: auth.tenantId, organizationId,
-    }, body, injectedParser as never);
+    }, { ...body, uloz: true }, injectedParser as never);
     await writeAudit(database, {
       tenantId: auth.tenantId, organizationId, actorType: 'user', actorId: auth.userId,
       action: 'ucto_presnost.measured', entityType: 'organization', entityId: organizationId,
-      correlationId: request.id, metadata: { vzorka: vysledok.vzorka, deliciDatum: vysledok.deliciDatum },
+      correlationId: request.id,
+      metadata: { vzorka: vysledok.vzorka, deliciDatum: vysledok.deliciDatum, rezim: vysledok.rezim },
     });
     return vysledok;
   });
 
+  // Doklady behu sa nevracajú — sú pre prehodnotenie a interval, nie pre obrazovku.
   app.get('/api/organizations/:id/ucto-presnost', async (request) => {
     const { auth, organizationId } = await pristup(request, false);
     const behy = await database.query<Record<string, any>>(
-      `SELECT id, delici_datum::text AS delici_datum, vzorka, vysledok, rozdiely, trvanie_ms, created_at
+      `SELECT id, delici_datum::text AS delici_datum, vzorka, vysledok, rozdiely, trvanie_ms, created_at,
+              metodika, rezim, manifest
          FROM ucto_presnost WHERE tenant_id=$1 AND organization_id=$2
         ORDER BY created_at DESC LIMIT 5`,
       [auth.tenantId, organizationId],
