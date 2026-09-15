@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { AccountingSuggestion, DocumentPodtyp, DphAudit, DphZistenie, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
 import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
-import { getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
+import { getCachedSnapshot, getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { druh, kvKodyPreTyp, predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
@@ -682,7 +682,14 @@ export function InvoicePanel({
   const removeVatRow = (index: number) => updateExtracted('rozpisDph', rozpis.filter((_, rowIndex) => rowIndex !== index));
 
   // ---- typ dokladu a režim zaúčtovania --------------------------------------
-  const typValue = draft.typ === 'PD' ? `PD:${ucto.pokladnaTyp ?? 'expense'}`
+  // Smer pokladne, kým ho doklad nemá — rovnaké pravidlo ako server pri vzniku
+  // dokladu: doklad, ktorý vystavila sama firma, je príjem, ostatné výdaj.
+  const vlastnaFirma = getCachedSnapshot()?.organizations.find((org) => org.id === draft.orgId);
+  const kluc = (hodnota?: string) => String(hodnota ?? '').replace(/[^0-9a-z]/gi, '').toUpperCase();
+  const smerPokladne: 'receipt' | 'expense' = [
+    [draft.extracted.dodavatel?.ico, vlastnaFirma?.ico], [draft.extracted.dodavatel?.icDph, vlastnaFirma?.icDph],
+  ].some(([strana, firma]) => kluc(firma) !== '' && kluc(strana) === kluc(firma)) ? 'receipt' : 'expense';
+  const typValue = draft.typ === 'PD' ? `PD:${ucto.pokladnaTyp ?? smerPokladne}`
     : (draft.typ === 'FP' || draft.typ === 'FV') && draft.podtyp && draft.podtyp !== 'bezna'
       ? `${draft.typ}:${draft.podtyp}` : draft.typ;
   const typLabel = TYP_OPTIONS.find((option) => option.value === typValue)?.label ?? draft.typ;
@@ -725,11 +732,12 @@ export function InvoicePanel({
   useEffect(() => {
     if (readOnly || draft.typ !== 'PD') return;
     const patch: Partial<DocumentUcto> = {};
-    if (!ucto.pokladnaTyp) patch.pokladnaTyp = 'expense';
+    // V karanténe môžu byť strany zamenené — smer sa uloží až po ich potvrdení.
+    if (!ucto.pokladnaTyp && draft.status !== 'karantena') patch.pokladnaTyp = smerPokladne;
     const pokladna = pokladnaRadu ?? predvolenaPokladna;
     if (!ucto.pokladnaKod?.trim() && pokladna) patch.pokladnaKod = pokladna;
     if (Object.keys(patch).length > 0) updateUcto(patch);
-  }, [readOnly, draft.typ, ucto.pokladnaTyp, ucto.pokladnaKod, pokladnaRadu, predvolenaPokladna]);
+  }, [readOnly, draft.typ, draft.status, ucto.pokladnaTyp, ucto.pokladnaKod, pokladnaRadu, predvolenaPokladna, smerPokladne]);
   const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);
   const rezim = `${typLabel}${vybranyRad?.kod ? ` (${vybranyRad.kod})` : ''}`;
 

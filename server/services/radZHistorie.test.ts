@@ -31,7 +31,9 @@ async function firma() {
   };
 
   let poradie = 0;
-  const doklad = async (agenda: string, radId: string, datum: string, protistrana = 'dodavatel', krajina: string | null = null) => {
+  const doklad = async (
+    agenda: string, radId: string, datum: string, protistrana = 'dodavatel', krajina: string | null = null, predkontacia = '518/321',
+  ) => {
     poradie += 1;
     const { ext, kod } = externe.get(radId)!;
     // Hlavička aj položka nesú rad — doklad sa musí rátať raz, nie dvakrát.
@@ -40,9 +42,9 @@ async function firma() {
         `INSERT INTO ucto_historia
           (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,line_text_normalized,
            predkontacia_kod,riadok_index,source,riadok_hash,rad_external_id,rad_kod,krajina)
-         VALUES ($1,$2,$3,$4,$5,$6::date,$7,'sluzba','518/321',$8,'mdb',$9,$10,$11,$12)`,
+         VALUES ($1,$2,$3,$4,$5,$6::date,$7,'sluzba',$13,$8,'mdb',$9,$10,$11,$12)`,
         [randomUUID(), kde.tenantId, kde.organizationId, agenda, `${kod}${1000 + poradie}`, datum, protistrana,
-          index, randomUUID(), ext, kod, krajina],
+          index, randomUUID(), ext, kod, krajina, predkontacia],
       );
     }
   };
@@ -252,5 +254,88 @@ describe('číselný rad z histórie firmy', () => {
     expect(vysledok.rozdiely).toEqual([
       expect.objectContaining({ agenda: 'FP-D', datum: '2026-02-15', skutocne: 'D26', navrh: null }),
     ]);
+  }, 90_000);
+
+  // Súbežné rady jednej agendy: záväzky 26OZ a platby kartou 26PK v tom istom
+  // mesiaci, bez spoločnej protistrany aj krajiny. Rozlišuje ich len
+  // predkontácia hlavičky, ktorú história nesie v tom istom riadku.
+  it('súbežné rady rozlíši predkontácia hlavičky, nastavenie účtovníka neprebije', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const oz = await rad('26OZ', 'Ostatné záväzky', 'ostatni_zavazky', '2026');
+    const pk = await rad('26PK', 'Platby kartou', 'ostatni_zavazky', '2026');
+    for (let den = 1; den <= 6; den += 1) await doklad('OZ', oz, `2026-03-0${den}`, `zavazok ${den}`, null, '518/321');
+    for (let den = 11; den <= 14; den += 1) await doklad('OZ', pk, `2026-03-${den}`, `karta ${den}`, null, '501/325');
+
+    expect(await resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {})).toBe(oz);
+    expect(await resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, '501/325')).toBe(pk);
+
+    // Návrh: deterministický podľa predkontácie kandidáta, AI podľa predkontácie modelu.
+    const [predOz, predPk] = [randomUUID(), randomUUID()];
+    for (const [id, kod] of [[predOz, '518/321'], [predPk, '501/325']]) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda')`,
+        [id, kde.tenantId, kde.organizationId, kod],
+      );
+    }
+    await database.query(
+      'INSERT INTO organization_accounting_defaults (organization_id,tenant_id,predkontacia_id) VALUES ($1,$2,$3)',
+      [kde.organizationId, kde.tenantId, predPk],
+    );
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'OZ','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,40,'EUR')`,
+      [documentId, kde.tenantId, kde.organizationId, JSON.stringify({ datumVystavenia: '2026-03-20', polozky: [{ popis: 'platba kartou' }] })],
+    );
+    const radNavrhu = async () => (await database.query<Record<string, any>>(
+      'SELECT ciselny_rad_id FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0].ciselny_rad_id;
+    await rebuildAccountingSuggestion(database, { ...kde, documentId });
+    expect(await radNavrhu()).toBe(pk);
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predPk, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: oz, confidence: 0.8, reason: 'Platba kartou',
+      })),
+    };
+    await database.query('DELETE FROM accounting_suggestions WHERE document_id=$1', [documentId]);
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), { ...kde, documentId }, {
+      documentType: 'OZ', datumVystavenia: '2026-03-20', totalAmount: 40, currency: 'EUR', lineDescriptions: ['platba kartou'],
+    }, parser)).toBe(true);
+    expect(await radNavrhu()).toBe(pk);
+
+    // Meranie so skutočnou predkontáciou hlavičky (horná hranica): štvrtá platba
+    // kartou už má tri predchodkyne a trafí svoj rad; bez nej padne do väčšiny.
+    expect((await zmerajRady(database, kde)).podlaAgendy.OZ).toEqual({ dokladov: 10, spravne: 5, prazdne: 1 });
+    expect((await zmerajRady(database, kde, { predkontacia: true })).podlaAgendy.OZ).toEqual({ dokladov: 10, spravne: 6, prazdne: 1 });
+
+    // Predkontácia pochádza z kandidáta či modelu, nie od účtovníka — nastavenie
+    // radu neprebije ani jednotná skupina piatich dokladov.
+    await doklad('OZ', pk, '2026-03-15', 'karta 15', null, '501/325');
+    await database.query(
+      `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id) VALUES ($1,$2,'OZ',$3)`,
+      [kde.organizationId, kde.tenantId, oz],
+    );
+    expect(await resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, '501/325')).toBe(oz);
+  }, 90_000);
+
+  // Nastavenie „2611" bez jediného dokladu proti rozhodnej histórii 26OZ: história
+  // ho prebíjala a skupina podľa predkontácie ho nesmie vzkriesiť — rozhodnosť sa
+  // posudzuje bez nej, predkontácia už len vyberá medzi radmi histórie.
+  it('predkontácia nevráti nastavenie, ktorému rozhodná história odporuje', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const oz = await rad('26OZ', 'Ostatné záväzky', 'ostatni_zavazky', '2026');
+    const pk = await rad('26PK', 'Platby kartou', 'ostatni_zavazky', '2026');
+    const prazdny = await rad('2611', 'Starý rad', 'ostatni_zavazky', '2026');
+    for (let i = 1; i <= 30; i += 1) await doklad('OZ', oz, '2026-03-05', `zavazok ${i}`, null, '518/321');
+    for (let i = 1; i <= 3; i += 1) await doklad('OZ', pk, '2026-03-06', `karta ${i}`, null, '501/325');
+    await database.query(
+      `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id) VALUES ($1,$2,'OZ',$3)`,
+      [kde.organizationId, kde.tenantId, prazdny],
+    );
+
+    const rad2026 = (kod?: string) => resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, kod);
+    expect(await rad2026()).toBe(oz);
+    expect(await rad2026('518/321')).toBe(oz);
+    expect(await rad2026('501/325')).toBe(pk);
   }, 90_000);
 });

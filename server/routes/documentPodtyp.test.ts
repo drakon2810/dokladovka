@@ -213,6 +213,18 @@ describe('podtyp dokladu', () => {
     expect(bezna.statusCode, bezna.body).toBe(200);
     expect(await joby()).toHaveLength(1);
 
+    // Druh sa zmenil, kým job už beží: ten číta doklad ešte v starom druhu,
+    // takže nový druh potrebuje vlastný job — ale stačí jeden čakajúci.
+    await database.query(`UPDATE processing_jobs SET status='running' WHERE document_id=$1`, [documentId]);
+    for (const [podtyp, expectedVersion] of [['zalohova', 4], ['bezna', 5]] as const) {
+      const pocasBehu = await app.inject({
+        method: 'PATCH', url: `/api/documents/${documentId}`, headers,
+        payload: { documentType: 'FP', podtyp, expectedVersion, accounting: { predkontaciaId: predkontacia } },
+      });
+      expect(pocasBehu.statusCode, pocasBehu.body).toBe(200);
+      expect((await joby()).map((job) => job.status).sort()).toEqual(['queued', 'running']);
+    }
+
     await app.close();
   }, 60_000);
 });

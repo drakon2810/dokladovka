@@ -64,12 +64,30 @@ export async function buildApprovedDocumentsXml(
   // Poradie v dataPacku = poradie vybrané v exportnom dialógu (dátum/číslo);
   // SELECT ... = ANY($2) poradie vstupu nezachováva.
   const order = new Map(uniqueIds.map((documentId, index) => [documentId, index]));
-  return buildServerDataPack({
+  const balik = {
     id: input.packId,
     ico: input.ico,
     documents: [...documents.rows]
       .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
       .map((row) => ({ id: row.id, snapshot: row.approved_snapshot! })),
     codeLists,
-  });
+  };
+  try {
+    return buildServerDataPack(balik);
+  } catch (chyba) {
+    // Kontroly balíka hlásia neplatný doklad obyčajným Error so slovenskou
+    // hláškou — bez 409 ju účtovník videl ako „neočakávanú chybu". HttpError aj
+    // chyba v kóde (TypeError a pod.) idú ďalej bez zmeny.
+    if (!(chyba instanceof Error) || chyba.constructor !== Error) throw chyba;
+    const { message } = chyba;
+    // Hláška bez id (neplatná suma, nepodporovaný typ): doklad nájde zostavenie
+    // po jednom. Keď zlyhajú všetky rovnako (IČO firmy), nejde o doklad.
+    const vHlaske = uniqueIds.find((id) => message.includes(id));
+    const zlyhane = vHlaske ? [] : balik.documents.filter((doklad) => {
+      try { buildServerDataPack({ ...balik, documents: [doklad] }); return false; } catch (e) { return e instanceof Error && e.message === message; }
+    });
+    const documentId = vHlaske
+      ?? (zlyhane.length < balik.documents.length || balik.documents.length === 1 ? zlyhane[0]?.id : undefined);
+    throw new HttpError(409, 'export_neplatny_doklad', message, documentId ? { documentId } : undefined);
+  }
 }
