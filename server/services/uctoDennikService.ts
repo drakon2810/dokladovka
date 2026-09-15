@@ -146,7 +146,25 @@ export async function ulozDennik(
   // Po 1000 proviozok v jednom INSERT-e — ročný denník po jednej trval pri
   // publikácii prenosu desiatky sekúnd. Jeden príkaz nesmie zasiahnuť tú istú
   // proviozku dvakrát (prekryté strany), vyhráva posledná.
-  const naVlozenie = [...new Map(input.riadky.map((riadok) => [riadok.externalnyId, riadok])).values()];
+  // Publikácia Mostíka ukladá id s databázou („<databaza>:9002"), ručné nahratie
+  // a starší Mostík bez nej. Proviozka toho istého roka z publikácie sa prepíše
+  // pod svojím id — inak by ručné nahratie zdvojilo rok až do ďalšieho prenosu.
+  const holeIds = input.riadky.flatMap((riadok) => (riadok.externalnyId.includes(':') ? [] : [riadok.externalnyId]));
+  const sDatabazou = new Map<string, string>();
+  if (holeIds.length > 0) {
+    const result = await database.query<{ externalny_id: string; kluc: string } & Record<string, unknown>>(
+      `SELECT externalny_id, substring(externalny_id from '[^:]+$') || '|' || coalesce(extract(year FROM datum)::int::text, '') AS kluc
+         FROM ucto_dennik
+        WHERE tenant_id=$1 AND organization_id=$2 AND position(':' in externalny_id) > 0
+          AND substring(externalny_id from '[^:]+$') = ANY($3::text[])`,
+      [input.tenantId, input.organizationId, holeIds],
+    );
+    for (const row of result.rows) sDatabazou.set(row.kluc, row.externalny_id);
+  }
+  const naVlozenie = [...new Map(input.riadky.map((povodny) => {
+    const riadok = { ...povodny, externalnyId: sDatabazou.get(`${povodny.externalnyId}|${povodny.datum?.slice(0, 4) ?? ''}`) ?? povodny.externalnyId };
+    return [riadok.externalnyId, riadok] as const;
+  })).values()];
   const STLPCOV = 17;
   for (let od = 0; od < naVlozenie.length; od += 1000) {
     const cast = naVlozenie.slice(od, od + 1000);

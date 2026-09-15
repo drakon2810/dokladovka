@@ -101,6 +101,15 @@ describe('prenos z Mostíka cez staging a publikáciu', () => {
       .toEqual([{ stav: 'publikovany', publikovany: true, databaza: DATABAZA, davok: 0 }]);
     expect(await sql(`SELECT kind, state, item_count FROM agent_sync_runs WHERE organization_id=$1 ORDER BY created_at`))
       .toEqual([{ kind: 'uctovnyProfil', state: 'ok', item_count: 25_000 }, { kind: 'uctovnyProfil', state: 'ok', item_count: 3 }]);
+
+    // Meno databázy z mServeru a z nastavenia POHODA CLI sa môže líšiť veľkosťou
+    // písmen — je to tá istá databáza a korpus sa nesmie zdvojiť.
+    const znova = randomUUID();
+    await agent('PUT', 'ucto-history', { ...davka0, importId: znova });
+    await agent('PUT', 'ucto-history', { ...davka1, importId: znova });
+    const malymi = await publikuj(znova, { ...telo, manifest: { ...manifest(), databaza: DATABAZA.toLowerCase() } });
+    expect(malymi.statusCode, malymi.body).toBe(200);
+    expect(await zivy()).toHaveLength(4);
   }, 120_000);
 
   it('neúplný alebo nahradený prenos živé dáta nezmení', async () => {
@@ -212,6 +221,12 @@ describe('prenos z Mostíka cez staging a publikáciu', () => {
     expect(publikacia.statusCode, publikacia.body).toBe(200);
     expect(publikacia.json()).toMatchObject({ ulozenych: 1, preskocene: 1 });
     // Rok 2025 ostal, 2026 je presne z prenosu a id nesie databázu.
+    expect(await zivy()).toEqual(['7001', `${DATABAZA}:9002`]);
+
+    // Ručné nahratie alebo starší Mostík (id bez databázy) po publikácii
+    // proviozku toho istého roka prepíše, nezdvojí.
+    const rucne = await agent('PUT', 'ucto-dennik', { xml: dennik([{ id: '9002', datum: '2026-08-01' }, { id: '7001', datum: '2025-12-31' }]) });
+    expect(rucne.statusCode, rucne.body).toBe(200);
     expect(await zivy()).toEqual(['7001', `${DATABAZA}:9002`]);
   }, 120_000);
 });

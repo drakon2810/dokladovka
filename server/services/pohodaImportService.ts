@@ -170,10 +170,11 @@ export async function publikujImport(
     if (body.druh === 'historia') {
       // Vymení sa len databáza tohto prenosu: po prechode na databázu nového
       // roka minulý rok ostane. NULL sú riadky spred rozlíšenia databázy a ručné
-      // nahratia — tie nahrádzal aj doterajší reset.
+      // nahratia — tie nahrádzal aj doterajší reset. Meno bez ohľadu na veľkosť
+      // písmen: mServer a nastavenie POHODA CLI ho píšu rôzne (ako MatchEndpoint).
       await tx.query(
         `DELETE FROM ucto_historia
-          WHERE tenant_id=$1 AND organization_id=$2 AND (zdroj_databaza=$3 OR zdroj_databaza IS NULL)`,
+          WHERE tenant_id=$1 AND organization_id=$2 AND (lower(zdroj_databaza)=lower($3) OR zdroj_databaza IS NULL)`,
         [tenantId, organizationId, body.manifest.databaza],
       );
       const historia = await importUctoHistory(tx, {

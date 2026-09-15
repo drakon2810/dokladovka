@@ -128,9 +128,13 @@ function riadokHash(row: ResolvedRow, poradie: number, zdrojDatabaza: string | u
   // prehodené položky ho nezmenia. Platí len v jednej databáze (ročníku),
   // preto je databáza v odtlačku. Položka bez vlastného id by s id dokladu
   // kolidovala so svojou hlavičkou — tá ide po starom.
+  // Id je jedinečné len v tabuľke agendy POHODY: faktúra, pokladničný a interný
+  // doklad môžu mať to isté id. Tabuľka sa berie z agendy — FP aj FP-D sú faktúry.
+  // Meno databázy bez ohľadu na veľkosť písmen: mServer a POHODA CLI ho píšu rôzne.
   if (row.dokladId && (row.riadokIndex ? row.polozkaId : true)) {
+    const tabulka = row.agenda === 'PPD' || row.agenda === 'VPD' ? 'voucher' : row.agenda === 'INT' ? 'intDoc' : 'invoice';
     return createHash('sha256')
-      .update(['pohoda', zdrojDatabaza ?? '', row.dokladId, row.polozkaId ?? 0].join('|'))
+      .update(['pohoda', (zdrojDatabaza ?? '').toLowerCase(), tabulka, row.dokladId, row.polozkaId ?? 0].join('|'))
       .digest('hex').slice(0, 32);
   }
   // Odtlačok PÔVODU riadka, nie obsahu: opakovaný import tej istej histórie nič
@@ -184,6 +188,22 @@ export async function importUctoHistory(
   const id = (kind: string, kod: string | undefined) =>
     (kod ? idPreKod.get(`${kind}:${kod.trim()}`) ?? null : null);
 
+  // Ručné XML a .mdb natívne id nepoznajú a odtlačok skladajú z agendy, čísla,
+  // dátumu a poradia. Riadok, ktorý už prišiel z publikácie Mostíka, sa preto
+  // prepíše pod svojím odtlačkom — inak by ručné nahratie tej istej histórie
+  // zdvojilo korpus až do ďalšieho prenosu.
+  const nativne = new Map<string, string>();
+  const cisla = input.zdrojDatabaza ? [] : [...new Set(input.rows.flatMap((row) => (row.dokladCislo ? [row.dokladCislo] : [])))];
+  if (cisla.length > 0) {
+    const result = await database.query<{ riadok_hash: string; kluc: string } & Record<string, unknown>>(
+      `SELECT riadok_hash, agenda || '|' || doklad_cislo || '|' || coalesce(datum::text, '') || '|' || coalesce(riadok_index::text, '') AS kluc
+         FROM ucto_historia
+        WHERE tenant_id=$1 AND organization_id=$2 AND pohoda_doklad_id IS NOT NULL AND doklad_cislo = ANY($3::text[])`,
+      [tenantId, organizationId, cisla],
+    );
+    for (const row of result.rows) nativne.set(row.kluc, row.riadok_hash);
+  }
+
   const resolved: ResolvedRow[] = [];
   let bezKodu = 0;
   for (const row of input.rows) {
@@ -220,7 +240,8 @@ export async function importUctoHistory(
       bezKodu += 1;
       continue; // riadok bez zaúčtovania sa nemá čo učiť
     }
-    base.hash = riadokHash(base, row.riadokIndex ?? resolved.length, input.zdrojDatabaza);
+    base.hash = nativne.get(`${base.agenda}|${base.dokladCislo}|${base.datum ?? ''}|${base.riadokIndex ?? ''}`)
+      ?? riadokHash(base, row.riadokIndex ?? resolved.length, input.zdrojDatabaza);
     resolved.push(base);
   }
 

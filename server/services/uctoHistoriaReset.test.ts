@@ -58,6 +58,36 @@ describe('korpus histórie a rozdelené agendy', () => {
 
     await nahraj('StwPh_12345678_2027', [{ agenda: 'FP', ...doklad, lineText: 'iny rok', riadokIndex: 0 }]);
     expect(await riadky()).toHaveLength(4);
+
+    // Id je jedinečné len v tabuľke agendy POHODY: faktúra a interný doklad
+    // s tým istým id sú dva doklady, nie jeden.
+    await nahraj('StwPh_12345678_2027', [{ agenda: 'INT', ...doklad, lineText: 'interny', riadokIndex: 0 }]);
+    expect(await riadky()).toHaveLength(5);
+  }, 90_000);
+
+  // Ručné XML a .mdb natívne id nepoznajú. Nahratie tej istej histórie po
+  // publikácii Mostíka musí riadok prepísať, nie pridať druhý.
+  it('ručný import po prenose s natívnym id korpus nezdvojí', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const doklad = { agenda: 'FP' as const, predkontaciaKod: '518/321', dokladCislo: 'DF1', datum: '2026-07-01' };
+    await importUctoHistory(database, {
+      ...seeded, source: 'mdb', zdrojDatabaza: 'StwPh_12345678_2026',
+      rows: [{ ...doklad, lineText: 'Tonery', riadokIndex: 0, dokladId: 54393 }, { ...doklad, lineText: 'Toner HP', riadokIndex: 1, dokladId: 54393, polozkaId: 50075 }],
+    });
+    const rucne = await importUctoHistory(database, {
+      ...seeded, source: 'mdb',
+      rows: [{ ...doklad, lineText: 'Tonery', riadokIndex: 0 }, { ...doklad, lineText: 'Toner HP opraveny', riadokIndex: 1 }],
+    });
+    expect(rucne).toMatchObject({ imported: 0, duplicates: 2 });
+    expect((await database.query<Record<string, unknown>>(
+      `SELECT line_text_normalized AS text, zdroj_databaza, pohoda_doklad_id IS NOT NULL AS nativny
+         FROM ucto_historia WHERE organization_id=$1 ORDER BY riadok_index`, [seeded.organizationId],
+    )).rows).toEqual([
+      { text: 'tonery', zdroj_databaza: 'StwPh_12345678_2026', nativny: true },
+      { text: 'toner hp opraveny', zdroj_databaza: 'StwPh_12345678_2026', nativny: true },
+    ]);
   }, 90_000);
 
   // F12: prírastkový import (ručné XML, starší Mostík) s tým istým odtlačkom

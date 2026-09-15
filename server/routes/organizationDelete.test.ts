@@ -90,11 +90,12 @@ describe('DELETE /api/organizations/:id', () => {
       ['organization_email_aliases', 'organization_id'], ['document_queues', 'organization_id'],
       ['pohoda_company_links', 'organization_id'], ['organization_memberships', 'organization_id'],
       ['ucto_dennik', 'organization_id'], ['ucto_historia', 'organization_id'], ['pohoda_importy', 'organization_id'],
-      ['pohoda_import_davky', 'import_id'],
     ] as const) {
       const rows = await database.query(`SELECT 1 FROM ${table} WHERE ${column}=$1`, [seeded.organizationId]);
       expect(rows.rowCount, `${table} nie je vyčistená`).toBe(0);
     }
+    // Dávka stagingu nemá stĺpec firmy — overuje sa podľa svojho prenosu.
+    expect((await database.query('SELECT 1 FROM pohoda_import_davky WHERE import_id=$1', [importId])).rowCount).toBe(0);
     await expect(storage.get(storageKey)).rejects.toThrow();
 
     // Audit zostáva ako stopa, len odpojený od zmazanej firmy.

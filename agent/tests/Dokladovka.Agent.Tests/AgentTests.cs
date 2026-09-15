@@ -1099,6 +1099,39 @@ public sealed class AgentTests
         Assert.DoesNotContain(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/training-decisions", StringComparison.Ordinal) && !poziadavka.Telo.Contains("importId", StringComparison.Ordinal));
     }
 
+    // Neúplná pamäť (t03 bez práv → 422 pri publikácii) blokuje len svoju
+    // publikáciu. História a denník majú vlastné prenosy a v 0.17 prešli.
+    [Fact]
+    public async Task OdmietnutaPamatNezastaviHistoriuADennik()
+    {
+        var poziadavky = await SpustiCyklusAsync(Organizacie(2), poziadavka => OdpovedPohody(poziadavka), (cesta, telo) =>
+            cesta.EndsWith("/publikuj", StringComparison.Ordinal) && telo.Contains("\"druh\":\"pamat\"", StringComparison.Ordinal)
+                ? (HttpStatusCode.UnprocessableEntity, """{"code":"import_neuplny","message":"Prenos je neúplný: agenda FP: error"}""")
+                : null);
+        var druhy = poziadavky.Where(poziadavka => poziadavka.Cesta.EndsWith("/publikuj", StringComparison.Ordinal))
+            .Select(poziadavka => JsonDocument.Parse(poziadavka.Telo).RootElement.GetProperty("druh").GetString());
+        Assert.Equal(["pamat", "historia", "dennik"], druhy);
+        Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "uctovnyProfil"));
+        Assert.Equal("error|BackendApiException", VysledokTelemetrie(poziadavky, "treningAi"));
+        // Žiadosť o sync ostáva, kým neprejdú všetky tri publikácie.
+        Assert.DoesNotContain(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/training-decisions", StringComparison.Ordinal) && !poziadavka.Telo.Contains("importId", StringComparison.Ordinal));
+    }
+
+    // Strop 20 000 je pre servery do 0.17. Nový server berie viac a riadok
+    // agenta je novší než riadok publikácie — orezaný by klamal v prehľade.
+    [Fact]
+    public async Task Protokol2NeorezavaPocetVTelemetrii()
+    {
+        var poziadavky = await SpustiCyklusAsync(Organizacie(2), poziadavka => OdpovedPohody(poziadavka), (cesta, _) =>
+            cesta.EndsWith("/publikuj", StringComparison.Ordinal)
+                ? (HttpStatusCode.OK, """{"imported":1,"duplicates":0,"rejected":0,"ulozenych":25000}""")
+                : null);
+        var dennik = poziadavky.Where(poziadavka => poziadavka.Cesta == "/api/agent/sync-results")
+            .Select(poziadavka => JsonDocument.Parse(poziadavka.Telo).RootElement)
+            .Last(telo => telo.GetProperty("kind").GetString() == "uctovnyDennik");
+        Assert.Equal(25_000, dennik.GetProperty("itemCount").GetInt32());
+    }
+
     private static string Organizacie(int? protokol) =>
         $$"""[{"organizationId":"org-1","ico":"12345678","nazov":"Firma","dbName":null,"uctovnyRok":null,"preferredYear":"latest","syncRequested":false,"trainingSyncRequested":true{{(protokol is null ? "" : $",\"historiaProtokol\":{protokol}")}}}]""";
 
@@ -1149,7 +1182,8 @@ public sealed class AgentTests
     }
 
     /// <summary>Jeden cyklus agenta proti podstrčenému cloudu aj mServeru. Vráti požiadavky na cloud.</summary>
-    private static async Task<List<(string Metoda, string Cesta, string Telo)>> SpustiCyklusAsync(string organizacie, Func<string, string> pohoda)
+    private static async Task<List<(string Metoda, string Cesta, string Telo)>> SpustiCyklusAsync(
+        string organizacie, Func<string, string> pohoda, Func<string, string, (HttpStatusCode Status, string Json)?>? cloud = null)
     {
         var poziadavky = new List<(string Metoda, string Cesta, string Telo)>();
         var handler = new DelegateHandler(async request =>
@@ -1164,7 +1198,7 @@ public sealed class AgentTests
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(xml, Encoding.UTF8, "text/xml") };
             }
             lock (poziadavky) poziadavky.Add((request.Method.Method, cesta, telo));
-            var (status, json) = cesta switch
+            var (status, json) = cloud?.Invoke(cesta, telo) ?? cesta switch
             {
                 "/api/agent/organizations" => (HttpStatusCode.OK, organizacie),
                 "/api/agent/export-queue" => (HttpStatusCode.OK, "[]"),
