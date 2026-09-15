@@ -1769,6 +1769,23 @@ public sealed class DocumentFolderTests
         Assert.Equal("intDoc|INT|chyba", $"{parsed.Agendy[11].Poziadavka}|{parsed.Agendy[11].Agenda}|{parsed.Agendy[11].Stav}");
     }
 
+    // Upozornenie POHODY záznamy nezahodí — agenda je úplná a poznámka ostane
+    // v manifeste. Inak by neškodný warning navždy blokoval publikáciu histórie.
+    [Fact]
+    public void ParseHistoryRows_WarningJeUplnaAgendaSPoznamkou()
+    {
+        const string response = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="warning" note="Niektoré polia neboli exportované."><lst:listInvoice version="2.0" state="warning"><lst:invoice version="2.0">
+                <inv:invoiceHeader><inv:invoiceType>receivedInvoice</inv:invoiceType><inv:text>Tonery</inv:text><inv:accounting><typ:ids>501/321</typ:ids></inv:accounting></inv:invoiceHeader>
+              </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var agenda = PohodaXml.ParseHistoryRows(response).Agendy[0];
+        Assert.Equal("ok|1|Niektoré polia neboli exportované.", $"{agenda.Stav}|{agenda.Dokladov}|{agenda.Poznamka}");
+        Assert.Empty(PohodaXml.ParseTrainingDecisions(response).Warnings);
+    }
+
     private static string ServerovaFixtura()
     {
         var koren = AppContext.BaseDirectory;

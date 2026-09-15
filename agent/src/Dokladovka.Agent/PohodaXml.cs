@@ -90,7 +90,8 @@ public static class PohodaXml
             var key = string.Join("\u0001", row.SupplierIco, row.SupplierName, row.LineText, row.PredkontaciaKod, row.ClenenieDphKod, row.ClenenieKvKod);
             if (seen.Add(key)) rows.Add(row);
         }
-        var warnings = document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value != "ok")
+        // „warning" záznamy vrátil, takže manifest pamäte ho nesmie brať ako chybu (StavPoziadavky).
+        var warnings = document.Descendants().Where(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("state")?.Value is not ("ok" or "warning"))
             .Select(item => FindText(item, "note") ?? item.Attribute("note")?.Value ?? "POHODA nevrátila časť faktúr.").ToArray();
         return new ParsedTrainingDecisions(rows, warnings);
     }
@@ -527,9 +528,12 @@ public static class PohodaXml
     private static string StavPoziadavky(XElement? polozka)
     {
         if (polozka is null) return "chyba";
-        if (polozka.Attribute("state")?.Value is { } stav && stav != "ok") return stav;
+        // „warning" znamená, že POHODA požiadavku spracovala a záznamy vrátila —
+        // poznámka ide do manifestu. Keby blokoval publikáciu, história firmy by sa
+        // pri neškodnom upozornení už nikdy neobnovila.
+        if (polozka.Attribute("state")?.Value is { } stav && stav is not ("ok" or "warning")) return stav;
         var zoznam = polozka.Elements().FirstOrDefault(IsStormware);
-        if (zoznam?.Attribute("state")?.Value is { } stavZoznamu && stavZoznamu != "ok") return stavZoznamu;
+        if (zoznam?.Attribute("state")?.Value is { } stavZoznamu && stavZoznamu is not ("ok" or "warning")) return stavZoznamu;
         return zoznam?.Elements().Any(node => IsStormware(node) && node.Name.LocalName == "parts") == true ? "parts" : "ok";
     }
 
