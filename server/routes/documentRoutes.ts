@@ -382,7 +382,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       confidence: 0,
       totalAmount: Number(extracted.sumaSpolu),
       currency: extracted.mena,
-    }, organization.rows[0]);
+      // Podtyp rozhoduje o znamienku: dobropis so zápornou sumou je v poriadku.
+    }, organization.rows[0], document.podtyp);
     const validationErrors = validationIssues.filter((issue) => issue.severity === 'error');
     if (validationErrors.length > 0) {
       // Konkrétne dôvody v message — generická hláška nechala používateľa

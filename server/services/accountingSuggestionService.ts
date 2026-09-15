@@ -1032,7 +1032,7 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   //
   // Prebiť výber smie len pravidlo účtovníka. Rad skopírovaný z pamäte
   // dodávateľa, z posledného dokladu či z predvolieb firmy nesie mesiac a druh
-  // TOHO dokladu (pamäť podtyp nerozlišuje) — marcová faktúra by dostala
+  // TOHO dokladu (pamäť už rozlišuje podtyp, mesiac nie) — marcová faktúra by dostala
   // februárový rad. Zdedený rad ostáva, len keď výber nevie nič (undefined).
   const radPravidla = pravidlo.candidate.ciselny_rad_id;
   const radVyberu = radPravidla ? undefined : await resolveSeriesDefault(
@@ -1258,9 +1258,9 @@ const POLIA_ZAUCTOVANIA = ['predkontaciaId', 'clenenieDphId', 'clenenieKvKod', '
  * Zaznamená, čo účtovník oproti návrhu zmenil. Jediný učiaci signál, ktorý
  * v POHODE neexistuje — tam je len výsledok, nie návrh, ktorý mu predchádzal.
  *
- * Beží pri schválení a nikdy nesmie schválenie zhodiť: keď zápis zlyhá,
- * doklad je už schválený a strata jedného merania je menšia škoda než chyba
- * účtovníkovi na obrazovke.
+ * Beží v tej istej transakcii ako schválenie: keď zápis zlyhá, schválenie sa
+ * vráti celé. Inak by doklad ostal schválený bez záznamu opravy a účtovník by
+ * dostal chybu k operácii, ktorá už prebehla.
  */
 export async function zaznamenajOpravu(tx: Queryable, input: {
   tenantId: string;

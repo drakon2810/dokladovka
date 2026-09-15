@@ -419,12 +419,12 @@ export function podtypPreTyp(documentType: string, podtyp: string | undefined): 
  * na aké sa jeho index neskôr uplatní, bola zhoda indexov len zhodou náhod.
  * Teraz je to zhoda z definície.
  *
- * ponytail: strop 60 položiek. Najdlhší doklad v prevádzke má 18 a nad 15 sú
- * dva zo 125; strop je poistka proti hromadnému importu, nie proti faktúram.
+ * Strop je rovnaký ako v návrhu zaúčtovania (200 položiek). Pri 60 by služba
+ * dostala orezaný doklad a riadky 61+ by nikdy nemohli dostať vlastný účet.
  */
 function polozkyModelu(extracted: unknown): Array<Record<string, unknown>> {
   const polozky = (extracted as { polozky?: unknown })?.polozky;
-  return Array.isArray(polozky) ? (polozky as Array<Record<string, unknown>>).slice(0, 60) : [];
+  return Array.isArray(polozky) ? (polozky as Array<Record<string, unknown>>).slice(0, 200) : [];
 }
 
 function polozkyPreModel(extracted: unknown) {
