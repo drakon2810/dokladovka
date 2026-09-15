@@ -58,6 +58,15 @@ describe('POHODA výmena XML bez agenta', () => {
     const saved = await saveDocument(
       document.id,
       {
+        // Syntetická odpoveď POHODY je z databázy roku 2025 (rad 2025 má year
+        // 2025). Rad iného účtovného roka schválenie odmietne, preto doklad
+        // nesie dátumy toho istého roka.
+        extracted: {
+          ...document.extracted,
+          datumVystavenia: '2025-07-13',
+          datumDodania: '2025-07-13',
+          datumSplatnosti: '2025-07-27',
+        },
         ucto: {
           ...document.ucto,
           predkontaciaId: predkontacia.id,
