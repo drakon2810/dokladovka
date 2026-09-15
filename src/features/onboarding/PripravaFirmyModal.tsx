@@ -1,12 +1,12 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { create } from 'zustand';
 import { useNavigate } from 'react-router-dom';
-import type { Organization, PripravaFirmy } from '../../data/types';
+import type { Organization, PripravaFirmy, PripravenostFirmy, SignalPripravenosti } from '../../data/types';
 import { Modal } from '../../components/ui';
-import { analyzeUctoProfil, backfillUctoHistory } from '../../data/api';
+import { analyzeUctoProfil, backfillUctoHistory, nacitajPripravenost } from '../../data/api';
 import { requestMostikCodeListSync, requestMostikTrainingSync } from '../../data/mostik/mostikService';
 import { showToast } from '../../components/toast';
-import { t } from '../../i18n/sk';
+import { t, tv, type SkKey } from '../../i18n/sk';
 import './pripravaFirmy.css';
 
 /**
@@ -18,9 +18,10 @@ import './pripravaFirmy.css';
  * mostíkom", „Analyzovať pamäť" — a z obrazovky sa nedalo zistiť, čo z toho
  * treba a v akom poradí.
  *
- * Stav krokov sa NEUKLADÁ. Číta sa zo skutočných dát (pripravaFiriem
- * v snapshote), takže sprievodca nemôže tvrdiť „hotové" o niečom, čo v systéme
- * nie je — a keď účtovník krok spraví inde, sprievodca to vidí tiež.
+ * Stav krokov sa NEUKLADÁ. Číta sa zo skutočných dát — z pripravenosti firmy
+ * na serveri (manifest histórie, job analýzy, živý agent), a keď nie je, zo
+ * snapshotu — takže sprievodca nemôže tvrdiť „hotové" o niečom, čo v systéme
+ * nie je. Keď účtovník krok spraví inde, sprievodca to vidí tiež.
  */
 
 /** Ktorej firme je sprievodca otvorený a ktorý krok práve beží. Zdieľané,
@@ -28,8 +29,9 @@ import './pripravaFirmy.css';
  *  vykresľuje Layout.
  *
  *  Bežiaci krok je tu, nie v komponente: analýza trvá minúty a účtovník
- *  okno medzitým zavrie. Po otvorení musí vidieť, že sa stále pracuje. */
-const usePripravaStore = create<{ orgId: string | null; bezi: { orgId: string; krok: number } | null }>(
+ *  okno medzitým zavrie. Po otvorení musí vidieť, že sa stále pracuje.
+ *  `kedy` je čas chyby kroku pri spustení (viď krokDobehol). */
+const usePripravaStore = create<{ orgId: string | null; bezi: { orgId: string; krok: number; kedy?: string } | null }>(
   () => ({ orgId: null, bezi: null }),
 );
 export const usePripravaOrgId = () => usePripravaStore((s) => s.orgId);
@@ -54,7 +56,9 @@ interface Krok {
   /** i18n kľúč hlášky počas behu. */
   bezimText?: Parameters<typeof t>[0];
   /** Čo sa ukáže, keď je hotový — konkrétne číslo, nie „OK". */
-  hotovo: (priprava: PripravaFirmy, organizacia: Organization) => string;
+  hotovo: (priprava: PripravaFirmy, organizacia: Organization, pripravenost?: PripravenostFirmy | null) => string;
+  /** Signály pripravenosti, ktoré krok uzatvárajú. Keď ich server nevráti, platí `splneny`. */
+  signaly?: Array<keyof PripravenostFirmy['signaly']>;
   splneny: (priprava: PripravaFirmy, organizacia: Organization) => boolean;
   /** Kroky 1-4 na sebe závisia; schránka vzniká automaticky, tak nečaká. */
   zavisly: boolean;
@@ -76,7 +80,15 @@ export const KROKY: readonly Krok[] = [
     popis: 'Agent na vašom počítači spojí Dokladovku s POHODOU. Bez neho sa nedá stiahnuť nič ďalšie.',
     cesta: '/nastavenia?tab=mostik',
     akcia: 'Otvoriť Mostík',
-    hotovo: () => 'Firma je spárovaná s účtovnou jednotkou v POHODE',
+    // Účtovník vidí, s ktorou databázou a rokom sa firma spárovala — pri
+    // prechode na nový rok je to prvé, čo treba skontrolovať.
+    hotovo: (_priprava, _organizacia, pripravenost) => {
+      const detail = pripravenost?.signaly.firma.detail as { dbName?: string; uctovnyRok?: string | null } | undefined;
+      return detail?.dbName
+        ? tv('priprava.sparovaneS', { databaza: detail.dbName, rok: detail.uctovnyRok ?? '—' })
+        : 'Firma je spárovaná s účtovnou jednotkou v POHODE';
+    },
+    signaly: ['mostik', 'firma'],
     splneny: (priprava) => priprava.mostik,
     zavisly: true,
   },
@@ -92,6 +104,7 @@ export const KROKY: readonly Krok[] = [
     beziKymNeHotovy: true,
     bezimText: 'priprava.ciselnikyBezia',
     hotovo: (priprava) => `${priprava.ciselniky} položiek číselníkov`,
+    signaly: ['ciselniky'],
     splneny: (priprava) => priprava.ciselniky > 0,
     zavisly: true,
   },
@@ -103,11 +116,12 @@ export const KROKY: readonly Krok[] = [
     // Beží na mieste — účtovník nemá dôvod odchádzať do Nastavení a hľadať
     // tam medzi Excelom, .mdb a dvoma tlačidlami to správne.
     // Požiadavka sa agentovi len zapíše; sťahuje ju na pozadí. Krok preto
-    // beží ďalej, kým sa v pamäti naozaj neobjavia rozhodnutia.
+    // beží ďalej, kým server nepotvrdí publikovanú históriu.
     spustit: (organizationId) => requestMostikTrainingSync(organizationId),
     beziKymNeHotovy: true,
     bezimText: 'priprava.stahujem',
     hotovo: (priprava) => `${priprava.pamat} zapamätaných rozhodnutí`,
+    signaly: ['historia'],
     splneny: (priprava) => priprava.pamat > 0,
     zavisly: true,
   },
@@ -123,7 +137,7 @@ export const KROKY: readonly Krok[] = [
     //
     // Analýza sa len postaví do fronty — beží vo workeri desiatky minút a
     // spojenie prehliadača toľko nevydrží. Krok preto dobieha rovnako ako
-    // mostík nad ním: beží ďalej, kým sa neobjavia kategórie. Že model
+    // mostík nad ním: beží ďalej, kým server nehlási dokončený job. Že model
     // nevrátil nič použiteľné, tak povie „splneny", nie návratová hodnota;
     // dôvod zlyhania ukáže obrazovka účtovného profilu.
     spustit: async (organizationId) => {
@@ -133,13 +147,22 @@ export const KROKY: readonly Krok[] = [
     beziKymNeHotovy: true,
     bezimText: 'priprava.analyzujem',
     hotovo: (priprava) => `${priprava.kategorie} kategórií plnení`,
+    signaly: ['profil'],
     splneny: (priprava) => priprava.kategorie > 0,
     zavisly: true,
   },
 ];
 
-export function stavKrokov(priprava: PripravaFirmy, organizacia: Organization): StavKroku[] {
-  const splnene = KROKY.map((krok) => krok.splneny(priprava, organizacia));
+/** Krok s výhradou („overiť") je hotový — výhrada sa ukáže pod ním, neblokuje ďalší. */
+function splnenyKrok(krok: Krok, priprava: PripravaFirmy, organizacia: Organization, pripravenost?: PripravenostFirmy | null): boolean {
+  if (pripravenost && krok.signaly) {
+    return krok.signaly.every((nazov) => ['ok', 'overit'].includes(pripravenost.signaly[nazov].stav));
+  }
+  return krok.splneny(priprava, organizacia);
+}
+
+export function stavKrokov(priprava: PripravaFirmy, organizacia: Organization, pripravenost?: PripravenostFirmy | null): StavKroku[] {
+  const splnene = KROKY.map((krok) => splnenyKrok(krok, priprava, organizacia, pripravenost));
   return KROKY.map((krok, index) => {
     if (splnene[index]) return 'hotovy';
     // Zamknutý ostáva, kým nie je hotový ktorýkoľvek predchádzajúci závislý
@@ -150,8 +173,85 @@ export function stavKrokov(priprava: PripravaFirmy, organizacia: Organization): 
 }
 
 /** Koľko krokov je hotových. Používa aj ľavý panel pre prstenec pri firme. */
-export function hotovychKrokov(priprava: PripravaFirmy, organizacia: Organization): number {
-  return stavKrokov(priprava, organizacia).filter((stav) => stav === 'hotovy').length;
+export function hotovychKrokov(priprava: PripravaFirmy, organizacia: Organization, pripravenost?: PripravenostFirmy | null): number {
+  return stavKrokov(priprava, organizacia, pripravenost).filter((stav) => stav === 'hotovy').length;
+}
+
+/** Text dôvodu signálu; textový detail (chyba agenta, druh číselníka) ide do zátvorky. */
+export function dovodPripravenosti(signal: SignalPripravenosti): string {
+  const text = t(`pripravenost.${signal.dovod}` as SkKey) ?? signal.dovod;
+  return typeof signal.detail === 'string' ? `${text} (${signal.detail})` : text;
+}
+
+/** Prvý dôvod, prečo firma nie je pripravená; undefined, keď je — alebo keď sa to nevie. */
+export function upozorneniePripravenosti(pripravenost: PripravenostFirmy | null | undefined): string | undefined {
+  if (!pripravenost || pripravenost.stav === 'pripravena') return undefined;
+  const problem = Object.values(pripravenost.signaly).find((signal) => signal.stav !== 'ok');
+  return problem && dovodPripravenosti(problem);
+}
+
+/** Riadok nad návrhom v detaile dokladu. „Nie je pripravená" len keď to tvrdí server, pri „overiť" miernejšie. */
+export function upozornenieNavrhu(pripravenost: PripravenostFirmy | null | undefined): string | undefined {
+  const dovod = upozorneniePripravenosti(pripravenost);
+  if (!pripravenost || !dovod) return undefined;
+  return `${t(pripravenost.stav === 'nepripravena' ? 'pripravenost.navrhUpozornenie' : 'pripravenost.navrhOverit')} ${dovod}`;
+}
+
+/** Päta tvrdí „pripravená" len podľa servera — päť hotových krokov na to nestačí. */
+export function poznamkaPaty(vsetkoHotove: boolean, pripravenost: PripravenostFirmy | null | undefined): string {
+  if (!vsetkoHotove) return t('priprava.zavriPoznamka');
+  if (pripravenost?.stav === 'pripravena') return t('priprava.hotovoPoznamka');
+  return tv('priprava.overitPoznamka', { dovod: upozorneniePripravenosti(pripravenost) ?? t('pripravenost.nenacitana') });
+}
+
+/**
+ * Krok, ktorý sa rozbehne sám. Sťahovať číselníky, kým server nepotvrdí živého
+ * agenta a databázu firmy, znamená spinner nad požiadavkou, ktorú nikto nevybaví.
+ * undefined = pripravenosť sa ešte načítava; null = nie je, platí snapshot.
+ */
+export function automatickyKrok(stavy: StavKroku[], pripravenost: PripravenostFirmy | null | undefined): Krok | undefined {
+  if (pripravenost === undefined) return undefined;
+  if (pripravenost && (pripravenost.signaly.mostik.stav !== 'ok' || pripravenost.signaly.firma.stav !== 'ok')) return undefined;
+  // Sám len krok, z ktorého ešte nič neprišlo. Po chybe by každé otvorenie okna
+  // poslalo novú požiadavku; agent číselníky aj tak ťahá každú hodinu.
+  return KROKY.find((krok, i) => krok.automaticky && stavy[i] === 'naRade'
+    && (!pripravenost || Boolean(krok.signaly?.every((nazov) => pripravenost.signaly[nazov].stav === 'caka'))));
+}
+
+/** Chyba, ktorú server pri kroku hlási (napr. číselník, ktorý POHODA nevrátila). */
+function chybaKroku(krok: Krok, pripravenost: PripravenostFirmy | null | undefined): SignalPripravenosti | undefined {
+  if (!pripravenost) return undefined;
+  return krok.signaly?.map((nazov) => pripravenost.signaly[nazov]).find((signal) => signal.stav === 'chyba');
+}
+
+/**
+ * Bežiaci krok dobehol: je hotový, alebo server hlási inú chybu, než mal krok
+ * pri spustení — agent odpovedal, len nie úspechom. Spinner by inak čakal na
+ * „hotovo", ktoré nepríde; dôvod ostane v riadku pod krokom.
+ */
+export function krokDobehol(
+  krok: Krok, stav: StavKroku, pripravenost: PripravenostFirmy | null | undefined, kedyPriSpusteni: string | undefined,
+): boolean {
+  const chyba = chybaKroku(krok, pripravenost);
+  return stav === 'hotovy' || Boolean(chyba && chyba.kedy !== kedyPriSpusteni);
+}
+
+/**
+ * Pripravenosť firmy zo servera: undefined, kým sa načítava; null, keď nie je
+ * (mock, výpadok). Kým je obrazovka otvorená, obnovuje sa po minúte — krok na
+ * pozadí (agent, analýza) medzitým dobehne.
+ */
+export function usePripravenost(orgId: string | undefined): PripravenostFirmy | null | undefined {
+  const [nacitana, setNacitana] = useState<{ orgId: string; hodnota: PripravenostFirmy | null }>();
+  useEffect(() => {
+    if (!orgId) return undefined;
+    let zive = true;
+    const nacitaj = () => void nacitajPripravenost(orgId).then((hodnota) => { if (zive) setNacitana({ orgId, hodnota }); });
+    nacitaj();
+    const casovac = setInterval(nacitaj, 60_000);
+    return () => { zive = false; clearInterval(casovac); };
+  }, [orgId]);
+  return orgId && nacitana?.orgId === orgId ? nacitana.hodnota : undefined;
 }
 
 function IkonaFajka() {
@@ -184,15 +284,16 @@ interface Props {
 export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat }: Props) {
   const navigate = useNavigate();
   const beziZaznam = usePripravaStore((stav) => stav.bezi);
-  const stavy = useMemo(() => stavKrokov(priprava, organizacia), [priprava, organizacia]);
+  const pripravenost = usePripravenost(organizacia.id);
+  const stavy = useMemo(() => stavKrokov(priprava, organizacia, pripravenost), [priprava, organizacia, pripravenost]);
   const bezi = beziZaznam?.orgId === organizacia.id ? beziZaznam.krok : null;
   // Krok na pozadí dobehol — spinner zhasne, len čo to vidno v dátach.
-  const beziciHotovy = bezi !== null && stavy[bezi - 1] === 'hotovy';
+  const beziciDobehol = bezi !== null && krokDobehol(KROKY[bezi - 1], stavy[bezi - 1], pripravenost, beziZaznam?.kedy);
   useEffect(() => {
-    if (beziciHotovy) usePripravaStore.setState({ bezi: null });
-  }, [beziciHotovy]);
+    if (beziciDobehol) usePripravaStore.setState({ bezi: null });
+  }, [beziciDobehol]);
   const spusti = (krok: Krok) => {
-    usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo } });
+    usePripravaStore.setState({ bezi: { orgId: organizacia.id, krok: krok.cislo, kedy: chybaKroku(krok, pripravenost)?.kedy } });
     void krok.spustit!(organizacia.id)
       .then(() => {
         // Agent pracuje na pozadí; spinner zhasne až keď je výsledok v dátach.
@@ -205,15 +306,16 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
   };
 
   // Krok, ktorý si účtovník neklikáva, sa rozbehne sám, len čo príde na rad.
-  const automatickyKrok = KROKY.find((krok, i) => krok.automaticky && stavy[i] === 'naRade');
-  const cakaAutomaticky = Boolean(automatickyKrok) && beziZaznam === null;
+  const automaticky = automatickyKrok(stavy, pripravenost);
+  const cakaAutomaticky = Boolean(automaticky) && beziZaznam === null;
   useEffect(() => {
-    if (cakaAutomaticky && automatickyKrok) spusti(automatickyKrok);
+    if (cakaAutomaticky && automaticky) spusti(automaticky);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cakaAutomaticky, automatickyKrok?.cislo]);
+  }, [cakaAutomaticky, automaticky?.cislo]);
 
   const hotove = stavy.filter((stav) => stav === 'hotovy').length;
   const vsetkoHotove = hotove === KROKY.length;
+  const pripravena = vsetkoHotove && pripravenost?.stav === 'pripravena';
 
   return (
     <Modal title={t('priprava.titulok')} onClose={onClose}>
@@ -232,6 +334,10 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
         {KROKY.map((krok, index) => {
           const stav = stavy[index];
           const blokujuci = KROKY.slice(0, index).filter((p, i) => p.zavisly && stavy[i] !== 'hotovy').pop();
+          // Výhrada alebo chyba servera pri kroku — „hotové" nesmie zakryť, čo treba overiť.
+          const vyhrada = pripravenost && krok.signaly
+            ?.map((nazov) => pripravenost.signaly[nazov])
+            .find((signal) => signal.stav === 'overit' || signal.stav === 'chyba');
           return (
             <div key={krok.cislo} className={`pf-krok pf-krok-${stav}`}>
               <span className={`pf-znak pf-znak-${stav}`}>
@@ -248,7 +354,8 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
                   </span>
                 </div>
                 <div className="pf-popis">{krok.popis}</div>
-                {stav === 'hotovy' && <div className="pf-hotovo">{krok.hotovo(priprava, organizacia)}</div>}
+                {stav === 'hotovy' && <div className="pf-hotovo">{krok.hotovo(priprava, organizacia, pripravenost)}</div>}
+                {vyhrada && <div className="pf-zamknute">{dovodPripravenosti(vyhrada)}</div>}
                 {stav === 'zamknuty' && blokujuci && (
                   <div className="pf-zamknute">Najprv dokončite krok {blokujuci.cislo} — {blokujuci.nazov.toLowerCase()}.</div>
                 )}
@@ -288,11 +395,9 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
       </div>
 
       <div className="pf-pata">
-        <span className="pf-poznamka">
-          {vsetkoHotove ? t('priprava.hotovoPoznamka') : t('priprava.zavriPoznamka')}
-        </span>
-        <button type="button" className={vsetkoHotove ? 'btn btn-primary' : 'btn'} onClick={onClose}>
-          {vsetkoHotove ? t('priprava.hotovo') : t('akcia.zavriet')}
+        <span className="pf-poznamka">{poznamkaPaty(vsetkoHotove, pripravenost)}</span>
+        <button type="button" className={pripravena ? 'btn btn-primary' : 'btn'} onClick={onClose}>
+          {pripravena ? t('priprava.hotovo') : t('akcia.zavriet')}
         </button>
       </div>
     </Modal>

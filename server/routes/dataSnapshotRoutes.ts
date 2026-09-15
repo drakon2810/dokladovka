@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { requireBrowserAuth } from '../auth.js';
+import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { mapDphProfilRow } from '../services/dphProfileService.js';
 import { mapUctovnyProfilRow } from '../services/accountingProfileService.js';
@@ -9,7 +10,7 @@ function iso(value: unknown): string | undefined {
   return value ? new Date(String(value)).toISOString() : undefined;
 }
 
-export function registerDataSnapshotRoutes(app: FastifyInstance, database: Database): void {
+export function registerDataSnapshotRoutes(app: FastifyInstance, database: Database, config: ServerConfig): void {
   app.get('/api/data/snapshot', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const organizations = await database.query<Record<string, any>>(
@@ -90,10 +91,16 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       ),
       // Pripravenosť firmy pre sprievodcu. Počty, nie riadky: pamäť má tisíce
       // záznamov a sprievodca z nich potrebuje jediné — či tam vôbec niečo je.
+      // Poctivé signály počíta GET /api/organizations/:id/pripravenost.
       database.query<Record<string, any>>(
         `SELECT o.id AS organization_id,
-                EXISTS (SELECT 1 FROM pohoda_company_links l
-                         WHERE l.organization_id=o.id AND l.tenant_id=o.tenant_id) AS mostik,
+                -- Prázdne prepojenie vzniká už pri založení firmy; spárovaná je
+                -- až s databázou POHODY a so živým agentom v tenante.
+                (EXISTS (SELECT 1 FROM pohoda_company_links l
+                          WHERE l.organization_id=o.id AND l.tenant_id=o.tenant_id AND l.db_name IS NOT NULL)
+                 AND EXISTS (SELECT 1 FROM agent_installations i
+                              WHERE i.tenant_id=o.tenant_id AND i.status='connected'
+                                AND i.last_seen_at > now() - ($3::text || ' hours')::interval)) AS mostik,
                 (SELECT count(*) FROM code_list_items c
                   WHERE c.organization_id=o.id AND c.tenant_id=o.tenant_id AND c.active) AS ciselniky,
                 (SELECT count(*) FROM ucto_decisions d
@@ -104,7 +111,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
                          WHERE a.organization_id=o.id AND a.tenant_id=o.tenant_id AND a.status='active') AS schranka
            FROM organizations o
           WHERE o.tenant_id=$1 AND o.id=ANY($2::text[])`,
-        [auth.tenantId, organizationIds],
+        [auth.tenantId, organizationIds, config.agentOfflineAlertHours],
       ),
     ]);
 

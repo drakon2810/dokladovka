@@ -24,6 +24,7 @@ import type {
   OrganizationBankAccount,
   OrganizationEmailAlias,
   PaymentStatus,
+  PripravenostFirmy,
   Role,
   SimulateInboundEmailInput,
   SimulateInboundEmailResult,
@@ -3258,6 +3259,21 @@ export async function analyzaStav(orgId: string): Promise<AnalyzaBeh | null> {
     `/api/organizations/${encodeURIComponent(orgId)}/ucto-profile/analyze`,
   );
   return odpoved.beh;
+}
+
+// Pripravenosť sa počíta z viacerých tabuliek — nie v päťsekundovom snapshote,
+// ale keď ju sprievodca či detail dokladu potrebuje, a minútu sa drží.
+const pripravenostCache = new Map<string, { kedy: number; odpoved: Promise<PripravenostFirmy | null> }>();
+
+/** null = pripravenosť nie je (mock, výpadok) — volajúci padá späť na snapshot. */
+export function nacitajPripravenost(orgId: string): Promise<PripravenostFirmy | null> {
+  if (!REST_DATA_MODE) return Promise.resolve(null);
+  const zaznam = pripravenostCache.get(orgId);
+  if (zaznam && Date.now() - zaznam.kedy < 60_000) return zaznam.odpoved;
+  const odpoved = restRequest<PripravenostFirmy>(`/api/organizations/${encodeURIComponent(orgId)}/pripravenost`)
+    .catch(() => null);
+  pripravenostCache.set(orgId, { kedy: Date.now(), odpoved });
+  return odpoved;
 }
 
 export async function listUctoKategorie(orgId: string): Promise<UctoKategoria[]> {

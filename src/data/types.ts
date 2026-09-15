@@ -1034,3 +1034,20 @@ export interface PripravaFirmy {
   kategorie: number;
   schranka: boolean;
 }
+
+/**
+ * Poctivá pripravenosť firmy (GET /api/organizations/:id/pripravenost) — každý
+ * signál má stav a kód dôvodu; text dôvodu je v sk.ts pod pripravenost.<kód>.
+ */
+export interface SignalPripravenosti {
+  stav: 'chyba' | 'caka' | 'overit' | 'ok';
+  dovod: string;
+  kedy?: string;
+  pocet?: number;
+  detail?: unknown;
+}
+
+export interface PripravenostFirmy {
+  stav: 'nepripravena' | 'overit' | 'pripravena';
+  signaly: Record<'mostik' | 'firma' | 'ciselniky' | 'historia' | 'profil' | 'meranie', SignalPripravenosti>;
+}
