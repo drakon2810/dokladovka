@@ -231,7 +231,17 @@ public static class PohodaXml
         /// a práve to rozhoduje medzi PD a PN, aj pri delení PHM 80/20.</summary>
         decimal? SadzbaDph = null,
         /// <summary>Stredisko riadku. Bez neho ho história nevie navrhnúť nikdy.</summary>
-        string? StrediskoKod = null);
+        string? StrediskoKod = null,
+        /// <summary>Číselný rad dokladu tak, ako ho POHODA nesie v hlavičke:
+        /// identifikátor (typ:id) a prefix (typ:ids). Bez nich server rad nového
+        /// dokladu hádal zo začiatku čísla — a marcová faktúra 26030… sa zhodla
+        /// s ťarchopismi 2603. Z histórie sa tak rad pre druh dokladu počíta.</summary>
+        string? RadExternalId = null,
+        string? RadKod = null,
+        /// <summary>Krajina protistrany (ISO kód). Firma rady delí aj podľa nej
+        /// („Prijaté faktúry SK" proti „zahraničné") a bez nej sa to z histórie
+        /// nedá vyčítať.</summary>
+        string? Krajina = null);
 
     /// <summary>
     /// Číselný rad prečítaný z DOKLADU, nie z číselníka. POHODA rad, ktorý nemá
@@ -318,7 +328,7 @@ public static class PohodaXml
             // Rad sa zbiera PRED preskočením dokladu nižšie: doklad bez textu
             // alebo bez predkontácie pre korpus signál nenesie, ale svoj číselný
             // rad má rovnako platný ako každý iný.
-            ZozbierajRad(series, header, headerName);
+            var (radExternalId, radKod) = ZozbierajRad(series, header, headerName);
             var lineText = Trimmed(header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "text")?.Value);
             var predkontacia = RefIds(header, "accounting");
             var clenenieDph = RefIds(header, "classificationVAT");
@@ -330,13 +340,15 @@ public static class PohodaXml
             var partnerNazov = Trimmed(partner is null ? null : FindText(partner, "company"));
             var agendaDokladu = agenda(header);
             var strediskoHlavicky = RefIds(header, "centre");
+            var krajina = KrajinaPartnera(partner);
             // Sadzba na hlavičke sa nedáva: doklad ich máva viac (5 % aj 19 %
             // na jednom bločku) a jedna hodnota by klamala. Nesú ju položky.
             rows.Add(new HistoryRow(
                 agendaDokladu, dokladCislo, datum, partnerIco, partnerNazov, lineText,
                 predkontacia, clenenieDph,
                 ZakladnaKvSekcia(RefIds(header, "classificationKVDPH")), 0,
-                StrediskoKod: strediskoHlavicky));
+                StrediskoKod: strediskoHlavicky,
+                RadExternalId: radExternalId, RadKod: radKod, Krajina: krajina));
 
             // Položky dokladu. POHODA ich v odpovedi posiela celé (invoiceItem
             // má text, accounting aj classificationVAT), korpus z nich doteraz
@@ -404,7 +416,9 @@ public static class PohodaXml
                     Suma: Ciastka(ceny, "price"),
                     SumaDph: Ciastka(ceny, "priceVAT"),
                     SadzbaDph: SadzbaDph(item),
-                    StrediskoKod: RefIds(item, "centre") ?? strediskoHlavicky));
+                    StrediskoKod: RefIds(item, "centre") ?? strediskoHlavicky,
+                    // Rad aj krajina patria dokladu, položka ich dedí z hlavičky.
+                    RadExternalId: radExternalId, RadKod: radKod, Krajina: krajina));
             }
         }
 
@@ -438,16 +452,18 @@ public static class PohodaXml
     /// <summary>
     /// Číselný rad z hlavičky dokladu. Kľúčom je identifikátor radu v POHODE
     /// (typ:id) — ten je jedinečný aj tam, kde prefix nie je: ALPINA má dva
-    /// rôzne rady pokladne s prefixom „26".
+    /// rôzne rady pokladne s prefixom „26". Identifikátor a prefix vráti aj
+    /// tam, kde sa rad nezbiera (agenda mimo číselníka) — riadky histórie ich
+    /// nesú vždy.
     /// </summary>
-    private static void ZozbierajRad(IDictionary<string, SeriesRow> series, XElement header, string headerName)
+    private static (string? ExternalId, string? Kod) ZozbierajRad(IDictionary<string, SeriesRow> series, XElement header, string headerName)
     {
         var number = header.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "number");
-        if (number is null) return;
+        if (number is null) return (null, null);
         var externalId = Trimmed(FindText(number, "id"));
         var kod = Trimmed(FindText(number, "ids"));
         var agenda = AgendaCiselnika(header, headerName);
-        if (externalId is null || kod is null || agenda is null) return;
+        if (externalId is null || kod is null || agenda is null) return (externalId, kod);
         // Posledné číslo je najvyššie číslo dokladu v rade — presne to, čo pri
         // vyexportovaných radoch vracia POHODA ako topNumber. Slúži len na odhad
         // ďalšieho čísla v karte dokladu; samotné číslo prideľuje POHODA.
@@ -455,13 +471,30 @@ public static class PohodaXml
         if (!series.TryGetValue(externalId, out var existing))
         {
             series[externalId] = new SeriesRow(externalId, kod, agenda, cislo);
-            return;
         }
-        if (cislo is not null && (existing.PosledneCislo is null
+        else if (cislo is not null && (existing.PosledneCislo is null
             || string.CompareOrdinal(cislo, existing.PosledneCislo) > 0))
         {
             series[externalId] = existing with { PosledneCislo = cislo };
         }
+        return (externalId, kod);
+    }
+
+    /// <summary>
+    /// Krajina partnera dokladu: kód krajiny z jeho adresy, inak prefix IČ DPH
+    /// (CZ123… → CZ). Adresa sa berie len priamo z partnerIdentity — dodacia
+    /// adresa (shipToAddress) má vlastnú krajinu a o protistrane nehovorí.
+    /// </summary>
+    private static string? KrajinaPartnera(XElement? partner)
+    {
+        var adresa = partner?.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "address");
+        if (adresa is null) return null;
+        var krajina = RefIds(adresa, "country");
+        if (krajina is not null) return krajina.ToUpperInvariant();
+        var icDph = Trimmed(adresa.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "icDph")?.Value);
+        return icDph is { Length: >= 2 } && char.IsAsciiLetter(icDph[0]) && char.IsAsciiLetter(icDph[1])
+            ? icDph[..2].ToUpperInvariant()
+            : null;
     }
 
     /// <summary>Doklady všetkých agend so spôsobom, ako z hlavičky určiť agendu.</summary>
@@ -782,18 +815,22 @@ public static class PohodaXml
         {
             var code = attributes ? item.Attribute("code")?.Value.Trim() : FindText(item, prefixCode ? "prefix" : "code");
             var name = attributes ? (item.Attribute("accounting")?.Value ?? item.Attribute("name")?.Value)?.Trim() : FindText(item, "name");
-            // Kľúčom je SAMOTNÝ kód. POHODA ten istý prefix používa vo viacerých
-            // agendách (rad 26 je v pokladni aj v ostatných záväzkoch) a druhý sa
-            // tu stratí. Vrátiť ho vie až kľúč podľa identifikátora radu v POHODE,
-            // čo je zmena naprieč cloudom aj databázou.
-            // ponytail: rady, ktoré číselník nedá vôbec (bez vyplneného Obdobia),
-            // medzitým dopĺňa ParseHistoryRows z dokladov; prefixové dvojičky
-            // ostávajú na kľúč podľa identifikátora.
-            if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name) || values.ContainsKey(code)) continue;
+            if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name)) continue;
+            // Číselný rad sa kľúčuje identifikátorom v POHODE, nie prefixom. Ten
+            // istý prefix POHODA používa vo viacerých agendách (rad 26 je v pokladni
+            // aj v ostatných záväzkoch, dve pokladne majú každá svoj) a kľúč podľa
+            // kódu by druhý rad ticho zahodil. id sa berie LEN ako priame dieťa
+            // hlavičky radu — cashAccount či unitPZD nesú vlastné typ:id.
+            var externalId = attributes ? item.Attribute("id")?.Value
+                : prefixCode ? Trimmed(item.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "numericalSeriesHeader")?
+                    .Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == "id")?.Value)
+                : FindText(item, "id");
+            var key = prefixCode ? externalId ?? code : code;
+            if (values.ContainsKey(key)) continue;
             // debit/credit = účty MD/DAL predkontácie (len itemAccounting ich má; inde vráti null).
             // topNumber = najvyššie číslo číselného radu (len numericalSeries; fallback number).
-            values.Add(code, new CodeListValue(code, name,
-                attributes ? item.Attribute("id")?.Value : FindText(item, "id"),
+            values.Add(key, new CodeListValue(code, name,
+                externalId,
                 attributes ? item.Attribute("agenda")?.Value : FindText(item, "agenda"),
                 attributes ? item.Attribute("year")?.Value : FindText(item, "year"),
                 attributes ? Trimmed(item.Attribute("debit")?.Value) : null,
