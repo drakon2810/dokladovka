@@ -2742,7 +2742,8 @@ describe('doklady histórie idú do promptu celé', () => {
     const POPLATOK = await predkontacia('379700-auto popl.');
     const NEDANOVE = await predkontacia('379700-PK-nedaňové');
     const doklad = { cislo: '26FP300', datum: '2026-05-10' };
-    await riadok(doklad, 0, 'dialničná známka', 200, 0, POPLATOK);
+    // Vlastný text hlavičky: s textom prvej položky by doklad nebol isto celý.
+    await riadok(doklad, 0, 'diaľničné poplatky', 200, 0, POPLATOK);
     await riadok(doklad, 1, 'dialničná známka', 166.67, 0, POPLATOK);
     await riadok(doklad, 2, 'dph', 33.33, 0, NEDANOVE);
     const prikladId = randomUUID();
@@ -2769,7 +2770,8 @@ describe('doklady histórie idú do promptu celé', () => {
     // 166,67 : 33,33 sa bez neho prečítať nedá.
     expect(prompt.doklady).toEqual([{
       ref: 'FP|26FP300|2026-05-10', agenda: 'FP', datum: '2026-05-10', tejProtistrany: true, podobnost: 1,
-      hlavicka: { text: 'dialničná známka', predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0] },
+      hlavicka: { text: 'diaľničné poplatky', predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0] },
+      vsetkyPolozky: true,
       suma: 200,
       polozky: [
         { riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, podiel: 0.8334, predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0], zdedene: true },

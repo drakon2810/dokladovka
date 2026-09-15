@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { zoradDokladyPrikladov, zoskupDokladyHistorie, type DokladHistorie } from './accountingSuggestionService.js';
+import { textSimilarity, zoradDokladyPrikladov, zoskupDokladyHistorie, type DokladHistorie } from './accountingSuggestionService.js';
 
 // Výber celých dokladov histórie pre prompt, bez databázy. Meria sa, či medzi
 // prvými tromi je doklad s rovnakým druhom plnenia — aj pre dodávateľa, ktorého
@@ -167,6 +167,93 @@ describe('výber celých dokladov histórie', () => {
       expect.not.objectContaining({ zdedene: true }),
     ]);
     expect(priklad.polozky![1]).toMatchObject({ podiel: 0.2, podielDph: 0.4997 });
+  });
+
+  const cast = (riadok: number, text: string, predkontaciaKod: string, suma?: number, sumaDph?: number) =>
+    ({ riadok, text, predkontaciaKod, suma, sumaDph, hash: `p${riadok}${text}` });
+
+  it('tvar je poradie položiek: doklad rezaný vcelku a rez jednej položky vedľa nerezanej sa nezlúčia', () => {
+    const phm = (cislo: string, datum: string, polozky: ReturnType<typeof cast>[], text = 'phm'): DokladHistorie => ({
+      agenda: 'FP', cislo, datum, ico: '11111111',
+      hlavicka: { text, predkontaciaKod: 'PHM', hash: `${cislo}-0` }, polozky,
+    });
+    const vcelku = phm('26FP001', '2026-01-10', [cast(1, 'natural 95 danova cast', 'PHM'), cast(2, 'natural 95 nedanova cast', 'PHM-N')]);
+    const sUmytim = phm('26FP002', '2026-02-10', [...vcelku.polozky, cast(3, 'umytie vozidla', 'PHM')]);
+    // Starší rozpísaný doklad a novší len s hlavičkou, s tými istými kódmi.
+    const hlavickou = phm('26FP003', '2026-03-10', [], 'natural 95');
+
+    const vysledok = zoradDokladyPrikladov([vcelku, sUmytim, hlavickou], { polozky: ['natural 95'], ico: '11111111' });
+    expect(vysledok.map(({ priklad }) => [priklad.ref, priklad.rovnakych]).sort()).toEqual([
+      ['FP|26FP001|2026-01-10', undefined], ['FP|26FP002|2026-02-10', undefined], ['FP|26FP003|2026-03-10', undefined],
+    ]);
+  });
+
+  it('doklad, pri ktorom korpus nemusí niesť všetky položky, nesľubuje celok ani podiely', () => {
+    const doklad = (cislo: string, hlavicka: string, polozky: ReturnType<typeof cast>[]): DokladHistorie => ({
+      agenda: 'FP', cislo, datum: '2026-01-10', ico: cislo,
+      hlavicka: { text: hlavicka, predkontaciaKod: 'PHM', hash: `${cislo}-0` }, polozky,
+    });
+    const priklad = (vzor: DokladHistorie) =>
+      zoradDokladyPrikladov([vzor], { polozky: ['natural 95'], ico: vzor.ico })[0].priklad;
+    const podiely = (vzor: DokladHistorie) => priklad(vzor).polozky!.map((polozka) => polozka.podiel);
+
+    // Rozúčtovaný s vlastným textom hlavičky: korpus nesie všetko.
+    const cely = doklad('1', 'phm', [cast(1, 'natural 95 80', 'PHM', 80, 11.5), cast(2, 'natural 95 20', 'PHM-N', 20, 11.5)]);
+    expect(priklad(cely)).toMatchObject({ vsetkyPolozky: true, suma: 100 });
+    expect(podiely(cely)).toEqual([0.8, 0.2]);
+    // Nerozúčtovaný: položky bez vlastného textu (900 € servisu) agent vynechal.
+    const nerozuctovany = doklad('2', 'servis', [cast(1, 'natural 95 servis', 'PHM', 100, 23)]);
+    // Hlavička bez vlastného textu si ho požičala od prvej položky — umytie bez textu vypadlo.
+    const pozicany = doklad('3', 'natural 95 80', [cast(1, 'natural 95 80', 'PHM', 80), cast(2, 'natural 95 20', 'PHM-N', 20)]);
+    // Medzera v číslach položiek: starší import bral len položky s vlastným zaúčtovaním.
+    const medzera = doklad('4', 'phm', [cast(1, 'natural 95 80', 'PHM', 80), cast(3, 'natural 95 20', 'PHM-N', 20)]);
+    for (const vzor of [nerozuctovany, pozicany, medzera]) {
+      expect(priklad(vzor).vsetkyPolozky).toBeUndefined();
+      expect(priklad(vzor).suma).toBeUndefined();
+      expect(podiely(vzor).every((podiel) => podiel === undefined)).toBe(true);
+    }
+  });
+
+  it('suma dokladu S DPH sa porovnáva so sumou príkladu s DPH, nie so základom', () => {
+    const doklad = (ico: string, datum: string, zaklad: number, dph: number): DokladHistorie => ({
+      agenda: 'FP', cislo: ico, datum, ico,
+      hlavicka: { text: 'servis', predkontaciaKod: '518', hash: `${ico}-0` },
+      polozky: [cast(1, 'oprava vozidla', '518', zaklad * 0.8, dph * 0.8), cast(2, 'olej', '501', zaklad * 0.2, dph * 0.2)],
+    });
+    // Novší doklad má ZÁKLAD rovný sume cieľa s DPH — bez DPH by vyhral on.
+    const vysledok = zoradDokladyPrikladov(
+      [doklad('22222222', '2026-01-10', 100, 23), doklad('33333333', '2026-02-10', 123, 28.29)],
+      { polozky: ['oprava vozidla', 'olej'], suma: 123 },
+    );
+    expect(vysledok.map(({ priklad }) => priklad.ref)).toEqual(['FP|22222222|2026-01-10', 'FP|33333333|2026-02-10']);
+  });
+
+  // Hodnotenie beží synchrónne v procese API aj workera: pomalé zmrazí všetkých.
+  it('8000 dokladov a 200 položiek sa zoradí rýchlo', () => {
+    const rnd = nahoda(7);
+    const slovo = () => `slovo${Math.floor(rnd() * 3000).toString(36)}x`;
+    const text = () => Array.from({ length: 4 + Math.floor(rnd() * 4) }, slovo).join(' ');
+    const doklady: DokladHistorie[] = Array.from({ length: 8000 }, (_, index) => ({
+      agenda: 'FP', cislo: String(index), datum: '2025-01-01', ico: String(index),
+      hlavicka: { text: text(), predkontaciaKod: '518', hash: `${index}` },
+      polozky: [cast(1, text(), '518', 10, 2), cast(2, text(), '501', 5, 1)],
+    }));
+    const polozky = Array.from({ length: 200 }, text);
+    const zaciatok = performance.now();
+    zoradDokladyPrikladov(doklady, { polozky, ico: '7', suma: 30 });
+    // Pred opravou 14 s; rezerva pre pomalý stroj.
+    expect(performance.now() - zaciatok).toBeLessThan(2_000);
+
+    // Rýchlejšie, no to isté skóre ako priemer najlepšej textSimilarity každej položky.
+    const vzorky = [doklady[1].hlavicka!.text, `${doklady[2].polozky[0].text} ${doklady[3].polozky[1].text}`];
+    const zhodne = zoradDokladyPrikladov(doklady, { polozky: vzorky });
+    expect(zhodne.length).toBeGreaterThan(2);
+    for (const { priklad, doklad } of zhodne) {
+      const texty = [doklad.hlavicka!, ...doklad.polozky].map((riadok) => riadok.text);
+      const ocakavana = vzorky.reduce((spolu, polozka) =>
+        spolu + Math.max(...texty.map((riadok) => textSimilarity(polozka, riadok))), 0) / vzorky.length;
+      expect(priklad.podobnost).toBe(Number(ocakavana.toFixed(2)));
+    }
   });
 
   it('bez čísla samotného: iný dátum aj iná agenda sú iný doklad, a doklad sám seba nevidí', () => {
