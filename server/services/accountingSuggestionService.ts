@@ -832,6 +832,9 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   );
   const lineText = normalizeLineText(current.rows[0]?.extracted);
   const documentType = current.rows[0]?.document_type;
+  // Pamäť aj história sa berú len z rovnakého DRUHU dokladu: dobropis ide
+  // opačným smerom a do C2, bežná faktúra toho istého dodávateľa mu nie je vzor.
+  const podtyp = current.rows[0]?.podtyp ?? 'bezna';
   // Dátum rozhoduje o mesačnom číselnom rade.
   const datumVystavenia = (current.rows[0]?.extracted as { datumVystavenia?: string } | undefined)?.datumVystavenia;
   // Kľúč pamäte a pravidiel je protistrana: pri FV odberateľ z dokladu, inak
@@ -852,9 +855,9 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
            FROM ucto_decisions
           WHERE tenant_id=$1 AND organization_id=$2 AND excluded=false AND (document_id IS NULL OR document_id<>$3)
             AND (($4::text <> '' AND supplier_ico=$4) OR ($5::text <> '' AND supplier_name_normalized=$5))
-            AND coalesce(document_type,'FP')=$6
+            AND coalesce(document_type,'FP')=$6 AND coalesce(podtyp,'bezna')=$7
           ORDER BY created_at DESC LIMIT 50`,
-        [input.tenantId, input.organizationId, input.documentId, supplierIco ?? '', supplierName, documentType ?? 'FP'],
+        [input.tenantId, input.organizationId, input.documentId, supplierIco ?? '', supplierName, documentType ?? 'FP', podtyp],
       )).rows
     : [];
 
@@ -965,9 +968,9 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
     const history = await tx.query<StoredDocument>(
       `SELECT id, extracted, accounting FROM documents
         WHERE tenant_id=$1 AND organization_id=$2 AND id<>$3
-          AND status IN ('schvaleny','exportovany') AND document_type=$4
+          AND status IN ('schvaleny','exportovany') AND document_type=$4 AND coalesce(podtyp,'bezna')=$5
         ORDER BY updated_at DESC LIMIT 100`,
-      [input.tenantId, input.organizationId, input.documentId, documentType ?? ''],
+      [input.tenantId, input.organizationId, input.documentId, documentType ?? '', podtyp],
     );
     const previous = history.rows.find((row) => {
       const supplier = protistranaDokladu(documentType, row.extracted);
@@ -1035,7 +1038,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   const druhDokladu = { typ: documentType ?? '', podtyp: current.rows[0]?.podtyp };
   kvKod = kvPreDruh(
     await kvPreClenenie(tx, input, candidate.clenenie_dph_id,
-      HISTORIA_AGENDY[documentType ?? ''] ?? [], kvPreDruh(kvKod, druhDokladu)),
+      (await agendyKorpusu(tx, input, documentType ?? '', podtyp, current.rows[0]?.pokladna_typ)).agendy,
+      kvPreDruh(kvKod, druhDokladu)),
     druhDokladu,
   );
 
@@ -1398,6 +1402,8 @@ Evidence, strongest first:
    Read "zhodaSlov" before you trust one. zhodaSlov > 0 means the category's own vocabulary literally appears in this document's items: that is the firm's documented practice. zhodaSlov = 0 with "podobnostVyznamu" set means the wording did NOT match and the category was offered only because it is semantically close — typically a foreign-language or unusually worded item. Such a candidate is a HYPOTHESIS: take it only when the kind of supply genuinely matches, and never because "pouziteKrat" is high. "pouziteKrat" describes the category, not this document.
 5. Your own accounting knowledge. You may use web search to verify Slovak VAT law (e.g. which KV section applies to a supply) when the evidence is ambiguous — use the web only for legal reasoning, never as a source of ids or codes.
 "dokument.odberatel" is the customer (partner of an issued invoice, FV): a customer without IČO/DIČ/IČ DPH is a private person — that matters for the VAT treatment and the KV section.
+"dokument.podtyp" is the kind of invoice and it changes the posting, not only the number series. A "dobropis" (credit note) or "tarchopis" (debit note) corrects an original supply: post it the way this firm posts corrections of that supply, in KV section C1 (issued) or C2 (received) — or KN where the firm keeps it out — never A1/B1/B2. A "zalohova" (advance invoice) usually carries no VAT posting of its own and takes KN; the tax follows the payment and the final invoice. "datumDodania" is the tax point, "datumVystavenia" the issue date.
+The history in "dennik", "rozuctovanie", "pravidlo" and "pouziteNaTomtoTypeDokladu" comes from documents of the same kind. When "zakladnaAgenda" is true, the firm has none of this kind yet and that evidence comes from ORDINARY documents of the same type: take accounts from it, never the KV section or anything else the kind changes.
 CONSISTENCY CHECK — do this before you answer, it outranks how often something appears in the journal. "dokument.sadzbyDphNaDoklade" lists the VAT rates printed on THIS document; "dokument.dodavatelKrajina" and the VAT numbers say WHOSE tax it is. A non-zero rate alone proves nothing — read it together with the country.
 - A SLOVAK party charging a Slovak rate: the supply is taxed in Slovakia. Do NOT pick a classification meaning the place of supply is abroad, the tax is reverse-charged to the customer, or the supply is exempt — those exist in the journal for invoices issued WITHOUT Slovak VAT, so their frequency says nothing about this document.
 - A FOREIGN supplier charging tax under its own VAT number (Austrian 20 %, German 19 %, Czech 21 %): that is FOREIGN VAT. It was paid abroad and never enters the Slovak VAT return, so this is NOT a domestic taxable supply and the amount is NOT deductible Slovak VAT — however non-zero the rate is. Take from the journal how this firm books such invoices instead of concluding "domestic" from the rate.
@@ -1456,9 +1462,8 @@ interface PouzitieClenenia {
 async function pouzitieCleneni(
   database: Database,
   input: SuggestionInput,
-  documentType: string,
+  agendy: readonly string[],
 ): Promise<Map<string, PouzitieClenenia>> {
-  const agendy = HISTORIA_AGENDY[documentType] ?? [];
   if (agendy.length === 0) return new Map();
   const rows = await database.query<{ kod: string; tu: string; inde: string }>(
     `SELECT clenenie_dph_kod AS kod,
@@ -1499,6 +1504,38 @@ export function agendaHistorie(typ: string, podtyp?: string): string {
   return `${typ}-${pismeno}`;
 }
 
+/**
+ * Agendy korpusu pre DRUH dokladu — typ, podtyp aj smer pokladne. Dobropis sa
+ * učí z FP-D, nie z bežných faktúr: ide opačným smerom a do sekcie C2, takže
+ * štatistika bežných faktúr by mu podsunula B2 aj prax, ktorú oprava nemá.
+ *
+ * Firma, ktorá druh ešte nemala (prvý dobropis), by však nedostala dôkaz
+ * žiadny. Vtedy sa ustúpi na základné agendy typu a volajúci to modelu povie —
+ * účet z bežnej faktúry je pre dobropis stále lepšie vodidlo než nič.
+ * ponytail: ústup sa rozhoduje za celý korpus firmy, nie za protistranu; firma
+ * s dobropismi iných dodávateľov dostane pre nového dodávateľa len ich prax.
+ */
+async function agendyKorpusu(
+  database: Queryable,
+  input: { tenantId: string; organizationId: string },
+  documentType: string,
+  podtyp?: string,
+  pokladnaTyp?: string,
+  doDatumu?: string,
+): Promise<{ agendy: readonly string[]; zakladna: boolean }> {
+  const zakladne = HISTORIA_AGENDY[documentType] ?? [];
+  const druhu = agendyHistorieRadu(documentType, podtyp, pokladnaTyp);
+  if (druhu.length === 0 || druhu.join() === zakladne.join()) return { agendy: zakladne, zakladna: false };
+  const maDruh = (await database.query(
+    `SELECT 1 FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+        AND ($4::date IS NULL OR datum < $4::date)
+      LIMIT 1`,
+    [input.tenantId, input.organizationId, druhu, doDatumu ?? null],
+  )).rows.length > 0;
+  return maDruh || zakladne.length === 0 ? { agendy: druhu, zakladna: false } : { agendy: zakladne, zakladna: true };
+}
+
 export interface DennikRiadok {
   text: string;
   predkontaciaKod?: string;
@@ -1530,13 +1567,12 @@ async function najdiDennik(
   database: Database,
   input: SuggestionInput,
   lineText: string,
-  documentType: string,
+  agendy: readonly string[],
   protistrana?: { nazov?: string; ico?: string },
   /** Meranie presnosti drží históriu k dátumu — doklad nesmie vidieť seba ani
    *  nič, čo vzniklo po ňom, inak si odpoveď jednoducho odpíše. */
   doDatumu?: string,
 ): Promise<DennikRiadok[]> {
-  const agendy = HISTORIA_AGENDY[documentType] ?? [];
   if (agendy.length === 0) return [];
   const nazov = normalizeName(protistrana?.nazov ?? '');
   const ico = String(protistrana?.ico ?? '').replace(/\D/g, '');
@@ -1744,10 +1780,9 @@ async function najdiRozuctovanie(
   database: Database,
   input: SuggestionInput,
   protistrana: { nazov?: string; ico?: string },
-  documentType: string,
+  agendy: readonly string[],
   doDatumu?: string,
 ): Promise<Array<Record<string, unknown>>> {
-  const agendy = HISTORIA_AGENDY[documentType] ?? [];
   const ico = String(protistrana.ico ?? '').replace(/\D/g, '');
   const nazov = normalizeName(protistrana.nazov ?? '');
   if (agendy.length === 0 || (!ico && !nazov)) return [];
@@ -2007,8 +2042,11 @@ export async function maybeAiAccountingSuggestion(
   // vyššie bežala naprázdno. Doklad ich má vždy, tak nech na volajúcom nezáleží.
   const riadokDokladu = (await database.query<{
     strana: { ico?: string; icDph?: string; iban?: string } | null; pokladna_typ: string | null;
+    datum_vystavenia: string | null; datum_dodania: string | null;
   }>(
-    `SELECT extracted->$3 AS strana, accounting->>'pokladnaTyp' AS pokladna_typ FROM documents WHERE id=$1 AND tenant_id=$2`,
+    `SELECT extracted->$3 AS strana, accounting->>'pokladnaTyp' AS pokladna_typ,
+            extracted->>'datumVystavenia' AS datum_vystavenia, extracted->>'datumDodania' AS datum_dodania
+       FROM documents WHERE id=$1 AND tenant_id=$2`,
     [input.documentId, input.tenantId, documentContext.documentType === 'FV' ? 'odberatel' : 'dodavatel'],
   )).rows[0];
   const dodavatelDokladu = riadokDokladu?.strana ?? {};
@@ -2033,6 +2071,12 @@ export async function maybeAiAccountingSuggestion(
     // Worker smer pokladne do kontextu neposiela, doklad ho má v zaúčtovaní —
     // bez neho by výdavkový doklad počítal rady aj z príjmových.
     documentContext.pokladnaTyp ?? (riadokDokladu?.pokladna_typ ?? undefined));
+  // Každý zdroj histórie nižšie (denník, rozúčtovanie, pravidlo protistrany,
+  // použitie členení, členenie z účtu, účty bez odpočtu, sekcia KV) sa berie
+  // z agendy DRUHU dokladu — dobropis z FP-D, výdavkový blok z VPD. Kým sa
+  // brala agenda typu, dobropis sa učil z bežných faktúr dodávateľa.
+  const korpus = await agendyKorpusu(database, input, documentContext.documentType, documentContext.podtyp,
+    documentContext.pokladnaTyp ?? riadokDokladu?.pokladna_typ ?? undefined, documentContext.historiaDoDatumu);
   // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];
@@ -2048,18 +2092,18 @@ export async function maybeAiAccountingSuggestion(
   );
   const kategorie = await najdiKategorie(
     database, config, input, lineText, documentContext.documentType, injectedEmbedder);
-  const dennik = await najdiDennik(database, input, lineText, documentContext.documentType,
+  const dennik = await najdiDennik(database, input, lineText, korpus.agendy,
     protistranaKontextu, documentContext.historiaDoDatumu);
   // Účtovný denník vidí to, čo hlavičkový korpus stratil: že doklady tejto
   // protistrany firma spravidla rozpisuje na viac nákladových účtov.
   const rozdelenie = await najdiRozdelenie(database, input, protistranaKontextu, documentContext.historiaDoDatumu);
   // Ako táto protistrana naposledy rozúčtovaná bola — s číslami, nie len s kódmi.
   const rozuctovanie = await najdiRozuctovanie(
-    database, input, protistranaKontextu, documentContext.documentType, documentContext.historiaDoDatumu);
+    database, input, protistranaKontextu, korpus.agendy, documentContext.historiaDoDatumu);
   // Pravidlo protistrany: to isté, čo je v rozúčtovaní, ale zhrnuté cez všetky
   // doklady a spočítané bez modelu. Účtovník si ho vie prečítať a opraviť.
   const pravidloProtistrany = await najdiPravidlo(
-    database, input, HISTORIA_AGENDY[documentContext.documentType] ?? [], protistranaKontextu,
+    database, input, korpus.agendy, protistranaKontextu,
     documentContext.historiaDoDatumu);
   // Model nevie účtovať na účet — vyberá predkontáciu. Ku každému účtu rozpadu
   // preto idú predkontácie, ktoré na tento účet účtujú; bez nich by mu ostalo
@@ -2096,9 +2140,9 @@ export async function maybeAiAccountingSuggestion(
   // tejto agende a nenulová inde. Kód, ktorý firma nepoužila nikde, ostáva —
   // prvá nadobúdacia faktúra z EÚ je legitímny prvý výskyt a odobrať účtovníkovi
   // jediný správny kód je horšia chyba než tá, ktorú riešime.
-  const pouzitie = await pouzitieCleneni(database, input, documentContext.documentType);
+  const pouzitie = await pouzitieCleneni(database, input, korpus.agendy);
   const kodyDokazov = new Set<string>([
-    // Denník je filtrovaný agendou (HISTORIA_AGENDY), takže je bezpečný.
+    // Denník je filtrovaný agendou druhu dokladu, takže je bezpečný.
     ...dennik.map((riadok) => riadok.clenenieDphKod).filter((kod): kod is string => Boolean(kod)),
     // Kategórie agendu NEFILTRUJÚ — agenda je pri nich len tie-break. Kategória
     // postavená na texte, ktorý firma účtuje na faktúre aj na internom doklade,
@@ -2162,8 +2206,16 @@ export async function maybeAiAccountingSuggestion(
 
   // Položky tak, ako ich uvidí model — rovnaké pole musí neskôr overiť rozpis
   // riadkov, inak by index v odpovedi ukazoval inam než index v prompte.
-  const polozkyPreModel = (documentContext.polozky
-    ?? documentContext.lineDescriptions.map((popis) => ({ popis }))).slice(0, 15);
+  //
+  // Kým sa posielalo prvých 15, položka na 16. mieste nemala ako dostať iný
+  // účet ani rez z profilu klienta — model ju nevidel a rozpis ju zahodil.
+  // Posielajú sa preto všetky; strop drží len veľkosť promptu. Nad ním model
+  // dostane počet vynechaných a riadok pre vynechanú položku overením neprejde.
+  // ponytail: 200 položiek × 120 znakov popisu; hromadný doklad nad strop by
+  // potreboval dávky po položkách a zlúčenie rozpisu.
+  const polozkyDokladu: Array<{ popis?: string; sadzbaDph?: number; suma?: number }> = documentContext.polozky
+    ?? documentContext.lineDescriptions.map((popis) => ({ popis }));
+  const polozkyPreModel = polozkyDokladu.slice(0, 200);
 
   const poziadavka = {
     model: config.openai.accountingModel,
@@ -2176,6 +2228,11 @@ export async function maybeAiAccountingSuggestion(
         text: JSON.stringify({
           dokument: {
             typ: documentContext.documentType,
+            // Druh a dátumy menia zaúčtovanie, nielen rad: dobropis ide do C1/C2,
+            // zálohová mimo výkazu, a dátum dodania určuje daňové obdobie.
+            podtyp: documentContext.podtyp,
+            datumVystavenia: documentContext.datumVystavenia ?? riadokDokladu?.datum_vystavenia ?? undefined,
+            datumDodania: riadokDokladu?.datum_dodania ?? undefined,
             dodavatel: documentContext.supplierName,
             dodavatelIco: documentContext.supplierIco,
             dodavatelIcDph: documentContext.supplierIcDph,
@@ -2194,13 +2251,21 @@ export async function maybeAiAccountingSuggestion(
             // Index je explicitne v dátach: podľa neho sa vracia rozpis riadkov
             // a poradie v poli je príliš krehký dohovor na to, aby o ňom
             // rozhodovalo zaúčtovanie.
-            polozky: polozkyPreModel.map((polozka, index) => ({ index, ...polozka })),
+            // Popis sa skracuje len v prompte — rozpis aj profil klienta čítajú celý.
+            polozky: polozkyPreModel.map((polozka, index) => ({
+              index, ...polozka, popis: polozka.popis?.slice(0, 120),
+            })),
+            polozkyVynechane: polozkyDokladu.length > polozkyPreModel.length
+              ? polozkyDokladu.length - polozkyPreModel.length : undefined,
             // Zhrnutie dokladu. Bez neho doklad bez položiek dorazí k modelu ako
             // meno dodávateľa a suma — „Stravovanie a nápoje" pozná krok čítania,
             // ale krok účtovania ten text doteraz nedostal vôbec, tak vybral
             // najpoužívanejší účet agendy namiesto reprezentácie.
             zhrnutie: documentContext.lineDescriptions.join(' | ').slice(0, 300) || undefined,
           },
+          // Firma druh dokladu ešte nemala: história nižšie je z bežných dokladov
+          // typu, a model to musí vedieť skôr, než ju napodobní.
+          zakladnaAgenda: korpus.zakladna || undefined,
           // Pravidlo protistrany — zhrnutie praxe cez všetky jej doklady.
           pravidlo: pravidloProtistrany ? {
             dokladov: pravidloProtistrany.dokladov, zhoda: pravidloProtistrany.zhoda,
@@ -2376,7 +2441,7 @@ export async function maybeAiAccountingSuggestion(
   if (!pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
     const kodUctu = codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code;
     const kodClenenia = kodUctu
-      ? await clenenieZUctu(database, input, HISTORIA_AGENDY[documentContext.documentType] ?? [],
+      ? await clenenieZUctu(database, input, korpus.agendy,
         String(kodUctu), documentContext.historiaDoDatumu)
       : undefined;
     const zHistorie = kodClenenia
@@ -2408,7 +2473,7 @@ export async function maybeAiAccountingSuggestion(
     .filter((item) => !clenenieVyzeraNaOdpocet({ kod: item.kod, nazov: item.nazov }))
     .map((item) => [item.kod.trim(), item.id] as const));
   const bezOdpoctuPreUcet = await uctyBezOdpoctu(
-    database, input, HISTORIA_AGENDY[typ] ?? [], cleneniaBezOdpoctu,
+    database, input, korpus.agendy, cleneniaBezOdpoctu,
     documentContext.historiaDoDatumu);
   /**
    * Náhradné členenie pre účet, ktorý odpočet nepripúšťa — alebo nič, keď ho
@@ -2438,7 +2503,7 @@ export async function maybeAiAccountingSuggestion(
 
   let kvKod = validated.clenenie_dph_id
     ? kvPreDruh(await kvPreClenenie(
-        database, input, validated.clenenie_dph_id, HISTORIA_AGENDY[typ] ?? [],
+        database, input, validated.clenenie_dph_id, korpus.agendy,
         kvPreDruh(pravidlo.kvKod, druhDokladu) ?? kvPreDruh(naDoklade.clenenieKvKod, druhDokladu)
           ?? kvPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu)
           // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do
@@ -2466,7 +2531,7 @@ export async function maybeAiAccountingSuggestion(
   // PN na prijatej faktúre firma legitímne dáva do KN, a to ostane.
   if (kvKod === 'KN' && validated.clenenie_dph_id && !pravidlo.kvKod && !naDoklade.clenenieKvKod) {
     const prax = kvPreDruh(await kvPreClenenie(
-      database, input, validated.clenenie_dph_id, HISTORIA_AGENDY[typ] ?? [], undefined,
+      database, input, validated.clenenie_dph_id, korpus.agendy, undefined,
     ), druhDokladu);
     if (prax && prax !== 'KN') {
       console.info(`[ai-navrh] ${input.documentId}: sekcia KN proti praxi firmy — prepisujem na ${prax}`);
