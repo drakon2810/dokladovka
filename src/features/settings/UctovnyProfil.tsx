@@ -7,6 +7,7 @@ import {
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import { CLENENIE_KV_KODY, type DphProfil } from '../../data/types';
+import { useAuth } from '../../auth/AuthContext';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 
@@ -29,6 +30,8 @@ interface KategoriaUprava {
 
 export function UctovnyProfil({ orgId }: { orgId: string }) {
   const { data } = useDataQuery();
+  // DPH profil ukladá len admin (server účtovníkovi vráti 403).
+  const mozeDoProfilu = useAuth().session?.user.role === 'admin';
   const [stats, setStats] = useState<UctoHistoryStats>();
   const [kategorie, setKategorie] = useState<UctoKategoria[]>([]);
   const [pravidla, setPravidla] = useState<UctoPravidlo[]>([]);
@@ -436,7 +439,8 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
                       && `, ${t('uctoProfil.deleniaPriklad')} ${navrh.priklady.map((priklad) => `${priklad.cislo} (${priklad.datum})`).join(', ')}`}
                   </span>
                 </div>
-                <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy !== undefined}
+                <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy !== undefined || !mozeDoProfilu}
+                  title={mozeDoProfilu ? undefined : t('uctoProfil.deleniaLenAdmin')}
                   onClick={() => void pouziDelenie(navrh)}>
                   {t('uctoProfil.deleniaPouzit')}
                 </button>

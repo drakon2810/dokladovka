@@ -29,7 +29,12 @@ try {
         if (naSkusku) throw new NaSkusku();
       });
     } catch (chyba) {
-      if (!(chyba instanceof NaSkusku)) throw chyba;
+      if (!(chyba instanceof NaSkusku)) {
+        // Chyba jednej firmy nezastaví ostatné; skript skončí nenulovým kódom.
+        console.error(`${firma.name}: prepočet zlyhal — ${chyba instanceof Error ? chyba.message : String(chyba)}`);
+        process.exitCode = 1;
+        continue;
+      }
     }
     const v = vysledok!;
     const vKonflikte = v.pravidiel > 0 ? ((v.konfliktov / v.pravidiel) * 100).toFixed(1) : '0.0';

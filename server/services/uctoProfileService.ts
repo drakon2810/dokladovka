@@ -327,6 +327,8 @@ export async function analyzujUctovnyProfil(
   if (vektory) console.info(`[ucto-profil] vektory pre ${vektory.length} kategórií (${config.openai.embeddingModel})`);
 
   const prepocet = await database.transaction(async (tx) => {
+    // Zámok PRED kategóriami: prepočet ide pravidlá → kategórie, analýza naopak.
+    await zamkniPrax(tx, input);
     // Kategória sa páruje menom, ktoré jej dal model (kluc), takže si drží id.
     // Pole, ktoré upravil účtovník (rucne_polia), analýza neprepíše, a zmazaná
     // kategória (active=false) ostane zmazaná. Vektor patrí k názvu, popisu
@@ -360,7 +362,9 @@ export async function analyzujUctovnyProfil(
         [input.tenantId, input.organizationId, zoznam.map((kategoria) => kategoria.nazov)],
       );
     }
-    return prepocitajPrax(tx, input, texty);
+    // Korpus sa načíta znova až tu: `texty` sú spred dávok a história mohla
+    // medzitým prísť nová — kódy kategórií by sa vrátili k starej.
+    return prepocitajPrax(tx, input);
   });
 
   // Právna kontrola dvojice členenie + sekcia KV. Zlyhanie ju nesmie zhodiť —
@@ -388,7 +392,6 @@ export async function analyzujUctovnyProfil(
 export async function prepocitajKategorie(
   database: Queryable,
   input: { tenantId: string; organizationId: string },
-  texty?: AgregovanyText[],
 ): Promise<{ kategoriiZmenenych: number }> {
   const kategorie = (await database.query<Record<string, any>>(
     `SELECT id, slovnik, rucne_polia, predkontacia_kod, predkontacia_id, clenenie_dph_kod, clenenie_dph_id,
@@ -397,35 +400,51 @@ export async function prepocitajKategorie(
     [input.tenantId, input.organizationId],
   )).rows;
   if (kategorie.length === 0) return { kategoriiZmenenych: 0 };
-  const korpus = texty ?? await agregujHistoriu(database, input.tenantId, input.organizationId);
+  const korpus = await agregujHistoriu(database, input.tenantId, input.organizationId);
   const idPreKod = new Map((await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
     `SELECT id, kind, code FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')`,
     [input.tenantId, input.organizationId],
   )).rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
 
+  const idKodu = (kind: string, kod: string | null) => (kod ? idPreKod.get(`${kind}:${kod.trim()}`) ?? null : null);
+
   let zmenenych = 0;
   for (const row of kategorie) {
     const kody = zjednotKody(row.slovnik, korpus);
+    // Počet zmien je len hlásenie — stačí mu stav z úvodného čítania.
     const rucne = new Set<string>(row.rucne_polia ?? []);
-    const predkontacia = rucne.has('predkontaciaKod')
-      ? { kod: row.predkontacia_kod, id: row.predkontacia_id }
-      : { kod: kody.predkontaciaKod, id: kody.predkontaciaKod ? idPreKod.get(`predkontacie:${kody.predkontaciaKod.trim()}`) ?? null : null };
-    const clenenie = rucne.has('clenenieDphKod')
-      ? { kod: row.clenenie_dph_kod, id: row.clenenie_dph_id }
-      : { kod: kody.clenenieDphKod, id: kody.clenenieDphKod ? idPreKod.get(`cleneniaDph:${kody.clenenieDphKod.trim()}`) ?? null : null };
-    const kv = rucne.has('clenenieKvKod') ? row.clenenie_kv_kod : kody.clenenieKvKod;
-    if (predkontacia.kod !== row.predkontacia_kod || clenenie.kod !== row.clenenie_dph_kod
-      || kv !== row.clenenie_kv_kod || kody.konflikt !== row.konflikt) zmenenych += 1;
+    const iny = (pole: string, nove: string | null, stare: string | null) => !rucne.has(pole) && nove !== stare;
+    if (iny('predkontaciaKod', kody.predkontaciaKod, row.predkontacia_kod) || iny('clenenieDphKod', kody.clenenieDphKod, row.clenenie_dph_kod)
+      || iny('clenenieKvKod', kody.clenenieKvKod, row.clenenie_kv_kod) || kody.konflikt !== row.konflikt) zmenenych += 1;
+    // Ručné pole sa rozhoduje v SQL nad AKTUÁLNYM riadkom, nie nad úvodným
+    // čítaním: PATCH účtovníka, ktorý prišiel počas agregácie korpusu, by
+    // inak prepočet prepísal a zmrazil v rucne_polia nesprávnu hodnotu.
     await database.query(
-      `UPDATE ucto_kategorie SET predkontacia_kod=$2, predkontacia_id=$3, clenenie_dph_kod=$4, clenenie_dph_id=$5,
-              clenenie_kv_kod=$6, pocet=$7, agendy=$8::jsonb, konflikt=$9
+      `UPDATE ucto_kategorie SET
+         predkontacia_kod=CASE WHEN 'predkontaciaKod'=ANY(rucne_polia) THEN predkontacia_kod ELSE $2 END,
+         predkontacia_id=CASE WHEN 'predkontaciaKod'=ANY(rucne_polia) THEN predkontacia_id ELSE $3 END,
+         clenenie_dph_kod=CASE WHEN 'clenenieDphKod'=ANY(rucne_polia) THEN clenenie_dph_kod ELSE $4 END,
+         clenenie_dph_id=CASE WHEN 'clenenieDphKod'=ANY(rucne_polia) THEN clenenie_dph_id ELSE $5 END,
+         clenenie_kv_kod=CASE WHEN 'clenenieKvKod'=ANY(rucne_polia) THEN clenenie_kv_kod ELSE $6 END,
+         pocet=$7, agendy=$8::jsonb, konflikt=$9
         WHERE id=$1`,
-      [row.id, predkontacia.kod, predkontacia.id, clenenie.kod, clenenie.id, kv, kody.pocet,
-        JSON.stringify(kody.agendy), kody.konflikt],
+      [row.id, kody.predkontaciaKod, idKodu('predkontacie', kody.predkontaciaKod), kody.clenenieDphKod,
+        idKodu('cleneniaDph', kody.clenenieDphKod), kody.clenenieKvKod, kody.pocet, JSON.stringify(kody.agendy), kody.konflikt],
     );
   }
   return { kategoriiZmenenych: zmenenych };
+}
+
+/**
+ * Zapisovatelia praxe jednej firmy (koniec analýzy, job prepocet_praxe, skript
+ * prepocitajPrax) idú za sebou. Súbežne sa zrážali: dva prepočty na unikátnom
+ * kľúči ucto_pravidla (druhý DELETE nevidí riadky, ktoré prvý práve vložil)
+ * a analýza s prepočtom v deadlocku na opačnom poradí tabuliek. Zámok patrí
+ * transakcii, uvoľní ho COMMIT aj ROLLBACK; v tej istej transakcii sa smie brať znova.
+ */
+async function zamkniPrax(tx: Queryable, input: { tenantId: string; organizationId: string }) {
+  await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ucto_prax:${input.tenantId}:${input.organizationId}`]);
 }
 
 /**
@@ -436,10 +455,10 @@ export async function prepocitajKategorie(
 export async function prepocitajPrax(
   database: Queryable,
   input: { tenantId: string; organizationId: string },
-  texty?: AgregovanyText[],
 ) {
+  await zamkniPrax(database, input);
   const pravidla = await prepocitajPravidla(database, input);
-  const { kategoriiZmenenych } = await prepocitajKategorie(database, input, texty);
+  const { kategoriiZmenenych } = await prepocitajKategorie(database, input);
   // Kategória hovorí o DRUHU plnenia, takže jej rozpis platí aj pre dodávateľa,
   // ktorého firma nikdy nemala — to pravidlo protistrany nedokáže.
   const { kategoriiSRozpisom } = await doplnRozpisKategorii(database, input);

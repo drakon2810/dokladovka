@@ -1626,6 +1626,7 @@ export const sk = {
   'uctoProfil.deleniaDokladov': 'dokladov',
   'uctoProfil.deleniaPriklad': 'napr.',
   'uctoProfil.deleniaKategoria': 'Delenie položky',
+  'uctoProfil.deleniaLenAdmin': 'Pravidlo do DPH profilu klienta môže pridať len administrátor.',
 } as const;
 
 export type SkKey = keyof typeof sk;

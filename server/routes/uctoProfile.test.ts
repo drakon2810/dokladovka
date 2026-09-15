@@ -2,11 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { maybeAiAccountingSuggestion } from '../services/accountingSuggestionService.js';
+import type { Database, Queryable } from '../db/database.js';
 import {
   agregujHistoriu,
   analyzujUctovnyProfil,
   deleteUctoKategoria,
   listUctoKategorie,
+  prepocitajKategorie,
+  prepocitajPrax,
   updateUctoKategoria,
   type UctoKategoria,
 } from '../services/uctoProfileService.js';
@@ -629,6 +632,94 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
     expect(await listUctoKategorie(database, seeded.tenantId, seeded.organizationId)).toEqual(po);
   }, 120_000);
 
+  it('zapisovatelia praxe firmy sa radia zámkom: analýza ho berie pred kategóriami, prepočet ako prvý príkaz', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await importUctoHistory(database, {
+      ...seeded, source: 'mdb', rows: hlavicky([1, 2, 3, 4, 5].map((n): [string, string, string, string] => [`T${n}`, `preprava ${n}`, '518/321', 'PD'])),
+    });
+    // PGlite má jedno spojenie, súbeh sa tu vyvolať nedá — overuje sa, že zámok
+    // ide v transakcii pred prvým zápisom (analýza: kategórie → pravidlá,
+    // prepočet: pravidlá → kategórie; bez zámku deadlock a 23505 na ucto_pravidla).
+    const prikazy: string[] = [];
+    const sledovana: Database = {
+      ...database,
+      transaction: (operacia) => database.transaction((tx) => operacia({
+        query: ((sql: string, params?: unknown[]) => { prikazy.push(sql); return tx.query(sql, params); }) as Queryable['query'],
+        exec: (sql) => tx.exec(sql),
+      })),
+    };
+    await analyzujUctovnyProfil(sledovana, testConfig(), seeded, {
+      parse: vi.fn().mockResolvedValue({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'])] } }),
+    });
+    expect(prikazy[0]).toContain('pg_advisory_xact_lock');
+    expect(prikazy.findIndex((sql) => sql.includes('INSERT INTO ucto_kategorie'))).toBeGreaterThan(0);
+    prikazy.length = 0;
+    await sledovana.transaction((tx) => prepocitajPrax(tx, seeded));
+    expect(prikazy[0]).toContain('pg_advisory_xact_lock');
+  }, 90_000);
+
+  it('kódy kategórií sú z korpusu v čase zápisu, nie spred dávok modelu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await seedCodeLists(database, seeded, [
+      ['predkontacie', '518/321'], ['predkontacie', '501/321'], ['cleneniaDph', 'PD'], ['cleneniaDph', 'PN'],
+    ]);
+    await importUctoHistory(database, {
+      ...seeded, source: 'mdb', rows: hlavicky([1, 2, 3, 4, 5].map((n): [string, string, string, string, string] => [`T${n}`, `preprava ${n}`, '518/321', 'PD', 'B2'])),
+    });
+    const parser = {
+      parse: vi.fn().mockImplementationOnce(async () => {
+        // Kým model premýšľa, Mostík publikuje novú históriu.
+        await importUctoHistory(database, {
+          ...seeded, source: 'mdb', rows: hlavicky(Array.from({ length: 10 },
+            (_, n): [string, string, string, string, string] => [`N${n}`, `preprava nova ${n}`, '501/321', 'PN', 'B2'])),
+        });
+        return { output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'])] } };
+      }),
+    };
+    await analyzujUctovnyProfil(database, testConfig(), seeded, parser);
+    expect(await listUctoKategorie(database, seeded.tenantId, seeded.organizationId)).toEqual([expect.objectContaining({
+      nazov: 'Preprava', predkontaciaKod: '501/321', clenenieDphKod: 'PN', pocet: 15,
+    })]);
+  }, 90_000);
+
+  it('ručná úprava uložená počas prepočtu kategórií sa neprepíše', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const ids = await seedCodeLists(database, seeded, [['predkontacie', '518/321'], ['predkontacie', '501/321'], ['cleneniaDph', 'PD']]);
+    await importUctoHistory(database, {
+      ...seeded, source: 'mdb', rows: hlavicky([1, 2, 3, 4, 5].map((n): [string, string, string, string] => [`T${n}`, `preprava ${n}`, '518/321', 'PD'])),
+    });
+    await analyzujUctovnyProfil(database, testConfig(), seeded, {
+      parse: vi.fn().mockResolvedValue({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'])] } }),
+    });
+    const [preprava] = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
+    expect(preprava.predkontaciaKod).toBe('518/321');
+
+    // Účtovník uloží kód medzi úvodným čítaním kategórií a zápisom prepočtu.
+    let ulozene = false;
+    const sUpravou: Queryable = {
+      query: (async (sql: string, params?: unknown[]) => {
+        const vysledok = await database.query(sql, params);
+        if (!ulozene && sql.includes('FROM ucto_kategorie')) {
+          ulozene = true;
+          await updateUctoKategoria(database, seeded.tenantId, seeded.organizationId, preprava.id, { predkontaciaKod: '501/321' });
+        }
+        return vysledok;
+      }) as Queryable['query'],
+      exec: (sql) => database.exec(sql),
+    };
+    await prepocitajKategorie(sUpravou, seeded);
+    expect(ulozene).toBe(true);
+    expect(await listUctoKategorie(database, seeded.tenantId, seeded.organizationId)).toEqual([expect.objectContaining({
+      id: preprava.id, predkontaciaKod: '501/321', predkontaciaId: ids.get('predkontacie:501/321'), clenenieDphKod: 'PD', pocet: 5,
+    })]);
+  }, 90_000);
+
   it('rozhodnutie preklopené z pamäte sa k faktúre z POHODY neráta druhýkrát a doklad sa ráta raz', async () => {
     const database = await createTestDatabase();
     databases.push(database);
@@ -718,7 +809,8 @@ describe('návrhy pravidiel delenia položiek', () => {
     expect(odpoved.statusCode, odpoved.body).toBe(200);
     expect(odpoved.json().navrhy).toEqual([{
       // Len slová oboch častí: „danova" a „nedanova" hovoria o reze, nie o plnení.
-      klucoveSlova: ['cast', 'natural'], percento: 80, percentoDph: 50,
+      // „cast" je aj v delení servisu — pravidlo by ním rezalo cudzie položky.
+      klucoveSlova: ['natural'], percento: 80, percentoDph: 50,
       predkontaciaId: ids.get('predkontacie:PHM-501'), predkontaciaNedanovaId: ids.get('predkontacie:PHM-Nadspotreba'),
       clenenieDphNedanoveId: ids.get('cleneniaDph:PN'), dokladov: 4,
       priklady: [{ cislo: 'F4', datum: '2026-04-10' }, { cislo: 'F3', datum: '2026-03-10' }, { cislo: 'F2', datum: '2026-02-10' }],

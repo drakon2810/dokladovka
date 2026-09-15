@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
 import {
-  najdiPravidlo, odvodPrax, odvodRozpis, odvodRozpisVarianty, prepocitajPravidla, variantyRozpisu, type DokladPraxe,
+  najdiPravidlo, odvodNavrhyDelenia, odvodPrax, odvodRozpis, odvodRozpisVarianty, prepocitajPravidla, variantyRozpisu,
+  type DokladDelenia, type DokladPraxe,
 } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { ocistiSlovnik } from './uctoProfileService.js';
@@ -367,6 +368,34 @@ describe('viac podôb rozpisu v jednej kategórii', () => {
       .toEqual([{ pocet: 0, riadky: [{ text: 'istina', predkontaciaKod: 'leas.istina' }] }]);
     expect(variantyRozpisu([])).toEqual([]);
     expect(variantyRozpisu(null)).toEqual([]);
+  });
+});
+
+// Pravidlo auta z DPH profilu reže položku, ktorej text kľúčové slovo LEN
+// OBSAHUJE. Slovo spoločné pre rez, ale prítomné aj inde, by rezalo cudzie položky.
+describe('návrhy pravidiel delenia — kľúčové slová', () => {
+  const rez = (n: number): DokladDelenia => ({
+    kluc: `D${n}`, cislo: `D${n}`, datum: `2026-0${n}-01`, polozky: [
+      { text: 'phm cast danova', suma: 80, sumaDph: 10, predkontaciaId: 'A' },
+      { text: 'phm cast nedanova', suma: 20, sumaDph: 10, predkontaciaId: 'B', clenenieDphId: 'pn',
+        clenenieDphKod: 'PN', clenenieDphNazov: 'Bez nároku na odpočet' },
+    ],
+  });
+  const olej: DokladDelenia = {
+    kluc: 'O1', cislo: 'O1', datum: '2026-05-01', polozky: [{ text: 'Castrol olej', suma: 30, predkontaciaId: 'C' }],
+  };
+
+  it('slovo, ktoré sa vyskytne aj mimo rezu (aj ako časť iného slova), do návrhu nepatrí', () => {
+    expect(odvodNavrhyDelenia([rez(1), rez(2), rez(3), olej])).toEqual([expect.objectContaining({
+      klucoveSlova: ['phm'], percento: 80, percentoDph: 50, predkontaciaId: 'A', predkontaciaNedanovaId: 'B', dokladov: 3,
+    })]);
+  });
+
+  it('rez bez rozlišujúceho slova sa nenavrhne — pravidlo bez slova by sa nepoužilo', () => {
+    const nerozdelene: DokladDelenia = {
+      kluc: 'P1', cislo: 'P1', datum: '2026-06-01', polozky: [{ text: 'PHM kamión', suma: 100, predkontaciaId: 'A' }],
+    };
+    expect(odvodNavrhyDelenia([rez(1), rez(2), rez(3), olej, nerozdelene])).toEqual([]);
   });
 });
 

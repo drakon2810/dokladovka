@@ -569,8 +569,8 @@ export interface NavrhDelenia {
   priklady: Array<{ cislo: string; datum: string }>;
 }
 
-const slovaTextu = (text: string) =>
-  text.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('sk').match(/\p{L}{3,}/gu) ?? [];
+const bezDiakritiky = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('sk');
+const slovaTextu = (text: string) => bezDiakritiky(text).match(/\p{L}{3,}/gu) ?? [];
 
 /**
  * Ustálené delenie jednej položky na daňovú a nedaňovú časť — napr. PHM 80 %
@@ -587,6 +587,7 @@ export function odvodNavrhyDelenia(doklady: DokladDelenia[]): NavrhDelenia[] {
   const skupiny = new Map<string, {
     danova: string; nedanova: string; clenenie?: string;
     podlaPomeru: Map<string, Array<{ doklad: DokladDelenia; slova: Set<string> }>>; dokladov: number;
+    riadky: Set<RiadokDelenia>;
   }>();
   for (const doklad of [...doklady].sort((a, b) => porovnaj(a.kluc, b.kluc))) {
     const druhy = new Map<string, RiadokDelenia[]>();
@@ -629,10 +630,11 @@ export function odvodNavrhyDelenia(doklady: DokladDelenia[]): NavrhDelenia[] {
       if (!skupina) {
         skupiny.set(kluc, skupina = {
           danova: danova[0].ucet, nedanova: nedanova[0].ucet, clenenie: nedanova[0].clenenie,
-          podlaPomeru: new Map(), dokladov: 0,
+          podlaPomeru: new Map(), dokladov: 0, riadky: new Set(),
         });
       }
       skupina.dokladov += 1;
+      for (const riadok of riadky) skupina.riadky.add(riadok);
       const pomer = `${percento}:${percentoDph ?? ''}`;
       // Kľúčové slová z oboch častí naraz: slovo len jednej časti („danova",
       // „nedanova") hovorí o reze, nie o tom, čo sa kupuje, a pravidlo by ním
@@ -645,6 +647,8 @@ export function odvodNavrhyDelenia(doklady: DokladDelenia[]): NavrhDelenia[] {
     }
   }
 
+  const vsetkyRiadky = doklady.flatMap((doklad) => doklad.polozky)
+    .map((riadok) => ({ riadok, text: bezDiakritiky(riadok.text) }));
   const navrhy: NavrhDelenia[] = [];
   for (const skupina of skupiny.values()) {
     const [pomer, vyskyty] = [...skupina.podlaPomeru.entries()]
@@ -653,9 +657,17 @@ export function odvodNavrhyDelenia(doklady: DokladDelenia[]): NavrhDelenia[] {
     const [percento, percentoDph] = pomer.split(':');
     const pocetSlov = new Map<string, number>();
     for (const vyskyt of vyskyty) for (const slovo of vyskyt.slova) pocetSlov.set(slovo, (pocetSlov.get(slovo) ?? 0) + 1);
+    // Pravidlo auta reže položku, ktorej text slovo len OBSAHUJE (najdiKlucoveSlovo).
+    // Slovo, ktoré sa vyskytne aj mimo tohto rezu — „cast" v inom delení,
+    // „Castrol olej" —, by rozrezalo cudzie položky na účty paliva.
+    const klucoveSlova = [...pocetSlov.entries()].sort(([a, x], [b, y]) => y - x || porovnaj(a, b))
+      .map(([slovo]) => slovo)
+      .filter((slovo) => !vsetkyRiadky.some(({ riadok, text }) => !skupina.riadky.has(riadok) && text.includes(slovo)))
+      .slice(0, 5);
+    // Bez slova sa pravidlo auta nepoužije nikdy — taký návrh by len mátol.
+    if (klucoveSlova.length === 0) continue;
     navrhy.push({
-      klucoveSlova: [...pocetSlov.entries()].sort(([a, x], [b, y]) => y - x || porovnaj(a, b))
-        .slice(0, 5).map(([slovo]) => slovo),
+      klucoveSlova,
       percento: Number(percento),
       ...(percentoDph ? { percentoDph: Number(percentoDph) } : {}),
       predkontaciaId: skupina.danova,
@@ -687,7 +699,7 @@ export async function navrhyPravidielDelenia(
             suma, suma_dph, predkontacia_id, clenenie_dph_id, clenenie_dph_kod
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND coalesce(riadok_index, 0) > 0
-        AND doklad_cislo IS NOT NULL AND predkontacia_id IS NOT NULL
+        AND doklad_cislo IS NOT NULL
       ORDER BY doklad_kluc, riadok_index`,
     [input.tenantId, input.organizationId],
   )).rows;
@@ -700,7 +712,8 @@ export async function navrhyPravidielDelenia(
       text: row.line_text_normalized ?? '',
       suma: row.suma === null ? undefined : Number(row.suma),
       sumaDph: row.suma_dph === null ? undefined : Number(row.suma_dph),
-      predkontaciaId: row.predkontacia_id,
+      // Riadok bez účtu rez neurčí, ale kľúčové slovo by ho rezalo tiež.
+      predkontaciaId: row.predkontacia_id ?? undefined,
       clenenieDphId: row.clenenie_dph_id ?? undefined,
       clenenieDphKod: clenenie?.code ?? row.clenenie_dph_kod ?? undefined,
       clenenieDphNazov: clenenie?.name,
