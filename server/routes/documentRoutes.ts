@@ -21,6 +21,7 @@ import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieServi
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 import { ingestFiles } from '../inbound/ingestFiles.js';
 import { zapisOpravuTypu } from '../services/firemnyProfilService.js';
+import { podtypPreTyp } from '../workerService.js';
 
 interface DocumentScope extends Record<string, unknown> {
   id: string;
@@ -29,6 +30,7 @@ interface DocumentScope extends Record<string, unknown> {
   processing_status: string;
   version: number;
   document_type: string;
+  podtyp: string;
   extracted: Record<string, unknown>;
   accounting: Record<string, string | undefined>;
   history: Array<Record<string, unknown>>;
@@ -36,8 +38,10 @@ interface DocumentScope extends Record<string, unknown> {
 }
 
 async function scopedDocument(database: Database, tenantId: string, id: string): Promise<DocumentScope> {
+  // Podtyp musí ísť so sebou: schválenie z neho skladá snapshot pre export
+  // (invoiceType) aj pamäť rozhodnutí — bez neho bol každý dobropis „bežná".
   const result = await database.query<DocumentScope>(
-    `SELECT id, organization_id, status, processing_status, version, document_type, extracted, accounting,
+    `SELECT id, organization_id, status, processing_status, version, document_type, podtyp, extracted, accounting,
             history, split_from_document_id
        FROM documents WHERE id=$1 AND tenant_id=$2`, [id, tenantId],
   );
@@ -176,6 +180,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
       documentType: z.enum(['FP','FV','BV','MZDY','OZ','PD']).optional(),
+      podtyp: z.enum(['bezna','dobropis','tarchopis','zalohova']).optional(),
       extracted: z.record(z.string(), z.unknown()).optional(),
       accounting: z.record(z.string(), z.string().optional()).optional(),
       expectedVersion: z.number().int().positive(),
@@ -189,27 +194,58 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       throw new HttpError(409, 'document_exported', 'Exportovaný doklad nie je možné upravovať');
     }
     const approvedChanged = document.status === 'schvaleny';
-    const result = await database.query<Record<string, unknown>>(
-      `UPDATE documents SET document_type=$1, extracted=$2::jsonb, accounting=$3::jsonb,
-              version=version+1, status=$4, approved_version=NULL, approved_snapshot=NULL, updated_at=now()
-        WHERE id=$5 AND tenant_id=$6 AND version=$7 RETURNING *`,
-      [body.documentType ?? document.document_type, JSON.stringify(body.extracted ?? document.extracted),
-        JSON.stringify(body.accounting ?? document.accounting), approvedChanged ? 'na_kontrole' : document.status,
-        id, auth.tenantId, body.expectedVersion],
-    );
-    if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+    const documentType = body.documentType ?? document.document_type;
+    // Rovnaké pravidlo ako pri vzniku dokladu: podtyp prežije len na faktúre,
+    // prepnutie na OZ či pokladňu ho vráti na bežnú.
+    const podtyp = podtypPreTyp(documentType, body.podtyp ?? document.podtyp);
+    const extracted = (body.extracted ?? document.extracted) as {
+      dodavatel?: { nazov?: string; ico?: string; icDph?: string; iban?: string }; textPolozky?: string;
+    } | undefined;
+    const accounting = body.accounting ?? document.accounting;
+    const druhZmeneny = documentType !== document.document_type || podtyp !== document.podtyp;
+    const saved = await database.transaction(async (tx) => {
+      const result = await tx.query<Record<string, unknown>>(
+        `UPDATE documents SET document_type=$1, extracted=$2::jsonb, accounting=$3::jsonb,
+                version=version+1, status=$4, approved_version=NULL, approved_snapshot=NULL, updated_at=now(), podtyp=$8
+          WHERE id=$5 AND tenant_id=$6 AND version=$7 RETURNING *`,
+        [documentType, JSON.stringify(extracted), JSON.stringify(accounting), approvedChanged ? 'na_kontrole' : document.status,
+          id, auth.tenantId, body.expectedVersion, podtyp],
+      );
+      if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+      if (!druhZmeneny) return result.rows[0];
+      // Iný druh dokladu = iná agenda radu, sekcia KV aj predkontácie. Návrh
+      // spravený pre pôvodný druh by pri schválení meral opravy voči nesprávnemu
+      // vzoru a ponúkal rad, ktorý k dokladu nepatrí.
+      await rebuildAccountingSuggestion(tx, {
+        tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id,
+        supplierIco: extracted?.dodavatel?.ico, supplierName: extracted?.dodavatel?.nazov,
+        supplierIcDph: extracted?.dodavatel?.icDph, supplierIban: extracted?.dodavatel?.iban,
+      });
+      if (accounting.ciselnyRadId) return result.rows[0];
+      // Editor pri zmene druhu rad vymaže — ten starý patril inej agende. Nový
+      // sa doplní z návrhu pre nový druh v tej istej verzii, inak by doklad
+      // ostal bez radu a účtovník by ho hľadal ručne.
+      const doplneny = await tx.query<Record<string, unknown>>(
+        `UPDATE documents d SET accounting = d.accounting || jsonb_build_object('ciselnyRadId', s.ciselny_rad_id)
+           FROM accounting_suggestions s
+          WHERE d.id=$1 AND d.tenant_id=$2 AND s.document_id=d.id AND s.ciselny_rad_id IS NOT NULL
+          RETURNING d.*`,
+        [id, auth.tenantId],
+      );
+      return doplneny.rows[0] ?? result.rows[0];
+    });
     // Prepnutie typu je oprava kroku „čo je to za papier". Doteraz sa nikam
     // nezapisovala a ďalší rovnaký doklad spravil tú istú chybu — pamäť
-    // rozhodnutí drží iba zaúčtovanie, teda krok PO určení typu.
-    if (body.documentType && body.documentType !== document.document_type) {
-      const extracted = (body.extracted ?? document.extracted) as
-        { dodavatel?: { nazov?: string }; textPolozky?: string } | undefined;
+    // rozhodnutí drží iba zaúčtovanie, teda krok PO určení typu. Podtyp ide
+    // v tom istom stĺpci („FP:dobropis"), aby sa klasifikácia učila aj dobropisy.
+    if (druhZmeneny) {
+      const druh = (typ: string, pod: string) => (pod === 'bezna' ? typ : `${typ}:${pod}`);
       await zapisOpravuTypu(database, {
         tenantId: auth.tenantId,
         organizationId: document.organization_id,
         documentId: id,
-        povodnyTyp: String(document.document_type),
-        novyTyp: body.documentType,
+        povodnyTyp: druh(document.document_type, document.podtyp),
+        novyTyp: druh(documentType, podtyp),
         userId: auth.userId,
         dodavatel: extracted?.dodavatel?.nazov,
         text: extracted?.textPolozky,
@@ -217,7 +253,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     }
     // Úprava schváleného dokladu ruší potvrdenie — rozhodnutie sa vyradí z pamäte.
     if (approvedChanged) await forgetUctoDecision(database, auth.tenantId, id);
-    return result.rows[0];
+    return saved;
   });
 
   app.post('/api/documents/:id/approve', async (request) => {

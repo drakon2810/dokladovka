@@ -1271,7 +1271,7 @@ export async function recordPaymentQrGenerated(
  */
 export async function saveDocument(
   id: string,
-  patch: Partial<Pick<DocumentItem, 'typ' | 'extracted' | 'ucto'>>,
+  patch: Partial<Pick<DocumentItem, 'typ' | 'podtyp' | 'extracted' | 'ucto'>>,
   expectedVersion?: number,
 ): Promise<DocumentItem> {
   assertCapability(
@@ -1286,6 +1286,9 @@ export async function saveDocument(
       method: 'PATCH',
       body: JSON.stringify({
         documentType: patch.typ,
+        // Bez podtypu by sa dobropis po uložení vrátil na bežnú faktúru —
+        // snapshot po uložení nesie hodnotu zo servera.
+        podtyp: patch.podtyp,
         extracted: patch.extracted,
         accounting: patch.ucto,
         expectedVersion: expectedVersion ?? current.version,

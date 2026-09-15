@@ -688,12 +688,15 @@ export function InvoicePanel({
   const setTypValue = (value: string) => {
     const option = TYP_OPTIONS.find((item) => item.value === value);
     if (!option) return;
+    const patch: Partial<DocumentUcto> = {};
     if (option.typ !== draft.typ || (option.podtyp ?? 'bezna') !== (draft.podtyp ?? 'bezna')) {
       setTyp(option.typ, option.podtyp ?? 'bezna');
+      // Rad patrí druhu dokladu (dobropis má iný rad než faktúra). Starý sa
+      // vymaže a server ho pri uložení doplní z návrhu pre nový druh.
+      if (ucto.ciselnyRadId) patch.ciselnyRadId = undefined;
     }
     // Smer pokladne je vlastnosť dokladu, nie číselníka — pri inej agende ho
     // necháme tak, POHODA ho pre faktúry ignoruje.
-    const patch: Partial<DocumentUcto> = {};
     if (option.pokladnaTyp && option.pokladnaTyp !== ucto.pokladnaTyp) patch.pokladnaTyp = option.pokladnaTyp;
     // Pokladňa z predvoľby firmy — POHODA bez nej doklad neprijme a účtovník ju
     // inak píše ručne na každom doklade. Už vyplnenú hodnotu neprepisujeme.

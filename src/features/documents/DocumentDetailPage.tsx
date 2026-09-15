@@ -961,6 +961,7 @@ export function DocumentDetailPage() {
   const storeDraft = async (): Promise<DocumentItem> =>
     saveDocument(draft.id, {
       typ: draft.typ,
+      podtyp: draft.podtyp,
       extracted: draft.extracted,
       ucto: draft.ucto,
     }, draft.version);
@@ -971,6 +972,9 @@ export function DocumentDetailPage() {
       const saved = await storeDraft();
       setDraft(cloneDocument(saved));
       setDirty(false);
+      // Zmena druhu dokladu na serveri prepočíta návrh — starý (pre pôvodný
+      // druh) by inak ponúkal rad a predkontáciu inej agendy.
+      setSuggestion(await getSuggestion(draft.id));
       showToast(t('toast.ulozene'));
     } catch {
       showToast(t('chyba.vseobecna'), { tone: 'error' });
