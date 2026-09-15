@@ -43,6 +43,30 @@ describe('export do POHODY — neplatný doklad', () => {
       details: { documentId: bezCiselnikov },
     });
 
+    // Hláška bez id dokladu (neplatná suma) v exporte viacerých dokladov: 409
+    // musí aj tak povedať, ktorý doklad zlyhal.
+    const kod = async (kind: string, code: string) => {
+      const id = randomUUID();
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source) VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, seeded.tenantId, seeded.organizationId, kind, code],
+      );
+      return id;
+    };
+    const ucto = { predkontaciaId: await kod('predkontacie', '518/321'), clenenieDphId: await kod('cleneniaDph', 'PD'), ciselnyRadId: await kod('ciselneRady', 'FP26') };
+    const faktura = (zaklad: unknown) => schvaleny({
+      version: 1, typ: 'FP', ucto,
+      extracted: { datumVystavenia: '2026-07-01', dodavatel: { nazov: 'Dodávateľ' }, rozpisDph: [{ sadzba: 23, zaklad, dph: 2.3 }] },
+    });
+    const dobra = await faktura(10);
+    const zlaSuma = await faktura('x');
+    const viac = await app.inject({
+      method: 'POST', url: '/api/exports/pohoda/xml', headers,
+      payload: { organizationId: seeded.organizationId, documentIds: [dobra, zlaSuma] },
+    });
+    expect(viac.statusCode, viac.body).toBe(409);
+    expect(viac.json()).toMatchObject({ code: 'export_neplatny_doklad', details: { documentId: zlaSuma } });
+
     // Chyba v kóde nie je chyba dokladu — účtovník ju opraviť nevie.
     const pokazeny = await schvaleny({ version: 1, typ: 'FP', extracted: null, ucto: {} });
     expect((await exportuj(pokazeny)).statusCode).toBe(500);

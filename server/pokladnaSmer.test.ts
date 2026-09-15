@@ -20,12 +20,12 @@ const PRAZDNY_POHYB = {
 };
 
 /** Bloček s jedinou položkou tak, ako by ho vrátil model. */
-function pokladnicnyDoklad(cislo: string, dodavatel: { nazov: string; ico: string }) {
+function pokladnicnyDoklad(cislo: string, dodavatel: { nazov: string; ico: string }, odberatel: { nazov?: string; ico?: string } = {}) {
   return {
     schemaVersion: EXTRACTION_SCHEMA_VERSION,
     documentType: 'PD',
     supplier: { ...PRAZDNA_STRANA, ...dodavatel },
-    buyer: { nazov: null, ico: null, dic: null, icDph: null, adresa: null, ulica: null, psc: null, obec: null, krajina: null },
+    buyer: { nazov: null, ico: null, dic: null, icDph: null, adresa: null, ulica: null, psc: null, obec: null, krajina: null, ...odberatel },
     invoiceNumber: cislo, orderNumber: null, deliveryNoteNumber: null, originalDocumentNumber: null,
     variableSymbol: null, constantSymbol: null, specificSymbol: null,
     issueDate: '2026-04-30', taxDate: '2026-04-30', servicePeriodEnd: null, originalTaxDate: null, dueDate: null, currency: 'EUR',
@@ -85,8 +85,8 @@ describe('smer pokladničného dokladu pri vzniku', () => {
         predkontaciaId: null, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.1, reason: 'test', riadky: null,
       })),
     };
-    const spracuj = async (cislo: string, dodavatel: { nazov: string; ico: string }) => {
-      wire = pokladnicnyDoklad(cislo, dodavatel);
+    const spracuj = async (cislo: string, dodavatel: { nazov: string; ico: string }, odberatel?: { nazov: string; ico: string }) => {
+      wire = pokladnicnyDoklad(cislo, dodavatel, odberatel);
       const nahratie = await app.inject({
         method: 'POST', url: '/api/documents/upload', headers,
         payload: {
@@ -113,6 +113,11 @@ describe('smer pokladničného dokladu pri vzniku', () => {
     // Príjmový doklad vystavila sama firma — dodávateľom je ona.
     expect(await spracuj('PPD-1', { nazov: 'Test s.r.o.', ico: '12345678' }))
       .toEqual({ smer: 'receipt', dennik: ['211/602'] });
+    // Dodávateľ firma a odberateľ cudzí s IČO: strany môžu byť zamenené (bloček
+    // z čerpacej stanice prečítaný naopak), doklad ide do karantény. Smer sa
+    // neuloží — „príjem" by po oprave strán ostal navždy.
+    expect(await spracuj('BLOK-Z', { nazov: 'Test s.r.o.', ico: '12345678' }, { nazov: 'Čerpacia stanica s.r.o.', ico: '87654321' }))
+      .toEqual({ smer: undefined, dennik: undefined });
     // Smer, ktorý účtovník nastavil počas extrakcie, predvoľba neprepíše.
     pocasExtrakcie = () => database.query(
       `UPDATE documents SET accounting = accounting || '{"pokladnaTyp":"receipt"}'::jsonb

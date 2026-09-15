@@ -7,10 +7,8 @@ import type { Queryable } from '../db/database.js';
  * ostal prázdny navždy. Čakajúci job stačí jeden — druhé prepnutie druhu pred
  * jeho spustením by model len zavolalo dvakrát nad tým istým dokladom. Bežiaci
  * job však doklad prečítal ešte v starom druhu a jeho návrh by ostal posledný,
- * preto sa za ním zaradí ďalší.
- * ponytail: claimJob pustí čakajúci job aj súbežne s bežiacim toho istého
- * dokladu (viac slučiek workera); keby starý skončil neskôr, prepíše návrh
- * starým druhom. Oprava: claimJob preskočí navrh_zauctovania dokladu s bežiacim.
+ * preto sa za ním zaradí ďalší. claimJob ho spustí až po bežiacom, takže
+ * posledný zápis patrí novému druhu.
  */
 export async function zaradNavrhZauctovania(db: Queryable, input: {
   tenantId: string;

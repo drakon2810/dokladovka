@@ -17,13 +17,13 @@ const { InvoicePanel } = await import('./InvoicePanel');
 
 const BEZ_CISELNIKOV = { predkontacie: [], cleneniaDph: [], strediska: [], cinnosti: [], zakazky: [], ciselneRady: [] };
 
-async function ulozenySmer(dodavatel: { ico?: string; icDph?: string }) {
+async function ulozenySmer(dodavatel: { ico?: string; icDph?: string }, status = 'na_kontrole') {
   const updateUcto = vi.fn();
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
   const draft = {
-    id: 'd1', tenantId: 't1', orgId: 'org-1', queueId: 'q1', typ: 'PD', status: 'na_kontrole', processingStatus: 'ready_for_review',
+    id: 'd1', tenantId: 't1', orgId: 'org-1', queueId: 'q1', typ: 'PD', status, processingStatus: 'ready_for_review',
     pdfUrl: '', prijateDna: '2026-04-30', zdroj: {}, confidence: 1, ucto: {}, history: [], comments: [], version: 1,
     extracted: {
       dodavatel: { nazov: 'Predajca', ...dodavatel }, odberatel: { nazov: '' }, cisloFaktury: '1',
@@ -49,5 +49,9 @@ describe('InvoicePanel — smer pokladničného dokladu', () => {
     expect(await ulozenySmer({ ico: '12 345 678' })).toBe('receipt');
     expect(await ulozenySmer({ icDph: 'SK2020123456' })).toBe('receipt');
     expect(await ulozenySmer({ ico: '87654321' })).toBe('expense');
+  });
+
+  it('doklad v karanténe smer neuloží — strany môžu byť zamenené', async () => {
+    expect(await ulozenySmer({ ico: '12345678' }, 'karantena')).toBeUndefined();
   });
 });

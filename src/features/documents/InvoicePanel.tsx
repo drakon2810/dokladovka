@@ -732,11 +732,12 @@ export function InvoicePanel({
   useEffect(() => {
     if (readOnly || draft.typ !== 'PD') return;
     const patch: Partial<DocumentUcto> = {};
-    if (!ucto.pokladnaTyp) patch.pokladnaTyp = smerPokladne;
+    // V karanténe môžu byť strany zamenené — smer sa uloží až po ich potvrdení.
+    if (!ucto.pokladnaTyp && draft.status !== 'karantena') patch.pokladnaTyp = smerPokladne;
     const pokladna = pokladnaRadu ?? predvolenaPokladna;
     if (!ucto.pokladnaKod?.trim() && pokladna) patch.pokladnaKod = pokladna;
     if (Object.keys(patch).length > 0) updateUcto(patch);
-  }, [readOnly, draft.typ, ucto.pokladnaTyp, ucto.pokladnaKod, pokladnaRadu, predvolenaPokladna, smerPokladne]);
+  }, [readOnly, draft.typ, draft.status, ucto.pokladnaTyp, ucto.pokladnaKod, pokladnaRadu, predvolenaPokladna, smerPokladne]);
   const chybaPokladna = jePokladna && (!ucto.pokladnaKod?.trim() || !ucto.pokladnaTyp);
   const rezim = `${typLabel}${vybranyRad?.kod ? ` (${vybranyRad.kod})` : ''}`;
 

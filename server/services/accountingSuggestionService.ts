@@ -492,7 +492,7 @@ async function vyberRadZDokladov(
   doklady: DokladRadu[],
   novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number; predkontacia: string },
   rok: number,
-): Promise<{ rad: string | null; rozhodny: boolean }> {
+): Promise<{ rad: string | null; rozhodnyRad: string | null }> {
   // Mesačná firma: aspoň dva mesiace s tromi a viac dokladmi, každý takmer celý
   // v jednom rade a tie rady navzájom rôzne. Jeden rad na celý rok ani delenie
   // podľa krajiny tak nevyzerá.
@@ -505,7 +505,7 @@ async function vyberRadZDokladov(
     // Nový mesiac nemá z čoho počítať — rad mu dá už len názov. Hádať podľa
     // iného mesiaca nesmieme: POHODA by pridelila číslo z cudzieho radu.
     const rady = await radyMesiaca(tx, input, agenda, novy.mesiac, rok);
-    return { rad: rady.length === 1 ? rady[0] : null, rozhodny: false };
+    return { rad: rady.length === 1 ? rady[0] : null, rozhodnyRad: null };
   }
 
   // Poradie = prednosť pri rovnakom podiele. Mesiac ide pred protistranu:
@@ -537,14 +537,21 @@ async function vyberRadZDokladov(
   ];
   const rady = skupiny.filter((skupina) => skupina.doklady.length >= skupina.minimum)
     .map((skupina) => ({ ...najcastejsiRad(skupina.doklady), pocet: skupina.doklady.length, zModelu: skupina.zModelu }));
-  let vybrany: { id: string; podiel: number } | undefined;
-  for (const rad of rady) if (!vybrany || rad.podiel > vybrany.podiel) vybrany = rad;
+  const vyber = (kandidati: typeof rady) => {
+    let vybrany: { id: string; podiel: number } | undefined;
+    for (const rad of kandidati) if (!vybrany || rad.podiel > vybrany.podiel) vybrany = rad;
+    return vybrany;
+  };
   // Rozhodnosť sa pýta, či rad nesie AKÁKOĽVEK dosť veľká jednotná skupina, nie
   // len víťazná: dva doklady protistrany so 100 % vyhrajú nad 150 dokladmi
-  // s 95 % v tom istom rade, a ten rad je pritom rozhodný.
+  // s 95 % v tom istom rade, a ten rad je pritom rozhodný. Posudzuje sa BEZ
+  // skupiny predkontácie: tá nesmie nastavenie účtovníka prebiť, ale ani vrátiť
+  // nastavenie, ktoré história bez nej prebíja.
+  const bezModelu = vyber(rady.filter((rad) => !rad.zModelu));
   return {
-    rad: vybrany?.id ?? null,
-    rozhodny: rady.some((rad) => !rad.zModelu && rad.id === vybrany?.id && rad.pocet >= 5 && rad.podiel >= 0.9),
+    rad: vyber(rady)?.id ?? null,
+    rozhodnyRad: rady.some((rad) => !rad.zModelu && rad.id === bezModelu?.id && rad.pocet >= 5 && rad.podiel >= 0.9)
+      ? bezModelu!.id : null,
   };
 }
 
@@ -574,7 +581,7 @@ async function radZHistorie(
   doDatumu: string | undefined,
   /** Predkontácia nového dokladu (kandidát či model) — delí súbežné rady agendy. */
   predkontaciaKod?: string,
-): Promise<{ rad: string | null; rozhodny: boolean } | undefined> {
+): Promise<{ rad: string | null; rozhodnyRad: string | null } | undefined> {
   if (agendy.length === 0) return undefined;
   const rok = Number(datum.slice(0, 4));
   // Doklad = jeden riadok na číslo dokladu; rad bez aktívneho riadku
@@ -621,7 +628,7 @@ async function radZHistorie(
   );
   // Rad prenesený z minulého roka nie je rozhodný: doklady tohto druhu v roku
   // dokladu ešte nie sú a nastavenie účtovníka sa nimi prebiť nesmie.
-  return novyRad.rows.length === 1 ? { rad: novyRad.rows[0].id, rozhodny: false } : undefined;
+  return novyRad.rows.length === 1 ? { rad: novyRad.rows[0].id, rozhodnyRad: null } : undefined;
 }
 
 /**
@@ -676,7 +683,9 @@ export async function resolveSeriesDefault(
     );
     const nastavenie = explicit.rows[0]?.ciselny_rad_id;
     if (nastavenie) {
-      if (!zHistorie?.rozhodny || zHistorie.rad === nastavenie) return nastavenie;
+      // Rozhodný rad je rad histórie bez skupiny predkontácie; keď história
+      // nastavenie prebije, vráti sa rad výberu (predkontácia vyberá medzi radmi histórie).
+      if (!zHistorie?.rozhodnyRad || zHistorie.rozhodnyRad === nastavenie) return nastavenie;
       console.info('[ciselny-rad] rozhodná história prebila nastavenie účtovníka', {
         organizationId: input.organizationId, documentType, pokladnaTyp, nastavenie, zHistorie: zHistorie.rad,
       });

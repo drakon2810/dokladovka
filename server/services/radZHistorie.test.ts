@@ -317,4 +317,25 @@ describe('číselný rad z histórie firmy', () => {
     );
     expect(await resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, '501/325')).toBe(oz);
   }, 90_000);
+
+  // Nastavenie „2611" bez jediného dokladu proti rozhodnej histórii 26OZ: história
+  // ho prebíjala a skupina podľa predkontácie ho nesmie vzkriesiť — rozhodnosť sa
+  // posudzuje bez nej, predkontácia už len vyberá medzi radmi histórie.
+  it('predkontácia nevráti nastavenie, ktorému rozhodná história odporuje', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const oz = await rad('26OZ', 'Ostatné záväzky', 'ostatni_zavazky', '2026');
+    const pk = await rad('26PK', 'Platby kartou', 'ostatni_zavazky', '2026');
+    const prazdny = await rad('2611', 'Starý rad', 'ostatni_zavazky', '2026');
+    for (let i = 1; i <= 30; i += 1) await doklad('OZ', oz, '2026-03-05', `zavazok ${i}`, null, '518/321');
+    for (let i = 1; i <= 3; i += 1) await doklad('OZ', pk, '2026-03-06', `karta ${i}`, null, '501/325');
+    await database.query(
+      `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id) VALUES ($1,$2,'OZ',$3)`,
+      [kde.organizationId, kde.tenantId, prazdny],
+    );
+
+    const rad2026 = (kod?: string) => resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, kod);
+    expect(await rad2026()).toBe(oz);
+    expect(await rad2026('518/321')).toBe(oz);
+    expect(await rad2026('501/325')).toBe(pk);
+  }, 90_000);
 });

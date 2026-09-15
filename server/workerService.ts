@@ -118,7 +118,13 @@ async function claimJob(
       `SELECT id, tenant_id, organization_id, attachment_id, document_id, correlation_id, kind,
               attempts, max_attempts, payload
          FROM processing_jobs
-        WHERE (status='queued' AND available_at <= now())
+        WHERE (status='queued' AND available_at <= now()
+               -- Návrh dokladu, ktorého predchádzajúci návrh ešte beží, počká:
+               -- súbežne by starý job (starý druh) zapísal návrh aj verdikt DPH
+               -- až po novom. Zaseknutý bežiaci job preberá vetva nižšie.
+               AND NOT (kind='navrh_zauctovania' AND EXISTS (
+                 SELECT 1 FROM processing_jobs r
+                  WHERE r.document_id=processing_jobs.document_id AND r.kind='navrh_zauctovania' AND r.status='running')))
            -- Zaseknutý beh: worker padol alebo ho niekto reštartoval uprostred
            -- extrakcie. Bez tejto vetvy ostane job navždy 'running' a doklad
            -- navždy v stave „spracúva sa" — nikto ho už nikdy nevyzdvihne.
@@ -624,10 +630,13 @@ async function completeRun(
   // zobrazoval a AI pre doklad bez smeru brala históriu príjmov aj výdajov
   // naraz. Doklad, ktorý vystavila sama firma, je príjem; ostatné výdaj.
   // V SQL ide pred uložené zaúčtovanie, takže smer, ktorý doklad už má, neprepíše.
+  // Karanténa (strany môžu byť zamenené) smer neuloží: po oprave strán by ostal
+  // navždy nesprávny — určí ho editor, keď sú strany potvrdené.
   const kluc = (hodnota?: string | null) => String(hodnota ?? '').replace(/[^0-9a-z]/gi, '').toUpperCase();
   const vystavilaFirma = [[result.supplier.ico, context.organization_ico], [result.supplier.icDph, context.organization_ic_dph]]
     .some(([strana, firma]) => kluc(firma) !== '' && kluc(strana) === kluc(firma));
-  const smerPokladne = (typ: string) => JSON.stringify(typ === 'PD' ? { pokladnaTyp: vystavilaFirma ? 'receipt' : 'expense' } : {});
+  const smerPokladne = (typ: string) =>
+    JSON.stringify(typ === 'PD' && !buyerMismatch ? { pokladnaTyp: vystavilaFirma ? 'receipt' : 'expense' } : {});
 
   await database.transaction(async (tx) => {
     await tx.query(

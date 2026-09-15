@@ -144,4 +144,33 @@ describe('job nového návrhu zaúčtovania', () => {
     expect(await processNextJob(database, testConfig(), 'test-worker', { aiParser: vypadok })).toBe(true);
     expect(await stavJobu(vypadokJob)).toMatchObject({ status: 'queued', error_code: 'processing_failed' });
   }, 120_000);
+
+  // Zmena druhu počas bežiaceho jobu zaradí ďalší. Druhá slučka workera ho
+  // nesmie spustiť súbežne: starý job by zapísal návrh (aj verdikt DPH) starého
+  // druhu až po novom a ten by ostal posledný.
+  it('čakajúci job dokladu nebeží súbežne s jeho bežiacim jobom', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','exportovany','ready_for_review','{}'::jsonb,'{}'::jsonb,1,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    const [bezi, caka] = [randomUUID(), randomUUID()];
+    await database.query(
+      `INSERT INTO processing_jobs (id,tenant_id,organization_id,document_id,kind,status,locked_at,correlation_id,payload)
+       VALUES ($1,$3,$4,$5,$6,'running',now(),'test','{}'::jsonb), ($2,$3,$4,$5,$6,'queued',NULL,'test','{}'::jsonb)`,
+      [bezi, caka, seeded.tenantId, seeded.organizationId, documentId, NAVRH_KIND],
+    );
+    const stav = async (id: string) => (await database.query<Record<string, any>>(
+      'SELECT status FROM processing_jobs WHERE id=$1', [id])).rows[0].status;
+
+    expect(await processNextJob(database, testConfig(), 'druha-slucka')).toBe(false);
+    expect(await stav(caka)).toBe('queued');
+    await database.query(`UPDATE processing_jobs SET status='succeeded' WHERE id=$1`, [bezi]);
+    expect(await processNextJob(database, testConfig(), 'druha-slucka')).toBe(true);
+    expect(await stav(caka)).toBe('succeeded');
+  }, 60_000);
 });
