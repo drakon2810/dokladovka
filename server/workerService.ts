@@ -43,7 +43,7 @@ interface JobRow extends Record<string, unknown> {
   attachment_id: string;
   document_id?: string;
   correlation_id: string;
-  kind: 'extract_document' | 'reprocess_document' | typeof ANALYZA_KIND;
+  kind: 'extract_document' | 'reprocess_document' | typeof ANALYZA_KIND | typeof NAVRH_KIND;
   attempts: number;
   max_attempts: number;
   payload: { mockExtraction?: MockExtractionHints; vzorka?: number };
@@ -59,6 +59,12 @@ interface JobRow extends Record<string, unknown> {
  * Práca sa pritom celá uložila.
  */
 export const ANALYZA_KIND = 'ucto_analyza';
+
+/**
+ * Nový návrh zaúčtovania pre uložený doklad: job s document_id, bez prílohy
+ * a s prázdnym payloadom. Zakladá ho zmena druhu dokladu (spracujNavrh).
+ */
+export const NAVRH_KIND = 'navrh_zauctovania';
 
 /**
  * Ako dlho smie job bežať, kým ho iný bežec vyhlási za zaseknutý. Extrakcia je
@@ -96,6 +102,8 @@ interface PreparedRun {
 export interface WorkerDependencies {
   storage?: ObjectStorage;
   provider?: ServerDocumentExtractionProvider;
+  /** Model návrhu zaúčtovania — v testoch náhrada za OpenAI. */
+  aiParser?: Parameters<typeof maybeAiAccountingSuggestion>[4];
 }
 
 async function claimJob(
@@ -398,6 +406,103 @@ export function podtypPreTyp(documentType: string, podtyp: string | undefined): 
   return ['dobropis', 'tarchopis', 'zalohova'].includes(podtyp ?? '') ? podtyp! : 'bezna';
 }
 
+/**
+ * Položky pre model sa berú z NORMALIZOVANÉHO dokladu, nie zo surovej odpovede
+ * modelu čítania. Práve normalizácia vie doklad doplniť o riadok, ktorý na
+ * papieri ako položka nestojí — cudziu daň z rekapitulácie: faktúra W.A.G.
+ * má 17 surových položiek a 18 normalizovaných, tou navyše je „DPH IT 22 %".
+ * Návrh sa staval zo surových, takže presne ten riadok, ktorý účtovník účtuje
+ * samostatne, model nikdy nevidel.
+ *
+ * Dôležitejšie je, že do documents.extracted sa ukladá normalizovaný doklad, a
+ * riadky odpovede modelu sa adresujú indexom. Kým model dostával iné pole, než
+ * na aké sa jeho index neskôr uplatní, bola zhoda indexov len zhodou náhod.
+ * Teraz je to zhoda z definície.
+ *
+ * ponytail: strop 60 položiek. Najdlhší doklad v prevádzke má 18 a nad 15 sú
+ * dva zo 125; strop je poistka proti hromadnému importu, nie proti faktúram.
+ */
+function polozkyModelu(extracted: unknown): Array<Record<string, unknown>> {
+  const polozky = (extracted as { polozky?: unknown })?.polozky;
+  return Array.isArray(polozky) ? (polozky as Array<Record<string, unknown>>).slice(0, 60) : [];
+}
+
+function polozkyPreModel(extracted: unknown) {
+  return polozkyModelu(extracted).map((polozka) => ({
+    popis: typeof polozka.popis === 'string' ? polozka.popis : undefined,
+    sadzbaDph: typeof polozka.sadzbaDph === 'number' ? polozka.sadzbaDph : undefined,
+    suma: typeof polozka.sumaSpolu === 'number' ? polozka.sumaSpolu : undefined,
+  }));
+}
+
+function popisy(extracted: unknown): string[] {
+  return polozkyModelu(extracted)
+    .map((polozka) => (typeof polozka.popis === 'string' ? polozka.popis : ''))
+    .filter(Boolean);
+}
+
+/**
+ * Kontext AI návrhu zaúčtovania z dokladu tak, ako leží v documents.extracted.
+ * Stavia ho worker po extrakcii aj job nového návrhu po zmene druhu — job už
+ * odpoveď modelu čítania nemá, len uložený doklad, a nesmie rozhodovať
+ * z chudobnejšieho kontextu než pôvodný návrh.
+ */
+export function kontextNavrhu(doklad: {
+  documentType: string;
+  podtyp?: string;
+  extracted: unknown;
+  totalAmount?: number;
+  currency?: string;
+  pokladnaTyp?: 'receipt' | 'expense';
+}): AiSuggestionDocumentContext {
+  type Strana = { nazov?: string | null; ico?: string | null; dic?: string | null; icDph?: string | null; krajina?: string | null };
+  const { dodavatel = {}, odberatel = {}, textPolozky, rozpisDph } = (doklad.extracted ?? {}) as {
+    dodavatel?: Strana; odberatel?: Strana; textPolozky?: string; rozpisDph?: unknown;
+  };
+  // Uložený doklad nesie prázdne meno ako '' a z UI aj null — pre model je to „nič".
+  const hodnota = (text?: string | null) => text || undefined;
+  return {
+    documentType: doklad.documentType,
+    podtyp: doklad.podtyp,
+    pokladnaTyp: doklad.pokladnaTyp,
+    supplierName: hodnota(dodavatel.nazov),
+    supplierIco: hodnota(dodavatel.ico),
+    supplierIcDph: hodnota(dodavatel.icDph),
+    // Krajina dodávateľa rozhoduje, ČIA daň je na doklade: rakúskych 20 % nie
+    // je slovenská DPH a do slovenského priznania nikdy nevstúpi. Bez nej model
+    // z nenulovej sadzby usudzoval tuzemské zdaniteľné plnenie.
+    supplierKrajina: hodnota(dodavatel.krajina),
+    // Odberateľ rozhoduje o DPH a sekcii KV vydanej faktúry (súkromná osoba
+    // bez identifikátorov vs. podnikateľ) — model ho musí vidieť.
+    odberatel: {
+      nazov: hodnota(odberatel.nazov),
+      ico: hodnota(odberatel.ico),
+      dic: hodnota(odberatel.dic),
+      icDph: hodnota(odberatel.icDph),
+      krajina: hodnota(odberatel.krajina),
+    },
+    // Dátum vystavenia: firma môže mať mesačné číselné rady.
+    datumVystavenia: datumZExtrakcie(doklad.extracted),
+    totalAmount: doklad.totalAmount,
+    currency: doklad.currency,
+    // Doklad BEZ položiek (pokuta, poplatok, odvod) nemá z čoho poskladať
+    // lineText — a ten je vstupom hneď troch vecí: filtra pravidiel podľa
+    // kľúčových slov (sediKlucoveSlovo v aiInstructionsService.ts) a retrievalu
+    // príkladov, kategórií aj denníka. S prázdnym reťazcom sa pravidlo účtovníka
+    // TICHO odfiltruje a model rozhoduje len podľa typu a sumy: talianska pokuta
+    // tak namiesto „325100-pokuty šofér" dostala väčšinový nedaňový OZ z denníka.
+    // Jediný text, ktorý taký doklad odlíši, je jeho zhrnutie (textPolozky).
+    lineDescriptions: popisy(doklad.extracted).length > 0
+      ? popisy(doklad.extracted)
+      : [textPolozky].filter((text): text is string => Boolean(text)),
+    polozky: polozkyPreModel(doklad.extracted),
+    // Sadzby z rozpisu DPH: doklad bez položiek ich inak nemá odkiaľ vziať.
+    sadzbyRozpisu: [...new Set((Array.isArray(rozpisDph) ? rozpisDph as Array<{ sadzba?: unknown }> : [])
+      .map((riadok) => Number(riadok.sadzba))
+      .filter((sadzba) => Number.isFinite(sadzba)))],
+  };
+}
+
 async function completeRun(
   database: Database,
   job: JobRow,
@@ -669,80 +774,30 @@ async function completeRun(
     console.warn('[dph-audit] kontrola zlyhala', error);
   }
   if (prepared.isReprocess) return undefined;
-  // Strany dokladu sú spoločné pre celý súbor aj pre doklady, ktoré z neho
-  // vznikli rozdelením — líšia sa len typom, sumou a položkami.
-  const strana = (kluc: 'dodavatel' | 'odberatel') =>
-    (normalized.extracted as Record<string, { krajina?: string } | undefined>)[kluc];
-  const strany = {
-    supplierName: result.supplier.nazov,
-    supplierIco: result.supplier.ico,
-    supplierIcDph: result.supplier.icDph,
-    // Krajina dodávateľa rozhoduje, ČIA daň je na doklade: rakúskych 20 % nie
-    // je slovenská DPH a do slovenského priznania nikdy nevstúpi. Bez nej model
-    // z nenulovej sadzby usudzoval tuzemské zdaniteľné plnenie.
-    supplierKrajina: strana('dodavatel')?.krajina,
-    // Odberateľ rozhoduje o DPH a sekcii KV vydanej faktúry (súkromná osoba
-    // bez identifikátorov vs. podnikateľ) — model ho musí vidieť.
-    odberatel: {
-      nazov: result.buyer.nazov ?? undefined,
-      ico: result.buyer.ico ?? undefined,
-      dic: result.buyer.dic ?? undefined,
-      icDph: result.buyer.icDph ?? undefined,
-      krajina: strana('odberatel')?.krajina,
-    },
-  };
-  /**
-   * Položky pre model sa berú z NORMALIZOVANÉHO dokladu, nie zo surovej odpovede
-   * modelu čítania. Práve normalizácia vie doklad doplniť o riadok, ktorý na
-   * papieri ako položka nestojí — cudziu daň z rekapitulácie: faktúra W.A.G.
-   * má 17 surových položiek a 18 normalizovaných, tou navyše je „DPH IT 22 %".
-   * Návrh sa staval zo surových, takže presne ten riadok, ktorý účtovník účtuje
-   * samostatne, model nikdy nevidel.
-   *
-   * Dôležitejšie je, že do documents.extracted sa ukladá normalizovaný doklad, a
-   * riadky odpovede modelu sa adresujú indexom. Kým model dostával iné pole, než
-   * na aké sa jeho index neskôr uplatní, bola zhoda indexov len zhodou náhod.
-   * Teraz je to zhoda z definície.
-   *
-   * ponytail: strop 60 položiek. Najdlhší doklad v prevádzke má 18 a nad 15 sú
-   * dva zo 125; strop je poistka proti hromadnému importu, nie proti faktúram.
-   */
-  const polozkyModelu = (extracted: unknown) => {
-    const polozky = (extracted as { polozky?: unknown })?.polozky;
-    return Array.isArray(polozky) ? (polozky as Array<Record<string, unknown>>).slice(0, 60) : [];
-  };
-  const polozkyPreModel = (extracted: unknown) => polozkyModelu(extracted).map((polozka) => ({
-    popis: typeof polozka.popis === 'string' ? polozka.popis : undefined,
-    sadzbaDph: typeof polozka.sadzbaDph === 'number' ? polozka.sadzbaDph : undefined,
-    suma: typeof polozka.sumaSpolu === 'number' ? polozka.sumaSpolu : undefined,
-  }));
-  const popisy = (extracted: unknown) => polozkyModelu(extracted)
-    .map((polozka) => (typeof polozka.popis === 'string' ? polozka.popis : ''))
-    .filter(Boolean);
-  return {
-    status,
-    ...strany,
+  const kontext = kontextNavrhu({
     documentType: normalized.documentType,
     // Druh faktúry ide do návrhu zaúčtovania: rozhoduje o sekcii KV aj o tom,
     // ktoré členenia DPH sa modelu vôbec ponúknu.
     podtyp: podtypPreTyp(normalized.documentType, podtyp),
-    // Dátum vystavenia: firma môže mať mesačné číselné rady.
-    datumVystavenia: datumZExtrakcie(normalized.extracted),
+    extracted: normalized.extracted,
     totalAmount: normalized.totalAmount,
     currency: normalized.currency,
-    // Doklad BEZ položiek (pokuta, poplatok, odvod) nemá z čoho poskladať
-    // lineText — a ten je vstupom hneď troch vecí: filtra pravidiel podľa
-    // kľúčových slov (sediKlucoveSlovo v aiInstructionsService.ts) a retrievalu
-    // príkladov, kategórií aj denníka. S prázdnym reťazcom sa pravidlo účtovníka
-    // TICHO odfiltruje a model rozhoduje len podľa typu a sumy: talianska pokuta
-    // tak namiesto „325100-pokuty šofér" dostala väčšinový nedaňový OZ z denníka.
-    // Jediný text, ktorý taký doklad odlíši, je jeho zhrnutie — presne tak to
-    // o pár riadkov nižšie už rieši doklad z rozdelenia.
-    lineDescriptions: popisy(normalized.extracted).length > 0
-      ? popisy(normalized.extracted)
-      : [result.documentSummary].filter((text): text is string => Boolean(text)),
-    polozky: polozkyPreModel(normalized.extracted),
-    // Sadzby z rozpisu DPH: doklad bez položiek ich inak nemá odkiaľ vziať.
+  });
+  // Strany dokladu sú spoločné pre celý súbor aj pre doklady, ktoré z neho
+  // vznikli rozdelením — líšia sa len typom, sumou a položkami.
+  const strany = {
+    supplierName: kontext.supplierName,
+    supplierIco: kontext.supplierIco,
+    supplierIcDph: kontext.supplierIcDph,
+    supplierKrajina: kontext.supplierKrajina,
+    odberatel: kontext.odberatel,
+  };
+  return {
+    status,
+    ...kontext,
+    // Po extrakcii ešte máme surový rozpis: uložený zlučuje cudziu daň do
+    // jedného riadku s 0 % (normalize.ts bezCudzejDane) a návrh po extrakcii
+    // videl sadzby vždy zo surového — to sa tu nemení.
     sadzbyRozpisu: [...new Set(result.vatBreakdown
       .map((riadok) => Number(riadok.vatRate))
       .filter((sadzba) => Number.isFinite(sadzba)))],
@@ -868,6 +923,72 @@ async function spracujAnalyzu(database: Database, config: ServerConfig, job: Job
   }
 }
 
+/**
+ * Nový návrh zaúčtovania pre uložený doklad (NAVRH_KIND).
+ *
+ * Zmena druhu (FP → dobropis, príjem → výdaj) prepočítala v návrhu len číselný
+ * rad; predkontácia, DPH aj dôvod ostali z analýzy pôvodného druhu. Job ich
+ * postaví znova z toho, čo je uložené — príloha sa nečíta a doklad sa nemení,
+ * preto nejde cestou extrakcie.
+ */
+async function spracujNavrh(
+  database: Database,
+  config: ServerConfig,
+  job: JobRow,
+  dependencies: WorkerDependencies,
+): Promise<void> {
+  try {
+    const doklad = (await database.query<{
+      document_type: string; podtyp: string; status: string; extracted: Record<string, unknown> | null;
+      accounting: { pokladnaTyp?: 'receipt' | 'expense' } | null; total_amount: string | number; currency: string;
+    } & Record<string, unknown>>(
+      `SELECT document_type, podtyp, status, extracted, accounting, total_amount, currency
+         FROM documents WHERE id=$1 AND tenant_id=$2 AND organization_id=$3`,
+      [job.document_id, job.tenant_id, job.organization_id],
+    )).rows[0];
+    // Zmazaný doklad nemá čo navrhovať; schválený či exportovaný má zaúčtovanie
+    // potvrdené účtovníkom a nový návrh by ho len rozporoval.
+    if (doklad && !['schvaleny', 'exportovany'].includes(doklad.status)) {
+      const dodavatel = (doklad.extracted?.dodavatel ?? {}) as { nazov?: string; ico?: string; icDph?: string; iban?: string };
+      const vstup = {
+        tenantId: job.tenant_id,
+        organizationId: job.organization_id,
+        documentId: job.document_id!,
+        supplierIco: dodavatel.ico,
+        supplierName: dodavatel.nazov,
+        supplierIcDph: dodavatel.icDph,
+        supplierIban: dodavatel.iban,
+      };
+      await rebuildAccountingSuggestion(database, vstup);
+      // Tie isté hranice ako po extrakcii: výpis má vlastný návrh po pohyboch
+      // a doklad v karanténe môže patriť inej firme.
+      if (doklad.document_type !== 'BV' && doklad.status !== 'karantena') {
+        const ai = await maybeAiAccountingSuggestion(database, config, vstup, kontextNavrhu({
+          documentType: doklad.document_type,
+          podtyp: doklad.podtyp,
+          extracted: doklad.extracted,
+          totalAmount: Number(doklad.total_amount),
+          currency: doklad.currency,
+          pokladnaTyp: doklad.accounting?.pokladnaTyp,
+        }), dependencies.aiParser);
+        // AI nie je nakonfigurovaná (alebo nemá z čoho vyberať): deterministický
+        // návrh je hotový a job tým skončil — opakovanie by nič nezmenilo.
+        if (!ai) console.info(`[ai-navrh] doklad ${job.document_id} ostáva s deterministickým návrhom`);
+      }
+    }
+    await database.query(
+      `UPDATE processing_jobs SET status='succeeded', locked_at=NULL, locked_by=NULL,
+              error_code=NULL, error_message=NULL, updated_at=now()
+        WHERE id=$1`,
+      [job.id],
+    );
+  } catch (chyba) {
+    // Výpadok modelu či databázy sa opakuje ako pri extrakcii; príloha ani beh
+    // extrakcie tu nie sú, failJob preto označí len samotný job.
+    await database.transaction((tx) => failJob(tx, job, undefined, asProviderError(chyba, job.document_id), 0));
+  }
+}
+
 export async function processNextJob(
   database: Database,
   config: ServerConfig,
@@ -882,6 +1003,10 @@ export async function processNextJob(
   if (!job) return false;
   if (job.kind === ANALYZA_KIND) {
     await spracujAnalyzu(database, config, job);
+    return true;
+  }
+  if (job.kind === NAVRH_KIND) {
+    await spracujNavrh(database, config, job, dependencies);
     return true;
   }
   const jobStartedAt = performance.now();
@@ -1073,7 +1198,7 @@ export async function processNextJob(
             // posiela oba už dávno — chýbali len tu.
             // IBAN summary nenesie — službe ho aj tak dodá samotný doklad.
             supplierIcDph: summary.supplierIcDph,
-          }, doklad.kontext);
+          }, doklad.kontext, dependencies.aiParser);
         } catch (cause) {
           // Návrh je voliteľný — chyba AI nezhodí doklad, ktorý je už uložený,
           // a nesmie pripraviť o analýzu ani ostatné doklady zo súboru. Ticho

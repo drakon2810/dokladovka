@@ -241,4 +241,17 @@ describe('druhý hlas', () => {
     expect(spolu.odporucaneClenenieKod).toBe('UN');
     expect(spolu.dovod).toContain('nezhodli');
   });
+
+  // Audit R5: rovnaké členenie, iná sekcia KV. Zlúčenie to bralo ako zhodu,
+  // vrátilo sekciu prvého hlasu a istotu druhého — výkaz tak mohol dostať
+  // riadok, na ktorom sa dva hlasy nezhodli, s istotou 0,9.
+  it('rozchod v sekcii KV nie je zhoda a istotu nezvýši', () => {
+    const a = JSON.parse("{\"verdikt\":\"suhlasi\",\"odporucaneClenenieKod\":\"PD\",\"odporucanaKvSekcia\":\"B2\",\"dovod\":\"a\",\"istota\":0.6}");
+    const b = { ...a, odporucanaKvSekcia: 'KN', istota: 0.9, dovod: 'b' };
+    const spolu = zluc(a, b);
+    expect(spolu.verdikt).toBe('neisty');
+    expect(spolu.istota).toBe(0.6);
+    expect(spolu.dovod).toContain('B2');
+    expect(spolu.dovod).toContain('KN');
+  });
 });
