@@ -80,6 +80,26 @@ describe('normalizácia SK/CZ faktúr', () => {
     expect(kody('1', '0.38', '3.82')).toContain('invalid_line_item');
   });
 
+  // ECH Scientific ECH-5488: „1 × 515.00, Discount 30.00%, Amount 360.50".
+  // Bez zľavy to vyzeralo ako zle prečítaná cena a doklad sa nedal schváliť.
+  it('zľava riadku nie je chyba ceny, cena ostáva pred zľavou', () => {
+    const doklad = (discountPercent: string | undefined) => normalizeExtractionResult({
+      schemaVersion: '2', documentType: 'FP', supplier: { nazov: 'ECH Scientific Ltd', icDph: 'GB260838886', krajina: 'GB' },
+      buyer: { ico: '35761571' }, invoiceNumber: 'ECH-5488', issueDate: '2026-07-27', taxDate: '2026-07-27',
+      dueDate: '2026-08-26', currency: 'EUR',
+      lineItems: [{
+        description: 'Aquamax KF Reagent Kit', quantity: '1', unitPriceWithoutVat: '515.00', discountPercent,
+        vatRate: '0', amountWithoutVat: '360.50', vatAmount: '0', amountTotal: '360.50',
+      }],
+      vatBreakdown: [{ vatRate: '0', base: '360.50', vat: '0' }],
+      totalAmount: '360.50', fieldConfidence: {}, evidence: {}, warnings: [],
+    } as never, 'doc-ech', '2026-07-27');
+    const sozlavou = doklad('30');
+    expect((sozlavou.extracted as any).polozky[0]).toMatchObject({ jednotkovaCenaBezDph: 515, zlavaPercent: 30, sumaBezDph: 360.5 });
+    expect(validateNormalizedExtraction(sozlavou, { ico: '35761571' }).map((issue) => issue.code)).not.toContain('invalid_line_item');
+    expect(validateNormalizedExtraction(doklad(undefined), { ico: '35761571' }).map((issue) => issue.code)).toContain('invalid_line_item');
+  });
+
   // Rakúska diaľničná známka ASFINAG: 89,00 + 20 % = 106,80. Rakúska daň sa
   // v SR neodpočíta ani nevykáže, takže rozpis DPH ostáva jedna nezdaniteľná suma.
   //

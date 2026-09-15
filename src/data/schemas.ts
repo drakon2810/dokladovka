@@ -131,6 +131,7 @@ export const extractionResultSchema = z.object({
       quantity: z.string().optional(),
       unit: z.string().optional(),
       unitPriceWithoutVat: decimalString,
+      discountPercent: decimalString,
       vatRate: z.string().optional(),
       amountWithoutVat: decimalString,
       vatAmount: decimalString,

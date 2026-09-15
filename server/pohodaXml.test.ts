@@ -459,6 +459,16 @@ describe('buildServerDataPack — rozpis na položky (invoiceDetail)', () => {
     expect(xml).toContain('<inv:invoiceSummary>');
   });
 
+  it('zľava riadku ide do POHODY s cenou pred zľavou', () => {
+    const doc = invoiceDocument({
+      polozky: [{ id: 'li-1', popis: 'Aquamax KF', mnozstvo: 1, sadzbaDph: 0, jednotkovaCenaBezDph: 515, zlavaPercent: 30, sumaBezDph: 360.5, sumaDph: 0, sumaSpolu: 360.5 }],
+    });
+    const xml = buildServerDataPack({ id: 'pack-zlava', ico: '35761571', documents: [doc], codeLists: detailCodeLists });
+    expect(xml).toContain('<inv:discountPercentage>30</inv:discountPercentage>');
+    expect(xml).toContain('<typ:unitPrice>515.00</typ:unitPrice>');
+    expect(xml).toContain('<typ:price>360.50</typ:price>');
+  });
+
   it('položky sa importujú s DPH, jednotkou, počtom a pozičným zaúčtovaním', () => {
     const doc = invoiceDocument({
       polozky: [

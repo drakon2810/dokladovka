@@ -16,6 +16,13 @@ describe('recalcItem', () => {
     expect(next.jednotkovaCenaBezDph).toBe(55);
   });
 
+  it('zľava riadku: cena ostáva pred zľavou, základ je po nej', () => {
+    const riadok = item({ sadzbaDph: 0, mnozstvo: 1, jednotkovaCenaBezDph: 515 });
+    expect(recalcItem({ ...riadok, zlavaPercent: 30 }, 'zlavaPercent')).toMatchObject({ sumaBezDph: 360.5, sumaSpolu: 360.5 });
+    // Zadaný základ neprepíše cenu pred zľavou na cenu po nej.
+    expect(recalcItem({ ...riadok, zlavaPercent: 30, sumaBezDph: 360.5 }, 'sumaBezDph').jednotkovaCenaBezDph).toBe(515);
+  });
+
   it('zmena základu dopočíta daň, sumu spolu aj jednotkovú cenu', () => {
     const next = recalcItem(item({ sadzbaDph: 23, mnozstvo: 4, sumaBezDph: 100 }), 'sumaBezDph');
     expect(next).toMatchObject({ sumaDph: 23, sumaSpolu: 123, jednotkovaCenaBezDph: 25 });

@@ -238,7 +238,7 @@ export function validateDocument(
       item.mnozstvo !== undefined &&
       item.jednotkovaCenaBezDph !== undefined &&
       item.sumaBezDph !== undefined &&
-      !isLineItemQuantityConsistent(item.mnozstvo, item.jednotkovaCenaBezDph, item.sumaBezDph)
+      !isLineItemQuantityConsistent(item.mnozstvo, item.jednotkovaCenaBezDph, item.sumaBezDph, item.zlavaPercent)
     ) {
       issues.push({ code: 'invalid_line_item', field: `polozky.${index}.sumaBezDph` });
     }

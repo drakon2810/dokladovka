@@ -23,7 +23,7 @@ const PRAZDNA_STRANA = {
 
 // Polia bankového pohybu — pri faktúrach a mzdách ich model vracia ako null.
 const PRAZDNY_POHYB = {
-  paymentDate: null, counterpartyName: null, counterpartyIban: null,
+  discountPercent: null, paymentDate: null, counterpartyName: null, counterpartyIban: null,
   variableSymbol: null, constantSymbol: null, specificSymbol: null,
 };
 

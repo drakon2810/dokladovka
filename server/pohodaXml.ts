@@ -196,6 +196,9 @@ function documentDetailXml(
     const cena = cudziaDan ? spolu : bezDph;
     const cenaDph = cudziaDan ? 0 : dph;
     const cenaZaJednotku = cudziaDan ? round2(spolu / mnozstvo) : unitPrice;
+    // Zľava ide s cenou pred zľavou. Pri cudzej dani je cena za jednotku už
+    // z celkovej sumy, zľava by sa odpočítala druhýkrát.
+    const zlava = !cudziaDan && Number(item.zlavaPercent) > 0 ? Number(item.zlavaPercent) : 0;
     const accounting = codeLists.predkontacie.get(item.ucto?.predkontaciaId ?? '') ?? header.accounting;
     const classificationVat = codeLists.cleneniaDph.get(item.ucto?.clenenieDphId ?? '') ?? header.classificationVat;
     const kv = item.ucto?.clenenieKvKod || header.kv;
@@ -211,7 +214,7 @@ function documentDetailXml(
       `        <${ns}:coefficient>1.0</${ns}:coefficient>`,
       `        <${ns}:payVAT>false</${ns}:payVAT>`,
       `        <${ns}:rateVAT>${vatRateName(item.sadzbaDph)}</${ns}:rateVAT>`,
-      `        <${ns}:discountPercentage>0.0</${ns}:discountPercentage>`,
+      `        <${ns}:discountPercentage>${zlava ? String(zlava) : '0.0'}</${ns}:discountPercentage>`,
       `        <${ns}:homeCurrency>`,
       `          <typ:unitPrice>${amount(cenaZaJednotku)}</typ:unitPrice>`,
       `          <typ:price>${amount(cena)}</typ:price>`,

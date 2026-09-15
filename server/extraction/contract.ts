@@ -50,6 +50,9 @@ const lineItemWireSchema = z.object({
   quantity: nullableDecimal,
   unit: nullableShortText,
   unitPriceWithoutVat: nullableDecimal,
+  // Zľava riadku v percentách. Bez nej „1 × 515 € so zľavou 30 % = 360,50 €"
+  // vyzerá ako zle prečítaná cena a doklad sa nedá schváliť.
+  discountPercent: nullableDecimal,
   vatRate: nullableDecimal,
   amountWithoutVat: nullableDecimal,
   vatAmount: nullableDecimal,
@@ -201,6 +204,7 @@ export interface ExtractionResult {
     quantity?: string;
     unit?: string;
     unitPriceWithoutVat?: string;
+    discountPercent?: string;
     vatRate?: string;
     amountWithoutVat?: string;
     vatAmount?: string;
@@ -352,7 +356,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   lineItems: z.array(z.object({
     description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
     accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
-    unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
+    unitPriceWithoutVat: z.string().optional(), discountPercent: z.string().optional(), vatRate: z.string().optional(),
     amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
     paymentDate: z.string().optional(), counterpartyName: z.string().optional(),
     counterpartyIban: z.string().optional(), variableSymbol: z.string().optional(),
@@ -370,7 +374,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
     lineItems: z.array(z.object({
       description: z.string().optional(), quantity: z.string().optional(), unit: z.string().optional(),
       accountCode: z.string().optional(), vatClassificationCode: z.string().optional(),
-      unitPriceWithoutVat: z.string().optional(), vatRate: z.string().optional(),
+      unitPriceWithoutVat: z.string().optional(), discountPercent: z.string().optional(), vatRate: z.string().optional(),
       amountWithoutVat: z.string().optional(), vatAmount: z.string().optional(), amountTotal: z.string().optional(),
       paymentDate: z.string().optional(), counterpartyName: z.string().optional(),
       counterpartyIban: z.string().optional(), variableSymbol: z.string().optional(),

@@ -381,10 +381,11 @@ export function cenaBezDane(
   mnozstvo: number | undefined,
   sumaBezDph: number | undefined,
   sumaSpolu: number | undefined,
+  zlavaPercent = 0,
 ): number | undefined {
   if (cena === undefined || !mnozstvo || sumaBezDph === undefined || sumaSpolu === undefined) return cena;
   const tolerancia = 0.02 + Math.abs(mnozstvo) * 0.005;
-  const sucin = round2(mnozstvo * cena);
+  const sucin = round2(mnozstvo * cena * (1 - zlavaPercent / 100));
   if (Math.abs(sucin - sumaBezDph) <= tolerancia) return cena;
   if (Math.abs(sucin - sumaSpolu) > tolerancia) return cena;
   // Štyri desatinné miesta: cena za liter sa tak na dokladoch aj píše a
@@ -414,13 +415,17 @@ export function normalizeExtractionResult(
     const mnozstvo = parseDecimal(item.quantity);
     const bezDph = parseDecimal(item.amountWithoutVat);
     const spolu = parseDecimal(item.amountTotal);
+    // Zľava mimo (0, 100) nie je zľava — nula nič nemení a 100 % by z ceny spravilo nulu.
+    const zlava = parseDecimal(item.discountPercent);
+    const zlavaPercent = zlava !== undefined && zlava > 0 && zlava < 100 ? zlava : undefined;
     return {
       id: `${documentId}-li-${index}`,
       popis: item.description ?? '',
       mnozstvo,
       jednotka: item.unit,
       jednotkovaCenaBezDph: cenaBezDane(
-        parseDecimal(item.unitPriceWithoutVat), mnozstvo, bezDph, spolu),
+        parseDecimal(item.unitPriceWithoutVat), mnozstvo, bezDph, spolu, zlavaPercent),
+      zlavaPercent,
       sadzbaDph: isValidVatRate(rate) ? rate : undefined,
       sumaBezDph: bezDph,
       sumaDph: parseDecimal(item.vatAmount),
@@ -811,8 +816,9 @@ export function validateNormalizedExtraction(
     // množstve sa rozdiel legálne nasčíta: 10 ks × 0,38 € vyjde 3,80, no riadok
     // je 3,82 (skutočná cena za kus je 0,382). Tolerancia preto rastie o pol
     // centa na kus — inak správna faktúra hlási chybu a nedá sa schváliť.
+    // Zľava riadku: „1 × 515 € so zľavou 30 %" je 360,50 €, nie chyba čítania.
     if (item.mnozstvo !== undefined && item.jednotkovaCenaBezDph !== undefined && item.sumaBezDph !== undefined
-      && Math.abs(round2(item.mnozstvo * item.jednotkovaCenaBezDph) - item.sumaBezDph)
+      && Math.abs(round2(item.mnozstvo * item.jednotkovaCenaBezDph * (1 - (item.zlavaPercent ?? 0) / 100)) - item.sumaBezDph)
         > 0.02 + Math.abs(item.mnozstvo) * 0.005 + 1e-9) {
       issues.push({ code: 'invalid_line_item', field: `polozky.${index}.sumaBezDph`, severity: 'error', message: 'Množstvo a jednotková cena nesedia so sumou položky' });
     }

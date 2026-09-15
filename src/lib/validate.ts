@@ -110,9 +110,10 @@ export function isVatRowConsistent(row: VatBreakdownRow, pocetPoloziek = 0): boo
  * (zlé množstvo, zlá cena) sa od sumy líši rádovo viac.
  */
 export function isLineItemQuantityConsistent(
-  mnozstvo: number, jednotkovaCenaBezDph: number, sumaBezDph: number,
+  mnozstvo: number, jednotkovaCenaBezDph: number, sumaBezDph: number, zlavaPercent = 0,
 ): boolean {
-  return Math.abs(mnozstvo * jednotkovaCenaBezDph - sumaBezDph)
+  // Zľava riadku: „1 × 515 € so zľavou 30 %" je 360,50 €, nie chyba.
+  return Math.abs(mnozstvo * jednotkovaCenaBezDph * (1 - zlavaPercent / 100) - sumaBezDph)
     <= VAT_ROW_TOLERANCE + Math.abs(mnozstvo) * 0.005 + 1e-9;
 }
 

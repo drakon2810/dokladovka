@@ -353,7 +353,9 @@ function invoiceDetailLines(
     lines.push('          <inv:coefficient>1.0</inv:coefficient>');
     lines.push('          <inv:payVAT>false</inv:payVAT>');
     lines.push(`          <inv:rateVAT>${vatRateName(item.sadzbaDph)}</inv:rateVAT>`);
-    lines.push('          <inv:discountPercentage>0.0</inv:discountPercentage>');
+    // Rovnako ako server (pohodaXml.ts): zľava ide s cenou pred zľavou, pri cudzej dani nie.
+    const zlava = !cudziaDan && (item.zlavaPercent ?? 0) > 0 ? item.zlavaPercent : 0;
+    lines.push(`          <inv:discountPercentage>${zlava ? String(zlava) : '0.0'}</inv:discountPercentage>`);
     lines.push('          <inv:homeCurrency>');
     lines.push(`            <typ:unitPrice>${formatXmlAmount(unitPrice)}</typ:unitPrice>`);
     lines.push(`            <typ:price>${formatXmlAmount(bezDph)}</typ:price>`);

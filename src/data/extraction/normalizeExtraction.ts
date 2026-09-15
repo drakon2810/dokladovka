@@ -84,6 +84,7 @@ export function normalizeExtractionResult(
         mnozstvo: parseDecimalString(item.quantity),
         jednotka: item.unit,
         jednotkovaCenaBezDph: parseDecimalString(item.unitPriceWithoutVat),
+        zlavaPercent: parseDecimalString(item.discountPercent) || undefined,
         sadzbaDph:
           item.vatRate && Number.isFinite(Number(item.vatRate)) && Number(item.vatRate) >= 0 && Number(item.vatRate) <= 100
             ? (Number(item.vatRate) as VatRate)

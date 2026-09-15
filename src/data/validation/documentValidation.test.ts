@@ -87,6 +87,19 @@ describe('validateDocument — zaokrúhlená jednotková cena', () => {
     expect(validateDocument(polozka(1, 0.38), organization))
       .toContainEqual({ code: 'invalid_line_item', field: 'polozky.0.sumaBezDph' });
   });
+
+  // 1 × 0,382 € so zľavou 50 % je 0,19 € — cena je pred zľavou, riadok po nej.
+  it('zľava riadku nie je nesúlad ceny', () => {
+    const doklad = prijataFaktura({
+      rozpisDph: [{ sadzba: 23, zaklad: 0.19, dph: 0.04 }],
+      sumaSpolu: 0.23,
+      polozky: [{
+        id: 'li-0', popis: 'Kontakt AMP Jun-Timer', mnozstvo: 1, jednotkovaCenaBezDph: 0.38, zlavaPercent: 50,
+        sadzbaDph: 23, sumaBezDph: 0.19, sumaDph: 0.04, sumaSpolu: 0.23,
+      }],
+    });
+    expect(validateDocument(doklad, organization).filter((issue) => issue.code === 'invalid_line_item')).toEqual([]);
+  });
 });
 
 describe('validateDocument — DIČ s prefixom neblokuje schválenie', () => {

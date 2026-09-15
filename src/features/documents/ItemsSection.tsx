@@ -208,7 +208,12 @@ const PencilIcon = () => (
  *  inak riadok označí ako `invalid_line_item` a doklad sa nedá schváliť. */
 function withUnitPrice(item: DocumentLineItem): DocumentLineItem {
   if (!item.mnozstvo || item.sumaBezDph === undefined) return item;
-  return { ...item, jednotkovaCenaBezDph: round2(item.sumaBezDph / item.mnozstvo) };
+  return { ...item, jednotkovaCenaBezDph: round2(item.sumaBezDph / item.mnozstvo / zlavaKoef(item)) };
+}
+
+/** Podiel ceny, ktorý po zľave riadku ostane — jednotková cena je pred zľavou. */
+function zlavaKoef(item: DocumentLineItem): number {
+  return 1 - (item.zlavaPercent ?? 0) / 100;
 }
 
 /**
@@ -232,8 +237,10 @@ export function recalcItem(item: DocumentLineItem, changed: keyof DocumentLineIt
     next.sumaSpolu = round2((next.sumaBezDph ?? 0) + (next.sumaDph ?? 0));
     return next;
   }
-  if (changed === 'mnozstvo' || changed === 'jednotkovaCenaBezDph') {
-    if (next.jednotkovaCenaBezDph !== undefined) next.sumaBezDph = round2(next.jednotkovaCenaBezDph * (next.mnozstvo ?? 1));
+  if (changed === 'mnozstvo' || changed === 'jednotkovaCenaBezDph' || changed === 'zlavaPercent') {
+    if (next.jednotkovaCenaBezDph !== undefined) {
+      next.sumaBezDph = round2(next.jednotkovaCenaBezDph * (next.mnozstvo ?? 1) * zlavaKoef(next));
+    }
   }
   if (next.sumaBezDph === undefined) return { ...next, sumaDph: undefined, sumaSpolu: undefined };
   if (rate !== undefined) {
@@ -258,7 +265,7 @@ function zakladADan(item: DocumentLineItem): { zaklad: number; dph: number } {
   // dá o halier iný základ (241,81 namiesto 241,82) a rozpis sa potom rozíde s
   // faktúrou — a s ňou aj kontrolný výkaz.
   if (item.jednotkovaCenaBezDph !== undefined) {
-    const zaklad = item.jednotkovaCenaBezDph * (item.mnozstvo ?? 1);
+    const zaklad = item.jednotkovaCenaBezDph * (item.mnozstvo ?? 1) * zlavaKoef(item);
     return { zaklad, dph: (zaklad * (item.sadzbaDph ?? 0)) / 100 };
   }
   const spolu = efektivne.spolu ?? item.sumaSpolu;
@@ -526,8 +533,8 @@ export function ItemsSection({
                   <div className="dk-sub">
                     <span className="dk-lbl">Zákazka</span>
                     <DcPick title={zdedene('Zákazka', index, headerUcto?.zakazka)} placeholder={headerUcto?.zakazka ?? '—'} value={item.ucto?.zakazkaId} options={zakazkaOpts} disabled={readOnly} onChange={(value) => patchUcto(item.id, { zakazkaId: value })} />
-                    <span className="dk-lbl" />
-                    <span />
+                    <span className="dk-lbl">Zľava %</span>
+                    <DcCell inputMode="decimal" disabled={readOnly} value={item.zlavaPercent === undefined ? '' : String(item.zlavaPercent)} onCommit={(raw) => patch(item.id, { zlavaPercent: parseOpt(raw) }, 'zlavaPercent')} />
                     <span className="dk-lbl" />
                     {!readOnly && (
                       <button type="button" className="dk-sub-del" onClick={() => removeItem(item.id)}>

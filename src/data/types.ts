@@ -168,6 +168,8 @@ export interface DocumentLineItem {
   mnozstvo?: number;
   jednotka?: string;
   jednotkovaCenaBezDph?: number;
+  /** Zľava riadku v % — jednotková cena je PRED zľavou, sumaBezDph po nej. */
+  zlavaPercent?: number;
   sadzbaDph?: VatRate;
   sumaBezDph?: number;
   sumaDph?: number;
@@ -840,6 +842,7 @@ export interface ExtractionResult {
     quantity?: string;
     unit?: string;
     unitPriceWithoutVat?: string;
+    discountPercent?: string;
     vatRate?: '23' | '21' | '19' | '12' | '5' | '0' | string;
     amountWithoutVat?: string;
     vatAmount?: string;
