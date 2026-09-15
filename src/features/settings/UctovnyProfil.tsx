@@ -89,14 +89,15 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       return;
     }
     const vysledok = dokoncene.vysledok;
+    // Menovateľ sú doklady so známou predkontáciou, nie všetky merané.
     const skore = Object.values(vysledok.presnost?.vysledok ?? {})
       .reduce((sucet, polozka) => ({
-        dokladov: sucet.dokladov + polozka.dokladov,
-        predkontacia: sucet.predkontacia + polozka.predkontacia,
-      }), { dokladov: 0, predkontacia: 0 });
-    const presnost = skore.dokladov > 0
-      ? ` · ${t('uctoProfil.analyzaPresnost')}: ${Math.round((skore.predkontacia / skore.dokladov) * 100)} %`
-        + ` (${skore.dokladov})`
+        znamych: sucet.znamych + (polozka.predkontacia?.znamych ?? 0),
+        spravne: sucet.spravne + (polozka.predkontacia?.spravne ?? 0),
+      }), { znamych: 0, spravne: 0 });
+    const presnost = skore.znamych > 0
+      ? ` · ${t('uctoProfil.analyzaPresnost')}: ${Math.round((skore.spravne / skore.znamych) * 100)} %`
+        + ` (${skore.spravne}/${skore.znamych})`
       : '';
     showToast((vysledok.zlyhanychDavok > 0
       ? `${t('uctoProfil.analyzaCiastocna')} (${vysledok.kategorii}, ${vysledok.zlyhanychDavok}/${vysledok.davok})`

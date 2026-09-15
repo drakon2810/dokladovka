@@ -891,10 +891,14 @@ async function spracujAnalyzu(database: Database, config: ServerConfig, job: Job
     const vysledok = await analyzujUctovnyProfil(database, config, kde);
     // Sebakontrola patrí do tej istej úlohy: bez nej účtovník dostane pravidlá
     // a nemá ako vedieť, či sú lepšie než predtým. Jej zlyhanie nesmie zhodiť
-    // analýzu — tá je už zaplatená a uložená.
+    // analýzu — tá je už zaplatená a uložená. Beží bez AI: každé stlačenie
+    // analýzy pridávalo štyridsať platených volaní a čísla medzi behmi aj tak
+    // neboli porovnateľné.
     let presnost;
     try {
-      presnost = await zmerajPresnost(database, config, kde, { vzorka: job.payload?.vzorka ?? 40 });
+      presnost = await zmerajPresnost(database, config, kde, {
+        rezim: 'bez_ai', vzorka: job.payload?.vzorka ?? 40, uloz: true,
+      });
     } catch (chyba) {
       console.warn('[ucto-profil] sebakontrola po analýze zlyhala:',
         chyba instanceof Error ? chyba.message : chyba);

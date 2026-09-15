@@ -107,6 +107,9 @@ async function najdiPodobnePriklady(
    * takže ako príklad pre ňu neplatí — a naopak. Filter preto berie DVOJICU.
    */
   podtyp: string = 'bezna',
+  /** Meranie: len rozhodnutia potvrdené pred dátumom dokladu — neskoršie
+   *  schválenie toho istého dokladu by bolo jeho vlastnou odpoveďou. */
+  doDatumu?: string,
 ): Promise<PodobnyPriklad[]> {
   if (!lineText) return [];
   const rows = (await database.query<{
@@ -118,8 +121,9 @@ async function najdiPodobnePriklady(
       WHERE tenant_id=$1 AND organization_id=$2 AND excluded=false
         AND predkontacia_id IS NOT NULL AND coalesce(document_type,'FP')=$3
         AND coalesce(podtyp,'bezna')=$4
+        AND ($5::date IS NULL OR created_at < $5::date)
       ORDER BY created_at DESC LIMIT 500`,
-    [input.tenantId, input.organizationId, documentType, podtyp],
+    [input.tenantId, input.organizationId, documentType, podtyp, doDatumu ?? null],
   )).rows;
 
   const scored = rows
@@ -664,6 +668,10 @@ export async function resolveSeriesDefault(
     }
   }
   if (zHistorie !== undefined) return zHistorie.rad;
+  // Bez doDatumu: či história rad dokladu nesie, je vlastnosť importu (od 0061),
+  // nie znalosť o odpovedi. S dátumom by prvý doklad druhu v roku zapol staré
+  // odhady, ktoré firma s takou históriou nikdy nedostane — zmerajRady by
+  // meral cestu, ktorou produkcia nejde.
   const maHistoriuRadov = agendy.length > 0 && (await tx.query(
     `SELECT 1 FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[]) AND rad_external_id IS NOT NULL
@@ -733,6 +741,8 @@ export async function resolveSeriesDefault(
          SELECT ciselny_rad_id, count(*) AS pouzitia
            FROM ucto_decisions
           WHERE tenant_id=$1 AND organization_id=$2 AND ciselny_rad_id IS NOT NULL AND excluded=false
+            -- Pri meraní rozhodujú len použitia spred dokladu, nie budúce schválenia.
+            AND ($6::date IS NULL OR created_at < $6::date)
           GROUP BY ciselny_rad_id
        ) u ON u.ciselny_rad_id=c.id
       WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
@@ -756,7 +766,7 @@ export async function resolveSeriesDefault(
                  '\\D', '', 'g'), ''), '0')::numeric DESC,
                c.code
       LIMIT 1`,
-    [input.tenantId, input.organizationId, agenda, tuzemsky, String(rok)],
+    [input.tenantId, input.organizationId, agenda, tuzemsky, String(rok), doDatumu ?? null],
   );
   return automatic.rows[0]?.id;
 }
@@ -799,6 +809,9 @@ async function zhodnePravidla(
   input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
   strana: { supplierIco?: string; supplierName?: string },
   lineText: string,
+  /** Meranie: pravidlo napísané po dátume dokladu (možno práve kvôli chybe
+   *  merania) nesmie prepisovať návrh pre skorší doklad. */
+  doDatumu?: string,
 ): Promise<ZhodaPravidiel> {
   const rules = await tx.query<SuggestionCandidate & {
     id: string; supplier_ico?: string; supplier_name_normalized?: string;
@@ -808,8 +821,9 @@ async function zhodnePravidla(
             predkontacia_id, clenenie_dph_id, ciselny_rad_id, stredisko_id
        FROM accounting_rules
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
+        AND ($3::date IS NULL OR created_at < $3::date)
       ORDER BY priority, created_at`,
-    [input.tenantId, input.organizationId],
+    [input.tenantId, input.organizationId, doDatumu ?? null],
   );
   const zhoda: ZhodaPravidiel = { candidate: {} };
   for (const row of rules.rows) {
@@ -1161,6 +1175,8 @@ async function kvPreClenenie(
   clenenieDphId: string | undefined,
   agendy: readonly string[],
   kvKod: string | undefined,
+  /** Meranie: prax len spred dokladu — inak sa sekcia doplní z jeho vlastného riadku. */
+  doDatumu?: string,
 ): Promise<string | undefined> {
   if (kvKod || !clenenieDphId) return kvKod;
   const zCiselnika = await tx.query<{ kv_section?: string } & Record<string, unknown>>(
@@ -1176,8 +1192,9 @@ async function kvPreClenenie(
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND clenenie_dph_id=$3
         AND agenda = ANY($4::text[]) AND clenenie_kv_kod IS NOT NULL
+        AND ($5::date IS NULL OR datum < $5::date)
       GROUP BY 1 ORDER BY count(*) DESC LIMIT 1`,
-    [input.tenantId, input.organizationId, clenenieDphId, [...agendy]],
+    [input.tenantId, input.organizationId, clenenieDphId, [...agendy], doDatumu ?? null],
   );
   const prax = zDennika.rows[0];
   if (!prax) return undefined;
@@ -1396,7 +1413,7 @@ const aiSuggestionSchema = z.object({
   riadky: z.array(aiRiadokSchema).nullable(),
 }).strict();
 
-const AI_SUGGESTION_INSTRUCTIONS = `You are the accounting analyst for Slovak double-entry bookkeeping. For every document decide the full posting: predkontácia, členenie DPH and sekcia KV DPH (kontrolný výkaz).
+export const AI_SUGGESTION_INSTRUCTIONS = `You are the accounting analyst for Slovak double-entry bookkeeping. For every document decide the full posting: predkontácia, členenie DPH and sekcia KV DPH (kontrolný výkaz).
 Choose predkontaciaId/clenenieDphId/ciselnyRadId ONLY from the provided code lists; copy "id" values exactly; null when nothing fits — never invent ids. clenenieKvKod is a section code, not an id.
 THE CONTROL STATEMENT SECTIONS, and what each one actually holds (Finančná správa, §78a):
 A1 — issued invoices where the payer is the person liable for Slovak tax, not exempt, excluding simplified invoices.
@@ -1486,6 +1503,8 @@ async function pouzitieCleneni(
   database: Database,
   input: SuggestionInput,
   agendy: readonly string[],
+  /** Meranie: použitia spred dokladu — budúca frekvencia by v ponuke prezradila odpoveď. */
+  doDatumu?: string,
 ): Promise<Map<string, PouzitieClenenia>> {
   if (agendy.length === 0) return new Map();
   const rows = await database.query<{ kod: string; tu: string; inde: string }>(
@@ -1495,8 +1514,9 @@ async function pouzitieCleneni(
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2
         AND clenenie_dph_kod IS NOT NULL AND clenenie_dph_kod <> ''
+        AND ($4::date IS NULL OR datum < $4::date)
       GROUP BY 1`,
-    [input.tenantId, input.organizationId, agendy],
+    [input.tenantId, input.organizationId, agendy, doDatumu ?? null],
   );
   return new Map(rows.rows.map((row) =>
     [row.kod.trim(), { tu: Number(row.tu), inde: Number(row.inde) }]));
@@ -1867,11 +1887,20 @@ async function najdiKategorie(
   lineText: string,
   documentType: string,
   injectedEmbedder?: Embedder,
+  /** Meranie: kategórie sa pri dátume vynechajú, ak ich beh výslovne nechce. */
+  doDatumu?: string,
+  sKategoriami = false,
 ): Promise<KategoriaPreNavrh[]> {
   // Doklad bez položiek nemá čo skórovať. Bez tejto poistky by pravidlo
   // „modelu vždy pošli kandidátov" poslalo najväčšiu kategóriu firmy ako tichý
   // default pre doklad, o ktorom nevieme nič.
   if (!lineText) return [];
+  // Kategórie sú odvodené z CELEJ histórie vrátane meraného dokladu a stav ku
+  // dňu nemajú (created_at je čas analýzy). Pri meraní sa preto vynechajú —
+  // aj s embeddingom; beh, ktorý ich chce, sa v manifeste označí za hornú hranicu.
+  // ponytail: číslo bez kategórií je dolná hranica; skutočný stav ku dňu dá až
+  //   PracticeSnapshot s asOf (R07).
+  if (doDatumu && !sKategoriami) return [];
   const rows = await database.query<KategoriaPreNavrh>(
     `SELECT nazov, popis, slovnik, predkontacia_kod, predkontacia_id, clenenie_dph_kod,
             clenenie_dph_id, clenenie_kv_kod, vynimky, agendy, pocet, rozpis, vektor, vektor_model
@@ -1992,6 +2021,52 @@ function finalnyJsonOdpovede(output: unknown): unknown {
   return undefined;
 }
 
+/** Riadok rozpisu návrhu — tak, ako ide do accounting_suggestions.riadky. */
+interface RiadokNavrhu {
+  index: number;
+  popis: string;
+  predkontaciaId: string;
+  clenenieDphId?: string;
+  clenenieKvKod?: string;
+  podiel?: number;
+  podielDph?: number;
+}
+
+/** Návrh zaúčtovania v tvare riadku accounting_suggestions. */
+export interface NavrhZauctovania {
+  predkontacia_id?: string;
+  clenenie_dph_id?: string;
+  ciselny_rad_id?: string;
+  stredisko_id?: string;
+  clenenie_kv_kod?: string;
+  confidence: number;
+  reason: string;
+  rule_id?: string;
+  riadky: RiadokNavrhu[] | null;
+}
+
+/**
+ * Čo o doklade už leží v databáze. Návrh ho nečíta sám: meranie presnosti
+ * doklad v tabuľke nemá a nesmie ho tam ani na chvíľu vložiť, preto ho zapisovač
+ * načíta a meranie poskladá z korpusu.
+ */
+export interface UlozenyDoklad {
+  doterajsi?: { stredisko_id?: string; clenenie_dph_id?: string };
+  strana?: { ico?: string; icDph?: string; iban?: string } | null;
+  pokladnaTyp?: string | null;
+  datumVystavenia?: string | null;
+  datumDodania?: string | null;
+  accounting: Record<string, string | undefined>;
+  extracted: unknown;
+}
+
+export type VysledokNavrhu = ({ navrh: NavrhZauctovania } | { zdrzanie: string }) & {
+  /** Spotreba tokenov z odpovede modelu — meranie ju sčíta do manifestu. */
+  usage?: Record<string, unknown>;
+  /** Surový JSON modelu: beh sa dá prehodnotiť bez nového volania. */
+  odpovedModelu?: unknown;
+};
+
 export async function maybeAiAccountingSuggestion(
   database: Database,
   config: ServerConfig,
@@ -2017,6 +2092,77 @@ export async function maybeAiAccountingSuggestion(
   // ktorý AI analýza nahradí.
   if (doterajsi?.source === 'manual_rule' && doterajsi.predkontacia_id
     && doterajsi.clenenie_dph_id && doterajsi.clenenie_kv_kod) return false;
+
+  const doklad = (await database.query<{
+    strana: { ico?: string; icDph?: string; iban?: string } | null; pokladna_typ: string | null;
+    datum_vystavenia: string | null; datum_dodania: string | null;
+    accounting: Record<string, string | undefined> | null; extracted: unknown;
+  }>(
+    `SELECT extracted->$3 AS strana, accounting->>'pokladnaTyp' AS pokladna_typ,
+            extracted->>'datumVystavenia' AS datum_vystavenia, extracted->>'datumDodania' AS datum_dodania,
+            accounting, extracted
+       FROM documents WHERE id=$1 AND tenant_id=$2`,
+    [input.documentId, input.tenantId, documentContext.documentType === 'FV' ? 'odberatel' : 'dodavatel'],
+  )).rows[0];
+  const vysledok = await navrhniZauctovanie(database, config, input, documentContext, {
+    doterajsi,
+    strana: doklad?.strana,
+    pokladnaTyp: doklad?.pokladna_typ,
+    datumVystavenia: doklad?.datum_vystavenia,
+    datumDodania: doklad?.datum_dodania,
+    accounting: doklad?.accounting ?? {},
+    extracted: doklad?.extracted ?? {},
+  }, { parser: injectedParser, embedder: injectedEmbedder });
+  if (!('navrh' in vysledok)) return false;
+  const navrh = vysledok.navrh;
+
+  await database.query(
+    `INSERT INTO accounting_suggestions
+      (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,
+       clenenie_kv_kod,source,confidence,reason,based_on_document_id,rule_id,riadky)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ai',$9,$10,NULL,$11,$12::jsonb)
+     ON CONFLICT (document_id) DO UPDATE SET
+       predkontacia_id=excluded.predkontacia_id, clenenie_dph_id=excluded.clenenie_dph_id,
+       ciselny_rad_id=excluded.ciselny_rad_id, stredisko_id=excluded.stredisko_id,
+       clenenie_kv_kod=excluded.clenenie_kv_kod,
+       source='ai', confidence=excluded.confidence, reason=excluded.reason,
+       based_on_document_id=NULL, rule_id=excluded.rule_id, riadky=excluded.riadky, updated_at=now()`,
+    [input.documentId, input.tenantId, input.organizationId,
+      navrh.predkontacia_id ?? null, navrh.clenenie_dph_id ?? null,
+      navrh.ciselny_rad_id ?? null,
+      navrh.stredisko_id ?? null, navrh.clenenie_kv_kod ?? null,
+      navrh.confidence, navrh.reason,
+      // Pravidlo, ktoré do návrhu prispelo — nesie si samokontrolu (updateRuleFeedback).
+      navrh.rule_id ?? null,
+      navrh.riadky ? JSON.stringify(navrh.riadky) : null],
+  );
+  return true;
+}
+
+/**
+ * Návrh zaúčtovania BEZ zápisu a bez čítania dokladu z databázy — všetko
+ * o doklade prichádza v kontexte a v `ulozeny`. Produkcia ho volá cez
+ * maybeAiAccountingSuggestion, meranie presnosti priamo: tak meria presne ten
+ * istý výpočet a nič do ostrých tabuliek nezapíše.
+ */
+export async function navrhniZauctovanie(
+  database: Database,
+  config: ServerConfig,
+  input: SuggestionInput,
+  documentContext: AiSuggestionDocumentContext,
+  ulozeny: UlozenyDoklad,
+  zavislosti: {
+    parser?: AiSuggestionParser;
+    embedder?: Embedder;
+    /** Meranie: bez web searchu — výsledok je opakovateľný a lacnejší. */
+    bezWebu?: boolean;
+    /** Meranie: kategórie aj pri dátume (horná hranica, pozri najdiKategorie). */
+    sKategoriami?: boolean;
+  } = {},
+): Promise<VysledokNavrhu> {
+  const doterajsi = ulozeny.doterajsi;
+  const injectedParser = zavislosti.parser;
+  const asOf = documentContext.historiaDoDatumu;
 
   // Bez LIMITu naprieč kinds — predkontácie sa zúžia textovou podobnosťou nižšie,
   // členenia a rady sú krátke číselníky. 5000 je len poistka proti degenerovaným dátam.
@@ -2063,16 +2209,10 @@ export async function maybeAiAccountingSuggestion(
   // nemusí — a jeden to naozaj nerobil: workerService pri návrhu po extrakcii
   // posielal len meno a IČO, takže karta sa nemala podľa čoho nájsť a oprava
   // vyššie bežala naprázdno. Doklad ich má vždy, tak nech na volajúcom nezáleží.
-  const riadokDokladu = (await database.query<{
-    strana: { ico?: string; icDph?: string; iban?: string } | null; pokladna_typ: string | null;
-    datum_vystavenia: string | null; datum_dodania: string | null;
-  }>(
-    `SELECT extracted->$3 AS strana, accounting->>'pokladnaTyp' AS pokladna_typ,
-            extracted->>'datumVystavenia' AS datum_vystavenia, extracted->>'datumDodania' AS datum_dodania
-       FROM documents WHERE id=$1 AND tenant_id=$2`,
-    [input.documentId, input.tenantId, documentContext.documentType === 'FV' ? 'odberatel' : 'dodavatel'],
-  )).rows[0];
-  const dodavatelDokladu = riadokDokladu?.strana ?? {};
+  const riadokDokladu = {
+    pokladna_typ: ulozeny.pokladnaTyp, datum_vystavenia: ulozeny.datumVystavenia, datum_dodania: ulozeny.datumDodania,
+  };
+  const dodavatelDokladu = ulozeny.strana ?? {};
   const kartaProtistrany = await najdiPartnera(database, input.tenantId, input.organizationId, {
     ...protistranaZDokladu,
     ico: protistranaZDokladu.ico || dodavatelDokladu.ico,
@@ -2104,17 +2244,18 @@ export async function maybeAiAccountingSuggestion(
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];
   const vsetkyPredkontacie = agendovaPonuka(byKind('predkontacie'), povoleneAgendy);
-  if (vsetkyPredkontacie.length === 0) return false;
+  if (vsetkyPredkontacie.length === 0) return { zdrzanie: 'bez_predkontacii' };
 
   // Retrieval beží nad PLNÝM zoznamom predkontácií (nie nad zúženou ponukou),
   // aby sa príklady účtovníka nestratili; ponuka sa potom zjednotí s príkladmi.
   const lineText = normalizeName(documentContext.lineDescriptions.join(' | ')).slice(0, 1000);
   const priklady = await najdiPodobnePriklady(
     database, input, lineText, new Set(vsetkyPredkontacie.map((item) => item.id)),
-    documentContext.documentType, documentContext.podtyp,
+    documentContext.documentType, documentContext.podtyp, asOf,
   );
   const kategorie = await najdiKategorie(
-    database, config, input, lineText, documentContext.documentType, injectedEmbedder);
+    database, config, input, lineText, documentContext.documentType, zavislosti.embedder,
+    asOf, zavislosti.sKategoriami);
   const dennik = await najdiDennik(database, input, lineText, korpus.agendy,
     protistranaKontextu, documentContext.historiaDoDatumu);
   // Účtovný denník vidí to, čo hlavičkový korpus stratil: že doklady tejto
@@ -2163,7 +2304,7 @@ export async function maybeAiAccountingSuggestion(
   // tejto agende a nenulová inde. Kód, ktorý firma nepoužila nikde, ostáva —
   // prvá nadobúdacia faktúra z EÚ je legitímny prvý výskyt a odobrať účtovníkovi
   // jediný správny kód je horšia chyba než tá, ktorú riešime.
-  const pouzitie = await pouzitieCleneni(database, input, korpus.agendy);
+  const pouzitie = await pouzitieCleneni(database, input, korpus.agendy, asOf);
   const kodyDokazov = new Set<string>([
     // Denník je filtrovaný agendou druhu dokladu, takže je bezpečný.
     ...dennik.map((riadok) => riadok.clenenieDphKod).filter((kod): kod is string => Boolean(kod)),
@@ -2219,6 +2360,7 @@ export async function maybeAiAccountingSuggestion(
     faza: 'accounting',
     documentType: documentContext.documentType,
     lineText,
+    asOf,
   }));
 
   const parser = injectedParser ?? (new OpenAI({
@@ -2380,10 +2522,11 @@ export async function maybeAiAccountingSuggestion(
   // Sporný výklad zákona (napr. sekcia KV) si model smie overiť na webe; kódy
   // aj ID berie výhradne z číselníkov v prompte. Keď model alebo účet web
   // search nepodporuje, návrh nesmie vypadnúť celý — zopakujeme ho bez nástroja.
-  let response: { output?: unknown };
+  let response: { output?: unknown; usage?: Record<string, unknown> };
   try {
-    response = await parser.create({ ...poziadavka, tools: [{ type: 'web_search' }] });
+    response = await parser.create(zavislosti.bezWebu ? poziadavka : { ...poziadavka, tools: [{ type: 'web_search' }] });
   } catch (cause) {
+    if (zavislosti.bezWebu) throw cause;
     // Zopakovať sa oplatí LEN pri 400 — tak API hlási nepodporovaný nástroj.
     // Timeout, rate limit či 5xx by druhý pokus len zdvojnásobil čakanie na
     // doklad; klient beží s maxRetries: 0 práve preto, aby sa to nedialo.
@@ -2392,7 +2535,8 @@ export async function maybeAiAccountingSuggestion(
     response = await parser.create(poziadavka);
   }
   const odpoved = finalnyJsonOdpovede(response.output);
-  if (!odpoved) return false;
+  const usage = response.usage;
+  if (!odpoved) return { zdrzanie: 'prazdna_odpoved', usage };
   // Vo formáte pre model je „riadky" povinné pole (structured outputs iné
   // nepustia), pri čítaní odpovede sa ale nevynucuje: chýbajúci rozpis je
   // „doklad sa nedelí", a kvôli nemu nemá padnúť celý návrh.
@@ -2413,15 +2557,12 @@ export async function maybeAiAccountingSuggestion(
         supplierIco: documentContext.supplierIco?.replace(/\D/g, '') || undefined,
         supplierName: normalizeName(documentContext.supplierName) || undefined,
       };
-  const pravidlo = await zhodnePravidla(database, input, protistrana, lineText);
+  const pravidlo = await zhodnePravidla(database, input, protistrana, lineText, asOf);
   // Čo na doklade UŽ je: kódy, ktoré určila extrakcia podľa pravidiel účtovníka
   // (napr. „§ 48 ods. 8 → UNodpS"), prípadne to, čo účtovník vyplnil sám.
   // Model text s odkazom na paragraf nevidí — v prompte sú len popisy položiek —
   // takže by rozhodnutie z pravidla prebil väčšinovým vzorom z denníka.
-  const naDoklade = (await database.query<{ accounting: Record<string, string | undefined> } & Record<string, unknown>>(
-    'SELECT accounting FROM documents WHERE id=$1 AND tenant_id=$2',
-    [input.documentId, input.tenantId],
-  )).rows[0]?.accounting ?? {};
+  const naDoklade = ulozeny.accounting;
   const validated = await onlyActiveIds(database, input, {
     predkontacia_id: pravidlo.candidate.predkontacia_id ?? naDoklade.predkontaciaId ?? parsed.predkontaciaId ?? undefined,
     clenenie_dph_id: pravidlo.candidate.clenenie_dph_id ?? naDoklade.clenenieDphId ?? parsed.clenenieDphId ?? undefined,
@@ -2454,7 +2595,7 @@ export async function maybeAiAccountingSuggestion(
     }
   }
 
-  if (!hasAccounting(validated)) return false;
+  if (!hasAccounting(validated)) return { zdrzanie: 'bez_zauctovania', usage, odpovedModelu: odpoved };
 
   // Členenie z účtu. Prebíja LEN odpoveď modelu: pravidlo účtovníka aj to, čo
   // je na doklade (extrakcia z neho číta odkaz na paragraf, ktorý model
@@ -2535,6 +2676,7 @@ export async function maybeAiAccountingSuggestion(
           // sekciu doniesla kategória, ktorá s dokladom nemá spoločné slovo.
           ?? kvPreDruh(
             kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu),
+        asOf,
       ), druhDokladu)
     : undefined;
 
@@ -2554,7 +2696,7 @@ export async function maybeAiAccountingSuggestion(
   // PN na prijatej faktúre firma legitímne dáva do KN, a to ostane.
   if (kvKod === 'KN' && validated.clenenie_dph_id && !pravidlo.kvKod && !naDoklade.clenenieKvKod) {
     const prax = kvPreDruh(await kvPreClenenie(
-      database, input, validated.clenenie_dph_id, korpus.agendy, undefined,
+      database, input, validated.clenenie_dph_id, korpus.agendy, undefined, asOf,
     ), druhDokladu);
     if (prax && prax !== 'KN') {
       console.info(`[ai-navrh] ${input.documentId}: sekcia KN proti praxi firmy — prepisujem na ${prax}`);
@@ -2614,10 +2756,6 @@ export async function maybeAiAccountingSuggestion(
   // na nastavení firmy nezávisia.
   {
     const profil = dphProfil ?? predvolenyDphProfil(input.tenantId, input.organizationId);
-    const doc = await database.query<{ extracted: unknown } & Record<string, unknown>>(
-      'SELECT extracted FROM documents WHERE id=$1 AND tenant_id=$2',
-      [input.documentId, input.tenantId],
-    );
     // Rozvinúť z ÚPLNÉHO zoznamu členení, nie zo zúženej ponuky — inak by
     // aktívne odpočtové členenie mimo ponuky (ktoré onlyActiveIds prepustí)
     // rozvinulo undefined a DPH blokácia pre neplatiteľa by sa nespustila.
@@ -2626,7 +2764,7 @@ export async function maybeAiAccountingSuggestion(
       : undefined;
     const posudok = posudDph({
       documentType: documentContext.documentType,
-      extracted: (doc.rows[0]?.extracted ?? {}) as Record<string, unknown>,
+      extracted: (ulozeny.extracted ?? {}) as Record<string, unknown>,
       accounting: {
         predkontaciaId: validated.predkontacia_id,
         clenenieDphId: validated.clenenie_dph_id,
@@ -2635,7 +2773,7 @@ export async function maybeAiAccountingSuggestion(
       },
       clenenieDph: clenenie,
     }, profil);
-    if (posudok.blokacie.length > 0) return false;
+    if (posudok.blokacie.length > 0) return { zdrzanie: 'posudok_dph', usage, odpovedModelu: odpoved };
   }
 
   // Strop istoty: bežný AI návrh ostáva na 0.8, teda pod hranicou
@@ -2777,16 +2915,6 @@ export async function maybeAiAccountingSuggestion(
     }
   }
 
-  interface RiadokNavrhu {
-    index: number;
-    popis: string;
-    predkontaciaId: string;
-    clenenieDphId?: string;
-    clenenieKvKod?: string;
-    podiel?: number;
-    podielDph?: number;
-  }
-
   const pouziteIndexy = new Set<number>();
   const riadky: RiadokNavrhu[] = (parsed.riadky ?? []).flatMap((riadok) => {
     const polozka = polozkyPreModel[riadok.index];
@@ -2895,25 +3023,19 @@ export async function maybeAiAccountingSuggestion(
       })));
   }
 
-  await database.query(
-    `INSERT INTO accounting_suggestions
-      (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,
-       clenenie_kv_kod,source,confidence,reason,based_on_document_id,rule_id,riadky)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ai',$9,$10,NULL,$11,$12::jsonb)
-     ON CONFLICT (document_id) DO UPDATE SET
-       predkontacia_id=excluded.predkontacia_id, clenenie_dph_id=excluded.clenenie_dph_id,
-       ciselny_rad_id=excluded.ciselny_rad_id, stredisko_id=excluded.stredisko_id,
-       clenenie_kv_kod=excluded.clenenie_kv_kod,
-       source='ai', confidence=excluded.confidence, reason=excluded.reason,
-       based_on_document_id=NULL, rule_id=excluded.rule_id, riadky=excluded.riadky, updated_at=now()`,
-    [input.documentId, input.tenantId, input.organizationId,
-      validated.predkontacia_id ?? null, validated.clenenie_dph_id ?? null,
-      radNavrhu ?? null,
-      validated.stredisko_id ?? null, kvKod ?? null,
-      Math.min(strop, Math.max(0, parsed.confidence)), dovod.slice(0, 500),
-      // Pravidlo, ktoré do návrhu prispelo — nesie si samokontrolu (updateRuleFeedback).
-      pravidlo.ruleId ?? null,
-      vsetkyRiadky.length > 0 ? JSON.stringify(vsetkyRiadky) : null],
-  );
-  return true;
+  return {
+    navrh: {
+      predkontacia_id: validated.predkontacia_id,
+      clenenie_dph_id: validated.clenenie_dph_id,
+      ciselny_rad_id: radNavrhu,
+      stredisko_id: validated.stredisko_id,
+      clenenie_kv_kod: kvKod,
+      confidence: Math.min(strop, Math.max(0, parsed.confidence)),
+      reason: dovod.slice(0, 500),
+      rule_id: pravidlo.ruleId,
+      riadky: vsetkyRiadky.length > 0 ? vsetkyRiadky : null,
+    },
+    usage,
+    odpovedModelu: odpoved,
+  };
 }

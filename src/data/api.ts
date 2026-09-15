@@ -3364,30 +3364,54 @@ export async function removeSharePointFolders(organizationId: string): Promise<v
   await restRequest(`/api/sharepoint/folders/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
 }
 
+/** Pole merania: presnosť je spravne/znamych, pokrytie navrhnutych/znamych. */
+export interface PresnostPole {
+  spravne: number;
+  znamych: number;
+  navrhnutych: number;
+}
+
+export interface PresnostAgenda {
+  dokladov: number;
+  zdrzanie: number;
+  chyb: number;
+  rozpisanych: number;
+  falosnyRozpis: number;
+  chybajuciRozpis: number;
+  predkontacia: PresnostPole;
+  clenenieDph: PresnostPole;
+  kv: PresnostPole;
+  rad: PresnostPole;
+  tvar: PresnostPole;
+}
+
+export type PresnostRezim = 'bez_ai' | 'ai';
+
 export interface PresnostBeh {
-  id: string;
+  id: string | null;
   delici_datum: string;
   vzorka: number;
-  vysledok: Record<string, {
-    dokladov: number; predkontacia: number; clenenieDph: number;
-    kv: number; rad: number; rozpisanych: number; rozpis: number;
-  }>;
+  /** 1 = staršia metodika (jedno delítko, neznáme DPH/KV ako zhoda) — s 2 neporovnateľná. */
+  metodika?: number;
+  rezim?: PresnostRezim | null;
+  manifest?: Record<string, unknown> | null;
+  vysledok: Record<string, PresnostAgenda>;
   rozdiely: Array<Record<string, unknown>>;
   trvanie_ms?: number;
   created_at?: string;
 }
 
 /**
- * Meranie presnosti: koľko z toho, čo účtovník zaúčtoval, by AI navrhla sama.
- * Beží dlho — jeden doklad je jedno volanie modelu. Výsledok sa ukladá pred
- * odpoveďou, takže aj keď spojenie medzitým vyprší, beh sa nestratí a načíta
- * sa cez listPresnost().
+ * Meranie presnosti: koľko z toho, čo účtovník zaúčtoval, by návrh dal sám.
+ * Bez AI je zadarmo; s AI je jeden doklad jedno volanie modelu. Výsledok sa
+ * ukladá pred odpoveďou, takže aj keď spojenie medzitým vyprší, beh sa
+ * nestratí a načíta sa cez listPresnost().
  */
-export async function zmeratPresnost(orgId: string, vzorka: number): Promise<PresnostBeh> {
+export async function zmeratPresnost(orgId: string, vzorka: number, rezim: PresnostRezim): Promise<{ vzorka: number }> {
   if (!REST_DATA_MODE) throw new Error('Meranie presnosti beží iba v serverovom režime');
-  return restRequest<PresnostBeh>(
+  return restRequest<{ vzorka: number }>(
     `/api/organizations/${encodeURIComponent(orgId)}/ucto-presnost`,
-    { method: 'POST', body: JSON.stringify({ vzorka }) },
+    { method: 'POST', body: JSON.stringify({ vzorka, rezim }) },
   );
 }
 
