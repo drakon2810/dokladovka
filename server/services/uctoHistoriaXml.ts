@@ -120,6 +120,11 @@ export function parseHistoriaXml(xml: string): { rows: HistoryRow[]; warnings: s
       datum: isoDate(header.date),
       supplierIco: text(adresa?.ico)?.replace(/\D/g, '') || undefined,
       supplierName: text(adresa?.company),
+      // Rad presne podľa POHODY, rovnako ako agent — predpona čísla ho neurčí.
+      radExternalId: text(header.number?.id),
+      radKod: text(header.number?.ids),
+      // Krajina z adresy; keď chýba, prezradí ju predpona IČ DPH.
+      krajina: (text(adresa?.country?.ids) ?? /^[A-Za-z]{2}/.exec(text(adresa?.icDph) ?? '')?.[0])?.toUpperCase(),
     };
     const kvHlavicky = platnyKvKod(refIds(header.classificationKVDPH));
     rows.push({

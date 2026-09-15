@@ -16,6 +16,19 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+/** Zapne mostík a spáruje agenta s firmou; vráti hlavičky agenta. */
+async function sparujAgenta(app: Awaited<ReturnType<typeof buildApp>>, seeded: Awaited<ReturnType<typeof seedTestUser>>) {
+  const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+  const browserHeaders = { cookie: String(login.headers['set-cookie']).split(';')[0], 'x-csrf-token': login.json().csrfToken as string };
+  await app.inject({ method: 'PUT', url: '/api/mostik/settings', headers: browserHeaders, payload: { enabled: true } });
+  const pairing = await app.inject({ method: 'POST', url: '/api/mostik/pairing-codes', headers: browserHeaders, payload: { organizationId: seeded.organizationId } });
+  const paired = await app.inject({
+    method: 'POST', url: '/api/agent/pair',
+    payload: { pairingCode: pairing.json().code as string, hostname: 'POHODA-SRV', agentVersion: '1.0.0', companyIco: '12345678' },
+  });
+  return { authorization: `Bearer ${paired.json().agentToken as string}` };
+}
+
 describe('agent backend contour', () => {
   it('pairs once, syncs code lists and confirms an export idempotently', async () => {
     const database = await createTestDatabase();
@@ -482,7 +495,7 @@ describe('agent backend contour', () => {
     // Číselník POHODY prinesie 26PK; 26OZ v ňom nie je a nikdy nebude.
     const ciselnik = await app.inject({
       method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`, headers: agentHeaders,
-      payload: { kind: 'ciselneRady', items: [{ kod: '26PK', nazov: 'Ostatné záväzky-Platba Kartou', agenda: 'ostatni_zavazky', posledneCislo: '26PK474' }] },
+      payload: { kind: 'ciselneRady', items: [{ kod: '26PK', nazov: 'Ostatné záväzky-Platba Kartou', externalId: '635', agenda: 'ostatni_zavazky', posledneCislo: '26PK474' }] },
     });
     expect(ciselnik.statusCode, ciselnik.body).toBe(200);
 
@@ -521,7 +534,7 @@ describe('agent backend contour', () => {
     // A hodinová synchronizácia číselníka ho nesmie zhasnúť — čistí len 'pohoda'.
     await app.inject({
       method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`, headers: agentHeaders,
-      payload: { kind: 'ciselneRady', items: [{ kod: '26PK', nazov: 'Ostatné záväzky-Platba Kartou', agenda: 'ostatni_zavazky' }] },
+      payload: { kind: 'ciselneRady', items: [{ kod: '26PK', nazov: 'Ostatné záväzky-Platba Kartou', externalId: '635', agenda: 'ostatni_zavazky' }] },
     });
     const poSynchronizacii = await database.query<{ last_number: string; active: boolean } & Record<string, unknown>>(
       `SELECT last_number, active FROM code_list_items
@@ -529,6 +542,121 @@ describe('agent backend contour', () => {
       [seeded.tenantId, seeded.organizationId],
     );
     expect(poSynchronizacii.rows[0]).toEqual(expect.objectContaining({ last_number: '26OZ372', active: true }));
+
+    await app.close();
+  }, 90_000);
+
+  // Rad je v POHODE daný identifikátorom, nie kódom. Kľúč podľa kódu zlial
+  // rady s rovnakou predponou do jedného a doklad dostal rad cudzej agendy.
+  it('číselné rady s rovnakým kódom rozlíši identifikátor POHODY a id riadkov drží', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const agentHeaders = await sparujAgenta(app, seeded);
+    // Rad uložený ešte bez identifikátora — naň už môžu odkazovať doklady.
+    const stary = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda)
+       VALUES ($1,$2,$3,'ciselneRady','26FP','Prijaté faktúry','pohoda','prijate_faktury')`,
+      [stary, seeded.tenantId, seeded.organizationId],
+    );
+    const ciselnik = (items: unknown[]) => app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/code-lists`, headers: agentHeaders,
+      payload: { kind: 'ciselneRady', items },
+    });
+    const rady = [
+      { kod: '26', nazov: 'Pokladňa', externalId: '578', agenda: 'pokladna' },
+      { kod: '26', nazov: 'Ostatné záväzky', externalId: '580', agenda: 'ostatni_zavazky' },
+      { kod: '26FP', nazov: 'Prijaté faktúry', externalId: '125', agenda: 'prijate_faktury' },
+    ];
+    const ulozene = async () => (await database.query<{ id: string; external_id: string; code: string; active: boolean } & Record<string, unknown>>(
+      `SELECT id, external_id, code, active FROM code_list_items
+        WHERE organization_id=$1 AND kind='ciselneRady' ORDER BY external_id`,
+      [seeded.organizationId],
+    )).rows;
+
+    const prvy = await ciselnik(rady);
+    expect(prvy.statusCode, prvy.body).toBe(200);
+    const poPrvom = await ulozene();
+    expect(poPrvom.map((row) => [row.external_id, row.code, row.active])).toEqual([
+      ['125', '26FP', true], ['578', '26', true], ['580', '26', true],
+    ]);
+    // Starý rad dostal identifikátor na mieste — nový riadok by odpojil doklady.
+    expect(poPrvom[0].id).toBe(stary);
+
+    // Opakovaný prenos riadky nemení ani nezdvojí.
+    expect((await ciselnik(rady)).statusCode).toBe(200);
+    expect(await ulozene()).toEqual(poPrvom);
+
+    // Rad zrušený v POHODE zhasne podľa identifikátora, hoci jeho kód „26" v dávke ostal.
+    expect((await ciselnik([rady[0], rady[2]])).json()).toMatchObject({ deactivated: 1 });
+    expect((await ulozene()).map((row) => [row.external_id, row.active])).toEqual([
+      ['125', true], ['578', true], ['580', false],
+    ]);
+
+    await app.close();
+  }, 90_000);
+
+  it('história nesie rad dokladu a krajinu a rad z dokladov dostane rok aj z neskoršej dávky', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const agentHeaders = await sparujAgenta(app, seeded);
+    const nahraj = (payload: Record<string, unknown>) => app.inject({
+      method: 'PUT', url: `/api/agent/organizations/${seeded.organizationId}/ucto-history`, headers: agentHeaders, payload,
+    });
+    const rady = async () => (await database.query<Record<string, unknown>>(
+      `SELECT external_id, code, agenda, accounting_year FROM code_list_items
+        WHERE organization_id=$1 AND kind='ciselneRady' ORDER BY external_id`,
+      [seeded.organizationId],
+    )).rows;
+
+    // Rady prídu s prvou dávkou; dva s kódom „26" sú dva rady. Doklad
+    // s posledným číslom FP20 v nej ešte nie je.
+    const prva = await nahraj({
+      reset: true, rows: [],
+      series: [
+        { externalId: '79', kod: 'FP20', agenda: 'prijate_faktury', posledneCislo: 'FP2025764' },
+        { externalId: '578', kod: '26', agenda: 'pokladna' },
+        { externalId: '580', kod: '26', agenda: 'ostatni_zavazky' },
+      ],
+    });
+    expect(prva.statusCode, prva.body).toBe(200);
+    expect(prva.json().rady).toEqual({ nove: 3, aktualizovane: 0 });
+    expect(await rady()).toEqual([
+      { external_id: '578', code: '26', agenda: 'pokladna', accounting_year: null },
+      { external_id: '580', code: '26', agenda: 'ostatni_zavazky', accounting_year: null },
+      { external_id: '79', code: 'FP20', agenda: 'prijate_faktury', accounting_year: null },
+    ]);
+
+    // Doklad s posledným číslom príde až v ďalšej dávke — a bez radu (starší Mostík).
+    const hlavicka = {
+      agenda: 'FP', dokladCislo: 'FP2025764', datum: '2025-12-15', lineText: 'Preprava',
+      predkontaciaKod: '518/321', clenenieDphKod: 'PD', riadokIndex: 0,
+    };
+    const riadky = [hlavicka, { ...hlavicka, lineText: 'Colné služby', riadokIndex: 1 }];
+    expect((await nahraj({ rows: riadky })).statusCode).toBe(200);
+    expect(await rady()).toContainEqual(
+      { external_id: '79', code: 'FP20', agenda: 'prijate_faktury', accounting_year: '2025' });
+
+    const historia = async () => (await database.query<Record<string, unknown>>(
+      `SELECT riadok_index, rad_external_id, rad_kod, krajina FROM ucto_historia
+        WHERE organization_id=$1 ORDER BY riadok_index`,
+      [seeded.organizationId],
+    )).rows;
+    const sRadom = [
+      { riadok_index: 0, rad_external_id: '79', rad_kod: 'FP20', krajina: 'AT' },
+      { riadok_index: 1, rad_external_id: '79', rad_kod: 'FP20', krajina: 'AT' },
+    ];
+    // Opakovaný prenos bez resetu rad doplní existujúcim riadkom, nezdvojí ich.
+    const doplnene = await nahraj({ rows: riadky.map((riadok) => ({ ...riadok, radExternalId: '79', radKod: 'FP20', krajina: 'at' })) });
+    expect(doplnene.json()).toMatchObject({ imported: 0, duplicates: 2 });
+    expect(await historia()).toEqual(sRadom);
+    // A prenos, ktorý rad nepozná (import .mdb), ho nezmaže.
+    expect((await nahraj({ rows: riadky })).statusCode).toBe(200);
+    expect(await historia()).toEqual(sRadom);
 
     await app.close();
   }, 90_000);

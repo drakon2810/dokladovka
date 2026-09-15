@@ -170,7 +170,14 @@ export async function importTrainingRows(
         AND kind IN ('predkontacie','cleneniaDph','ciselneRady','strediska')`,
     [tenantId, organizationId],
   );
-  const idPreKod = new Map(codeLists.rows.map((row) => [`${row.kind}:${row.code.trim()}`, row.id]));
+  const idPreKod = new Map<string, string | null>();
+  for (const row of codeLists.rows) {
+    const kluc = `${row.kind}:${row.code.trim()}`;
+    // Kód, ktorý nesie viac číselných radov („26" v pokladni aj v ostatných
+    // záväzkoch), je viacznačný: rad sa nepriradí, ale riadok sa neodmietne —
+    // zaúčtovanie z neho platí bez ohľadu na rad.
+    idPreKod.set(kluc, row.kind === 'ciselneRady' && idPreKod.has(kluc) ? null : row.id);
+  }
 
   const rejected: Array<{ index: number; dovod: string }> = [];
   const resolved: Array<{
@@ -194,6 +201,10 @@ export async function importTrainingRows(
         continue;
       }
       const found = idPreKod.get(`${kind}:${kod}`);
+      if (found === null) {
+        ids[field] = null;
+        continue;
+      }
       if (!found) {
         rejected.push({ index, dovod: `Kód „${kod}" nie je v aktívnom číselníku (${kind})` });
         return;

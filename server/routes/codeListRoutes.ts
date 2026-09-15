@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
 import { writeAudit } from '../audit.js';
 import { seedTaxRatioDefaults } from '../services/taxRatios.js';
-import type { Database } from '../db/database.js';
+import type { Database, Queryable } from '../db/database.js';
 
 const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'zakazky', 'cinnosti', 'projekty', 'bankoveUcty'] as const;
 const itemSchema = z.object({
@@ -38,6 +38,49 @@ const importSchema = z.object({
 
 type Counts = { nove: number; aktualizovane: number; vyradene: number; bezZmeny: number };
 
+type PolozkaKluc = { kod: string; externalId?: string };
+
+/**
+ * Číselný rad je v POHODE daný identifikátorom, nie kódom: ten istý kód („26")
+ * nesie rad pokladne aj ostatných záväzkov (migrácia 0062). Ostatné číselníky
+ * a rad bez identifikátora ostávajú kľúčované kódom.
+ */
+function radPodlaId(kind: string, item: PolozkaKluc): item is PolozkaKluc & { externalId: string } {
+  return kind === 'ciselneRady' && Boolean(item.externalId);
+}
+
+/** Kľúč položky v jednej dávke — dva rady s rovnakým kódom nie sú duplicita. */
+export function klucPolozky(kind: string, item: PolozkaKluc): string {
+  return radPodlaId(kind, item) ? `id:${item.externalId}` : item.kod;
+}
+
+/** ON CONFLICT musí menovať presne ten čiastočný index, do ktorého riadok patrí. */
+export function konfliktPolozky(kind: string, item: PolozkaKluc): string {
+  if (kind !== 'ciselneRady') return `(tenant_id, organization_id, kind, code) WHERE kind <> 'ciselneRady'`;
+  return radPodlaId(kind, item)
+    ? `(tenant_id, organization_id, external_id) WHERE kind = 'ciselneRady' AND external_id IS NOT NULL`
+    : `(tenant_id, organization_id, code) WHERE kind = 'ciselneRady' AND external_id IS NULL`;
+}
+
+/**
+ * Rad uložený ešte bez identifikátora (ručne, starším prenosom) si prvý prenos
+ * s identifikátorom osvojí a nezaloží druhý riadok: na jeho id odkazujú doklady,
+ * návrhy aj predvolené rady — bez cudzieho kľúča, takže nový riadok by ich
+ * potichu odpojil.
+ */
+export async function osvojRadBezIdentifikatora(
+  db: Queryable, tenantId: string, organizationId: string, kind: string, item: PolozkaKluc,
+): Promise<void> {
+  if (!radPodlaId(kind, item)) return;
+  await db.query(
+    `UPDATE code_list_items SET external_id=$4, updated_at=now()
+      WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND code=$3 AND external_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM code_list_items
+                         WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND external_id=$4)`,
+    [tenantId, organizationId, item.kod, item.externalId],
+  );
+}
+
 export function registerCodeListRoutes(app: FastifyInstance, database: Database): void {
   app.put('/api/organizations/:id/code-lists/import', async (request) => {
     const auth = await requireBrowserAuth(request, database);
@@ -60,16 +103,20 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
         const incoming = [...body.perKind[kind].nove, ...body.perKind[kind].aktualizovane];
         const seen = new Set<string>();
         for (const item of incoming) {
-          if (seen.has(item.kod)) throw new Error(`Kód ${item.kod} je v importe uvedený viackrát`);
-          seen.add(item.kod);
+          const kluc = klucPolozky(kind, item);
+          if (seen.has(kluc)) throw new Error(`Kód ${item.kod} je v importe uvedený viackrát`);
+          seen.add(kluc);
+          await osvojRadBezIdentifikatora(tx, auth.tenantId, id, kind, item);
+          const podlaId = radPodlaId(kind, item);
           const existing = await tx.query<{
             id: string; name: string; source: string; active: boolean; external_id?: string;
             agenda?: string; accounting_year?: string; last_number?: string; kv_section?: string;
             ucet_md?: string; ucet_dal?: string; iban?: string; mena?: string;
           } & Record<string, unknown>>(
             `SELECT id,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena FROM code_list_items
-              WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3 AND code=$4`,
-            [auth.tenantId, id, kind, item.kod],
+              WHERE tenant_id=$1 AND organization_id=$2 AND kind=$3
+                AND ${podlaId ? 'external_id=$4' : "code=$4 AND (kind <> 'ciselneRady' OR external_id IS NULL)"}`,
+            [auth.tenantId, id, kind, podlaId ? item.externalId : item.kod],
           );
           const row = existing.rows[0];
           const unchanged = row && row.source === 'pohoda' && row.active && row.name === item.nazov
@@ -90,13 +137,13 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
             `INSERT INTO code_list_items
               (id,tenant_id,organization_id,kind,code,name,source,active,external_id,agenda,accounting_year,last_number,kv_section,ucet_md,ucet_dal,iban,mena,synced_at)
              VALUES ($1,$2,$3,$4,$5,$6,'pohoda',true,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-             ON CONFLICT (tenant_id,organization_id,kind,code) DO UPDATE SET
+             ON CONFLICT ${konfliktPolozky(kind, item)} DO UPDATE SET
                name=EXCLUDED.name,source='pohoda',active=true,external_id=EXCLUDED.external_id,
                agenda=EXCLUDED.agenda,accounting_year=EXCLUDED.accounting_year,last_number=EXCLUDED.last_number,
                kv_section=EXCLUDED.kv_section,ucet_md=EXCLUDED.ucet_md,ucet_dal=EXCLUDED.ucet_dal,
                iban=EXCLUDED.iban,mena=EXCLUDED.mena,
                synced_at=EXCLUDED.synced_at,updated_at=now()`,
-            [randomUUID(), auth.tenantId, id, kind, item.kod, item.nazov, item.externalId ?? null,
+            [randomUUID(), auth.tenantId, id, kind, item.kod, item.nazov, item.externalId || null,
               item.agenda ?? null, item.uctovnyRok ?? null, item.posledneCislo ?? null, item.kvSekcia ?? null,
               item.ucetMd ?? null, item.ucetDal ?? null, item.iban ?? null, item.mena ?? null, syncedAt],
           );

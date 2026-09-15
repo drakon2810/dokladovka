@@ -76,4 +76,46 @@ describe('import číselníkov — posledné číslo a sekcia KV DPH', () => {
     expect(again.json().perKind.cleneniaDph.bezZmeny).toBe(1);
     await app.close();
   }, 120_000);
+
+  // Rad je v POHODE daný identifikátorom: „26" v pokladni aj v ostatných
+  // záväzkoch sú dva rady, nie duplicitný kód.
+  it('dva číselné rady s rovnakým kódom uloží oba a druhý import ich nezmení', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const headers = sessionHeaders(
+      await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } }),
+    );
+    const payload = {
+      orgId: seeded.organizationId,
+      perKind: {
+        predkontacie: emptyKind(), cleneniaDph: emptyKind(), strediska: emptyKind(),
+        ciselneRady: {
+          nove: [
+            { kod: '26', nazov: 'Pokladňa', externalId: '578', agenda: 'pokladna' },
+            { kod: '26', nazov: 'Ostatné záväzky', externalId: '580', agenda: 'ostatni_zavazky' },
+          ],
+          aktualizovane: [], bezZmeny: 0, vyradene: [],
+        },
+      },
+    };
+    const importuj = () => app.inject({
+      method: 'PUT', url: `/api/organizations/${seeded.organizationId}/code-lists/import`, headers, payload,
+    });
+
+    const prvy = await importuj();
+    expect(prvy.statusCode, prvy.body).toBe(200);
+    expect(prvy.json().perKind.ciselneRady.nove).toBe(2);
+    expect((await importuj()).json().perKind.ciselneRady).toMatchObject({ nove: 0, aktualizovane: 0, bezZmeny: 2 });
+    const rady = await database.query<{ external_id: string; agenda: string }>(
+      "SELECT external_id, agenda FROM code_list_items WHERE organization_id=$1 AND kind='ciselneRady' ORDER BY external_id",
+      [seeded.organizationId],
+    );
+    expect(rady.rows).toEqual([
+      { external_id: '578', agenda: 'pokladna' },
+      { external_id: '580', agenda: 'ostatni_zavazky' },
+    ]);
+    await app.close();
+  }, 120_000);
 });

@@ -52,6 +52,11 @@ export async function nacitajCiselnikIndex(
 export function najdiKod(index: CodeIndex, kind: CodeKind, code: unknown): string | undefined {
   const hladane = normalizuj(code);
   if (!hladane) return undefined;
+  // Ten istý kód smie niesť viac číselných radov („26" v pokladni aj
+  // v ostatných záväzkoch). Ktorý z nich pravidlo myslí, sa z kódu nevyčíta —
+  // posledný načítaný by bol náhoda, tak radšej žiadny. Prefixy držia
+  // viacznačný kód ako null.
+  if (kind === 'ciselneRady' && index.prefixy.get(kind)?.get(hladane) === null) return undefined;
   const presne = index.presne.get(kind)?.get(hladane);
   if (presne) return presne;
   // Jednoznačný kandidát, ktorý hľadaným kódom začína („521100/331100" → „…HM").
