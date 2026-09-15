@@ -898,6 +898,90 @@ public sealed class AgentTests
         Assert.Null(rady.Single(rad => rad.Kod == "2026").PokladnaKod);
     }
 
+    // Rady s rovnakým prefixom v rôznych agendách. Kľúč podľa kódu druhý rad
+    // ticho zahodil a server potom rad hádal podľa prefixu. id sa berie len
+    // z hlavičky radu: typ:id pokladne tu schválne koliduje s prvým radom.
+    [Fact]
+    public void ParseCodeLists_RadySRovnakymPrefixomOstanuObidva()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="c03" state="ok">
+                <lst:listNumericalSeries xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:numericalSeries xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd" version="2.0">
+                    <nms:numericalSeriesHeader>
+                      <nms:id>13</nms:id>
+                      <nms:prefix>2026</nms:prefix>
+                      <nms:name>Prijate faktury</nms:name>
+                      <nms:agenda>prijate_faktury</nms:agenda>
+                    </nms:numericalSeriesHeader>
+                  </lst:numericalSeries>
+                  <lst:numericalSeries xmlns:nms="http://www.stormware.cz/schema/version_2/numericalSeries.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <nms:numericalSeriesHeader>
+                      <nms:cashAccount><typ:id>13</typ:id><typ:ids>HP1</typ:ids></nms:cashAccount>
+                      <nms:id>27</nms:id>
+                      <nms:prefix>2026</nms:prefix>
+                      <nms:name>Pokladna</nms:name>
+                      <nms:agenda>pokladna</nms:agenda>
+                    </nms:numericalSeriesHeader>
+                  </lst:numericalSeries>
+                </lst:listNumericalSeries>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var rady = PohodaXml.ParseCodeLists(response).Items["ciselneRady"];
+        Assert.Equal(
+            new (string?, string?, string?)[] { ("2026", "13", "prijate_faktury"), ("2026", "27", "pokladna") },
+            rady.Select(rad => ((string?)rad.Kod, rad.ExternalId, rad.Agenda)));
+    }
+
+    // Rad a krajina dokladu v korpuse. Bez nich server rad nového dokladu hádal
+    // zo začiatku čísla. Nesie ich hlavička aj každá položka; krajina bez kódu
+    // krajiny v adrese sa berie z prefixu IČ DPH, nikdy z dodacej adresy.
+    [Fact]
+    public void ParseHistoryRows_NesieRadAKrajinuDokladu()
+    {
+        const string response = """
+            <?xml version="1.0" encoding="Windows-1250"?>
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h01" state="ok">
+                <lst:listInvoice xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" version="2.0">
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:number><typ:id>41</typ:id><typ:ids>DF260</typ:ids><typ:numberRequested>DF260200</typ:numberRequested></inv:number>
+                      <inv:partnerIdentity><typ:address><typ:company>Print-Office s.r.o.</typ:company><typ:icDph>CZ99887766</typ:icDph><typ:country><typ:ids>sk</typ:ids></typ:country></typ:address></inv:partnerIdentity>
+                      <inv:text>Tonery</inv:text>
+                      <inv:accounting><typ:ids>501/321</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                    <inv:invoiceDetail>
+                      <inv:invoiceItem><inv:text>Toner HP</inv:text></inv:invoiceItem>
+                    </inv:invoiceDetail>
+                  </lst:invoice>
+                  <lst:invoice xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0">
+                    <inv:invoiceHeader>
+                      <inv:invoiceType>receivedInvoice</inv:invoiceType>
+                      <inv:number><typ:id>42</typ:id><typ:ids>ZF260</typ:ids><typ:numberRequested>ZF260414</typ:numberRequested></inv:number>
+                      <inv:partnerIdentity>
+                        <typ:address><typ:company>Dodavatel CZ</typ:company><typ:icDph>CZ123</typ:icDph></typ:address>
+                        <typ:shipToAddress><typ:country><typ:ids>AT</typ:ids></typ:country></typ:shipToAddress>
+                      </inv:partnerIdentity>
+                      <inv:text>Preprava</inv:text>
+                      <inv:accounting><typ:ids>518/321</typ:ids></inv:accounting>
+                    </inv:invoiceHeader>
+                  </lst:invoice>
+                </lst:listInvoice>
+              </rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var rows = PohodaXml.ParseHistoryRows(response).Rows;
+        Assert.Equal(
+            new (string?, string?, string?)[] { ("41", "DF260", "SK"), ("41", "DF260", "SK"), ("42", "ZF260", "CZ") },
+            rows.Select(row => (row.RadExternalId, row.RadKod, row.Krajina)));
+        Assert.Equal(new int?[] { 0, 1, 0 }, rows.Select(row => row.RiadokIndex));
+    }
+
     // Stránkovanie denníka. Strana je 10 000 proviozok (strop schémy); SLO SERVICES
     // naň narazila presne a zvyšok roka sa nepreniesol.
     [Fact]
