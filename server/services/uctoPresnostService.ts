@@ -682,7 +682,12 @@ export interface RadyVysledok {
 export async function zmerajRady(
   database: Database,
   input: { tenantId: string; organizationId: string },
-  moznosti: { od?: string } = {},
+  moznosti: {
+    od?: string;
+    /** Skupina podľa predkontácie hlavičky so SKUTOČNOU predkontáciou z histórie
+     *  — horná hranica; v produkcii ju dáva kandidát či model. */
+    predkontacia?: boolean;
+  } = {},
 ): Promise<RadyVysledok> {
   // Predvolene od 1. januára posledného roka, ktorý rad dokladu nesie: staršie
   // roky majú v POHODE iné rady a výber by sa meral na tom, čo firma nerobí.
@@ -698,7 +703,7 @@ export async function zmerajRady(
   const doklady = (await database.query<Record<string, any>>(
     `SELECT DISTINCT ON (agenda, doklad_cislo)
             agenda, doklad_cislo, datum::text AS datum, supplier_ico, supplier_name_normalized,
-            krajina, rad_external_id, rad_kod
+            krajina, rad_external_id, rad_kod, btrim(predkontacia_kod) AS predkontacia_kod
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND rad_external_id IS NOT NULL
         AND doklad_cislo IS NOT NULL AND datum >= $3::date AND agenda=ANY($4::text[])
@@ -716,7 +721,7 @@ export async function zmerajRady(
     const navrh = await resolveSeriesDefault(
       database, input, druh.typ, doklad.datum, druh.podtyp,
       { ico: doklad.supplier_ico ?? undefined, nazov: doklad.supplier_name_normalized ?? undefined, krajina: doklad.krajina ?? undefined },
-      doklad.datum, druh.pokladnaTyp,
+      doklad.datum, druh.pokladnaTyp, moznosti.predkontacia ? doklad.predkontacia_kod ?? undefined : undefined,
     );
     const skore = vysledok.podlaAgendy[doklad.agenda] ??= { dokladov: 0, spravne: 0, prazdne: 0 };
     skore.dokladov += 1;

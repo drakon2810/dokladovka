@@ -620,6 +620,14 @@ async function completeRun(
   const cisloVPohode = prepared.isReprocess
     ? undefined
     : cisloVPohodeZDokladu(normalized.documentType, normalized.extracted);
+  // Smer pokladničného dokladu sa pri vzniku neukladal — editor „Výdajový" len
+  // zobrazoval a AI pre doklad bez smeru brala históriu príjmov aj výdajov
+  // naraz. Doklad, ktorý vystavila sama firma, je príjem; ostatné výdaj.
+  // V SQL ide pred uložené zaúčtovanie, takže smer, ktorý doklad už má, neprepíše.
+  const kluc = (hodnota?: string | null) => String(hodnota ?? '').replace(/[^0-9a-z]/gi, '').toUpperCase();
+  const vystavilaFirma = [[result.supplier.ico, context.organization_ico], [result.supplier.icDph, context.organization_ic_dph]]
+    .some(([strana, firma]) => kluc(firma) !== '' && kluc(strana) === kluc(firma));
+  const smerPokladne = (typ: string) => JSON.stringify(typ === 'PD' ? { pokladnaTyp: vystavilaFirma ? 'receipt' : 'expense' } : {});
 
   await database.transaction(async (tx) => {
     await tx.query(
@@ -643,7 +651,7 @@ async function completeRun(
     } else {
       await tx.query(
         `UPDATE documents SET document_type=$1,podtyp=$16,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
-                accounting=accounting || $15::jsonb,
+                accounting=$17::jsonb || accounting || $15::jsonb,
                 field_confidence=$4::jsonb,confidence=$5,total_amount=$6,currency=$7,
                 quarantine_reason=$8,duplicate_of_document_id=$9,applied_extraction_run_id=$10,
                 source=source || jsonb_build_object('format', $11::text),updated_at=now()
@@ -662,7 +670,9 @@ async function completeRun(
           }),
           // $16 — pridané na KONIEC. Vložené pred $15 by posunulo zaúčtovanie
           // do stĺpca podtyp a doklad by prestal mať predkontáciu.
-          podtypPreTyp(normalized.documentType, podtyp)],
+          podtypPreTyp(normalized.documentType, podtyp),
+          // $17 — predvolený smer pokladne, z rovnakého dôvodu tiež na konci.
+          smerPokladne(normalized.documentType)],
       );
       // Partner sa založí/doplní z dodávateľa ešte pred návrhom zaúčtovania,
       // aby predvoľby partnera platili už pre tento doklad.
@@ -700,7 +710,7 @@ async function completeRun(
             (id,tenant_id,organization_id,queue_id,document_type,status,processing_status,source,extracted,
              accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id)
            SELECT $1,tenant_id,organization_id,queue_id,$2,$3,'ready_for_review',source,$4::jsonb,
-             accounting || $10::jsonb,field_confidence,confidence,$5,$6,$7::jsonb,$8
+             $11::jsonb || accounting || $10::jsonb,field_confidence,confidence,$5,$6,$7::jsonb,$8
              FROM documents WHERE id=$8 AND tenant_id=$9`,
           [dalsi.id, dalsi.normalized.documentType, status,
             JSON.stringify(ciselnikIndex
@@ -709,7 +719,8 @@ async function completeRun(
             dalsi.normalized.totalAmount, dalsi.normalized.currency,
             JSON.stringify([{ ts: new Date().toISOString(), user: 'Systém', akcia: 'Doklad vznikol rozdelením prijatého súboru podľa pravidla' }]),
             prepared.documentId, job.tenant_id,
-            JSON.stringify(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, dalsi.zdroj) : {})],
+            JSON.stringify(ciselnikIndex ? zauctovanieZKodov(ciselnikIndex, dalsi.zdroj) : {}),
+            smerPokladne(dalsi.normalized.documentType)],
         );
         await rebuildAccountingSuggestion(tx, {
           tenantId: job.tenant_id,

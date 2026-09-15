@@ -461,6 +461,7 @@ interface DokladRadu extends Record<string, unknown> {
   supplier_name_normalized: string | null;
   krajina: string | null;
   mesiac: number;
+  predkontacia: string | null;
 }
 
 /** Najčastejší rad skupiny dokladov a jeho podiel v nej. */
@@ -489,7 +490,7 @@ async function vyberRadZDokladov(
   input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
   agenda: string,
   doklady: DokladRadu[],
-  novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number },
+  novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number; predkontacia: string },
   rok: number,
 ): Promise<{ rad: string | null; rozhodny: boolean }> {
   // Mesačná firma: aspoň dva mesiace s tromi a viac dokladmi, každý takmer celý
@@ -510,12 +511,22 @@ async function vyberRadZDokladov(
   // Poradie = prednosť pri rovnakom podiele. Mesiac ide pred protistranu:
   // v mesačnej firme sú doklady protistrany z iných mesiacov, takže jej „100 %"
   // je rad TOHO mesiaca, nie tohto — stály zákazník by dostal februárový rad.
-  const skupiny: Array<{ doklady: DokladRadu[]; minimum: number }> = [
+  //
+  // Predkontácia hlavičky delí súbežné rady tej istej agendy (záväzky a platby
+  // kartou, mzdy a odpisy), ktoré protistrana ani krajina nerozlíšia. Nový
+  // doklad ju má od kandidáta či modelu, nie od účtovníka — preto o rozhodnosti
+  // nerozhoduje a nastavenie radu neprebije.
+  const skupiny: Array<{ doklady: DokladRadu[]; minimum: number; zModelu?: boolean }> = [
     { doklady: mesacna ? podlaMesiaca.get(novy.mesiac) ?? [] : [], minimum: 1 },
     {
       doklady: doklady.filter((doklad) => (novy.ico !== '' && doklad.supplier_ico === novy.ico)
         || (novy.nazov !== '' && doklad.supplier_name_normalized === novy.nazov)),
       minimum: 2,
+    },
+    {
+      doklady: novy.predkontacia === '' ? [] : doklady.filter((doklad) => doklad.predkontacia === novy.predkontacia),
+      minimum: 3,
+      zModelu: true,
     },
     {
       doklady: novy.tuzemsky === null ? [] : doklady.filter((doklad) =>
@@ -525,7 +536,7 @@ async function vyberRadZDokladov(
     { doklady, minimum: 1 },
   ];
   const rady = skupiny.filter((skupina) => skupina.doklady.length >= skupina.minimum)
-    .map((skupina) => ({ ...najcastejsiRad(skupina.doklady), pocet: skupina.doklady.length }));
+    .map((skupina) => ({ ...najcastejsiRad(skupina.doklady), pocet: skupina.doklady.length, zModelu: skupina.zModelu }));
   let vybrany: { id: string; podiel: number } | undefined;
   for (const rad of rady) if (!vybrany || rad.podiel > vybrany.podiel) vybrany = rad;
   // Rozhodnosť sa pýta, či rad nesie AKÁKOĽVEK dosť veľká jednotná skupina, nie
@@ -533,7 +544,7 @@ async function vyberRadZDokladov(
   // s 95 % v tom istom rade, a ten rad je pritom rozhodný.
   return {
     rad: vybrany?.id ?? null,
-    rozhodny: rady.some((rad) => rad.id === vybrany?.id && rad.pocet >= 5 && rad.podiel >= 0.9),
+    rozhodny: rady.some((rad) => !rad.zModelu && rad.id === vybrany?.id && rad.pocet >= 5 && rad.podiel >= 0.9),
   };
 }
 
@@ -561,6 +572,8 @@ async function radZHistorie(
   datum: string,
   protistrana: { nazov?: string; ico?: string; icDph?: string; krajina?: string } | undefined,
   doDatumu: string | undefined,
+  /** Predkontácia nového dokladu (kandidát či model) — delí súbežné rady agendy. */
+  predkontaciaKod?: string,
 ): Promise<{ rad: string | null; rozhodny: boolean } | undefined> {
   if (agendy.length === 0) return undefined;
   const rok = Number(datum.slice(0, 4));
@@ -569,7 +582,7 @@ async function radZHistorie(
   const doklady = async (rokDokladov: number) => (await tx.query<DokladRadu>(
     `SELECT DISTINCT ON (h.agenda, h.doklad_cislo)
             c.id AS rad_id, h.supplier_ico, h.supplier_name_normalized, h.krajina,
-            extract(month FROM h.datum)::int AS mesiac
+            extract(month FROM h.datum)::int AS mesiac, btrim(h.predkontacia_kod) AS predkontacia
        FROM ucto_historia h
        JOIN code_list_items c
          ON c.tenant_id=h.tenant_id AND c.organization_id=h.organization_id AND c.kind='ciselneRady'
@@ -586,6 +599,7 @@ async function radZHistorie(
     nazov: normalizeName(protistrana?.nazov ?? ''),
     tuzemsky: tuzemskaProtistrana(protistrana),
     mesiac: Number(datum.slice(5, 7)),
+    predkontacia: predkontaciaKod?.trim() ?? '',
   };
 
   const tohtoRoka = await doklady(rok);
@@ -629,6 +643,8 @@ export async function resolveSeriesDefault(
   protistrana?: { nazov?: string; ico?: string; icDph?: string; krajina?: string },
   doDatumu?: string,
   pokladnaTyp?: string,
+  /** Predkontácia kandidáta či modelu — rozlíši súbežné rady, nastavenie účtovníka neprebije. */
+  predkontaciaKod?: string,
 ): Promise<string | null | undefined> {
   const agenda = agendaRadu(documentType, podtyp);
   if (!agenda) return undefined;
@@ -638,7 +654,7 @@ export async function resolveSeriesDefault(
     .find((hodnota) => /^\d{4}-\d{2}-\d{2}/.test(hodnota)) ?? new Date().toISOString().slice(0, 10);
   const rok = Number(datum.slice(0, 4));
   const agendy = agendyHistorieRadu(documentType, podtyp, pokladnaTyp);
-  const zHistorie = await radZHistorie(tx, input, agenda, agendy, datum, protistrana, doDatumu);
+  const zHistorie = await radZHistorie(tx, input, agenda, agendy, datum, protistrana, doDatumu, predkontaciaKod);
 
   // Nastavenie účtovníka je predvoľba BEŽNÉHO dokladu — kľúčom je len typ, takže
   // platilo aj pre dobropis a zálohovú: Shenzhen by dobropisu nikdy nedal rad
@@ -1049,12 +1065,16 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // TOHO dokladu (pamäť už rozlišuje podtyp, mesiac nie) — marcová faktúra by dostala
   // februárový rad. Zdedený rad ostáva, len keď výber nevie nič (undefined).
   const radPravidla = pravidlo.candidate.ciselny_rad_id;
+  // Predkontácia kandidáta rozlíši súbežné rady agendy (záväzky a platby kartou).
+  const kodPredkontacie = radPravidla || !candidate.predkontacia_id ? undefined : (await tx.query<{ code: string } & Record<string, unknown>>(
+    'SELECT code FROM code_list_items WHERE id=$1 AND tenant_id=$2', [candidate.predkontacia_id, input.tenantId],
+  )).rows[0]?.code;
   const radVyberu = radPravidla ? undefined : await resolveSeriesDefault(
     tx, input, documentType, datumVystavenia, current.rows[0]?.podtyp,
     // Krajina ide vždy z dokladu — input ju nenesie a bez nej sa tuzemský rad
     // od zahraničného nerozozná.
     { ...strana, krajina: protistranaDokladu(documentType, current.rows[0]?.extracted).krajina },
-    undefined, current.rows[0]?.pokladna_typ);
+    undefined, current.rows[0]?.pokladna_typ, kodPredkontacie);
   candidate.ciselny_rad_id = radPravidla ?? (radVyberu !== undefined ? radVyberu ?? undefined : candidate.ciselny_rad_id);
 
   candidate = await onlyActiveIds(tx, input, candidate);
@@ -1885,7 +1905,8 @@ async function najdiKategorie(
   config: ServerConfig,
   input: SuggestionInput,
   lineText: string,
-  documentType: string,
+  /** Agendy korpusu druhu dokladu (FP-D, INT, VPD…) — v nich kategória drží svoje agendy. */
+  agendy: readonly string[],
   injectedEmbedder?: Embedder,
   /** Meranie: kategórie sa pri dátume vynechajú, ak ich beh výslovne nechce. */
   doDatumu?: string,
@@ -1912,8 +1933,9 @@ async function najdiKategorie(
     row,
     zhoda: pocetZhodSlov(row.slovnik, lineText),
     // Kategória z inej agendy je slabší signál, nie vylúčenie — ten istý druh
-    // plnenia môže prísť faktúrou aj blokom z pokladne.
-    agenda: Array.isArray(row.agendy) && (row.agendy as string[]).includes(documentType),
+    // plnenia môže prísť faktúrou aj blokom z pokladne. Porovnávajú sa agendy
+    // korpusu, nie typ dokladu: „MZDY" či „PD" v agendách kategórie nie je nikdy.
+    agenda: Array.isArray(row.agendy) && agendy.some((agenda) => (row.agendy as string[]).includes(agenda)),
   }));
 
   // Lexikálna zhoda je TVRDÝ dôkaz a ostáva presne ako doteraz. Vektor ju
@@ -2222,18 +2244,6 @@ export async function navrhniZauctovanie(
   const protistranaKontextu = kartaProtistrany
     ? { nazov: kartaProtistrany.nazov, ico: kartaProtistrany.ico || protistranaZDokladu.ico }
     : { nazov: protistranaZDokladu.nazov, ico: protistranaZDokladu.ico };
-  // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
-  // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
-  // určí rovnako ako inde (nastavenie účtovníka, inak rad z histórie firmy).
-  // null = história je, ale rozhodnúť sa nedá — vtedy neplatí ani rad modelu.
-  const radPreTyp = await resolveSeriesDefault(
-    database, input, documentContext.documentType, documentContext.datumVystavenia,
-    documentContext.podtyp,
-    { ...protistranaKontextu, icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina },
-    documentContext.historiaDoDatumu,
-    // Worker smer pokladne do kontextu neposiela, doklad ho má v zaúčtovaní —
-    // bez neho by výdavkový doklad počítal rady aj z príjmových.
-    documentContext.pokladnaTyp ?? (riadokDokladu?.pokladna_typ ?? undefined));
   // Každý zdroj histórie nižšie (denník, rozúčtovanie, pravidlo protistrany,
   // použitie členení, členenie z účtu, účty bez odpočtu, sekcia KV) sa berie
   // z agendy DRUHU dokladu — dobropis z FP-D, výdavkový blok z VPD. Kým sa
@@ -2254,7 +2264,7 @@ export async function navrhniZauctovanie(
     documentContext.documentType, documentContext.podtyp, asOf,
   );
   const kategorie = await najdiKategorie(
-    database, config, input, lineText, documentContext.documentType, zavislosti.embedder,
+    database, config, input, lineText, korpus.agendy, zavislosti.embedder,
     asOf, zavislosti.sKategoriami);
   const dennik = await najdiDennik(database, input, lineText, korpus.agendy,
     protistranaKontextu, documentContext.historiaDoDatumu);
@@ -2311,9 +2321,11 @@ export async function navrhniZauctovanie(
     // Kategórie agendu NEFILTRUJÚ — agenda je pri nich len tie-break. Kategória
     // postavená na texte, ktorý firma účtuje na faktúre aj na internom doklade,
     // by inak vrátila do ponuky presne ten kód, kvôli ktorému zúženie vzniklo.
+    // Agendy kategórie sú agendy korpusu — dobropisu dokazuje len kategória FP-D,
+    // nie kategória bežných faktúr.
     ...kategorie
       .filter((kategoria) => Array.isArray(kategoria.agendy)
-        && (kategoria.agendy as string[]).includes(documentContext.documentType))
+        && korpus.agendy.some((agenda) => (kategoria.agendy as string[]).includes(agenda)))
       .map((kategoria) => kategoria.clenenie_dph_kod).filter((kod): kod is string => Boolean(kod)),
   ]);
   // Príklady a doterajší návrh nesú id, nie kód. Členenie bez nároku na odpočet
@@ -2571,6 +2583,20 @@ export async function navrhniZauctovanie(
     // Stredisko model nevyberá — ostáva z pravidla alebo z deterministického návrhu.
     stredisko_id: pravidlo.candidate.stredisko_id ?? (doterajsi?.stredisko_id as string | undefined),
   });
+  // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
+  // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
+  // určí rovnako ako inde (nastavenie účtovníka, inak rad z histórie firmy),
+  // a až tu: predkontácia, ktorú doklad dostal, rozlíši súbežné rady agendy.
+  // null = história je, ale rozhodnúť sa nedá — vtedy neplatí ani rad modelu.
+  const radPreTyp = pravidlo.candidate.ciselny_rad_id ? undefined : await resolveSeriesDefault(
+    database, input, documentContext.documentType, documentContext.datumVystavenia,
+    documentContext.podtyp,
+    { ...protistranaKontextu, icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina },
+    documentContext.historiaDoDatumu,
+    // Worker smer pokladne do kontextu neposiela, doklad ho má v zaúčtovaní —
+    // bez neho by výdavkový doklad počítal rady aj z príjmových.
+    documentContext.pokladnaTyp ?? (riadokDokladu?.pokladna_typ ?? undefined),
+    codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code);
   const radNavrhu = pravidlo.candidate.ciselny_rad_id
     ?? (radPreTyp !== undefined ? radPreTyp ?? undefined : validated.ciselny_rad_id);
   // Zaúčtovanie musí prísť od modelu alebo z pravidla. Prenesené stredisko ani
@@ -2848,7 +2874,9 @@ export async function navrhniZauctovanie(
   // zahadzuje: prázdny riadok v editore aj v exporte znamená „ako doklad", tak
   // by len zdvojoval to isté rozhodnutie.
   const vPonukePredkontacii = new Set(predkontacie.map((item) => item.id));
-  const vPonukeCleneni = new Set(byKind('cleneniaDph').map((item) => item.id));
+  // Členenie riadku z tej istej zúženej ponuky ako hlavička: kód dokázateľne
+  // z iného druhu dokladu na riadku neprejde a riadok zdedí členenie hlavičky.
+  const vPonukeCleneni = new Set(cleneniaDph.map((item) => item.id));
 
   // Položky, ktoré sa majú ROZREZAŤ. Faktúra za PHM má jediný riadok
   // „Natural 95" a účtovník z neho v POHODE spraví dva — daňovú časť 80 %
