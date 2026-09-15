@@ -62,6 +62,14 @@ describe('profil firmy pre klasifikáciu', { timeout: 60_000 }, () => {
     expect(profil).toContain('verb');
   });
 
+  it('zmazaná kategória klasifikáciu neriadi', async () => {
+    const p = await pripravDb();
+    await p.kategoria('pokuty', ['OZ'], ['pokuta']);
+    // Mäkké zmazanie z účtovného profilu (deleteUctoKategoria).
+    await p.database.query('UPDATE ucto_kategorie SET active=false');
+    expect(await profilPreKlasifikaciu(p.database, p.scope)).toBeUndefined();
+  });
+
   it('kategória bez agendy sa nepribalí — nepovie, kam doklad patrí', async () => {
     const p = await pripravDb();
     await p.kategoria('nezaradené', [], ['čokoľvek']);

@@ -6,6 +6,7 @@ import { HttpError } from '../http.js';
 import { ulozTreningoveRiadky, type trainingRowSchema } from '../routes/aiTrainingRoutes.js';
 import { ulozDennik, type DennikRiadok } from './uctoDennikService.js';
 import { importUctoHistory, ulozRadyZDokladov, type HistoryRow } from './uctoHistoryService.js';
+import { PREPOCET_PRAXE_KIND } from '../workerService.js';
 
 /**
  * Prenos histórie z Mostíka po dávkach do stagingu a jedna publikácia.
@@ -244,5 +245,18 @@ export async function publikujImport(
     return { vysledok };
   });
   if ('zamietnute' in vystup) throw new HttpError(422, 'import_neuplny', `Prenos je neúplný: ${vystup.zamietnute}`);
+  // Prax firmy (pravidlá, kódy kategórií, rozpis) sa prepočíta z novej histórie
+  // až po COMMIT-e — worker by inak čítal starý korpus. Aj pri zopakovanej
+  // publikácii: ak zápis jobu minule zlyhal, agent to skúsi znova. Čakajúci
+  // job stačí jeden, prepočíta to isté.
+  if (body.druh === 'historia') {
+    await database.query(
+      `INSERT INTO processing_jobs (id,tenant_id,organization_id,kind,status,max_attempts,correlation_id,payload)
+       SELECT $1::text, $2::text, $3::text, $4::text, 'queued', 1, $5::text, '{}'::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM processing_jobs
+                           WHERE tenant_id=$2 AND organization_id=$3 AND kind=$4 AND status='queued')`,
+      [randomUUID(), tenantId, organizationId, PREPOCET_PRAXE_KIND, input.correlationId],
+    );
+  }
   return vystup.vysledok;
 }

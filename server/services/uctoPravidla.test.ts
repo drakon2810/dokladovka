@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
-import { najdiPravidlo, odvodRozpisVarianty, prepocitajPravidla, variantyRozpisu } from './uctoPravidlaService.js';
+import {
+  najdiPravidlo, odvodPrax, odvodRozpis, odvodRozpisVarianty, prepocitajPravidla, variantyRozpisu, type DokladPraxe,
+} from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { ocistiSlovnik } from './uctoProfileService.js';
 
@@ -31,8 +33,9 @@ describe('pravidlá odvodené z histórie', () => {
     );
 
     // Leasing: hlavička istina, položky istina + úrok. Sumy sa menia, takže
-    // podiel ustálený NIE JE a do pravidla nepatrí.
-    for (const [cislo, istina, urok] of [['L1', 800, 200], ['L2', 900, 120], ['L3', 700, 300]] as const) {
+    // podiel ustálený NIE JE a do rozpisu nepatrí. Úrok ostáva v tom istom
+    // pásme 20 % — inak by to boli rôzne podoby praxe (podiel je v jej kľúči).
+    for (const [cislo, istina, urok] of [['L1', 820, 180], ['L2', 820, 180], ['L3', 776, 224]] as const) {
       await riadok('OZ', 'čsob leasing', cislo, 0, 'splátka', null, 'leas.istina', 'PD');
       await riadok('OZ', 'čsob leasing', cislo, 1, 'istina', istina, 'leas.istina', 'PD');
       await riadok('OZ', 'čsob leasing', cislo, 2, 'úrok', urok, 'Úroky-leas', 'PD');
@@ -56,7 +59,7 @@ describe('pravidlá odvodené z histórie', () => {
     const vysledok = await prepocitajPravidla(database, {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId,
     });
-    expect(vysledok).toEqual({ pravidiel: 3, sRozpisom: 2 });
+    expect(vysledok).toEqual({ pravidiel: 3, sRozpisom: 2, konfliktov: 0, zmienRezimu: 0 });
 
     const leasing = await najdiPravidlo(database, {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId,
@@ -111,6 +114,143 @@ describe('pravidlá odvodené z histórie', () => {
       [seeded.organizationId]);
     expect(Number((pocet.rows[0] as { n: string }).n)).toBe(1);
   }, 60_000);
+});
+
+// F18: účet a DPH pravidla pochádzali z rôznych skupín dokladov. A má 60
+// dokladov (30 VATx, 30 VATz), B 40 dokladov VATy — nezávislé väčšiny dali
+// A + VATy, kombináciu, ktorú firma nikdy nepoužila.
+describe('spoločná prax protistrany', () => {
+  it('uložené pravidlo nezmieša účet a DPH z rôznych dokladov a meranie k dátumu dá to isté', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = { tenantId: seeded.tenantId, organizationId: seeded.organizationId };
+    // Dátumy sa prekrývajú (7n mod 100) — nejde o zmenu režimu, ale o dve praxe naraz.
+    await database.query(
+      `INSERT INTO ucto_historia (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,riadok_index,source,riadok_hash)
+       SELECT 'r' || n, $1, $2, 'FP', 'D' || n, date '2026-01-01' + (n * 7 % 100), 'zmiesana s.r.o.', 'sluzba',
+              CASE WHEN n <= 60 THEN 'A' ELSE 'B' END,
+              CASE WHEN n <= 30 THEN 'VATx' WHEN n <= 60 THEN 'VATz' ELSE 'VATy' END, 'B2', 0, 'mdb', 'h' || n
+         FROM generate_series(1, 100) AS n`,
+      [kde.tenantId, kde.organizationId],
+    );
+    await prepocitajPravidla(database, kde);
+    const pravidlo = await najdiPravidlo(database, kde, ['FP'], { nazov: 'Zmiesana s.r.o.' });
+    expect(pravidlo).toMatchObject({ dokladov: 100, zhoda: 40, konflikt: true });
+    expect([pravidlo?.predkontaciaKod, pravidlo?.clenenieDphKod]).not.toEqual(['A', 'VATy']);
+    expect(pravidlo?.predkontaciaKod).toBeUndefined();
+    // Pri rovnakom počte rozhoduje novší posledný doklad (VATz 10. apríla, VATx 9.).
+    expect(pravidlo?.varianty.map((v) => [v.predkontaciaKod, v.clenenieDphKod, v.dokladov]))
+      .toEqual([['B', 'VATy', 40], ['A', 'VATz', 30], ['A', 'VATx', 30]]);
+    // Meranie počíta to isté pravidlo, aké používa produkcia.
+    const kDatumu = await najdiPravidlo(database, kde, ['FP'], { nazov: 'zmiesana s.r.o.' }, '2027-01-01');
+    expect({ ...kDatumu, id: '' }).toEqual({ ...pravidlo, id: '' });
+  }, 90_000);
+});
+
+// Prax ako spoločné podoby dokladov — čistá funkcia, bez databázy.
+describe('prax protistrany z celých dokladov', () => {
+  type Polozka = [predkontacia: string, dph: string, suma: number, sumaDph?: number, kv?: string];
+  const doklad = (cislo: string, datum: string, hlavicka: [string, string], polozky: Polozka[] = []): DokladPraxe => ({
+    kluc: `FP|${cislo}|${datum}`,
+    datum,
+    hlavicka: { riadokIndex: 0, text: 'doklad', predkontaciaKod: hlavicka[0], clenenieDphKod: hlavicka[1], clenenieKvKod: 'B2' },
+    polozky: polozky.map(([predkontaciaKod, clenenieDphKod, suma, sumaDph, kv], index) => ({
+      riadokIndex: index + 1, text: predkontaciaKod, suma, sumaDph, predkontaciaKod, clenenieDphKod, clenenieKvKod: kv ?? 'B2',
+    })),
+  });
+  const den = (poradie: number) => new Date(Date.UTC(2025, 0, 1 + poradie)).toISOString().slice(0, 10);
+
+  it('A 60 (VATx/VATz) a B 40 (VATy) je konflikt a každá podoba je z dokladov', () => {
+    const doklady = [
+      ...Array.from({ length: 30 }, (_, i) => doklad(`X${i}`, den(i * 3), ['A', 'VATx'])),
+      ...Array.from({ length: 30 }, (_, i) => doklad(`Z${i}`, den(i * 3 + 1), ['A', 'VATz'])),
+      ...Array.from({ length: 40 }, (_, i) => doklad(`Y${i}`, den(i * 2 + 2), ['B', 'VATy'])),
+    ];
+    const prax = odvodPrax(doklady);
+    expect(prax.vitaz).toBeUndefined();
+    expect(prax.konflikt).toBe(true);
+    const videne = new Set(doklady.map((item) => `${item.hlavicka!.predkontaciaKod}|${item.hlavicka!.clenenieDphKod}`));
+    expect(prax.varianty).toHaveLength(3);
+    for (const variant of prax.varianty) expect(videne.has(`${variant.predkontaciaKod}|${variant.clenenieDphKod}`)).toBe(true);
+    expect(prax.varianty.map((v) => [v.predkontaciaKod, v.clenenieDphKod])).not.toContainEqual(['A', 'VATy']);
+  });
+
+  it('pozícia rozpisu je celá trojica — X/PD/KN, ktorý nebol v žiadnom doklade, nevznikne', () => {
+    const riadok = (trojica: [string, string, string], riadokIndex: number) => ({
+      riadokIndex, text: trojica[0], suma: 50, predkontaciaKod: trojica[0], clenenieDphKod: trojica[1], clenenieKvKod: trojica[2],
+    });
+    const doklady = (pocet: number, prva: [string, string, string]) =>
+      Array.from({ length: pocet }, () => [riadok(prva, 1), riadok(['Z', 'PD', 'B2'], 2)]);
+    const trojice = (riadky: Array<{ predkontaciaKod?: string; clenenieDphKod?: string; clenenieKvKod?: string }>) =>
+      riadky.map((item) => `${item.predkontaciaKod}/${item.clenenieDphKod}/${item.clenenieKvKod}`);
+    // Účet X má 65 %, PD 75 %, KN 60 % — každé zvlášť prejde, spolu nikdy.
+    const vstup = [...doklady(40, ['X', 'PD', 'B2']), ...doklady(25, ['X', 'PN', 'KN']), ...doklady(35, ['Y', 'PD', 'KN'])];
+    const rozpis = odvodRozpis(vstup);
+    expect(trojice(rozpis)).not.toContain('X/PD/KN');
+    const videne = new Set(trojice(vstup.flat()));
+    for (const trojica of trojice(rozpis)) expect(videne.has(trojica)).toBe(true);
+    // Prevažujúca trojica sa na pozíciu dostane celá.
+    expect(trojice(odvodRozpis([...doklady(7, ['X', 'PN', 'KN']), ...doklady(3, ['X', 'PD', 'B2'])])))
+      .toEqual(['X/PN/KN', 'Z/PD/B2']);
+  });
+
+  it('podoba rozpisu kategórie sa delí aj podľa DPH, nie len podľa účtov', () => {
+    const riadok = (predkontaciaKod: string, clenenieDphKod: string, clenenieKvKod: string, riadokIndex: number) =>
+      ({ riadokIndex, text: predkontaciaKod, suma: riadokIndex === 1 ? 80 : 20, predkontaciaKod, clenenieDphKod, clenenieKvKod });
+    const varianty = odvodRozpisVarianty([
+      ...Array.from({ length: 3 }, () => [riadok('PHM', 'PD', 'B2', 1), riadok('DPH', 'PN', 'KN', 2)]),
+      ...Array.from({ length: 3 }, () => [riadok('PHM', 'PN', 'KN', 1), riadok('DPH', 'PD', 'B2', 2)]),
+    ]);
+    expect(varianty.map((v) => v.riadky.map((r) => `${r.predkontaciaKod}/${r.clenenieDphKod}/${r.clenenieKvKod}`)))
+      .toEqual([['PHM/PD/B2', 'DPH/PN/KN'], ['PHM/PN/KN', 'DPH/PD/B2']]);
+  });
+
+  it('nová prax po konci starej vyhrá so zmenou režimu, prekrývajúca sa nie', () => {
+    const stare = Array.from({ length: 20 }, (_, i) =>
+      doklad(`S${i}`, `2025-${String((i % 12) + 1).padStart(2, '0')}-10`, ['A', 'PD']));
+    const nove = Array.from({ length: 5 }, (_, i) => doklad(`N${i}`, `2026-0${i + 2}-01`, ['A', 'PN']));
+    expect(odvodPrax([...stare, ...nove])).toMatchObject({
+      konflikt: false, zmenaRezimu: { od: '2026-02-01' }, vitaz: { predkontaciaKod: 'A', clenenieDphKod: 'PN', dokladov: 5 },
+    });
+    // Tých istých päť dokladov uprostred roka 2025 nie je nový režim, len menšina.
+    const zmiesane = odvodPrax([...stare, ...nove.map((item, i) => ({ ...item, datum: `2025-0${i + 3}-15` }))]);
+    expect(zmiesane).toMatchObject({ konflikt: false, vitaz: { clenenieDphKod: 'PD', dokladov: 20 } });
+    expect(zmiesane.zmenaRezimu).toBeUndefined();
+  });
+
+  it('poradie vstupu výsledok nemení a doklad od dátumu merania ho nezmení', () => {
+    const doklady = [
+      ...Array.from({ length: 6 }, (_, i) => doklad(`P${i}`, `2025-0${i + 1}-05`, ['PHM', 'PD'],
+        [['PHM', 'PD', 80, 10], ['NAD', 'PN', 20, 10, 'KN']])),
+      ...Array.from({ length: 3 }, (_, i) => doklad(`Q${i}`, `2025-0${i + 2}-20`, ['PHM', 'PD'],
+        [['PHM', 'PD', 80, 16], ['NAD', 'PN', 20, 4, 'KN']])),
+      ...Array.from({ length: 2 }, (_, i) => doklad(`R${i}`, `2025-0${i + 3}-11`, ['518', 'PD'])),
+    ];
+    const zamiesane = [...doklady.slice(4), ...doklady.slice(0, 4)].reverse();
+    expect(JSON.stringify(odvodPrax(zamiesane))).toBe(JSON.stringify(odvodPrax(doklady)));
+    // Doklad presne v deň merania aj neskorší sú budúcnosť — výsledok k dátumu sa nepohne.
+    const neskorsie = [doklad('L1', '2025-07-01', ['518', 'PD']), doklad('L2', '2026-01-01', ['PHM', 'PN'])];
+    expect(odvodPrax([...neskorsie, ...doklady], '2025-07-01')).toEqual(odvodPrax(doklady, '2025-07-01'));
+  });
+
+  it('80/20 s daňou 50/50 a 80/20 s daňou 80/20 sú dve praxe; zdedená položka podobu nedelí', () => {
+    const kratena = Array.from({ length: 3 }, (_, i) => doklad(`K${i}`, `2025-0${i + 1}-05`, ['PHM', 'PD'], [
+      ['PHM', 'PD', 80, 10], ['NAD', 'PN', 20, 10, 'KN'],
+      // Umytie auta na účte hlavičky — len dedí, tvar nemení.
+      ...(i === 0 ? [['PHM', 'PD', 10, 0] as Polozka] : []),
+    ]));
+    const pomerna = Array.from({ length: 3 }, (_, i) => doklad(`M${i}`, `2025-0${i + 1}-06`, ['PHM', 'PD'],
+      [['PHM', 'PD', 80, 16], ['NAD', 'PN', 20, 4, 'KN']]));
+    const prax = odvodPrax([...kratena, ...pomerna]);
+    const nedanova = { predkontaciaKod: 'NAD', clenenieDphKod: 'PN', clenenieKvKod: 'KN', podiel: 0.2 };
+    expect(prax.varianty.map((v) => [v.dokladov, v.tvar])).toEqual(expect.arrayContaining([
+      [3, [{ ...nedanova, podielDph: 0.5 }]],
+      [3, [{ ...nedanova, podielDph: 0.2 }]],
+    ]));
+    expect(prax.varianty).toHaveLength(2);
+  });
 });
 
 // Rozpis kategórie. Pravidlo protistrany platí len pre dodávateľa, ktorého

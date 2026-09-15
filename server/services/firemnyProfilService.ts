@@ -35,8 +35,10 @@ export async function profilPreKlasifikaciu(
   scope: { tenantId: string; organizationId: string },
 ): Promise<string | undefined> {
   const kategorie = await database.query<KategoriaRiadok>(
+    // Zmazaná kategória (active=false) je rozhodnutie účtovníka, že neplatí —
+    // nesmie ďalej ťahať doklady do svojich agend.
     `SELECT nazov, agendy, slovnik FROM ucto_kategorie
-      WHERE tenant_id=$1 AND organization_id=$2
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true
       ORDER BY jsonb_array_length(slovnik) DESC
       LIMIT ${MAX_KATEGORII}`,
     [scope.tenantId, scope.organizationId],

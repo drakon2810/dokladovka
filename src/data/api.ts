@@ -3447,6 +3447,19 @@ export interface UctoPravidloRiadok {
   podiel?: number;
 }
 
+/** Jedna podoba praxe protistrany: hlavička a tvar položiek, ktoré boli v dokladoch spolu. */
+export interface UctoPravidloVariant {
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  clenenieKvKod?: string;
+  tvar: Array<{ predkontaciaKod?: string; clenenieDphKod?: string; clenenieKvKod?: string; podiel?: number; podielDph?: number }>;
+  dokladov: number;
+  od: string;
+  do: string;
+  vitaz?: boolean;
+  zmenaRezimu?: boolean;
+}
+
 export interface UctoPravidlo {
   agenda: string;
   protistrana: string;
@@ -3456,6 +3469,30 @@ export interface UctoPravidlo {
   clenenie_dph_kod?: string;
   clenenie_kv_kod?: string;
   rozpis: UctoPravidloRiadok[];
+  /** Žiadna podoba neprevažuje — pravidlo nemá kódy, len podoby. */
+  konflikt?: boolean;
+  varianty?: UctoPravidloVariant[];
+}
+
+/** Ustálené delenie položky z histórie v tvare pravidla auta DPH profilu. */
+export interface NavrhPravidlaDelenia {
+  klucoveSlova: string[];
+  percento: number;
+  percentoDph?: number;
+  predkontaciaId: string;
+  predkontaciaNedanovaId: string;
+  clenenieDphNedanoveId?: string;
+  dokladov: number;
+  priklady: Array<{ cislo: string; datum: string }>;
+}
+
+/** Návrhy pravidiel delenia — nič sa neukladá, pravidlo pridá účtovník. */
+export async function listNavrhyPravidielDelenia(orgId: string): Promise<NavrhPravidlaDelenia[]> {
+  if (!REST_DATA_MODE) return [];
+  const odpoved = await restRequest<{ navrhy: NavrhPravidlaDelenia[] }>(
+    `/api/organizations/${encodeURIComponent(orgId)}/navrhy-pravidiel-delenia`,
+  );
+  return odpoved.navrhy;
 }
 
 /**

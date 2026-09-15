@@ -12,6 +12,7 @@ import {
   importUctoHistory,
 } from '../services/uctoHistoryService.js';
 import { parseHistoriaXml } from '../services/uctoHistoriaXml.js';
+import { navrhyPravidielDelenia } from '../services/uctoPravidlaService.js';
 import { zmerajPresnost } from '../services/uctoPresnostService.js';
 import { ANALYZA_KIND } from '../workerService.js';
 import {
@@ -74,17 +75,24 @@ export function registerUctoProfileRoutes(
   });
 
   // Pravidlá protistrán — odvodenina korpusu, nie samostatný záznam. Počítajú
-  // sa pri analýze profilu; toto je len čítanie pre obrazovku.
+  // sa pri analýze profilu a po prenose histórie; toto je len čítanie pre obrazovku.
   app.get('/api/organizations/:id/ucto-pravidla', async (request) => {
     const { auth, organizationId } = await pristup(request, false);
     const pravidla = await database.query<Record<string, any>>(
       `SELECT agenda, protistrana, dokladov, zhoda, predkontacia_kod, clenenie_dph_kod,
-              clenenie_kv_kod, rozpis
+              clenenie_kv_kod, rozpis, varianty, konflikt
          FROM ucto_pravidla WHERE tenant_id=$1 AND organization_id=$2
         ORDER BY dokladov DESC LIMIT 300`,
       [auth.tenantId, organizationId],
     );
     return { pravidla: pravidla.rows };
+  });
+
+  // Ustálené delenia položiek z histórie ako návrhy pravidiel DPH profilu.
+  // Len čítanie — pravidlo pridá účtovník cez uloženie DPH profilu.
+  app.get('/api/organizations/:id/navrhy-pravidiel-delenia', async (request) => {
+    const { auth, organizationId } = await pristup(request, false);
+    return { navrhy: await navrhyPravidielDelenia(database, { tenantId: auth.tenantId, organizationId }) };
   });
 
   // Meranie presnosti: čo by návrh zaúčtovania dal na dokladoch, ktoré účtovník

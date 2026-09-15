@@ -12,7 +12,7 @@ import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddin
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
-import { najdiPravidlo, variantyRozpisu } from './uctoPravidlaService.js';
+import { DOKLAD_KLUC_SQL, MIN_DOKLADOV, najdiPravidlo, variantyRozpisu } from './uctoPravidlaService.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -174,7 +174,11 @@ export function jeBezPredkontacia(kod: string | undefined | null): boolean {
   return /^bez/i.test(kod?.trim() ?? '');
 }
 
-/** Od koľkých historických riadkov je kategória dosť overená na predvyplnenie. */
+/**
+ * Od koľkých historických DOKLADOV je kategória dosť overená na predvyplnenie.
+ * ponytail: číslo ostalo z čias, keď sa počítali riadky; dokladov je menej,
+ * takže predvypĺňa menej kategórií. Prekalibrovať na meraní presnosti.
+ */
 const KATEGORIA_ISTOTA_OD = 20;
 
 /** Koľko kategórií vidí model. Zoznam sa NIKDY nezúži na prázdno, keď je čo skórovať. */
@@ -1485,6 +1489,7 @@ The journal usually holds several variants of the same service (domestic, abroad
 If "profilKlienta" is present, follow its "pokyny" strictly — they are the accountant's VAT rules for this client.
 A category in "kategorie" may carry its own "rozpis" — the settled shapes of lines for that KIND of supply. Unlike "pravidlo" it holds for a supplier the firm has never had, so use it when the counterparty is new and the kind of supply is familiar. It is a LIST of shapes, each with "pocet", how many documents were posted that way, and "riadky", the lines themselves: one kind of supply is bought under different regimes and each has its own shape. Fuel is the plain case — the same category holds a domestic card split into a deductible and a non-deductible part, and foreign refuelling split into the fuel and that country's VAT. Choose the shape whose accounts and VAT classifications fit the document in front of you, never the one with the highest "pocet"; when none of them fits, follow the category's own account and say so in the reason.
 "pravidlo" — what this firm does with documents from THIS counterparty, counted from its whole history without a model: the header codes it settled on, in how many of how many documents, and "rozpis", the settled shape of the lines. A line there carrying "podiel" means the firm divides that line in a fixed ratio every time. This is the summary; when it is present, follow it unless the document in front of you plainly contradicts it, and say in the reason which part you followed. A document whose items belong to several different accounts does NOT contradict it. The header is only what the lines you do not mark inherit, so a mixture is a reason to name the exceptions in "riadky" — never a reason to move the header off the account this counterparty settled on, not even when the exceptional lines carry most of the money. A category never overrides "pravidlo" either: a category speaks about a kind of supply, "pravidlo" about this very counterparty.
+When "pravidlo" carries "konflikt": true, the firm has no single settled practice for this counterparty and "varianty" lists the practices it did use (each with its header codes, "tvar" — the parts of the items posted differently from the header with their shares — and how many documents between which dates): choose the single variant that fits this document and never combine codes from different variants.
 HOW DOCUMENTS LIKE THIS ONE GET POSTED — "doklady". These are past documents of this firm, each with its header ("hlavicka") and its lines exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. A document carrying "vsetkyPolozky": true lists ALL its lines; only such a document carries its total base ("suma") and each line's share of that whole base ("podiel") and VAT ("podielDph") — a share of the document, not the fraction of a cut item, which you compute from the sums of its parts. A document without it may be missing lines that had neither a text nor a posting of their own, so what its lines add up to is not the whole document. "agenda" is the kind of document it was. "rovnakych" counts the documents of that counterparty posted in exactly this shape; you see the newest of them. A document without "polozky" was recorded with its header only. A document with "tejProtistrany": true comes from THIS counterparty: it is not a hint, it is the record of a decision the firm has already made. Read the shape of it and reproduce that shape on the document in front of you. A document without it is the same kind of supply posted for another counterparty: weaker evidence — use it for the shape and the accounts of a supply this counterparty's own documents do not show, never to depart from what they do show. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed. Lines carrying "zdedene": true are the ones the accountant left alone — they hold the header's codes, so they show the shape of the document and the amounts a ratio is computed from, but they decide no account of their own; read them the same way as inherited rows in "dennik" above.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
 An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification and the KN section even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction and puts them in the control statement.
@@ -1781,6 +1786,41 @@ async function clenenieZUctu(
   if (rows.length !== 1) return undefined;
   return Number(rows[0].dokladov) >= CLENENIE_Z_UCTU_OD
     ? String(rows[0].clenenie_dph_kod) : undefined;
+}
+
+/**
+ * Hlavička návrhu je kombinácia, ktorú firma na tomto účte ešte nemala.
+ *
+ * Reťaz účet → členenie → sekcia KV skladá výsledok z troch samostatných
+ * väčšín: účet A firma účtuje vždy s členením x a sekciou KN, ale x nesie B2
+ * na iných účtoch — clenenieZUctu dá x, kvPreClenenie B2 a vyjde A/x/B2, čo
+ * nebolo ani v jednom doklade. Polia sa NEMENIA: zriedkavá, ale správna
+ * operácia nesmie byť vyhlásená za chybu len preto, že je nová. Návrh sa len
+ * nepredvyplní a účtovník vie prečo.
+ *
+ * Sekcia KV na riadku histórie bez nej (staršie importy) sa nepovažuje za
+ * rozpor — o kombinácii nič netvrdí.
+ */
+async function kombinaciaNevidena(
+  database: Database,
+  input: SuggestionInput,
+  agendy: readonly string[],
+  hlavicka: { predkontaciaKod: string; clenenieDphKod: string; clenenieKvKod?: string },
+  doDatumu?: string,
+): Promise<boolean> {
+  if (agendy.length === 0) return false;
+  const row = (await database.query<Record<string, any>>(
+    `SELECT count(DISTINCT ${DOKLAD_KLUC_SQL}) AS na_ucte,
+            count(DISTINCT ${DOKLAD_KLUC_SQL}) FILTER (WHERE btrim(clenenie_dph_kod) = $5
+              AND ($6::text IS NULL OR clenenie_kv_kod IS NULL OR btrim(clenenie_kv_kod) = $6)) AS spolu
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[])
+        AND btrim(predkontacia_kod) = $4 AND doklad_cislo IS NOT NULL
+        AND ($7::date IS NULL OR datum < $7::date)`,
+    [input.tenantId, input.organizationId, agendy, hlavicka.predkontaciaKod, hlavicka.clenenieDphKod,
+      hlavicka.clenenieKvKod ?? null, doDatumu ?? null],
+  )).rows[0];
+  return Number(row?.na_ucte ?? 0) >= MIN_DOKLADOV && Number(row?.spolu ?? 0) === 0;
 }
 
 /** Menej dokladov než toľko je preklep účtovníka, nie prax firmy. */
@@ -2735,13 +2775,21 @@ export async function navrhniZauctovanie(
           // Firma druh dokladu ešte nemala: história nižšie je z bežných dokladov
           // typu, a model to musí vedieť skôr, než ju napodobní.
           zakladnaAgenda: korpus.zakladna || undefined,
-          // Pravidlo protistrany — zhrnutie praxe cez všetky jej doklady.
+          // Pravidlo protistrany — zhrnutie praxe cez všetky jej doklady. Pri
+          // konflikte nemá kódy hlavičky a model dostane podoby, z ktorých
+          // vyberá jednu celú — nikdy účet z jednej a DPH z druhej.
           pravidlo: pravidloProtistrany ? {
             dokladov: pravidloProtistrany.dokladov, zhoda: pravidloProtistrany.zhoda,
             predkontaciaKod: pravidloProtistrany.predkontaciaKod,
             clenenieDphKod: pravidloProtistrany.clenenieDphKod,
             clenenieKvKod: pravidloProtistrany.clenenieKvKod,
             rozpis: pravidloProtistrany.rozpis,
+            konflikt: pravidloProtistrany.konflikt,
+            varianty: pravidloProtistrany.varianty.map((variant) => ({
+              predkontaciaKod: variant.predkontaciaKod, clenenieDphKod: variant.clenenieDphKod,
+              clenenieKvKod: variant.clenenieKvKod, tvar: variant.tvar,
+              dokladov: variant.dokladov, od: variant.od, do: variant.do,
+            })),
           } : undefined,
           // Celé doklady histórie s číslami — pomer základu aj krátenie dane
           // sú z nich priamo vidieť.
@@ -3068,6 +3116,17 @@ export async function navrhniZauctovanie(
     }
   }
 
+  // Spoločná kombinácia hlavičky — až tu, keď reťaz účet → členenie → KV
+  // povedala posledné slovo. Korpus nesie kódy, nie id, tak sa porovnávajú kódy.
+  const kodPredkontacie = codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code?.trim();
+  const kodClenenia = validated.clenenie_dph_id
+    ? vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)?.kod.trim()
+    : undefined;
+  const nevidenaKombinacia = kodPredkontacie && kodClenenia
+    ? await kombinaciaNevidena(database, input, korpus.agendy,
+      { predkontaciaKod: kodPredkontacie, clenenieDphKod: kodClenenia, clenenieKvKod: kvKod }, asOf)
+    : false;
+
   // Deterministická kontrola po AI: návrh, ktorý by DPH poradca pri schválení
   // aj tak zablokoval (neplatiteľ s odpočtom, odpočet cudzej dane), sa vôbec
   // nezobrazí. Beží aj bez vyplneného profilu — kontroly zo samotného dokladu
@@ -3130,20 +3189,32 @@ export async function navrhniZauctovanie(
   // presne, v koľkých dokladoch z koľkých to platí — a keď firma robí to isté
   // v deviatich z desiatich, nechať účtovníka klikať pri každom doklade je
   // opatrnosť, ktorá už nič nechráni. Rozpis sa vtedy predvyplní s hlavičkou.
-  const kodPredkontacie = codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code?.trim();
+  // Zhoda len v účte nestačí: pravidlo A/PD a návrh A/PN by s istotou 0.95
+  // predvyplnil odpočet, aký firma u protistrany neuplatňuje. Pravidlo
+  // v konflikte nemá víťaza, s ktorým by sa návrh mohol zhodovať.
   const silnePravidlo = pravidloProtistrany
+    && !pravidloProtistrany.konflikt
     && pravidloProtistrany.dokladov >= 10
     && pravidloProtistrany.zhoda / pravidloProtistrany.dokladov >= 0.9
     && Boolean(kodPredkontacie)
-    && kodPredkontacie === pravidloProtistrany.predkontaciaKod;
-  const strop = silnePravidlo
+    && kodPredkontacie === pravidloProtistrany.predkontaciaKod
+    && (!pravidloProtistrany.clenenieDphKod || kodClenenia === pravidloProtistrany.clenenieDphKod)
+    && (!pravidloProtistrany.clenenieKvKod || kvKod === pravidloProtistrany.clenenieKvKod);
+  // Kombinácia, akú firma ešte nemala, sa nepredvyplní, nech ju podporí čokoľvek.
+  const strop = nevidenaKombinacia
+    ? 0.8
+    : silnePravidlo
     ? 0.95
     : (rozdelenie ? 0.8 : (overenaKategoria || dennikZhoda || prikladZhoda ? 0.95 : 0.8));
-  const varovanie = rozdelenie
+  // Upozornenie ide na začiatok dôvodu: dôvod sa reže na 500 znakov a na konci
+  // by ho dlhé zdôvodnenie modelu odstrihlo.
+  const varovanie = (nevidenaKombinacia
+    ? `Pozor: kombináciu ${kodPredkontacie} / ${kodClenenia}${kvKod ? ` / ${kvKod}` : ''} firma na tomto účte ešte nepoužila — skontrolujte ju. `
+    : '') + (rozdelenie
     ? `Pozor: doklady tejto protistrany firma spravidla delí (${rozdelenie.pocet} z ${rozdelenie.spolu}`
       + ` na účty ${rozdelenie.ucty.join(' + ')}${rozdelenie.priklad ? `, napr. ${rozdelenie.priklad}` : ''})`
       + ' — jedna predkontácia nemusí stačiť. '
-    : '';
+    : '');
   const dovod = varovanie + (silnePravidlo
     ? `Podľa ustáleného pravidla protistrany (${pravidloProtistrany!.zhoda} z ${pravidloProtistrany!.dokladov} dokladov): ${parsed.reason}`
     : pravidlo.ruleId
