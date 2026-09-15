@@ -148,6 +148,16 @@ describe('podtyp dokladu', () => {
        VALUES ($1,$2,$3,$4,$5,$6,'ai',0.8,'AI analýza dokladu: záloha na tovar')`,
       [documentId, seeded.tenantId, seeded.organizationId, predkontacia, clenenie, rad],
     );
+    // Verdikt kontroly DPH pre bežnú faktúru — pri zálohovej by radil B2 nad
+    // poľom, ktoré posudzoval iný druh dokladu.
+    const vlozAuditDph = () => database.query(
+      `INSERT INTO dph_audit (document_id,tenant_id,organization_id,verdikt,odporucana_kv_sekcia,dovod,istota)
+       VALUES ($1,$2,$3,'neisty','B2','Bežná faktúra s odpočtom',0.6)`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    const auditDph = async () => (await database.query(
+      'SELECT verdikt FROM dph_audit WHERE document_id=$1', [documentId])).rows;
+    await vlozAuditDph();
 
     // Editor pri zmene druhu starý rad (prijaté faktúry) vymaže.
     const zalohova = await app.inject({
@@ -176,6 +186,9 @@ describe('podtyp dokladu', () => {
     const joby = async () => (await database.query<{ kind: string; status: string; max_attempts: number } & Record<string, unknown>>(
       'SELECT kind, status, max_attempts FROM processing_jobs WHERE document_id=$1', [documentId])).rows;
     expect(await joby()).toEqual([{ kind: 'navrh_zauctovania', status: 'queued', max_attempts: 3 }]);
+    // Verdikt patril starému druhu; nový vznikne v jobe návrhu.
+    expect(await auditDph()).toEqual([]);
+    await vlozAuditDph();
 
     // Prepnutie tam a späť rad z konceptu zmazalo; druh je ako v databáze,
     // a doklad aj tak nesmie ostať bez radu.
@@ -188,8 +201,9 @@ describe('podtyp dokladu', () => {
     });
     expect(spat.statusCode, spat.body).toBe(200);
     expect(spat.json().accounting.ciselnyRadId).toBe(radZalohovy);
-    // Druh sa nezmenil — nový návrh netreba.
+    // Druh sa nezmenil — nový návrh netreba a verdikt kontroly DPH platí ďalej.
     expect(await joby()).toHaveLength(1);
+    expect(await auditDph()).toEqual([{ verdikt: 'neisty' }]);
 
     // Ďalšia zmena druhu, kým prvý job ešte čaká: druhý by model len zavolal znova.
     const bezna = await app.inject({

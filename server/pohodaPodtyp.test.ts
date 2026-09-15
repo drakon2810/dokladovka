@@ -83,3 +83,49 @@ describe('zálohová faktúra bez zaúčtovania (R4)', () => {
     expect(() => build(sUcto('FP', 'bezna', { ciselnyRadId: 'r1' }))).toThrow(/nemá platné aktívne číselníky/);
   });
 });
+
+// Dobropis z roku 2025 opravuje decembrovú dodávku s 20 %. Sadzba sa hľadala
+// k dňu plnenia dobropisu, 20 % v roku 2025 neexistuje, a tak základ aj DPH
+// odišli do priceNone — oprava odpočtu z priznania potichu zmizla.
+describe('dobropis plnenia zo staršieho obdobia DPH', () => {
+  const sDanou = (podtyp: string, dodavatel: Record<string, string>, datum: string, sadzba: number) => {
+    const zaklad = doklad('FP', podtyp);
+    return {
+      ...zaklad,
+      snapshot: {
+        ...zaklad.snapshot,
+        extracted: {
+          ...zaklad.snapshot.extracted, dodavatel, datumVystavenia: datum, datumDodania: datum,
+          rozpisDph: [{ sadzba, zaklad: -100, dph: -sadzba }], sumaSpolu: -(100 + sadzba),
+        },
+      },
+    };
+  };
+  const build = (document: ReturnType<typeof sDanou>) =>
+    buildServerDataPack({ id: 'pack', ico: '35761571', documents: [document], codeLists });
+  const slovensky = { nazov: 'Test s.r.o.', ico: '31386946', krajina: 'SK' };
+  const rakusky = { nazov: 'ASFINAG', icDph: 'ATU12345678', krajina: 'AT' };
+
+  it('dobropis aj ťarchopis so sadzbou z minulého obdobia export zastavia s vysvetlením', () => {
+    expect(() => build(sDanou('dobropis', slovensky, '2025-02-10', 20))).toThrow(/predchádzajúceho obdobia DPH/);
+    expect(() => build(sDanou('tarchopis', slovensky, '2025-03-01', 10))).toThrow(/historickou sadzbou/);
+  });
+
+  it('cudzia daň ostáva cudzou — rozhoduje dodávateľ, nie podtyp', () => {
+    expect(build(sDanou('bezna', rakusky, '2026-03-10', 20))).toContain('<typ:priceNone>-120.00</typ:priceNone>');
+    expect(build(sDanou('dobropis', rakusky, '2026-03-10', 20))).toContain('<typ:priceNone>-120.00</typ:priceNone>');
+  });
+
+  it('dobropis nesie číslo opravovaného dokladu, bežná faktúra nie', () => {
+    const sPovodnym = (podtyp: string) => {
+      const zaklad = doklad('FP', podtyp);
+      return {
+        ...zaklad,
+        snapshot: { ...zaklad.snapshot, extracted: { ...zaklad.snapshot.extracted, povodnyDoklad: { cislo: 'FA-2024-118', datumPlnenia: '2024-12-15' } } },
+      };
+    };
+    const xml = (podtyp: string) => buildServerDataPack({ id: 'pack', ico: '35761571', documents: [sPovodnym(podtyp)], codeLists });
+    expect(xml('dobropis')).toContain('<inv:originalDocumentNumber>FA-2024-118</inv:originalDocumentNumber>');
+    expect(xml('bezna')).not.toContain('originalDocumentNumber');
+  });
+});

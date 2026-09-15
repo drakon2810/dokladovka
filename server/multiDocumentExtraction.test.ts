@@ -34,9 +34,9 @@ function rekapitulaciaWire() {
     documentType: 'MZDY',
     supplier: { ...PRAZDNA_STRANA, nazov: 'AGS Bratislava' },
     buyer: { nazov: null, ico: null, dic: null, icDph: null, adresa: null, ulica: null, psc: null, obec: null, krajina: null },
-    invoiceNumber: 'MZDY-04/2026', orderNumber: null, deliveryNoteNumber: null,
+    invoiceNumber: 'MZDY-04/2026', orderNumber: null, deliveryNoteNumber: null, originalDocumentNumber: null,
     variableSymbol: '202612', constantSymbol: null, specificSymbol: null,
-    issueDate: '2026-04-30', taxDate: '2026-04-30', servicePeriodEnd: null, dueDate: null, currency: 'EUR',
+    issueDate: '2026-04-30', taxDate: '2026-04-30', servicePeriodEnd: null, originalTaxDate: null, dueDate: null, currency: 'EUR',
     statementNumber: null,
     documentSummary: 'mzdy za 2026/04',
     // Mzdy idú do POHODY ako „UN" + sekcia KV „KN" — obidve naraz, každá vo svojom poli.

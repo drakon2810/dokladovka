@@ -531,6 +531,11 @@ export function normalizeExtractionResult(
       pociatocnyZostatok: result.documentType === 'BV' ? parseDecimal(result.totalWithoutVat) : undefined,
       cisloObjednavky: result.orderNumber,
       cisloDodaciehoListu: result.deliveryNoteNumber,
+      // Opravovaný doklad dobropisu/ťarchopisu: číslo ide do POHODY a jeho dátum
+      // plnenia určuje obdobie DPH opravy, preto patrí k dokladu, nie len k behu.
+      povodnyDoklad: result.originalDocumentNumber || result.originalTaxDate
+        ? { cislo: result.originalDocumentNumber, datumPlnenia: result.originalTaxDate }
+        : undefined,
       variabilnySymbol: result.variableSymbol,
       konstantnySymbol: result.constantSymbol,
       specifickySymbol: result.specificSymbol,

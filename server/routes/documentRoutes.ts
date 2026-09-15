@@ -299,6 +299,11 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
             WHERE document_id=$2 AND tenant_id=$3`,
           [radNovehoDruhu, id, auth.tenantId],
         );
+        // Verdikt kontroly DPH posudzoval starý druh — B2 bežnej faktúry by
+        // radil nad dobropisom a po prepnutí na mzdy by ho nová kontrola ani
+        // neprepísala. Nejde o stopu rozhodnutia k tomu istému návrhu, ktorú
+        // drží endpoint rozhodnutia; job návrhu posúdi nový druh znova.
+        await tx.query('DELETE FROM dph_audit WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
         await zaradNavrhZauctovania(tx, {
           tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id, correlationId: request.id,
         });

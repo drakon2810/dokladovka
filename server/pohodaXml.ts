@@ -169,6 +169,16 @@ function vatRateName(sadzba: unknown, datum: string, cudzia: boolean): SadzbaPoh
   return 'none';
 }
 
+/**
+ * Slovenská sadzba, ktorá v deň plnenia už neplatí, no platila predtým (20 %
+ * a 10 % do roku 2024). Na dobropise patrí opravovanému plneniu.
+ */
+function sadzbaZoStarsiehoObdobia(sadzba: unknown, datum: string): boolean {
+  const rate = Number(sadzba);
+  return vatRateName(rate, datum, false) === 'none'
+    && SK_SADZBY_DPH.some((riadok) => riadok.od <= datum && [riadok.high, riadok.low, riadok.third].includes(rate));
+}
+
 /** Efektívne sumy položky — prázdna DPH pri vyplnenej sadzbe sa dopočíta zo základu (zhoda s normalize.ts). */
 function lineItemAmounts(item: any): { bezDph: number; dph: number; spolu: number; unitPrice: number } {
   let dph = item.sumaDph !== undefined ? Number(item.sumaDph) : undefined;
@@ -615,7 +625,21 @@ export function buildServerDataPack(input: {
     // Cudziu daň určuje dodávateľ rovnako ako pri normalizácii extrakcie;
     // vydaná faktúra nesie vždy našu, slovenskú daň.
     const cudzia = snapshot.typ !== 'FV' && jeCudziDodavatel(supplier);
-    const sadzbaDph = (sadzba: unknown) => vatRateName(sadzba, taxDate, cudzia);
+    // Dobropis a ťarchopis opravujú plnenie, ktoré mohlo patriť do staršieho
+    // obdobia DPH. Sadzba, ktorá k dateTax už neplatí (20 % na dobropise z roku
+    // 2025), by skončila ako „none" v priceNone a oprava odpočtu by z priznania
+    // potichu zmizla — export preto zastaví a povie účtovníkovi prečo. Cudziu
+    // daň rozhoduje dodávateľ ako doteraz, tá sa nezastavuje.
+    // ponytail: fáza 1 bez historickej sadzby; POHODA ju prijme ako rateVAT
+    // historyHigh/historyLow + percentVAT, len keď to klient povolil v Globálnom
+    // nastavení — doplniť po overení importu v testovacej POHODE.
+    const oprava = snapshot.podtyp === 'dobropis' || snapshot.podtyp === 'tarchopis';
+    const sadzbaDph = (sadzba: unknown) => {
+      if (oprava && !cudzia && sadzbaZoStarsiehoObdobia(sadzba, taxDate)) {
+        throw new Error(`Doklad ${id} (${snapshot.podtyp === 'dobropis' ? 'dobropis' : 'ťarchopis'}) má sadzbu DPH ${Number(sadzba)} %, ktorá k dátumu plnenia ${taxDate} na Slovensku neplatí: opravuje plnenie z predchádzajúceho obdobia DPH. Zaúčtujte ho v POHODE ručne s historickou sadzbou.`);
+      }
+      return vatRateName(sadzba, taxDate, cudzia);
+    };
     const rows = Array.isArray(extracted.rozpisDph) ? extracted.rozpisDph : [];
     const sucet = (kategoria: SadzbaPohody, pole: 'zaklad' | 'dph') => rows
       .filter((row: any) => sadzbaDph(row.sadzba) === kategoria)
@@ -750,6 +774,7 @@ export function buildServerDataPack(input: {
         <inv:number>${numberXml}</inv:number>
         <inv:symVar>${escapeXml(clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20))}</inv:symVar>
         ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</inv:originalDocument>` : ''}
+        ${oprava && extracted.povodnyDoklad?.cislo ? `<inv:originalDocumentNumber>${escapeXml(clamp(extracted.povodnyDoklad.cislo, 32))}</inv:originalDocumentNumber>` : ''}
         <inv:date>${issueDate}</inv:date>
         <inv:dateTax>${taxDate}</inv:dateTax>
         <inv:dateDue>${dueDate}</inv:dateDue>

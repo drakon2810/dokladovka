@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { DphAuditor, bezPrazdnehoNavrhu, kodyPreStranu, overeneFakty, trebaDruhyHlas, zluc, zosuladSPraxou, type DphAuditVstup } from './dphAuditService.js';
+import { createTestDatabase, seedTestUser } from '../testHelpers.js';
+import { DphAuditor, bezPrazdnehoNavrhu, kodyPreStranu, nacitajCiselnikPreAudit, overeneFakty, trebaDruhyHlas, zluc, zosuladSPraxou, type DphAuditVstup } from './dphAuditService.js';
 
 // Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
 // model dostane spoľahlivé fakty o krajine a nikdy nesmie prejsť s kódom,
@@ -151,6 +153,51 @@ describe('DphAuditor', () => {
     const auditor = new DphAuditor(config, { parse: async () => ({}) });
     expect(await auditor.posud(moldavskaFaktura)).toBeUndefined();
   });
+
+  // Dobropis sa posudzoval ako bežná faktúra (B2/A1) a z dlhého dokladu model
+  // videl len prvých 20 položiek.
+  it('modelu ide podtyp dokladu a všetky jeho položky', async () => {
+    let odoslane: any;
+    const auditor = new DphAuditor(config, {
+      parse: async (body: any) => {
+        odoslane = JSON.parse(body.input[0].content[0].text);
+        return { output_parsed: { verdikt: 'suhlasi', odporucaneClenenieKod: null, odporucanaKvSekcia: null, dovod: 'ok', istota: 0.8 } };
+      },
+    });
+    const polozky = Array.from({ length: 30 }, (_, index) => ({ popis: `položka ${index + 1}`, sadzbaDph: 23 }));
+    await auditor.posud({ ...moldavskaFaktura, documentType: 'FP', podtyp: 'dobropis', extracted: { ...moldavskaFaktura.extracted, polozky } });
+    expect(odoslane.doklad.podtyp).toBe('dobropis');
+    expect(odoslane.doklad.polozky).toHaveLength(30);
+  });
+});
+
+describe('zvyk firmy podľa druhu dokladu', () => {
+  // Dobropis sa učil z bežných faktúr a pokladničný doklad hľadal agendu „PD",
+  // ktorú korpus nemá (VPD/PPD) — zladenie so zvykom tak bolo naprázdno.
+  it('dobropis počíta prax z FP-D, výdavkový pokladničný doklad z VPD', async () => {
+    const database = await createTestDatabase();
+    try {
+      const { tenantId, organizationId } = await seedTestUser(database);
+      for (const [agenda, kod, pocet] of [['FP', 'PNnevymer', 3], ['FP-D', 'PN', 2], ['VPD', 'PD', 1], ['PPD', 'UD', 4]] as const) {
+        for (let index = 0; index < pocet; index += 1) {
+          await database.query(
+            `INSERT INTO ucto_historia
+              (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,line_text_normalized,
+               predkontacia_kod,clenenie_dph_kod,riadok_index,source,riadok_hash)
+             VALUES ($1,$2,$3,$4,$5,'2026-03-10'::date,'dodavatel','sluzba','518/321',$6,0,'mdb',$7)`,
+            [randomUUID(), tenantId, organizationId, agenda, `${agenda}${index}`, kod, randomUUID()],
+          );
+        }
+      }
+      const prax = async (...druh: [string, string?, string?]) =>
+        Object.fromEntries((await nacitajCiselnikPreAudit(database, tenantId, organizationId, ...druh)).prax);
+      expect(await prax('FP', 'dobropis')).toEqual({ PN: 2 });
+      expect(await prax('FP', 'bezna')).toEqual({ PNnevymer: 3 });
+      expect(await prax('PD', undefined, 'expense')).toEqual({ PD: 1 });
+    } finally {
+      await database.close();
+    }
+  }, 60_000);
 });
 
 

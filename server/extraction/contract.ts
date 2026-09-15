@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
-export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v7';
-export const EXTRACTION_SCHEMA_VERSION = '2';
+export const EXTRACTION_PROMPT_VERSION = 'invoice-sk-cz-v8';
+// '3': pôvodný doklad dobropisu (originalDocumentNumber, originalTaxDate) —
+// nové povinné vlastnosti wire schémy. Uložené behy s '2' ostávajú platné,
+// extractionResultSchema ich má voliteľné.
+export const EXTRACTION_SCHEMA_VERSION = '3';
 export const SUPPORTED_VAT_RATES = [23, 21, 19, 12, 5, 0] as const;
 export const SUPPORTED_EXTRACTION_MIME_TYPES = [
   'application/pdf',
@@ -131,6 +134,12 @@ export const extractionWireSchema = z.object({
   invoiceNumber: nullableShortText,
   orderNumber: nullableShortText,
   deliveryNoteNumber: nullableShortText,
+  /**
+   * Dobropis a ťarchopis: číslo a dátum zdaniteľného plnenia dokladu, ktorý
+   * opravujú. Dátum plnenia pôvodného dokladu určuje obdobie a sadzbu DPH
+   * opravy — dobropis z roku 2025 k decembrovej dodávke nesie ešte 20 %.
+   */
+  originalDocumentNumber: nullableShortText,
   variableSymbol: nullableShortText,
   constantSymbol: nullableShortText,
   specificSymbol: nullableShortText,
@@ -143,6 +152,8 @@ export const extractionWireSchema = z.object({
    * účtovníčka potom dátum dodania zadáva ručne, lebo ten určuje obdobie DPH.
    */
   servicePeriodEnd: nullableIsoDate,
+  /** Dátum zdaniteľného plnenia dokladu, ktorý dobropis opravuje (pozri originalDocumentNumber). */
+  originalTaxDate: nullableIsoDate,
   dueDate: nullableIsoDate,
   currency: nullableShortText,
   // Bankový výpis: krátke číslo výpisu (POHODA dovolí max 10 znakov).
@@ -177,6 +188,9 @@ export interface ExtractionResult {
   invoiceNumber?: string;
   orderNumber?: string;
   deliveryNoteNumber?: string;
+  /** Dobropis/ťarchopis: číslo a dátum plnenia opravovaného dokladu (pozri wire schému). */
+  originalDocumentNumber?: string;
+  originalTaxDate?: string;
   variableSymbol?: string;
   constantSymbol?: string;
   specificSymbol?: string;
@@ -281,6 +295,8 @@ export function fromWireResult(value: unknown): ExtractionResult {
       invoiceNumber: parsed.invoiceNumber,
       orderNumber: parsed.orderNumber,
       deliveryNoteNumber: parsed.deliveryNoteNumber,
+      originalDocumentNumber: parsed.originalDocumentNumber,
+      originalTaxDate: parsed.originalTaxDate,
       variableSymbol: parsed.variableSymbol,
       constantSymbol: parsed.constantSymbol,
       specificSymbol: parsed.specificSymbol,
@@ -347,6 +363,7 @@ export const extractionResultSchema: z.ZodType<ExtractionResult> = z.object({
   }),
   invoiceNumber: z.string().optional(), orderNumber: z.string().optional(),
   deliveryNoteNumber: z.string().optional(), variableSymbol: z.string().optional(),
+  originalDocumentNumber: z.string().optional(), originalTaxDate: z.string().optional(),
   constantSymbol: z.string().optional(), specificSymbol: z.string().optional(),
   issueDate: z.string().optional(), taxDate: z.string().optional(), servicePeriodEnd: z.string().optional(), dueDate: z.string().optional(),
   currency: z.string().optional(), statementNumber: z.string().optional(), documentSummary: z.string().optional(),

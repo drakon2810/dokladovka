@@ -463,6 +463,8 @@ export const sk = {
   'detail.datumVystavenia': 'Dátum vystavenia',
   'detail.datumSplatnosti': 'Dátum splatnosti',
   'detail.datumDodania': 'Dátum dodania (DUZP)',
+  'detail.povodnyDokladCislo': 'Číslo pôvodného dokladu',
+  'detail.povodnyDokladDatum': 'Dátum plnenia pôvodného dokladu',
   'detail.mena': 'Mena',
   'detail.rozpisDph': 'Rozpis DPH',
   'detail.sadzba': 'Sadzba',

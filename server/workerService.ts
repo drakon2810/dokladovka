@@ -14,7 +14,7 @@ import {
 import { MockServerDocumentExtractionProvider, type MockExtractionHints } from './extraction/mockProvider.js';
 import { ExtractionProviderError, OpenAIDocumentExtractionProvider } from './extraction/openaiProvider.js';
 import { OpenAIDocumentClassifier, type Klasifikacia } from './extraction/classifyProvider.js';
-import { posudADulozDph } from './services/dphAuditService.js';
+import { posudNavrhDokladu, type DphAuditor } from './services/dphAuditService.js';
 import { PeppolDocumentExtractionProvider } from './extraction/peppolProvider.js';
 import { SepaStatementExtractionProvider } from './extraction/sepaProvider.js';
 import { classifyXml } from './inbound/xmlClassifier.js';
@@ -104,6 +104,8 @@ export interface WorkerDependencies {
   provider?: ServerDocumentExtractionProvider;
   /** Model návrhu zaúčtovania — v testoch náhrada za OpenAI. */
   aiParser?: Parameters<typeof maybeAiAccountingSuggestion>[4];
+  /** Kontrola DPH — v testoch náhrada za OpenAI. */
+  dphAuditor?: DphAuditor;
 }
 
 async function claimJob(
@@ -754,21 +756,13 @@ async function completeRun(
   // otvorenú transakciu by blokovalo zápis ostatných dokladov. Zlyhanie
   // nesmie zhodiť doklad, ktorý je už uložený — verdikt je poradca.
   try {
-    const navrh = await database.query<{ kod?: string; kv?: string } & Record<string, unknown>>(
-      `SELECT c.code AS kod, s.clenenie_kv_kod AS kv
-         FROM accounting_suggestions s
-         LEFT JOIN code_list_items c ON c.id=s.clenenie_dph_id
-        WHERE s.document_id=$1 AND s.tenant_id=$2`,
-      [prepared.documentId, job.tenant_id],
-    );
-    await posudADulozDph(database, config, {
+    await posudNavrhDokladu(database, config, {
       tenantId: job.tenant_id,
       organizationId: job.organization_id,
       documentId: prepared.documentId,
       documentType: normalized.documentType,
+      podtyp: podtypPreTyp(normalized.documentType, podtyp),
       extracted: normalized.extracted as Record<string, unknown>,
-      navrhnuteClenenieKod: navrh.rows[0]?.kod ?? undefined,
-      navrhnutaKvSekcia: navrh.rows[0]?.kv ?? undefined,
     });
   } catch (error) {
     console.warn('[dph-audit] kontrola zlyhala', error);
@@ -960,6 +954,20 @@ async function spracujNavrh(
         supplierIban: dodavatel.iban,
       };
       await rebuildAccountingSuggestion(database, vstup);
+      // Kontrola DPH pre nový druh — verdikt starého druhu zmazala úprava
+      // dokladu. Tie isté pravidlá ako po extrakcii: posudzuje návrh z pamäte,
+      // beží mimo transakcie a jej výpadok job nezhodí.
+      try {
+        await posudNavrhDokladu(database, config, {
+          ...vstup,
+          documentType: doklad.document_type,
+          podtyp: doklad.podtyp,
+          pokladnaTyp: doklad.accounting?.pokladnaTyp,
+          extracted: doklad.extracted ?? {},
+        }, dependencies.dphAuditor);
+      } catch (error) {
+        console.warn('[dph-audit] kontrola zlyhala', error);
+      }
       // Tie isté hranice ako po extrakcii: výpis má vlastný návrh po pohyboch
       // a doklad v karanténe môže patriť inej firme.
       if (doklad.document_type !== 'BV' && doklad.status !== 'karantena') {

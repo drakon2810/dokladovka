@@ -196,6 +196,16 @@ describe('buildDataPack — slovenská sadzba DPH podľa dátumu plnenia', () =>
     expect(xml).toContain('<inv:rateVAT>none</inv:rateVAT>');
     expect(xml).toContain('<typ:priceNone>120.00</typ:priceNone>');
   });
+
+  // Zhoda so serverom (server/pohodaPodtyp.test.ts): dobropis z roku 2025
+  // s 20 % opravuje staršie obdobie — nesmie potichu skončiť v priceNone.
+  it('dobropis so sadzbou zo staršieho obdobia export zastaví', () => {
+    const dobropis = mkDoc({
+      podtyp: 'dobropis',
+      extracted: { ...doklad2024().extracted, datumVystavenia: '2025-02-10', datumDodania: '2025-02-10' },
+    } as Partial<DocumentItem>);
+    expect(() => buildDataPack(ORG, [dobropis], CODE_LISTS)).toThrow(/predchádzajúceho obdobia DPH/);
+  });
 });
 
 describe('buildDataPack — číselník položky mimo exportu', () => {
