@@ -32,6 +32,8 @@ export interface DphPosudokDokument {
   accounting?: Record<string, string | undefined> | null;
   /** Zvolené členenie DPH rozpísané z číselníka — pre kontrolu odpočtu. */
   clenenieDph?: { id: string; kod: string; nazov: string };
+  /** Členenia DPH položiek s vlastným členením, rozpísané z číselníka podľa id. */
+  cleneniaPoloziek?: Array<{ id: string; kod: string; nazov: string }>;
 }
 
 const EU_DPH_PREFIXY = [
@@ -163,6 +165,17 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
   const blokacie: DphZistenie[] = [];
   const doklad = extrakt(dokument);
   const bezNarokuNaOdpocet = profil.platitelDph !== 'platitel';
+  // Členenia, ktoré doklad naozaj uplatní: hlavička a každá položka s vlastným
+  // členením (prázdne pole položky dedí hlavičku). Export ich posiela za riadok,
+  // takže odpočet na položke je odpočet aj pod hlavičkou „bez odpočtu" — kým sa
+  // posudzovala len hlavička, neplatiteľ s položkou PD prešiel bez blokácie.
+  const zoznamPoloziek = dokument.extracted?.polozky;
+  const polozky: Array<Record<string, any>> = Array.isArray(zoznamPoloziek) ? zoznamPoloziek : [];
+  const clenenia = [
+    dokument.clenenieDph,
+    ...polozky.map((polozka) => dokument.cleneniaPoloziek?.find((clenenie) => clenenie.id === polozka?.ucto?.clenenieDphId)),
+  ].filter((clenenie, index, vsetky): clenenie is { id: string; kod: string; nazov: string } =>
+    Boolean(clenenie) && vsetky.findIndex((ine) => ine?.id === clenenie?.id) === index);
 
   // Neplatiteľ / registrácia §7a: nikdy nemá nárok na odpočet.
   if (bezNarokuNaOdpocet) {
@@ -173,14 +186,14 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
         : 'Organizácia je registrovaná podľa §7a — bez nároku na odpočet DPH.',
       clenenieDphId: profil.clenenieBezOdpoctuId,
     });
-    if (dokument.clenenieDph) {
+    for (const clenenie of clenenia) {
       const povolene = profil.clenenieBezOdpoctuId
-        ? dokument.clenenieDph.id === profil.clenenieBezOdpoctuId
-        : !clenenieVyzeraNaOdpocet(dokument.clenenieDph);
+        ? clenenie.id === profil.clenenieBezOdpoctuId
+        : !clenenieVyzeraNaOdpocet(clenenie);
       if (!povolene) {
         blokacie.push({
           kod: 'dph_neplatitel_odpocet',
-          sprava: `Organizácia nemá nárok na odpočet DPH, ale členenie „${dokument.clenenieDph.kod} — ${dokument.clenenieDph.nazov}“ odpočet uplatňuje. Vyberte členenie bez odpočtu.`,
+          sprava: `Organizácia nemá nárok na odpočet DPH, ale členenie „${clenenie.kod} — ${clenenie.nazov}“ odpočet uplatňuje. Vyberte členenie bez odpočtu.`,
           clenenieDphId: profil.clenenieBezOdpoctuId,
         });
       }
@@ -222,10 +235,10 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
   if (cudziaDan) {
     const sprava = `Dodávateľ z ${doklad.dodavatelKrajina} fakturuje vlastnú DPH ${doklad.dphSpolu.toFixed(2)} ${doklad.mena} — zahraničná daň nevstupuje do slovenského priznania ani do kontrolného výkazu a nie je odpočítateľná.`;
     navrhy.push({ kod: 'dph_cudzia_dan', sprava });
-    if (dokument.clenenieDph && clenenieVyzeraNaOdpocet(dokument.clenenieDph)) {
+    for (const clenenie of clenenia.filter(clenenieVyzeraNaOdpocet)) {
       blokacie.push({
         kod: 'dph_cudzia_dan_odpocet',
-        sprava: `${sprava} Členenie „${dokument.clenenieDph.kod} — ${dokument.clenenieDph.nazov}“ pritom odpočet uplatňuje. Vyberte členenie bez nároku na odpočet (nezahrnované do priznania).`,
+        sprava: `${sprava} Členenie „${clenenie.kod} — ${clenenie.nazov}“ pritom odpočet uplatňuje. Vyberte členenie bez nároku na odpočet (nezahrnované do priznania).`,
       });
     }
   }

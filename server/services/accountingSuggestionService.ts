@@ -374,7 +374,7 @@ const AGENDA_PRE_TYP: Record<string, string> = {
  * a ťarchopis nie — ich rady ležia medzi bežnými faktúrami.
  * Zhodné s src/data/pohoda/agendas.ts.
  */
-function agendaRadu(documentType: string | undefined, podtyp: string | undefined): string | undefined {
+export function agendaRadu(documentType: string | undefined, podtyp: string | undefined): string | undefined {
   if (podtyp === 'zalohova') {
     if (documentType === 'FP') return 'prijate_zalohove_faktury';
     if (documentType === 'FV') return 'vydane_zalohove_faktury';

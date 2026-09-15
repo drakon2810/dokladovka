@@ -551,6 +551,8 @@ export const sk = {
   'schvalenie.chyba.bankUcet': 'vybrať bankový účet výpisu',
   'schvalenie.chyba.bankPohyby': 'doplniť predkontáciu ku každému pohybu výpisu',
   'schvalenie.chyba.bankMena': 'výpis v inej mene ako EUR sa zatiaľ neexportuje',
+  'schvalenie.chyba.clenenieKv': 'opraviť sekciu KV DPH — k tomuto druhu dokladu nepatrí',
+  'schvalenie.chyba.analytika': 'opraviť činnosť alebo zákazku — vybraté už nie sú v číselníku firmy',
   'schvalenie.chyba.supplier_name_required': 'doplniť názov dodávateľa',
   'schvalenie.chyba.buyer_name_required': 'doplniť názov odberateľa',
   'schvalenie.chyba.invoice_number_required': 'doplniť číslo dokladu',

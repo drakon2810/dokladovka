@@ -196,6 +196,37 @@ describe('dphAdvisor — posudDph', () => {
     expect(skRegistracia.navrhy.some((zistenie) => zistenie.kod === 'dph_cudzia_dan')).toBe(false);
   });
 
+  it('položka s vlastným členením sa posudzuje ako hlavička (R1 z auditu)', () => {
+    // Neplatiteľ: hlavička bez odpočtu, položka s odpočtom. Posudzovala sa len
+    // hlavička, takže doklad prešiel bez blokácie a export poslal PD za riadok.
+    const r1 = {
+      documentType: 'FP',
+      extracted: {
+        sumaSpolu: 123, rozpisDph: [{ zaklad: 100, dph: 23 }],
+        polozky: [{ popis: 'Synthetic', sumaSpolu: 123, ucto: { clenenieDphId: 'PD' } }],
+      },
+      accounting: { clenenieDphId: 'UN' },
+      clenenieDph: { id: 'UN', kod: 'UN', nazov: 'Nezahrnovat do DPH' },
+      cleneniaPoloziek: [{ id: 'PD', kod: 'PD', nazov: 'Tuzemské plnenie s odpočtom' }],
+    };
+    expect(posudDph(r1, profil({ platitelDph: 'neplatitel' })).blokacie.map((zistenie) => zistenie.kod))
+      .toEqual(['dph_neplatitel_odpocet']);
+    // Položka bez vlastného členenia dedí hlavičku — tá odpočet neuplatňuje.
+    const zdedene = { ...r1, extracted: { ...r1.extracted, polozky: [{ popis: 'Synthetic', sumaSpolu: 123 }] } };
+    expect(posudDph(zdedene, profil({ platitelDph: 'neplatitel' })).blokacie).toHaveLength(0);
+
+    // Cudzia daň: to isté pravidlo pre položku s odpočtom pod hlavičkou UN.
+    const cudzia = {
+      ...r1,
+      extracted: {
+        dodavatel: { nazov: 'ASFINAG', icDph: 'ATU43143200', krajina: 'AT' },
+        rozpisDph: [{ sadzba: 20, zaklad: 89, dph: 17.8 }], sumaSpolu: 106.8,
+        polozky: [{ popis: 'Vignette', sumaSpolu: 106.8, ucto: { clenenieDphId: 'PD' } }],
+      },
+    };
+    expect(posudDph(cudzia, profil()).blokacie.map((zistenie) => zistenie.kod)).toEqual(['dph_cudzia_dan_odpocet']);
+  });
+
   it('neplatiteľ nedostáva varovania o krátení odpočtu', () => {
     const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({
       platitelDph: 'neplatitel',
