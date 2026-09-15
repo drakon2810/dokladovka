@@ -42,12 +42,22 @@ export function agendaRadu({ typ, podtyp }: DruhDokladu): string | undefined {
  * Číselné rady vhodné pre daný typ dokladu. Keď firma pre agendu nemá ani jeden
  * rad (ručne založené číselníky bez agendy), vráti všetky — inak by sa doklad
  * nedal zaúčtovať vôbec.
+ *
+ * S rokom dokladu vypadnú rady iného účtovného roka: POHODA zakladá rady každý
+ * rok nanovo a rad prečítaný zo starého dokladu (ROFA „FP20" z decembra 2025)
+ * sa inak ponúkal aj faktúre z roku 2026. Keď by nezostal žiadny, ostanú rady
+ * agendy — číselník nového roka ešte nemusí byť stiahnutý.
  */
-export function radyPreTyp<T extends { agenda?: string }>(rady: T[], druhDokladu: DruhDokladu): T[] {
+export function radyPreTyp<T extends { agenda?: string; uctovnyRok?: string }>(
+  rady: T[],
+  druhDokladu: DruhDokladu,
+  rok?: string,
+): T[] {
   const agenda = agendaRadu(druhDokladu);
   if (!agenda) return rady;
   const vhodne = rady.filter((item) => item.agenda === agenda);
-  return vhodne.length > 0 ? vhodne : rady;
+  const tohtoRoka = rok ? vhodne.filter((item) => !item.uctovnyRok || item.uctovnyRok === rok) : vhodne;
+  return tohtoRoka.length > 0 ? tohtoRoka : vhodne.length > 0 ? vhodne : rady;
 }
 
 /**

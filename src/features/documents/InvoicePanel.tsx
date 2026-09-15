@@ -591,7 +591,7 @@ export function InvoicePanel({
   // Rad musí sedieť s agendou dokladu — pokladničný doklad nesmie dostať rad
   // prijatých faktúr. Už zvolený rad ostáva v ponuke, nech sa hodnota nestratí.
   const druhDokladu = druh(draft);
-  const ponukaRadov = radyPreTyp(codeLists.ciselneRady, druhDokladu);
+  const ponukaRadov = radyPreTyp(codeLists.ciselneRady, druhDokladu, /^(\d{4})-/.exec(ex.datumVystavenia ?? '')?.[1]);
   // POHODA má pre každú agendu vlastné predkontácie — na vydanú faktúru nepatrí nákupová.
   //
   // Značka agendy z POHODY ale hovorí, kde bola predkontácia ZALOŽENÁ, nie kde

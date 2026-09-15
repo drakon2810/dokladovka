@@ -135,6 +135,57 @@ describe('meranie presnosti zaúčtovania', () => {
     expect(prompt.pravidlo).toMatchObject({ dokladov: 3, zhoda: 3, predkontaciaKod: '602200' });
   }, 90_000);
 
+  // Rad sa rátal ako trafený, keď návrh nejaký rad určil — na produkcii tak bol
+  // rad 100 % v každej agende každej firmy a o správnosti nehovoril nič.
+  it('rad sa porovná s radom, do ktorého doklad v POHODE naozaj padol', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const predkontacia = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`,
+      [predkontacia, ...kde],
+    );
+    for (const [kod, ext] of [['DF260', '11'], ['ZF260', '12']]) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,external_id,accounting_year)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$4,'pohoda','prijate_faktury',$5,'2026')`,
+        [randomUUID(), ...kde, kod, ext],
+      );
+    }
+    const doKorpusu = async (cislo: string, datum: string, rad: string, krajina: string) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,line_text_normalized,
+         predkontacia_id,riadok_index,suma,source,riadok_hash,rad_external_id,rad_kod,krajina)
+       VALUES ($1,$2,$3,'FP',$4,$5::date,'preprava s.r.o.','preprava',$6,0,100,'mdb',$7,$8,$9,$10)`,
+      [randomUUID(), ...kde, cislo, datum, predkontacia, randomUUID(),
+        rad === 'DF260' ? '11' : '12', rad, krajina],
+    );
+    for (const [index, cislo] of ['DF260001', 'DF260002', 'DF260003'].entries()) {
+      await doKorpusu(cislo, `2026-0${index + 1}-15`, 'DF260', 'SK');
+    }
+    // Merané: jeden trafený, druhý v zahraničnom rade, ktorý história nepozná.
+    await doKorpusu('DF260090', '2026-08-20', 'DF260', 'SK');
+    await doKorpusu('ZF260091', '2026-08-21', 'ZF260', 'IT');
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: predkontacia, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Preprava',
+      })),
+    };
+    const vysledok = await zmerajPresnost(
+      database, testConfig(), { tenantId: seeded.tenantId, organizationId: seeded.organizationId },
+      { deliciDatum: '2026-08-01', vzorka: 10 }, parser as never,
+    );
+    expect(vysledok.vysledok.FP).toMatchObject({ dokladov: 2, radov: 2, rad: 1, predkontacia: 2 });
+    expect(vysledok.rozdiely).toEqual([expect.objectContaining({
+      doklad: 'ZF260091', skutocne: expect.objectContaining({ rad: 'ZF260' }), navrh: expect.objectContaining({ rad: 'DF260' }),
+    })]);
+  }, 90_000);
+
   it('bez dokladov za meraným obdobím to povie, nie spadne', async () => {
     const database = await createTestDatabase();
     databases.push(database);

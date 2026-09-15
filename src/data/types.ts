@@ -565,7 +565,8 @@ export type CodeListKind =
   | 'projekty'
   | 'bankoveUcty';
 
-export type CodeListSource = 'manual' | 'pohoda';
+/** pohoda_doklad = rad, ktorý POHODA v zozname radov nemá a prečítal sa z dokladov. */
+export type CodeListSource = 'manual' | 'pohoda' | 'pohoda_doklad';
 
 export interface CodeListItem {
   id: string;

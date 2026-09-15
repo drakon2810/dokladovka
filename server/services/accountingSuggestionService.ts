@@ -382,12 +382,6 @@ function agendaRadu(documentType: string | undefined, podtyp: string | undefined
   return documentType ? AGENDA_PRE_TYP[documentType] : undefined;
 }
 
-/**
- * Predvolený číselný rad firmy pre daný typ dokladu:
- * 1) čo účtovník nastavil v Nastaveniach, 2) inak rad, ktorý firma reálne
- * používa — najprv podľa počtu použití v pamäti rozhodnutí, potom podľa
- * najvyššieho čísla z POHODY (nepoužitý rad stojí na 1).
- */
 /** Mesiace v názvoch číselných radov, bez diakritiky — poradie = číslo mesiaca. */
 const MESIACE_V_NAZVE = [
   'januar', 'februar', 'marec', 'april', 'maj', 'jun',
@@ -407,40 +401,266 @@ export function mesiacZNazvu(nazov: string | undefined): number | undefined {
   return undefined;
 }
 
-async function resolveSeriesDefault(
+/**
+ * Rady agendy, ktoré majú v názve daný mesiac („Vydané faktúry jún") a patria
+ * roku dokladu. Rad s iným účtovným rokom je rad minulého roka — POHODA
+ * zakladá rady na každý rok nanovo (FP20 → FP202).
+ */
+async function radyMesiaca(
   tx: Queryable,
-  input: SuggestionInput,
+  input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
+  agenda: string,
+  mesiac: number,
+  rok: number,
+): Promise<string[]> {
+  const rady = await tx.query<{ id: string; name?: string } & Record<string, unknown>>(
+    `SELECT id, name FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND active=true AND agenda=$3
+        AND (accounting_year IS NULL OR accounting_year=$4)`,
+    [input.tenantId, input.organizationId, agenda, String(rok)],
+  );
+  return rady.rows.filter((rad) => mesiacZNazvu(rad.name) === mesiac).map((rad) => rad.id);
+}
+
+/**
+ * Tuzemská protistrana — ale LEN keď to doklad naozaj hovorí. Bez krajiny aj
+ * bez IČ DPH je null: zahraničná faktúra, ktorej sa krajina neprečítala, by
+ * inak spadla do tuzemského radu.
+ */
+function tuzemskaProtistrana(protistrana?: { icDph?: string; krajina?: string }): boolean | null {
+  const krajina = String(protistrana?.krajina ?? '').trim().toUpperCase();
+  const prefixIcDph = String(protistrana?.icDph ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 2);
+  return krajina === 'SK' || prefixIcDph === 'SK'
+    ? true
+    : (jeCudziDodavatel({ icDph: protistrana?.icDph, krajina: protistrana?.krajina }) ? false : null);
+}
+
+/**
+ * Agendy korpusu, z ktorých sa počíta rad druhu dokladu. Dobropis leží
+ * v číselníku v tej istej agende ako bežná faktúra, no má vlastný rad —
+ * korpus ho drží ako FP-D a do bežných faktúr sa miešať nesmie. Pokladňa bez
+ * známeho smeru nevie, či je príjmom alebo výdajom, preto berie oba.
+ */
+function agendyHistorieRadu(documentType: string | undefined, podtyp?: string, pokladnaTyp?: string): string[] {
+  switch (documentType) {
+    case 'FP': case 'FV': return [agendaHistorie(documentType, podtyp)];
+    case 'OZ': return ['OZ'];
+    case 'MZDY': return ['INT'];
+    case 'PD': return pokladnaTyp === 'receipt' ? ['PPD'] : pokladnaTyp === 'expense' ? ['VPD'] : ['VPD', 'PPD'];
+    default: return [];
+  }
+}
+
+interface DokladRadu extends Record<string, unknown> {
+  rad_id: string;
+  supplier_ico: string | null;
+  supplier_name_normalized: string | null;
+  krajina: string | null;
+  mesiac: number;
+}
+
+/** Najčastejší rad skupiny dokladov a jeho podiel v nej. */
+function najcastejsiRad(doklady: DokladRadu[]): { id: string; podiel: number } {
+  const pocty = new Map<string, number>();
+  for (const doklad of doklady) pocty.set(doklad.rad_id, (pocty.get(doklad.rad_id) ?? 0) + 1);
+  let najviac: [string, number] = ['', 0];
+  for (const pocet of pocty) if (pocet[1] > najviac[1]) najviac = pocet;
+  return { id: najviac[0], podiel: najviac[1] / doklady.length };
+}
+
+/**
+ * Rad z dokladov jedného roka. Každá vlastnosť nového dokladu (protistrana,
+ * mesiac, tuzemský/zahraničný, nič) vyberie rad, v ktorom sú jej doklady
+ * najčastejšie; vyhrá tá, ktorej doklady sú v ňom najjednotnejšie. Firmy delia
+ * rady rôzne — ALPINA podľa krajiny (DF260/ZF260), AGS podľa mesiaca (26070
+ * júl), iná má jeden rad — a podiel to rozsúdi bez pravidla pre konkrétnu firmu.
+ * null = firma rady delí podľa mesiaca, no tento mesiac ešte nemá doklad
+ * a rad sa podľa názvu nájsť nedá.
+ */
+async function vyberRadZDokladov(
+  tx: Queryable,
+  input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
+  agenda: string,
+  doklady: DokladRadu[],
+  novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number },
+  rok: number,
+): Promise<string | null> {
+  // Mesačná firma: aspoň dva mesiace s tromi a viac dokladmi, každý takmer celý
+  // v jednom rade a tie rady navzájom rôzne. Jeden rad na celý rok ani delenie
+  // podľa krajiny tak nevyzerá.
+  const podlaMesiaca = new Map<number, DokladRadu[]>();
+  for (const doklad of doklady) podlaMesiaca.set(doklad.mesiac, [...(podlaMesiaca.get(doklad.mesiac) ?? []), doklad]);
+  const mesiace = [...podlaMesiaca.values()].filter((skupina) => skupina.length >= 3).map(najcastejsiRad);
+  const mesacna = mesiace.length >= 2 && mesiace.every((mesiac) => mesiac.podiel >= 0.9)
+    && new Set(mesiace.map((mesiac) => mesiac.id)).size === mesiace.length;
+  if (mesacna && !podlaMesiaca.has(novy.mesiac)) {
+    // Nový mesiac nemá z čoho počítať — rad mu dá už len názov. Hádať podľa
+    // iného mesiaca nesmieme: POHODA by pridelila číslo z cudzieho radu.
+    const rady = await radyMesiaca(tx, input, agenda, novy.mesiac, rok);
+    return rady.length === 1 ? rady[0] : null;
+  }
+
+  // Poradie = prednosť pri rovnakom podiele. Mesiac ide pred protistranu:
+  // v mesačnej firme sú doklady protistrany z iných mesiacov, takže jej „100 %"
+  // je rad TOHO mesiaca, nie tohto — stály zákazník by dostal februárový rad.
+  const skupiny: Array<{ doklady: DokladRadu[]; minimum: number }> = [
+    { doklady: mesacna ? podlaMesiaca.get(novy.mesiac) ?? [] : [], minimum: 1 },
+    {
+      doklady: doklady.filter((doklad) => (novy.ico !== '' && doklad.supplier_ico === novy.ico)
+        || (novy.nazov !== '' && doklad.supplier_name_normalized === novy.nazov)),
+      minimum: 2,
+    },
+    {
+      doklady: novy.tuzemsky === null ? [] : doklady.filter((doklad) =>
+        Boolean(doklad.krajina) && (doklad.krajina === 'SK') === novy.tuzemsky),
+      minimum: 3,
+    },
+    { doklady, minimum: 1 },
+  ];
+  let vybrany: { id: string; podiel: number } | undefined;
+  for (const skupina of skupiny) {
+    if (skupina.doklady.length < skupina.minimum) continue;
+    const rad = najcastejsiRad(skupina.doklady);
+    if (!vybrany || rad.podiel > vybrany.podiel) vybrany = rad;
+  }
+  return vybrany?.id ?? null;
+}
+
+/**
+ * Rad, ktorý účtovník firmy na tento druh dokladu v POHODE naozaj dáva,
+ * spočítaný z histórie — každý doklad nesie identifikátor svojho radu.
+ *
+ * Doteraz sa rad hádal z predpony čísla dokladu a chybil naprieč firmami:
+ * marcové vydané faktúry AGS (26030…) padli do „Vydané ťarchopisy" 2603,
+ * vydané faktúry ROFA do „Prijaté dopropisy" 2026 a ROFA dostávala „FP20"
+ * z decembrových dokladov 2025. Preto sa počítajú len doklady rovnakého druhu
+ * z roku dokladu (pri meraní len spred jeho dátumu).
+ *
+ * Január nového roka históriu ešte nemá: rad sa vyberie z minulého roka
+ * a prenesie na rad nového roka s rovnakým názvom — POHODA rady zakladá každý
+ * rok nanovo, názov ostáva.
+ *
+ * undefined = z histórie sa nedá povedať nič, null = nechať prázdne.
+ */
+async function radZHistorie(
+  tx: Queryable,
+  input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
+  agenda: string,
+  agendy: string[],
+  datum: string,
+  protistrana: { nazov?: string; ico?: string; icDph?: string; krajina?: string } | undefined,
+  doDatumu: string | undefined,
+): Promise<string | null | undefined> {
+  if (agendy.length === 0) return undefined;
+  const rok = Number(datum.slice(0, 4));
+  // Doklad = jeden riadok na číslo dokladu; rad bez aktívneho riadku
+  // v číselníku sa ponúknuť nedá, jeho doklady sa nerátajú.
+  const doklady = async (rokDokladov: number) => (await tx.query<DokladRadu>(
+    `SELECT DISTINCT ON (h.agenda, h.doklad_cislo)
+            c.id AS rad_id, h.supplier_ico, h.supplier_name_normalized, h.krajina,
+            extract(month FROM h.datum)::int AS mesiac
+       FROM ucto_historia h
+       JOIN code_list_items c
+         ON c.tenant_id=h.tenant_id AND c.organization_id=h.organization_id AND c.kind='ciselneRady'
+        AND c.active=true AND c.external_id=h.rad_external_id
+      WHERE h.tenant_id=$1 AND h.organization_id=$2 AND h.agenda=ANY($3::text[])
+        AND h.rad_external_id IS NOT NULL AND h.doklad_cislo IS NOT NULL
+        AND h.datum >= make_date($4::int, 1, 1) AND h.datum < make_date($4::int + 1, 1, 1)
+        AND ($5::date IS NULL OR h.datum < $5::date)
+      ORDER BY h.agenda, h.doklad_cislo, coalesce(h.riadok_index, 0)`,
+    [input.tenantId, input.organizationId, agendy, rokDokladov, doDatumu ?? null],
+  )).rows;
+  const novy = {
+    ico: String(protistrana?.ico ?? '').replace(/\D/g, ''),
+    nazov: normalizeName(protistrana?.nazov ?? ''),
+    tuzemsky: tuzemskaProtistrana(protistrana),
+    mesiac: Number(datum.slice(5, 7)),
+  };
+
+  const tohtoRoka = await doklady(rok);
+  if (tohtoRoka.length > 0) return vyberRadZDokladov(tx, input, agenda, tohtoRoka, novy, rok);
+
+  const minulehoRoka = await doklady(rok - 1);
+  if (minulehoRoka.length === 0) return undefined;
+  const minulyRad = await vyberRadZDokladov(tx, input, agenda, minulehoRoka, novy, rok - 1);
+  if (!minulyRad) return undefined;
+  const novyRad = await tx.query<{ id: string } & Record<string, unknown>>(
+    `SELECT n.id
+       FROM code_list_items s
+       JOIN code_list_items n
+         ON n.tenant_id=s.tenant_id AND n.organization_id=s.organization_id AND n.kind='ciselneRady'
+        AND n.active=true AND n.agenda=s.agenda AND n.accounting_year=$4
+        AND lower(trim(n.name))=lower(trim(s.name))
+      WHERE s.tenant_id=$1 AND s.organization_id=$2 AND s.id=$3`,
+    [input.tenantId, input.organizationId, minulyRad, String(rok)],
+  );
+  return novyRad.rows.length === 1 ? novyRad.rows[0].id : undefined;
+}
+
+/**
+ * Číselný rad nového dokladu:
+ * 1) nastavenie účtovníka — len pre bežný doklad a len rad jeho agendy,
+ * 2) rad z histórie firmy (radZHistorie),
+ * 3) staré odhady, kým história firmy rad dokladu nenesie.
+ *
+ * undefined = výber nevie nič a volajúci si nechá svoj rad; null = história
+ * je, ale rozhodnúť sa nedá — pole ostane prázdne pre účtovníka a nezaplní ho
+ * ani model, ani rad zdedený z pamäte.
+ */
+export async function resolveSeriesDefault(
+  tx: Queryable,
+  input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
   documentType: string | undefined,
   datumVystavenia?: string,
   podtyp?: string,
   protistrana?: { nazov?: string; ico?: string; icDph?: string; krajina?: string },
   doDatumu?: string,
-): Promise<string | undefined> {
-  const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
-    `SELECT d.ciselny_rad_id
-       FROM organization_series_defaults d
-       JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true
-      WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type=$3`,
-    [input.tenantId, input.organizationId, documentType ?? ''],
-  );
-  if (explicit.rows[0]) return explicit.rows[0].ciselny_rad_id;
-
+  pokladnaTyp?: string,
+): Promise<string | null | undefined> {
   const agenda = agendaRadu(documentType, podtyp);
   if (!agenda) return undefined;
+
+  // Nastavenie účtovníka je predvoľba BEŽNÉHO dokladu — kľúčom je len typ, takže
+  // platilo aj pre dobropis a zálohovú: Shenzhen by dobropisu nikdy nedal rad
+  // „Prijaté dopropisy" a zálohová dostávala rad z agendy bežných faktúr.
+  if (!podtyp || podtyp === 'bezna') {
+    const explicit = await tx.query<{ ciselny_rad_id: string } & Record<string, unknown>>(
+      `SELECT d.ciselny_rad_id
+         FROM organization_series_defaults d
+         JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true AND c.agenda=$4
+        WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type=$3`,
+      [input.tenantId, input.organizationId, documentType ?? '', agenda],
+    );
+    if (explicit.rows[0]) return explicit.rows[0].ciselny_rad_id;
+  }
+
+  // Rok dokladu: dátum vystavenia, pri meraní dátum, po ktorý sa história drží.
+  const datum = [datumVystavenia, doDatumu].map((hodnota) => hodnota?.trim() ?? '')
+    .find((hodnota) => /^\d{4}-\d{2}-\d{2}/.test(hodnota)) ?? new Date().toISOString().slice(0, 10);
+  const rok = Number(datum.slice(0, 4));
+  const agendy = agendyHistorieRadu(documentType, podtyp, pokladnaTyp);
+  const zHistorie = await radZHistorie(tx, input, agenda, agendy, datum, protistrana, doDatumu);
+  if (zHistorie !== undefined) return zHistorie;
+  const maHistoriuRadov = agendy.length > 0 && (await tx.query(
+    `SELECT 1 FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[]) AND rad_external_id IS NOT NULL
+      LIMIT 1`,
+    [input.tenantId, input.organizationId, agendy],
+  )).rows.length > 0;
+  if (maHistoriuRadov) return undefined;
+
+  // ponytail: staré odhady nižšie (mesiac z názvu, predpona čísla dokladu,
+  // najvyššie číslo) bežia len pre firmy, ktorých história rad dokladu ešte
+  // nenesie. Zmazať, keď ho nesie história každej firmy (rad_external_id).
 
   // Mesačné rady („Vydané faktúry jún", „…júl"): doklad patrí do radu SVOJHO
   // mesiaca. Automatika nižšie vyberá naposledy použitý rad, takže júlovej
   // faktúre dala júnový rad — a POHODA jej pridelila číslo z nesprávneho radu.
   const mesiacDokladu = /^\d{4}-(\d{2})-\d{2}$/.exec(datumVystavenia?.trim() ?? '')?.[1];
   if (mesiacDokladu) {
-    const rady = await tx.query<{ id: string; name?: string } & Record<string, unknown>>(
-      `SELECT id, name FROM code_list_items
-        WHERE tenant_id=$1 AND organization_id=$2 AND kind='ciselneRady' AND active=true AND agenda=$3`,
-      [input.tenantId, input.organizationId, agenda],
-    );
-    const podlaMesiaca = rady.rows.filter((rad) => mesiacZNazvu(rad.name) === Number(mesiacDokladu));
+    const podlaMesiaca = await radyMesiaca(tx, input, agenda, Number(mesiacDokladu), rok);
     // Len pri jednoznačnej zhode — dva rady toho istého mesiaca nevieme rozsúdiť.
-    if (podlaMesiaca.length === 1) return podlaMesiaca[0].id;
+    if (podlaMesiaca.length === 1) return podlaMesiaca[0];
   }
 
   // Rad, ktorý firma tejto protistrane naozaj dáva. U ALPINY o ňom rozhoduje
@@ -463,14 +683,14 @@ async function resolveSeriesDefault(
            ON h.tenant_id=c.tenant_id AND h.organization_id=c.organization_id
           AND h.doklad_cislo LIKE c.code || '%'
         WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
-          AND c.active=true AND c.agenda=$3
+          AND c.active=true AND c.agenda=$3 AND (c.accounting_year IS NULL OR c.accounting_year=$7)
           AND (($4::text <> '' AND h.supplier_ico=$4) OR ($5::text <> '' AND h.supplier_name_normalized=$5))
           AND ($6::date IS NULL OR h.datum < $6::date)
         GROUP BY c.id, c.code
        HAVING count(*) >= 3
         ORDER BY count(*) DESC, length(c.code) DESC, c.code
         LIMIT 1`,
-      [input.tenantId, input.organizationId, agenda, ico, nazov, doDatumu ?? null],
+      [input.tenantId, input.organizationId, agenda, ico, nazov, doDatumu ?? null, String(rok)],
     );
     if (podlaProtistrany.rows[0]) return podlaProtistrany.rows[0].id;
   }
@@ -480,14 +700,8 @@ async function resolveSeriesDefault(
   // 2611 a stošesťdesiaty druhý doklad, „261200002" je rad 2612 a druhý.
   // Bez odrezania kódu vyhráva rad s dlhším odsadením núl, takže prijatá
   // faktúra dostávala rad „Prijaté dobropisy" s dvomi dokladmi.
-  // Tuzemský či zahraničný doklad — ale LEN keď to doklad naozaj hovorí.
-  // Bez krajiny aj bez IČ DPH sa poradie nemení: zahraničná faktúra, ktorej sa
-  // krajina neprečítala, by inak spadla do tuzemského radu.
-  const krajina = String(protistrana?.krajina ?? '').trim().toUpperCase();
-  const prefixIcDph = String(protistrana?.icDph ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 2);
-  const tuzemsky = krajina === 'SK' || prefixIcDph === 'SK'
-    ? true
-    : (jeCudziDodavatel({ icDph: protistrana?.icDph, krajina: protistrana?.krajina }) ? false : null);
+  // Tuzemský či zahraničný doklad — bez krajiny aj bez IČ DPH sa poradie nemení.
+  const tuzemsky = tuzemskaProtistrana(protistrana);
 
   const automatic = await tx.query<{ id: string } & Record<string, unknown>>(
     `SELECT c.id
@@ -499,7 +713,7 @@ async function resolveSeriesDefault(
           GROUP BY ciselny_rad_id
        ) u ON u.ciselny_rad_id=c.id
       WHERE c.tenant_id=$1 AND c.organization_id=$2 AND c.kind='ciselneRady'
-        AND c.active=true AND c.agenda=$3
+        AND c.active=true AND c.agenda=$3 AND (c.accounting_year IS NULL OR c.accounting_year=$5)
       -- Rad, ktorý firma sama nazvala zahraničným, nepatrí tuzemskej faktúre.
       -- Číselník pole „krajina" nemá, firma to má v názve: ALPINA má „Prijaté
       -- faktúry SK" proti „Prijaté faktúry zahraničné". Podľa protistrany sa to
@@ -519,7 +733,7 @@ async function resolveSeriesDefault(
                  '\\D', '', 'g'), ''), '0')::numeric DESC,
                c.code
       LIMIT 1`,
-    [input.tenantId, input.organizationId, agenda, tuzemsky],
+    [input.tenantId, input.organizationId, agenda, tuzemsky, String(rok)],
   );
   return automatic.rows[0]?.id;
 }
@@ -609,8 +823,11 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   let kvKod: string | undefined;
   let ruleId: string | undefined;
 
-  const current = await tx.query<{ extracted: unknown; document_type?: string; podtyp?: string } & Record<string, unknown>>(
-    'SELECT extracted, document_type, podtyp FROM documents WHERE id=$1 AND tenant_id=$2',
+  const current = await tx.query<{
+    extracted: unknown; document_type?: string; podtyp?: string; pokladna_typ?: string;
+  } & Record<string, unknown>>(
+    `SELECT extracted, document_type, podtyp, accounting->>'pokladnaTyp' AS pokladna_typ
+       FROM documents WHERE id=$1 AND tenant_id=$2`,
     [input.documentId, input.tenantId],
   );
   const lineText = normalizeLineText(current.rows[0]?.extracted);
@@ -786,11 +1003,19 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // nenašlo NIČ, takže pole ostávalo prázdne aj pri inak trafenom návrhu.
   // Protistrana ide do výberu — u ALPINY práve ona rozhoduje medzi tuzemským
   // radom a zahraničným.
-  candidate.ciselny_rad_id ??= await resolveSeriesDefault(
+  //
+  // Prebiť výber smie len pravidlo účtovníka. Rad skopírovaný z pamäte
+  // dodávateľa, z posledného dokladu či z predvolieb firmy nesie mesiac a druh
+  // TOHO dokladu (pamäť podtyp nerozlišuje) — marcová faktúra by dostala
+  // februárový rad. Zdedený rad ostáva, len keď výber nevie nič (undefined).
+  const radPravidla = pravidlo.candidate.ciselny_rad_id;
+  const radVyberu = radPravidla ? undefined : await resolveSeriesDefault(
     tx, input, documentType, datumVystavenia, current.rows[0]?.podtyp,
     // Krajina ide vždy z dokladu — input ju nenesie a bez nej sa tuzemský rad
     // od zahraničného nerozozná.
-    { ...strana, krajina: protistranaDokladu(documentType, current.rows[0]?.extracted).krajina });
+    { ...strana, krajina: protistranaDokladu(documentType, current.rows[0]?.extracted).krajina },
+    undefined, current.rows[0]?.pokladna_typ);
+  candidate.ciselny_rad_id = radPravidla ?? (radVyberu !== undefined ? radVyberu ?? undefined : candidate.ciselny_rad_id);
 
   candidate = await onlyActiveIds(tx, input, candidate);
   if (!hasAccounting(candidate)) {
@@ -1658,6 +1883,8 @@ export interface AiSuggestionDocumentContext {
   supplierKrajina?: string;
   /** Dátum vystavenia — určuje mesačný číselný rad firmy. */
   datumVystavenia?: string;
+  /** Smer pokladničného dokladu — príjem a výdaj majú v histórii vlastné rady. */
+  pokladnaTyp?: 'receipt' | 'expense';
   /** Odberateľ — partner vydanej faktúry; bez identifikátorov = súkromná osoba. */
   odberatel?: { nazov?: string; ico?: string; dic?: string; icDph?: string; krajina?: string };
   totalAmount?: number;
@@ -1793,13 +2020,13 @@ export async function maybeAiAccountingSuggestion(
     : { nazov: protistranaZDokladu.nazov, ico: protistranaZDokladu.ico };
   // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
   // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
-  // určí rovnako ako inde (nastavenie účtovníka, rad tejto protistrany
-  // z korpusu, inak reálne používaný rad).
+  // určí rovnako ako inde (nastavenie účtovníka, inak rad z histórie firmy).
+  // null = história je, ale rozhodnúť sa nedá — vtedy neplatí ani rad modelu.
   const radPreTyp = await resolveSeriesDefault(
     database, input, documentContext.documentType, documentContext.datumVystavenia,
     documentContext.podtyp,
     { ...protistranaKontextu, icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina },
-    documentContext.historiaDoDatumu);
+    documentContext.historiaDoDatumu, documentContext.pokladnaTyp);
   // Ponuka sa zúži na agendu dokladu; predkontácie bez agendy (ručne založené)
   // ostávajú a pri prázdnom výsledku sa vráti všetko — inak by model nemal z čoho vyberať.
   const povoleneAgendy = PREDKONTACIA_AGENDA[documentContext.documentType ?? ''];
@@ -2109,6 +2336,8 @@ export async function maybeAiAccountingSuggestion(
     // Stredisko model nevyberá — ostáva z pravidla alebo z deterministického návrhu.
     stredisko_id: pravidlo.candidate.stredisko_id ?? (doterajsi?.stredisko_id as string | undefined),
   });
+  const radNavrhu = pravidlo.candidate.ciselny_rad_id
+    ?? (radPreTyp !== undefined ? radPreTyp ?? undefined : validated.ciselny_rad_id);
   // Zaúčtovanie musí prísť od modelu alebo z pravidla. Prenesené stredisko ani
   // číselný rad sa nepočítajú — rad určuje nastavenie firmy (radPreTyp nižšie),
   // takže model, ktorý nič nespoznal, by inak prázdnou odpoveďou prepísal dobrý
@@ -2307,7 +2536,7 @@ export async function maybeAiAccountingSuggestion(
       accounting: {
         predkontaciaId: validated.predkontacia_id,
         clenenieDphId: validated.clenenie_dph_id,
-        ciselnyRadId: pravidlo.candidate.ciselny_rad_id ?? radPreTyp ?? validated.ciselny_rad_id,
+        ciselnyRadId: radNavrhu,
         clenenieKvKod: kvKod,
       },
       clenenieDph: clenenie,
@@ -2585,7 +2814,7 @@ export async function maybeAiAccountingSuggestion(
        based_on_document_id=NULL, rule_id=excluded.rule_id, riadky=excluded.riadky, updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
       validated.predkontacia_id ?? null, validated.clenenie_dph_id ?? null,
-      pravidlo.candidate.ciselny_rad_id ?? radPreTyp ?? validated.ciselny_rad_id ?? null,
+      radNavrhu ?? null,
       validated.stredisko_id ?? null, kvKod ?? null,
       Math.min(strop, Math.max(0, parsed.confidence)), dovod.slice(0, 500),
       // Pravidlo, ktoré do návrhu prispelo — nesie si samokontrolu (updateRuleFeedback).
