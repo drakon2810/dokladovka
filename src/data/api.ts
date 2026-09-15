@@ -45,6 +45,8 @@ import {
   PUBLIC_MAIL_RECEIVING_DOMAIN,
 } from './config';
 import { newId, nowIso } from '../lib/id';
+import { CLENENIE_KV_KODY } from './types';
+import { agendaRadu, druh, kvKodyPreTyp } from './pohoda/agendas';
 import { isTotalConsistent, isVatRowConsistent, round2 } from '../lib/validate';
 import { buildSeedState } from './mock/seed';
 import { simulateInboundEmail as runSimulation } from './inbound/inboundService';
@@ -1338,7 +1340,7 @@ export interface ApprovalCheck {
 
 export type ChybajucePole =
   | 'predkontacia' | 'clenenieDph' | 'ciselnyRad' | 'stredisko'
-  | 'pokladna' | 'bankUcet' | 'bankPohyby' | 'bankMena';
+  | 'pokladna' | 'bankUcet' | 'bankPohyby' | 'bankMena' | 'clenenieKv' | 'analytika';
 
 /** Podmienky schválenia (SPEC §6.4, §11.14) — kontroluje aj UI pre disabled stav. */
 export function checkApprovable(
@@ -1367,6 +1369,7 @@ export function checkApprovable(
     return predkontacia.agenda !== ((pohyb.sumaSpolu ?? 0) < 0 ? 'bankIssued' : 'bankReceived');
   };
   const chybajuceUcto: ChybajucePole[] = [];
+  const druhDokladu = druh(doc);
   if (doc.typ === 'BV') {
     if (!(codeLists.bankoveUcty ?? []).some((ucet) =>
       ucet.orgId === doc.orgId && ucet.active && ucet.kod.trim() === doc.ucto.bankUcetKod?.trim())) chybajuceUcto.push('bankUcet');
@@ -1384,9 +1387,31 @@ export function checkApprovable(
     const zalohova = doc.podtyp === 'zalohova';
     if (!zalohova && !inOrg(codeLists.predkontacie, doc.ucto.predkontaciaId)) chybajuceUcto.push('predkontacia');
     if (!zalohova && !inOrg(codeLists.cleneniaDph, doc.ucto.clenenieDphId)) chybajuceUcto.push('clenenieDph');
-    if (!inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId)) chybajuceUcto.push('ciselnyRad');
+    // Rad inej agendy či iného účtovného roka server odmietne rovnako ako
+    // chýbajúci — POHODA by doklad očíslovala z cudzieho radu. Rad bez agendy
+    // či roka je ručne založený a prechádza, ako v ponuke editora.
+    const rad = codeLists.ciselneRady.find((item) => item.id === doc.ucto.ciselnyRadId);
+    const agenda = agendaRadu(druhDokladu);
+    const rok = /^\d{4}/.exec(doc.extracted.datumVystavenia ?? '')?.[0];
+    if (!inOrg(codeLists.ciselneRady, doc.ucto.ciselnyRadId)
+      || (rad?.agenda && agenda && rad.agenda !== agenda)
+      || (rad?.uctovnyRok && rok && rad.uctovnyRok !== rok)) chybajuceUcto.push('ciselnyRad');
     if (!!doc.ucto.strediskoId && !inOrg(codeLists.strediska, doc.ucto.strediskoId)) chybajuceUcto.push('stredisko');
     if (doc.typ === 'PD' && (!doc.ucto.pokladnaKod?.trim() || !doc.ucto.pokladnaTyp)) chybajuceUcto.push('pokladna');
+  }
+  // Vyplnené pole položky musí byť platné rovnako ako hlavička — prázdne dedí
+  // hlavičku, neplatné nie (export by ho ticho nahradil hlavičkou). Zhodné so
+  // serverovým schválením, aby tlačidlo nepustilo doklad, ktorý server odmietne.
+  const pridaj = (pole: ChybajucePole) => { if (!chybajuceUcto.includes(pole)) chybajuceUcto.push(pole); };
+  const neplatne = (list: CodeListItem[] | undefined, id?: string) => !!id && !inOrg(list ?? [], id);
+  const kvKody = kvKodyPreTyp(CLENENIE_KV_KODY, druhDokladu);
+  const polozkyUcto = (doc.extracted.polozky ?? []).map((polozka) => polozka.ucto ?? {});
+  for (const [index, ucto] of [doc.ucto, ...polozkyUcto].entries()) {
+    if (index > 0 && doc.typ !== 'BV' && neplatne(codeLists.predkontacie, ucto.predkontaciaId)) pridaj('predkontacia');
+    if (index > 0 && neplatne(codeLists.cleneniaDph, ucto.clenenieDphId)) pridaj('clenenieDph');
+    if (index > 0 && neplatne(codeLists.strediska, ucto.strediskoId)) pridaj('stredisko');
+    if (neplatne(codeLists.cinnosti, ucto.cinnostId) || neplatne(codeLists.zakazky, ucto.zakazkaId)) pridaj('analytika');
+    if (ucto.clenenieKvKod && !kvKody.includes(ucto.clenenieKvKod)) pridaj('clenenieKv');
   }
   const missingUcto = chybajuceUcto.length > 0;
   const vatInconsistent = doc.extracted.rozpisDph.some((r) => !isVatRowConsistent(r));

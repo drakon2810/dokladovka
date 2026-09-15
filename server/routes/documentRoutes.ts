@@ -14,8 +14,9 @@ import { classifyXml } from '../inbound/xmlClassifier.js';
 import { detectedMimeType, safeName } from '../inbound/attachmentMime.js';
 import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
-import { forgetUctoDecision, protistranaDokladu, rebuildAccountingSuggestion, recordUctoDecision, resolveSeriesDefault, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
-import { posudDph } from '../services/dphAdvisor.js';
+import { agendaRadu, forgetUctoDecision, kvPreDruh, protistranaDokladu, rebuildAccountingSuggestion, recordUctoDecision, resolveSeriesDefault, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
+import { posudDph, type DphPosudokDokument } from '../services/dphAdvisor.js';
+import { zaradNavrhZauctovania } from '../services/navrhZauctovaniaJob.js';
 import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
@@ -85,20 +86,82 @@ function sumyZPoloziek(polozky: Array<Record<string, any>>): { rozpisDph: Array<
   };
 }
 
-/** Zvolené členenie DPH dokladu rozpísané z číselníka (pre dphAdvisor). */
-async function clenenieDphDokladu(
+function polozkyDokladu(document: DocumentScope): Array<{ ucto?: Record<string, string | undefined> }> {
+  const polozky = document.extracted?.polozky;
+  return Array.isArray(polozky) ? polozky : [];
+}
+
+/** Členenia DPH dokladu rozpísané z číselníka (pre dphAdvisor) — hlavička aj položky. */
+async function cleneniaDphDokladu(
   database: Database,
   tenantId: string,
   document: DocumentScope,
-): Promise<{ id: string; kod: string; nazov: string } | undefined> {
-  const clenenieDphId = document.accounting?.clenenieDphId;
-  if (!clenenieDphId) return undefined;
-  const result = await database.query<{ id: string; code: string; name: string } & Record<string, unknown>>(
-    'SELECT id, code, name FROM code_list_items WHERE id=$1 AND tenant_id=$2 AND organization_id=$3',
-    [clenenieDphId, tenantId, document.organization_id],
-  );
-  const row = result.rows[0];
-  return row ? { id: row.id, kod: row.code, nazov: row.name } : undefined;
+): Promise<Pick<DphPosudokDokument, 'clenenieDph' | 'cleneniaPoloziek'>> {
+  const hlavicka = document.accounting?.clenenieDphId;
+  const ids = [...new Set([hlavicka, ...polozkyDokladu(document).map((polozka) => polozka?.ucto?.clenenieDphId)].filter(Boolean))];
+  if (ids.length === 0) return {};
+  const clenenia = (await database.query<{ id: string; code: string; name: string } & Record<string, unknown>>(
+    'SELECT id, code, name FROM code_list_items WHERE id=ANY($1::text[]) AND tenant_id=$2 AND organization_id=$3',
+    [ids, tenantId, document.organization_id],
+  )).rows.map((row) => ({ id: row.id, kod: row.code, nazov: row.name }));
+  return { clenenieDph: clenenia.find((clenenie) => clenenie.id === hlavicka), cleneniaPoloziek: clenenia };
+}
+
+/** Pole zaúčtovania → číselník, z ktorého smie pochádzať jeho id. */
+const CISELNIK_POLA = {
+  predkontaciaId: 'predkontacie',
+  clenenieDphId: 'cleneniaDph',
+  ciselnyRadId: 'ciselneRady',
+  strediskoId: 'strediska',
+  cinnostId: 'cinnosti',
+  zakazkaId: 'zakazky',
+} as const;
+
+/**
+ * Každý odkaz zaúčtovania, ktorý pôjde do POHODY — v hlavičke aj na každej
+ * položke. Počet aktívnych id nestačil: predkontácia ukazujúca na členenie DPH
+ * tej istej firmy, rad inej agendy či iného roka alebo neznáme id na položke
+ * schválením prešli a export ich potom ticho nahradil hlavičkou alebo zhodil
+ * celú dávku. Prázdne pole položky dedí hlavičku; vyplnené neplatné nie.
+ * Rad bez agendy či roka je ručne založený a prechádza — ako v ponuke editora.
+ */
+async function overOdkazyZauctovania(database: Database, tenantId: string, document: DocumentScope): Promise<void> {
+  const zdroje = [
+    { cesta: 'ucto.', ucto: document.accounting ?? {} },
+    ...polozkyDokladu(document).map((polozka, index) => ({ cesta: `polozky.${index}.ucto.`, ucto: polozka?.ucto ?? {} })),
+  ];
+  const druhDokladu = { typ: document.document_type, podtyp: document.podtyp };
+  for (const { cesta, ucto } of zdroje) {
+    const kv = ucto.clenenieKvKod;
+    if (kv && kvPreDruh(kv, druhDokladu) !== kv) {
+      throw new HttpError(409, 'kv_invalid', `Sekcia KV DPH „${kv}" k tomuto druhu dokladu nepatrí (${cesta}clenenieKvKod)`,
+        { pole: `${cesta}clenenieKvKod` });
+    }
+  }
+  const odkazy = zdroje.flatMap(({ cesta, ucto }) => Object.entries(CISELNIK_POLA)
+    .filter(([pole]) => ucto[pole])
+    .map(([pole, kind]) => ({ pole: `${cesta}${pole}`, id: String(ucto[pole]), kind })));
+  if (odkazy.length === 0) return;
+  const polozkyCiselnika = new Map((await database.query<{
+    id: string; kind: string; agenda: string | null; accounting_year: string | null;
+  } & Record<string, unknown>>(
+    `SELECT id, kind, agenda, accounting_year FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])`,
+    [tenantId, document.organization_id, [...new Set(odkazy.map((odkaz) => odkaz.id))]],
+  )).rows.map((row) => [row.id, row]));
+  const agenda = agendaRadu(document.document_type, document.podtyp);
+  const rok = /^\d{4}/.exec(String((document.extracted as { datumVystavenia?: unknown })?.datumVystavenia ?? ''))?.[0];
+  for (const odkaz of odkazy) {
+    const riadok = polozkyCiselnika.get(odkaz.id);
+    const chyba = !riadok || riadok.kind !== odkaz.kind
+      ? `Pole ${odkaz.pole} neukazuje na aktívnu položku číselníka „${odkaz.kind}" tejto organizácie`
+      : riadok.kind === 'ciselneRady' && riadok.agenda && agenda && riadok.agenda !== agenda
+        ? `Číselný rad patrí agende „${riadok.agenda}", doklad potrebuje rad agendy „${agenda}" (${odkaz.pole})`
+        : riadok.kind === 'ciselneRady' && riadok.accounting_year && rok && riadok.accounting_year !== rok
+          ? `Číselný rad je pre účtovný rok ${riadok.accounting_year}, doklad je z roku ${rok} (${odkaz.pole})`
+          : undefined;
+    if (chyba) throw new HttpError(409, 'code_list_invalid', chyba, { pole: odkaz.pole });
+  }
 }
 
 export function registerDocumentRoutes(app: FastifyInstance, database: Database, storage: ObjectStorage, config: ServerConfig): void {
@@ -217,17 +280,28 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       // Rad pre nový druh — návrh k dokladu byť nemusí, tak sa drží aj tu.
       let radNovehoDruhu: string | null = null;
       if (druhZmeneny) {
-        // Iný druh dokladu = iná agenda radu. Prepočíta sa LEN rad v návrhu:
-        // celá prestavba návrhu by AI analýzu (predkontácia, DPH, dôvod) prepísala
-        // slabším návrhom z pamäte a AI by ju už nikto znova nepustil.
+        // Iný druh dokladu = iná agenda radu, iné účty aj iná sekcia KV. Rad sa
+        // prepočíta hneď; zvyšok návrhu patril starému druhu (predkontácia
+        // faktúry na ostatnom záväzku, bežné členenie na dobropise) a nesmie
+        // vyzerať ako aktuálny. Zruší sa aj s pravidlom (inak by schválenie
+        // počítalo opravu pravidlu, ktoré sa na doklad už nevzťahuje) a nový
+        // návrh sa zaradí do fronty v tej istej transakcii. Prestavba z pamäte
+        // priamo tu by AI analýzu nahradila slabším návrhom bez modelu.
         radNovehoDruhu = await resolveSeriesDefault(
           tx, { tenantId: auth.tenantId, organizationId: document.organization_id }, documentType,
           (extracted as { datumVystavenia?: string } | undefined)?.datumVystavenia, podtyp,
           protistranaDokladu(documentType, extracted), undefined, accounting.pokladnaTyp) ?? null;
         await tx.query(
-          'UPDATE accounting_suggestions SET ciselny_rad_id=$1, updated_at=now() WHERE document_id=$2 AND tenant_id=$3',
+          `UPDATE accounting_suggestions
+              SET ciselny_rad_id=$1, predkontacia_id=NULL, clenenie_dph_id=NULL, clenenie_kv_kod=NULL,
+                  stredisko_id=NULL, riadky=NULL, rule_id=NULL, vysvetlenia=NULL, confidence=0,
+                  reason='Návrh sa prepočítava pre nový druh dokladu.', updated_at=now()
+            WHERE document_id=$2 AND tenant_id=$3`,
           [radNovehoDruhu, id, auth.tenantId],
         );
+        await zaradNavrhZauctovania(tx, {
+          tenantId: auth.tenantId, organizationId: document.organization_id, documentId: id, correlationId: request.id,
+        });
       }
       if (accounting.ciselnyRadId) return result.rows[0];
       // Editor pri zmene druhu rad vymaže — ten starý patril inej agende. Doplní
@@ -322,11 +396,13 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     }
     // BV nemá číselný rad ani členenie DPH (POHODA čísluje pohyby výpisom);
     // povinný je bankový účet a zaúčtovanie každého pohybu — pohyb bez vlastnej
-    // predkontácie dedí hlavičkovú, presne ako pri exporte.
-    const requiredIds = document.document_type === 'BV'
-      ? [document.accounting.predkontaciaId].filter(Boolean)
-      : [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
-    if (document.document_type !== 'BV' && requiredIds.some((value) => !value)) {
+    // predkontácie dedí hlavičkovú, presne ako pri exporte. Zálohová faktúra sa
+    // neúčtuje: POHODA ju vedie bez predkontácie a členenia DPH, daňový moment
+    // nastane až pri úhrade — povinný je len rad, zhodne s checkApprovable.
+    const povinne = document.document_type === 'BV' ? []
+      : document.podtyp === 'zalohova' ? [document.accounting.ciselnyRadId]
+        : [document.accounting.predkontaciaId, document.accounting.clenenieDphId, document.accounting.ciselnyRadId];
+    if (povinne.some((value) => !value)) {
       throw new HttpError(409, 'accounting_incomplete', 'Zaúčtovanie nie je kompletné');
     }
     if (document.document_type === 'PD' && (!document.accounting.pokladnaKod || !['receipt', 'expense'].includes(document.accounting.pokladnaTyp ?? ''))) {
@@ -375,17 +451,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           }
         });
       }
-      // Predkontácie pohybov musia patriť organizácii a byť aktívne.
-      requiredIds.push(...new Set<string>(pohyby.map((pohyb: any) => pohyb?.ucto?.predkontaciaId).filter(Boolean)));
     }
-    if (requiredIds.length > 0) {
-      const valid = await database.query(
-        `SELECT id FROM code_list_items
-          WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id=ANY($3::text[])`,
-        [auth.tenantId, document.organization_id, requiredIds],
-      );
-      if (valid.rowCount !== new Set(requiredIds).size) throw new HttpError(409, 'code_list_invalid', 'Číselník nepatrí organizácii alebo nie je aktívny');
-    }
+    await overOdkazyZauctovania(database, auth.tenantId, document);
     if (document.document_type === 'BV') {
       const ucet = await database.query(
         `SELECT 1 FROM code_list_items
@@ -404,7 +471,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       documentType: document.document_type,
       extracted: document.extracted,
       accounting: document.accounting,
-      clenenieDph: await clenenieDphDokladu(database, auth.tenantId, document),
+      ...await cleneniaDphDokladu(database, auth.tenantId, document),
     }, dphProfil);
     if (dphPosudok.blokacie.length > 0) {
       throw new HttpError(409, 'dph_profil_blokacia', dphPosudok.blokacie[0].sprava);
@@ -413,28 +480,20 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     // Podtyp ide do snapshotu spolu s typom — invoiceType pre POHODU sa určuje
     // z dvojice a bez neho by dobropis odišiel ako bežná faktúra.
     const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, podtyp: document.podtyp ?? 'bezna', extracted: document.extracted, ucto: document.accounting };
-    const result = await database.query<Record<string, unknown>>(
-      `UPDATE documents SET status='schvaleny', version=$1, approved_version=$1, approved_snapshot=$2::jsonb, updated_at=now()
-        WHERE id=$3 AND tenant_id=$4 AND version=$5 RETURNING *`,
-      [approvedVersion, JSON.stringify(snapshot), id, auth.tenantId, expectedVersion],
-    );
-    if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
-    // Pamäť rozhodnutí: potvrdené zaúčtovanie sa uloží ako vzor pre budúce návrhy.
-    await recordUctoDecision(database, {
-      tenantId: auth.tenantId,
-      organizationId: document.organization_id,
-      documentId: id,
-      documentType: String(document.document_type ?? '') || undefined,
-      podtyp: String(document.podtyp ?? 'bezna'),
-      extracted: document.extracted,
-      accounting: document.accounting,
-    });
-    // Samokontrola pravidiel: zhoda so schváleným = potvrdenie, rozdiel = oprava.
-    await updateRuleFeedback(database, { tenantId: auth.tenantId, documentId: id, accounting: document.accounting });
-    // Čo účtovník oproti návrhu zmenil — meranie kvality návrhov aj podklad na
-    // učenie. Zlyhanie zápisu nesmie zhodiť už schválený doklad.
-    try {
-      await zaznamenajOpravu(database, {
+    // Schválenie je jeden celok: stav so snapshotom, pamäť rozhodnutí, spätná
+    // väzba pravidiel, záznam opravy aj audit. Keď zápisy bežali po jednom,
+    // zlyhanie pamäte po uložení stavu vrátilo klientovi chybu pri už
+    // schválenom doklade a opakované schválenie narazilo na zmenenú verziu.
+    // Vnútri sú len zápisy do databázy — žiadne volanie modelu, ktoré by
+    // transakciu držalo otvorenú.
+    return database.transaction(async (tx) => {
+      const result = await tx.query<Record<string, unknown>>(
+        `UPDATE documents SET status='schvaleny', version=$1, approved_version=$1, approved_snapshot=$2::jsonb, updated_at=now()
+          WHERE id=$3 AND tenant_id=$4 AND version=$5 RETURNING *`,
+        [approvedVersion, JSON.stringify(snapshot), id, auth.tenantId, expectedVersion],
+      );
+      if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+      const rozhodnutie = {
         tenantId: auth.tenantId,
         organizationId: document.organization_id,
         documentId: id,
@@ -442,12 +501,16 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         podtyp: String(document.podtyp ?? 'bezna'),
         extracted: document.extracted,
         accounting: document.accounting,
-      });
-    } catch (cause) {
-      console.warn(`[ucto-opravy] ${id}: záznam opravy zlyhal`, cause);
-    }
-    await writeAudit(database, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
-    return result.rows[0];
+      };
+      // Pamäť rozhodnutí: potvrdené zaúčtovanie sa uloží ako vzor pre budúce návrhy.
+      await recordUctoDecision(tx, rozhodnutie);
+      // Samokontrola pravidiel: zhoda so schváleným = potvrdenie, rozdiel = oprava.
+      await updateRuleFeedback(tx, { tenantId: auth.tenantId, documentId: id, accounting: document.accounting });
+      // Čo účtovník oproti návrhu zmenil — meranie kvality návrhov aj podklad na učenie.
+      await zaznamenajOpravu(tx, rozhodnutie);
+      await writeAudit(tx, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
+      return result.rows[0];
+    });
   });
 
   // Komunikácia na doklade: komentár s @-spomenutiami. Spomenutia sa
@@ -510,7 +573,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       documentType: document.document_type,
       extracted: document.extracted,
       accounting: document.accounting,
-      clenenieDph: await clenenieDphDokladu(database, auth.tenantId, document),
+      ...await cleneniaDphDokladu(database, auth.tenantId, document),
     }, profil);
   });
 

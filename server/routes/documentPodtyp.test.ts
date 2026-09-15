@@ -123,11 +123,26 @@ describe('podtyp dokladu', () => {
     await app.close();
   }, 60_000);
 
-  it('zmena druhu doplní rad pre nový druh a AI návrh nechá tak', async () => {
+  it('zálohová faktúra sa schváli len s radom — bez predkontácie a členenia DPH', async () => {
+    const { database, seeded, app, headers } = await pripravAplikaciu();
+    const { documentId, radZalohovy } = await pripravDoklad(database, seeded, 'zalohova');
+    // POHODA ju vedie bez účtovania; klient ju tak schváliť pustil, server nie.
+    await database.query('UPDATE documents SET accounting=$2::jsonb WHERE id=$1',
+      [documentId, JSON.stringify({ ciselnyRadId: radZalohovy })]);
+
+    const approved = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/approve`, headers, payload: { expectedVersion: 1 },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+
+    await app.close();
+  }, 60_000);
+
+  it('zmena druhu doplní rad pre nový druh, starý návrh zruší a zaradí nový', async () => {
     const { database, seeded, app, headers } = await pripravAplikaciu();
     const { documentId, predkontacia, clenenie, rad, radZalohovy } = await pripravDoklad(database, seeded, 'bezna');
-    // AI analýza dokladu, ktorú by celá prestavba návrhu prepísala slabším
-    // návrhom z pamäte — a nikto by ju už znova nepustil.
+    // AI analýza pre bežnú faktúru — na zálohovej by jej predkontácia a členenie
+    // vyzerali ako aktuálny návrh, hoci patria inému druhu dokladu.
     await database.query(
       `INSERT INTO accounting_suggestions (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,source,confidence,reason)
        VALUES ($1,$2,$3,$4,$5,$6,'ai',0.8,'AI analýza dokladu: záloha na tovar')`,
@@ -146,9 +161,21 @@ describe('podtyp dokladu', () => {
     // Jedna verzia — doplnenie radu nie je druhá úprava dokladu.
     expect(zalohova.json().version).toBe(2);
     expect(zalohova.json().accounting.ciselnyRadId).toBe(radZalohovy);
-    const navrh = await database.query<{ ciselny_rad_id: string; source: string; predkontacia_id: string } & Record<string, unknown>>(
-      'SELECT ciselny_rad_id, source, predkontacia_id FROM accounting_suggestions WHERE document_id=$1', [documentId]);
-    expect(navrh.rows[0]).toMatchObject({ ciselny_rad_id: radZalohovy, source: 'ai', predkontacia_id: predkontacia });
+    // Ručné hodnoty dokladu ostávajú — zrušený je len návrh.
+    expect(zalohova.json().accounting.predkontaciaId).toBe(predkontacia);
+    const navrh = await database.query<{
+      ciselny_rad_id: string; predkontacia_id: string | null; clenenie_dph_id: string | null; confidence: string; reason: string;
+    } & Record<string, unknown>>(
+      'SELECT ciselny_rad_id, predkontacia_id, clenenie_dph_id, confidence, reason FROM accounting_suggestions WHERE document_id=$1',
+      [documentId]);
+    expect(navrh.rows[0]).toMatchObject({
+      ciselny_rad_id: radZalohovy, predkontacia_id: null, clenenie_dph_id: null,
+      reason: 'Návrh sa prepočítava pre nový druh dokladu.',
+    });
+    expect(Number(navrh.rows[0].confidence)).toBe(0);
+    const joby = async () => (await database.query<{ kind: string; status: string; max_attempts: number } & Record<string, unknown>>(
+      'SELECT kind, status, max_attempts FROM processing_jobs WHERE document_id=$1', [documentId])).rows;
+    expect(await joby()).toEqual([{ kind: 'navrh_zauctovania', status: 'queued', max_attempts: 3 }]);
 
     // Prepnutie tam a späť rad z konceptu zmazalo; druh je ako v databáze,
     // a doklad aj tak nesmie ostať bez radu.
@@ -161,6 +188,16 @@ describe('podtyp dokladu', () => {
     });
     expect(spat.statusCode, spat.body).toBe(200);
     expect(spat.json().accounting.ciselnyRadId).toBe(radZalohovy);
+    // Druh sa nezmenil — nový návrh netreba.
+    expect(await joby()).toHaveLength(1);
+
+    // Ďalšia zmena druhu, kým prvý job ešte čaká: druhý by model len zavolal znova.
+    const bezna = await app.inject({
+      method: 'PATCH', url: `/api/documents/${documentId}`, headers,
+      payload: { documentType: 'FP', podtyp: 'bezna', expectedVersion: 3, accounting: { predkontaciaId: predkontacia } },
+    });
+    expect(bezna.statusCode, bezna.body).toBe(200);
+    expect(await joby()).toHaveLength(1);
 
     await app.close();
   }, 60_000);

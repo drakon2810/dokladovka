@@ -40,7 +40,7 @@ function downloadXml(xml: string, fileName: string): void {
 
 type ExportUnavailableReason = 'bankovy-ucet' | 'bankovy-vypis-demo' | 'mzdy' | 'ciselny-rad' | 'ucto-nekompletne';
 
-function exportUnavailableReason(
+export function exportUnavailableReason(
   document: DocumentItem,
   codeLists: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[]; ciselneRady: CodeListItem[]; bankoveUcty?: CodeListItem[] },
 ): ExportUnavailableReason | undefined {
@@ -77,6 +77,9 @@ function exportUnavailableReason(
   // Server vyžaduje všetky tri aktívne číselníky (server/pohodaXml.ts), preto ich
   // musíme skontrolovať aj v UI — inak doklad vyzerá exportovateľný a padne na 500.
   if (!hasActiveCode(codeLists.ciselneRady, ucto.ciselnyRadId)) return 'ciselny-rad';
+  // Zálohová faktúra sa neúčtuje — schválenie ju pustí len s radom, bez
+  // predkontácie a členenia DPH, tak ju export s radom musí aj ponúknuť.
+  if (document.podtyp === 'zalohova') return undefined;
   if (
     !hasActiveCode(codeLists.predkontacie, ucto.predkontaciaId) ||
     !hasActiveCode(codeLists.cleneniaDph, ucto.clenenieDphId)
