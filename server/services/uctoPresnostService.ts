@@ -429,7 +429,11 @@ const lokalnyParser = {
     const pravidlo = prompt.pravidlo;
     const dennik = (prompt.dennik ?? []).find((riadok: any) => riadok.tejProtistrany);
     const rozpis: any[] = pravidlo?.rozpis ?? [];
-    const odpoved = pravidlo ? {
+    // Pravidlo bez účtu je spor praxí (konflikt): protistrana má viac ustálených
+    // zaúčtovaní a ani jedno neprevažuje. Základná čiara ho nesmie brať ako
+    // odpoveď — inak by sa spor javil ako zdržanie, hoci denník tej istej
+    // protistrany odpoveď má.
+    const odpoved = pravidlo?.predkontaciaKod ? {
       predkontaciaId: idPodlaKodu(predkontacie, pravidlo.predkontaciaKod),
       clenenieDphId: idPodlaKodu(cleneniaDph, pravidlo.clenenieDphKod),
       clenenieKvKod: pravidlo.clenenieKvKod ?? null,

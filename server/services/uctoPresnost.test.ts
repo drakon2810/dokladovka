@@ -196,6 +196,31 @@ describe('meranie presnosti zaúčtovania', () => {
     const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
     expect(vysledok.vysledok.FP.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
   }, 60_000);
+
+  // Spor praxí: protistrana má dve ustálené zaúčtovania a ani jedno neprevažuje,
+  // takže pravidlo príde bez účtu. Základná čiara to nesmie brať ako odpoveď —
+  // inak by spor vyzeral ako zdržanie, hoci denník tej istej protistrany odpoveď má.
+  it('bez AI pri spore praxí siahne po denníku, nie po prázdnom pravidle', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const p518 = await kod('predkontacie', '518/321');
+    const p501 = await kod('predkontacie', '501/321');
+    // Striedavo po mesiacoch, aby nešlo o zmenu praxe (tá by víťaza mala).
+    const prax = [
+      ['26FP001', '2026-01-15', p518, '518/321'], ['26FP002', '2026-02-15', p501, '501/321'],
+      ['26FP003', '2026-03-15', p518, '518/321'], ['26FP004', '2026-04-15', p501, '501/321'],
+      ['26FP005', '2026-05-15', p518, '518/321'], ['26FP006', '2026-06-15', p501, '501/321'],
+      ['26FP007', '2026-07-15', p518, '518/321'],
+    ] as const;
+    for (const [cislo, datum, id, kodPredkontacie] of prax) {
+      await riadok({ doklad_cislo: cislo, datum, predkontacia_id: id, predkontacia_kod: kodPredkontacie });
+    }
+    // 4 zo 7 je pod hranicou 60 %, takže pravidlo skončí v spore bez kódov.
+    await riadok({ doklad_cislo: '26FP090', datum: '2026-08-20', predkontacia_id: p518, predkontacia_kod: '518/321' });
+
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
+    expect(vysledok.doklady[0].zdrzanie ?? null).toBeNull();
+    expect(vysledok.vysledok.FP.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
+  }, 60_000);
 });
 
 // Neskorší doklad ani nič, čo vzniklo po dátume dokladu, nesmie zmeniť to, čo
