@@ -393,7 +393,7 @@ export function cisloVPohodeZDokladu(documentType: string, extracted: unknown): 
  * dobropis nemajú, a keby klasifikácia jeden vrátila, zmenila by im číselný
  * rad aj sekciu KV.
  */
-function podtypPreTyp(documentType: string, podtyp: string | undefined): string {
+export function podtypPreTyp(documentType: string, podtyp: string | undefined): string {
   if (documentType !== 'FP' && documentType !== 'FV') return 'bezna';
   return ['dobropis', 'tarchopis', 'zalohova'].includes(podtyp ?? '') ? podtyp! : 'bezna';
 }
