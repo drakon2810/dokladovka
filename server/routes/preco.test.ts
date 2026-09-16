@@ -185,9 +185,11 @@ describe('Prečo? — AI vysvetlenie', () => {
         return { output_parsed: { vysvetlenie: 'Preprava patrí do 518.', zdroje: [] }, usage: { input_tokens: 1, output_tokens: 1 } };
       },
     };
-    await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
+    const vysledok = await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
     const ulozene = await database.query<Record<string, any>>('SELECT vysvetlenia FROM accounting_suggestions WHERE document_id=$1', [documentId]);
     expect(ulozene.rows[0].vysvetlenia).toBeNull();
+    // Ani účtovníkovi sa text starého návrhu nevráti — patrí k inému zaúčtovaniu.
+    expect(vysledok).toBeNull();
   }, 120_000);
 
   it('vygeneruje raz, kešuje, účtuje spotrebu; prepočet návrhu kešu nuluje', async () => {

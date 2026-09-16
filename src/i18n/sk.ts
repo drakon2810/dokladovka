@@ -650,6 +650,12 @@ export const sk = {
   'detail.zdroj.pouzitExtrakciu': 'Použiť novú extrakciu',
   'detail.zdroj.behy': 'Extrakčné behy',
   'detail.zdroj.chyba': 'Chyba extrakcie',
+  'detail.zdroj.etapa.zauctovanie': 'Návrh zaúčtovania',
+  'detail.zdroj.etapa.vysvetlenie': 'Vysvetlenie „Prečo?"',
+  'detail.zdroj.zdrzanie': 'AI sa návrhu zdržala',
+  'detail.zdroj.zdrzanie.bez_zauctovania': 'nenašla vhodné zaúčtovanie',
+  'detail.zdroj.zdrzanie.posudok_dph': 'kontrola DPH návrh zastavila',
+  'detail.zdroj.zdrzanie.prazdna_odpoved': 'model nevrátil odpoveď',
   'detail.duplicita.banner': 'Možná duplicita dokladu',
   'detail.duplicita.popis':
     'Rovnaký dodávateľ a číslo faktúry už existuje v tejto organizácii.',
@@ -1658,6 +1664,7 @@ export const sk = {
   'preco.dovod.ucet_bez_odpoctu': 'na tomto účte firma daň neodpočítava',
   'preco.dovod.kv_bez_clenenia': 'bez členenia DPH sa sekcia KV neposiela',
   'preco.dovod.kv_podla_praxe_a_druhu': 'sekciu určila prax firmy pri tomto členení a druh dokladu',
+  'preco.dovod.kv_podla_druhu': 'sekciu upravil druh dokladu (napr. pokladničný doklad do 1 000 € patrí do B3)',
   'preco.dovod.kn_proti_praxi': 'KN odporuje praxi firmy pri tomto členení',
   'preco.dovod.kn_s_odpoctom': 'odpočet a sekcia KN sa vylučujú',
 } as const;

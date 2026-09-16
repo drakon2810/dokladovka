@@ -2593,16 +2593,22 @@ export async function maybeAiAccountingSuggestion(
       extracted: doklad?.extracted ?? {},
     }, { parser: injectedParser, embedder: injectedEmbedder });
   } catch (cause) {
+    // Neúspešný beh AI je len chyba samotného volania modelu. Chyba prípravy
+    // (databáza pred volaním) model nevolala a nič nestála — do behov nepatrí.
     // Zápis behu nesmie prekryť pôvodnú chybu — tú potrebuje job na opakovanie.
-    await zapisBehNavrhu(database, config, input, zaciatok, { chyba: cause }).catch(() => undefined);
+    if (jeVolanieModelu(cause)) {
+      await zapisBehNavrhu(database, config, input, zaciatok, { chyba: cause }).catch(() => undefined);
+    }
     throw cause;
   }
   // Beh sa zapisuje, len keď sa model naozaj volal (odpoveď nesie usage aj
   // pri zdržaní) — doklad bez ponuky predkontácií model nevolá a nič nestojí.
+  // Zlyhaný zápis logu nesmie zahodiť návrh, za ktorý sa už zaplatilo.
   if ('usage' in vysledok) {
     await zapisBehNavrhu(database, config, input, zaciatok, {
       usage: vysledok.usage, zdrzanie: 'zdrzanie' in vysledok ? vysledok.zdrzanie : undefined,
-    });
+    }).catch((chyba) => console.warn(`[ai-navrh] ${input.documentId}: zápis behu zlyhal:`,
+      chyba instanceof Error ? chyba.message : chyba));
   }
   if (!('navrh' in vysledok)) return false;
   const { navrh, dokazy } = vysledok;
@@ -2654,6 +2660,17 @@ export async function maybeAiAccountingSuggestion(
  * čísla a kódy: riadky behov idú každému prehliadaču v dátovom snapshote.
  * `result` ostáva prázdny — výsledok extrakcie hľadá beh s výsledkom.
  */
+/** Chyba vznikla pri volaní modelu (nie pri príprave) — len tá je neúspešný beh AI. */
+const VOLANIE_MODELU = Symbol('volanieModelu');
+function oznacVolanieModelu(cause: unknown): unknown {
+  const chyba = cause && typeof cause === 'object' ? cause : new Error(String(cause));
+  (chyba as Record<symbol, boolean>)[VOLANIE_MODELU] = true;
+  return chyba;
+}
+function jeVolanieModelu(cause: unknown): boolean {
+  return Boolean(cause && typeof cause === 'object' && (cause as Record<symbol, boolean>)[VOLANIE_MODELU]);
+}
+
 async function zapisBehNavrhu(
   database: Database,
   config: ServerConfig,
@@ -3080,13 +3097,17 @@ export async function navrhniZauctovanie(
   try {
     response = await parser.create(zavislosti.bezWebu ? poziadavka : { ...poziadavka, tools: [{ type: 'web_search' }] });
   } catch (cause) {
-    if (zavislosti.bezWebu) throw cause;
+    if (zavislosti.bezWebu) throw oznacVolanieModelu(cause);
     // Zopakovať sa oplatí LEN pri 400 — tak API hlási nepodporovaný nástroj.
     // Timeout, rate limit či 5xx by druhý pokus len zdvojnásobil čakanie na
     // doklad; klient beží s maxRetries: 0 práve preto, aby sa to nedialo.
-    if ((cause as { status?: number })?.status !== 400) throw cause;
+    if ((cause as { status?: number })?.status !== 400) throw oznacVolanieModelu(cause);
     console.warn('[ai-navrh] model web search nepodporuje, skúšam bez neho:', cause instanceof Error ? cause.message : cause);
-    response = await parser.create(poziadavka);
+    try {
+      response = await parser.create(poziadavka);
+    } catch (druhyPokus) {
+      throw oznacVolanieModelu(druhyPokus);
+    }
   }
   const odpoved = finalnyJsonOdpovede(response.output);
   // Web search sa platí za volanie, nie za tokeny — bez počtu by cena dokladu klamala.
@@ -3251,22 +3272,32 @@ export async function navrhniZauctovanie(
     }
   }
 
+  const kvZPravidla = kvNavrhuPreDruh(pravidlo.kvKod, druhDokladu);
+  const kvZDokladu = kvNavrhuPreDruh(naDoklade.clenenieKvKod, druhDokladu);
+  const kvZModelu = kvNavrhuPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu);
+  // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do kontrolného
+  // výkazu, a sémantického kandidáta viaže na doklad len rovnosť predkontácie —
+  // tú istú nesie viac kategórií, takže by sem sekciu doniesla kategória, ktorá
+  // s dokladom nemá spoločné slovo.
+  const kvZKategorie = kvNavrhuPreDruh(
+    kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu);
   let kvKod = validated.clenenie_dph_id
     ? kvNavrhuPreDruh(await kvPreClenenie(
         database, input, validated.clenenie_dph_id, korpus.agendy,
-        kvNavrhuPreDruh(pravidlo.kvKod, druhDokladu) ?? kvNavrhuPreDruh(naDoklade.clenenieKvKod, druhDokladu)
-          ?? kvNavrhuPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu)
-          // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do
-          // kontrolného výkazu, a sémantického kandidáta viaže na doklad len
-          // rovnosť predkontácie — tú istú nesie viac kategórií, takže by sem
-          // sekciu doniesla kategória, ktorá s dokladom nemá spoločné slovo.
-          ?? kvNavrhuPreDruh(
-            kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu),
+        kvZPravidla ?? kvZDokladu ?? kvZModelu ?? kvZKategorie,
         asOf,
       ), druhDokladu)
     : undefined;
-  zmen('clenenieKvKod', parsed.clenenieKvKod, kvKod, pravidlo.kvKod ? 'pravidlo_uctovnika'
-    : naDoklade.clenenieKvKod ? 'kod_z_dokladu' : !validated.clenenie_dph_id ? 'kv_bez_clenenia' : 'kv_podla_praxe_a_druhu');
+  // Dôvod podľa zdroja, ktorý sekciu naozaj dal — nie podľa toho, či pravidlo
+  // nejakú sekciu nesie. Pravidlo s A1 na prijatej faktúre sa nepoužije a zmena
+  // mu nesmie byť pripísaná. Úprava sekcie modelu podľa druhu dokladu (pokladňa
+  // do 1 000 € dostane B3 namiesto B2) je samostatný dôvod.
+  const kvModeluUpravene = kvZModelu !== undefined && kvZModelu !== platnyKvKod(parsed.clenenieKvKod ?? undefined);
+  zmen('clenenieKvKod', parsed.clenenieKvKod, kvKod, !validated.clenenie_dph_id ? 'kv_bez_clenenia'
+    : kvZPravidla ? 'pravidlo_uctovnika'
+    : kvZDokladu ? 'kod_z_dokladu'
+    : kvModeluUpravene ? 'kv_podla_druhu'
+    : 'kv_podla_praxe_a_druhu');
 
   // KN proti praxi firmy. Zo všetkých zlých sekcií, ktoré zdroj návrhu donesie,
   // prežije práve KN: B2 na vydanej faktúre zákonná kontrola (kvPreDruh)

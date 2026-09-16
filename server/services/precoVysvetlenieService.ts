@@ -201,7 +201,7 @@ export async function precoVysvetlenie(
     // Model odpovedá sekundy a návrh sa medzitým môže prepísať (AI návrh po
     // deterministickom). Vysvetlenie sa uloží len k tomu návrhu, ku ktorému
     // vzniklo — a updated_at sa nehýbe: kešovanie textu nie je zmena návrhu.
-    await database.query(
+    const ulozene = await database.query(
       `UPDATE accounting_suggestions
           SET vysvetlenia = COALESCE(vysvetlenia,'{}'::jsonb) || $1::jsonb
         WHERE document_id=$2 AND tenant_id=$3 AND organization_id=$4
@@ -226,6 +226,9 @@ export async function precoVysvetlenie(
         }),
         startedAt],
     );
+    // Návrh sa medzitým zmenil: text patrí k inému zaúčtovaniu, tak sa ani
+    // nevráti. Spotreba je zaúčtovaná vyššie — model odpovedal, stálo to peniaze.
+    if (ulozene.rowCount === 0) return null;
     return { vysvetlenie: parsed.vysvetlenie, zdroje };
   } catch {
     // Vysvetlenie je best-effort — chyba LLM nesmie zhodiť panel „Prečo?".

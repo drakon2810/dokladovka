@@ -80,6 +80,7 @@ import {
 import './sourceHighlight.css';
 import { AssistantPanel } from '../assistant/AssistantPanel';
 import { pouziNavrhNaPolozky } from './ItemsSection';
+import { popisBehu, type EtapaBehu } from './behDokladu';
 import { danovaKontrolaBrzdi } from './predvyplnenie';
 import {
   createMostikExportJob,
@@ -170,6 +171,20 @@ const QUARANTINE_KEYS: Record<string, SkKey> = {
 function cloneDocument(document: DocumentItem): DocumentItem {
   return structuredClone(document);
 }
+
+/** Názov etapy behu AI v zozname behov dokladu. */
+const ETAPA_BEHU: Record<EtapaBehu, SkKey> = {
+  extrakcia: 'detail.zdroj.extrakcia',
+  zauctovanie: 'detail.zdroj.etapa.zauctovanie',
+  vysvetlenie: 'detail.zdroj.etapa.vysvetlenie',
+};
+
+/** Prečo sa AI návrhu zdržala — kódy zapisuje zápis behu návrhu zaúčtovania. */
+const DOVOD_ZDRZANIA: Record<string, SkKey> = {
+  bez_zauctovania: 'detail.zdroj.zdrzanie.bez_zauctovania',
+  posudok_dph: 'detail.zdroj.zdrzanie.posudok_dph',
+  prazdna_odpoved: 'detail.zdroj.zdrzanie.prazdna_odpoved',
+};
 
 function confidenceFor(document: DocumentItem, field: string): number | undefined {
   for (const key of FIELD_ALIASES[field] ?? [field]) {
@@ -1611,26 +1626,34 @@ export function DocumentDetailPage() {
             <h3 className="mb-2 mt-4 text-sm font-semibold">{t('detail.zdroj.behy')}</h3>
             {runs.length ? (
               <div className="space-y-2">
-                {runs.map((run) => (
+                {runs.map((run) => {
+                  const { etapa, vysledok } = popisBehu(run);
+                  return (
                   <div key={run.id} className="flex items-start gap-2 rounded border border-line p-2 text-sm">
                     <span
-                      className={run.status === 'failed' ? 'text-red-700' : 'text-green-700'}
+                      className={vysledok === 'chyba' ? 'text-red-700' : vysledok === 'zdrzanie' ? 'text-amber-700' : 'text-green-700'}
                       aria-label={
-                        run.status === 'failed'
+                        vysledok === 'chyba'
                           ? t('detail.chyba.banner')
-                          : t('detail.zdroj.extrakcia')
+                          : vysledok === 'zdrzanie' ? t('detail.zdroj.zdrzanie') : t(ETAPA_BEHU[etapa])
                       }
                     >
-                      {run.status === 'failed' ? '!' : run.status === 'succeeded' ? '✓' : '~'}
+                      {vysledok === 'chyba' ? '!' : vysledok === 'zdrzanie' ? '–' : vysledok === 'uspech' ? '✓' : '~'}
                     </span>
                     <div className="min-w-0">
                       <p className="font-medium">
-                        {run.provider.toUpperCase()}
+                        {t(ETAPA_BEHU[etapa])} · {run.provider.toUpperCase()}
                         {run.model ? ` · ${run.model}` : ''}
                       </p>
                       <p className="tnum text-xs text-ink-soft">
                         {formatDateTime(run.completedAt ?? run.startedAt ?? run.createdAt)}
                       </p>
+                      {vysledok === 'zdrzanie' && (
+                        <p className="mt-1 text-xs text-amber-700">
+                          {t('detail.zdroj.zdrzanie')}
+                          {run.errorCode && DOVOD_ZDRZANIA[run.errorCode] ? `: ${t(DOVOD_ZDRZANIA[run.errorCode])}` : ''}
+                        </p>
+                      )}
                       {run.status === 'failed' && run.errorMessage && (
                         <p className="mt-1 text-xs text-red-700">
                           {t('detail.zdroj.chyba')}: {run.errorMessage}
@@ -1650,7 +1673,8 @@ export function DocumentDetailPage() {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-sm text-ink-soft">{t('stav.ziadneData')}</p>

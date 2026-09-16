@@ -75,7 +75,9 @@ describe('Tréning AI', () => {
       'SELECT source, confidence, predkontacia_id, clenenie_kv_kod FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0];
     expect(suggestion).toMatchObject({ source: 'decision_memory', predkontacia_id: pred, clenenie_kv_kod: 'B2' });
-    expect(Number(suggestion.confidence)).toBeCloseTo(0.95);
+    // Jeden importovaný riadok je príklad, nie prax — doklad sám nepredvyplní
+    // (na to treba päť rovnakých potvrdení).
+    expect(Number(suggestion.confidence)).toBeCloseTo(0.85);
   }, 120_000);
 
   it('kód, ktorý nesie viac číselných radov, rad nepriradí, ale riadok neodmietne', async () => {

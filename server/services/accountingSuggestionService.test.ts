@@ -3266,3 +3266,119 @@ describe('vydaná faktúra so sekciou KN od modelu', () => {
     expect(navrh.clenenie_dph_id).toBe(ud);
   }, 90_000);
 });
+
+// Stopa rozhodnutia musí povedať, ČO sekciu KV naozaj určilo. Pravidlo účtovníka
+// so sekciou, ktorá k druhu dokladu nepatrí (A1 na prijatej faktúre), sa nepoužije
+// — a zmena sa mu nesmie pripísať. Úprava sekcie podľa druhu dokladu (pokladňa
+// do 1 000 € dostane B3 namiesto B2) je samostatná udalosť.
+describe('dôvod zmeny sekcie KV v stope', () => {
+  async function navrh(moznosti: { typ: 'FP' | 'PD'; pravidloKv?: string; modelKv: string | null }) {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const [ucet, pd] = [randomUUID(), randomUUID()];
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`, [ucet, ...kde]);
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,kv_section)
+       VALUES ($1,$2,$3,'cleneniaDph','PD','Tuzemské plnenia','pohoda','B2')`, [pd, ...kde]);
+    if (moznosti.pravidloKv) {
+      await database.query(
+        `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_ico,clenenie_kv_kod,origin)
+         VALUES ($1,$2,$3,'11112222',$4,'manual')`, [randomUUID(), ...kde, moznosti.pravidloKv]);
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,$4,'na_kontrole','ready_for_review','{}'::jsonb,$5::jsonb,100,'EUR')`,
+      [documentId, ...kde, moznosti.typ, JSON.stringify(moznosti.typ === 'PD' ? { pokladnaTyp: 'expense' } : {})]);
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: ucet, clenenieDphId: pd, clenenieKvKod: moznosti.modelKv,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Servis',
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '11112222', supplierName: 'Servis s.r.o.' };
+    await maybeAiAccountingSuggestion(database, testConfig(), input, {
+      documentType: moznosti.typ, supplierName: 'Servis s.r.o.', supplierIco: '11112222', totalAmount: 100, currency: 'EUR',
+      lineDescriptions: ['servis'], polozky: [{ popis: 'servis', suma: 100 }],
+      ...(moznosti.typ === 'PD' ? { pokladnaTyp: 'expense' as const } : {}),
+    }, parser);
+    const stopa = (await database.query<Record<string, any>>(
+      'SELECT zmeny FROM ucto_navrh_stopa WHERE document_id=$1', [documentId])).rows[0];
+    const zmeny = typeof stopa?.zmeny === 'string' ? JSON.parse(stopa.zmeny) : stopa?.zmeny ?? [];
+    return zmeny.find((zmena: { pole: string }) => zmena.pole === 'clenenieKvKod');
+  }
+
+  it('nepoužité pravidlo sa nevydáva za dôvod', async () => {
+    expect(await navrh({ typ: 'FP', pravidloKv: 'A1', modelKv: null }))
+      .toMatchObject({ z: null, na: 'B2', dovod: 'kv_podla_praxe_a_druhu' });
+  }, 90_000);
+
+  it('B2 na pokladni do limitu je úprava podľa druhu dokladu', async () => {
+    expect(await navrh({ typ: 'PD', modelKv: 'B2' }))
+      .toMatchObject({ z: 'B2', na: 'B3', dovod: 'kv_podla_druhu' });
+  }, 90_000);
+});
+
+// Beh AI v logu dokladu = model sa naozaj volal. Chyba prípravy (databáza pred
+// volaním) nie je neúspešné volanie modelu, a zlyhaný zápis logu nesmie zahodiť
+// návrh, za ktorý sa už zaplatilo.
+describe('záznam behu AI návrhu', () => {
+  async function priprava(zlyha: RegExp) {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const ucet = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`, [ucet, ...kde]);
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,100,'EUR')`, [documentId, ...kde]);
+    // Databáza, ktorá zlyhá len na vybranom príkaze — zvyšok beží normálne.
+    const chybna = new Proxy(database, {
+      get(target, prop) {
+        if (prop === 'query') {
+          return (sql: string, params?: unknown[]) => (zlyha.test(sql)
+            ? Promise.reject(new Error('databáza nedostupná'))
+            : target.query(sql, params as never));
+        }
+        const hodnota = Reflect.get(target, prop);
+        return typeof hodnota === 'function' ? hodnota.bind(target) : hodnota;
+      },
+    });
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: ucet, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.8, reason: 'Servis',
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Servis s.r.o.' };
+    const kontext = {
+      documentType: 'FP', supplierName: 'Servis s.r.o.', totalAmount: 100, currency: 'EUR',
+      lineDescriptions: ['servis'], polozky: [{ popis: 'servis', suma: 100 }],
+    };
+    const behy = async () => (await database.query<Record<string, any>>(
+      'SELECT status, error_code FROM extraction_runs WHERE document_id=$1', [documentId])).rows;
+    return { database, chybna, parser, input, kontext, documentId, behy };
+  }
+
+  it('chyba pred volaním modelu sa nezapíše ako neúspešný beh AI', async () => {
+    const { chybna, parser, input, kontext, behy } = await priprava(/FROM ucto_pravidla/);
+    await expect(maybeAiAccountingSuggestion(chybna as never, testConfig(), input, kontext, parser)).rejects.toThrow();
+    expect(parser.create).not.toHaveBeenCalled();
+    expect(await behy()).toEqual([]);
+  }, 90_000);
+
+  it('zlyhaný zápis behu návrh nezahodí', async () => {
+    const { database, chybna, parser, input, kontext, documentId } = await priprava(/INSERT INTO extraction_runs/);
+    expect(await maybeAiAccountingSuggestion(chybna as never, testConfig(), input, kontext, parser)).toBe(true);
+    const navrh = (await database.query<Record<string, any>>(
+      'SELECT source FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
+    expect(navrh?.source).toBe('ai');
+  }, 90_000);
+});
