@@ -2449,16 +2449,31 @@ export async function maybeAiAccountingSuggestion(
        FROM documents WHERE id=$1 AND tenant_id=$2`,
     [input.documentId, input.tenantId, documentContext.documentType === 'FV' ? 'odberatel' : 'dodavatel'],
   )).rows[0];
-  const vysledok = await navrhniZauctovanie(database, config, input, documentContext, {
-    doterajsi,
-    strana: doklad?.strana,
-    pokladnaTyp: doklad?.pokladna_typ,
-    datumVystavenia: doklad?.datum_vystavenia,
-    datumDodania: doklad?.datum_dodania,
-    pohodaCislo: doklad?.pohoda_number,
-    accounting: doklad?.accounting ?? {},
-    extracted: doklad?.extracted ?? {},
-  }, { parser: injectedParser, embedder: injectedEmbedder });
+  const zaciatok = Date.now();
+  let vysledok: VysledokNavrhu;
+  try {
+    vysledok = await navrhniZauctovanie(database, config, input, documentContext, {
+      doterajsi,
+      strana: doklad?.strana,
+      pokladnaTyp: doklad?.pokladna_typ,
+      datumVystavenia: doklad?.datum_vystavenia,
+      datumDodania: doklad?.datum_dodania,
+      pohodaCislo: doklad?.pohoda_number,
+      accounting: doklad?.accounting ?? {},
+      extracted: doklad?.extracted ?? {},
+    }, { parser: injectedParser, embedder: injectedEmbedder });
+  } catch (cause) {
+    // Zápis behu nesmie prekryť pôvodnú chybu — tú potrebuje job na opakovanie.
+    await zapisBehNavrhu(database, config, input, zaciatok, { chyba: cause }).catch(() => undefined);
+    throw cause;
+  }
+  // Beh sa zapisuje, len keď sa model naozaj volal (odpoveď nesie usage aj
+  // pri zdržaní) — doklad bez ponuky predkontácií model nevolá a nič nestojí.
+  if ('usage' in vysledok) {
+    await zapisBehNavrhu(database, config, input, zaciatok, {
+      usage: vysledok.usage, zdrzanie: 'zdrzanie' in vysledok ? vysledok.zdrzanie : undefined,
+    });
+  }
   if (!('navrh' in vysledok)) return false;
   const { navrh, dokazy } = vysledok;
 
@@ -2495,6 +2510,46 @@ export async function maybeAiAccountingSuggestion(
       navrh.riadky ? JSON.stringify(navrh.riadky) : null, stopaId],
   );
   return true;
+}
+
+/**
+ * Beh AI návrhu zaúčtovania v logu behov dokladu. Je to najdrahšie volanie
+ * dokladu (s web searchom), a kým sa nezapisovalo, cena dokladu zahŕňala len
+ * extrakciu a výpadok či zdržanie modelu nebolo nikde vidieť. Zapisujú sa len
+ * čísla a kódy: riadky behov idú každému prehliadaču v dátovom snapshote.
+ * `result` ostáva prázdny — výsledok extrakcie hľadá beh s výsledkom.
+ */
+async function zapisBehNavrhu(
+  database: Database,
+  config: ServerConfig,
+  input: SuggestionInput,
+  zaciatok: number,
+  beh: { usage?: Record<string, unknown>; zdrzanie?: string; chyba?: unknown },
+): Promise<void> {
+  const usage = beh.usage as {
+    input_tokens?: number; output_tokens?: number; web_search_calls?: number;
+    input_tokens_details?: { cached_tokens?: number }; output_tokens_details?: { reasoning_tokens?: number };
+  } | undefined;
+  const status = (beh.chyba as { status?: number } | undefined)?.status;
+  await database.query(
+    `INSERT INTO extraction_runs
+      (id,tenant_id,organization_id,document_id,provider,model,prompt_version,schema_version,status,
+       error_code,error_message,latency_ms,usage,started_at,completed_at)
+     VALUES ($1,$2,$3,$4,'openai',$5,'navrh-zauctovania-v1','1',$6,$7,$8,$9,$10::jsonb,to_timestamp($11/1000.0),now())`,
+    [randomUUID(), input.tenantId, input.organizationId, input.documentId, config.openai.accountingModel,
+      beh.chyba ? 'failed' : 'succeeded',
+      beh.chyba ? (status ? `openai_${status}` : 'navrh_zlyhal') : beh.zdrzanie ?? null,
+      beh.chyba ? 'AI návrh zaúčtovania zlyhal' : null,
+      Date.now() - zaciatok,
+      usage ? JSON.stringify({
+        inputTokens: usage.input_tokens ?? null,
+        cachedTokens: usage.input_tokens_details?.cached_tokens ?? null,
+        outputTokens: usage.output_tokens ?? null,
+        reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? null,
+        webSearchCalls: usage.web_search_calls ?? 0,
+      }) : null,
+      zaciatok],
+  );
 }
 
 /**
@@ -2899,7 +2954,10 @@ export async function navrhniZauctovanie(
     response = await parser.create(poziadavka);
   }
   const odpoved = finalnyJsonOdpovede(response.output);
-  const usage = response.usage;
+  // Web search sa platí za volanie, nie za tokeny — bez počtu by cena dokladu klamala.
+  const hladani = Array.isArray(response.output)
+    ? response.output.filter((item) => (item as { type?: string } | null)?.type === 'web_search_call').length : 0;
+  const usage = response.usage && hladani > 0 ? { ...response.usage, web_search_calls: hladani } : response.usage;
   if (!odpoved) return { zdrzanie: 'prazdna_odpoved', usage };
   // Vo formáte pre model je „riadky" povinné pole (structured outputs iné
   // nepustia), pri čítaní odpovede sa ale nevynucuje: chýbajúci rozpis je

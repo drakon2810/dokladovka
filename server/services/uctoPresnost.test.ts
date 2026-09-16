@@ -352,7 +352,7 @@ describe('meranie bez zápisov', () => {
     // Lokálny výber odpovedá z pravidla protistrany, ktoré je v prompte.
     expect(bezAi).toMatchObject({ rezim: 'bez_ai', vysledok: { FP: { predkontacia: { spravne: 1, znamych: 1, navrhnutych: 1 } } } });
     expect(znova.doklady).toEqual(bezAi.doklady);
-    for (const tabulka of ['documents', 'accounting_suggestions', 'ucto_navrh_stopa', 'ucto_presnost']) {
+    for (const tabulka of ['documents', 'accounting_suggestions', 'ucto_navrh_stopa', 'extraction_runs', 'ucto_presnost']) {
       expect((await database.query(`SELECT 1 FROM ${tabulka} WHERE organization_id=$1`, [kde.organizationId])).rowCount).toBe(0);
     }
 

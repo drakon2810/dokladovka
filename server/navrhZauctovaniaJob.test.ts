@@ -87,9 +87,12 @@ describe('job nového návrhu zaúčtovania', () => {
       create: vi.fn(async () => {
         zamokCerstvy = (await database.query<Record<string, any>>(
           `SELECT locked_at > now() - interval '1 minute' AS cerstvy FROM processing_jobs WHERE status='running'`)).rows[0]?.cerstvy;
-        return aiOdpoved({
-          clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: faktury, confidence: 0.8, reason: 'Oprava služby',
-        });
+        return {
+          ...aiOdpoved({
+            clenenieKvKod: null, predkontaciaId: pred, clenenieDphId: null, ciselnyRadId: faktury, confidence: 0.8, reason: 'Oprava služby',
+          }, 'Overujem sekciu KV.'),
+          usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 40 }, output_tokens: 20, total_tokens: 120 },
+        };
       }),
     };
     const otvoreny = await doklad('na_kontrole');
@@ -115,6 +118,15 @@ describe('job nového návrhu zaúčtovania', () => {
     expect(await navrh(otvoreny)).toMatchObject({ source: 'ai', predkontacia_id: pred, ciselny_rad_id: dobropisy });
     expect(parser.create).toHaveBeenCalledTimes(1);
     expect(zamokCerstvy).toBe(true);
+    // Beh návrhu je v logu behov dokladu so spotrebou, aby cena dokladu
+    // zahŕňala aj najdrahšie volanie — a výsledok extrakcie ostal nedotknutý.
+    const behy = async (documentId: string) => (await database.query<Record<string, any>>(
+      'SELECT status, prompt_version, usage, result, error_code FROM extraction_runs WHERE document_id=$1', [documentId],
+    )).rows;
+    expect(await behy(otvoreny)).toEqual([{
+      status: 'succeeded', prompt_version: 'navrh-zauctovania-v1', result: null, error_code: null,
+      usage: { inputTokens: 100, cachedTokens: 40, outputTokens: 20, reasoningTokens: null, webSearchCalls: 1 },
+    }]);
     expect(auditovane.doklad.podtyp).toBe('dobropis');
     expect((await database.query<Record<string, any>>(
       'SELECT dovod, rozhodnutie FROM dph_audit WHERE document_id=$1', [otvoreny])).rows).toEqual([
@@ -143,6 +155,8 @@ describe('job nového návrhu zaúčtovania', () => {
     const vypadokJob = await job(vypadokDoklad);
     expect(await processNextJob(database, testConfig(), 'test-worker', { aiParser: vypadok })).toBe(true);
     expect(await stavJobu(vypadokJob)).toMatchObject({ status: 'queued', error_code: 'processing_failed' });
+    // Výpadok je vidieť v behoch dokladu, nie len v jobe.
+    expect(await behy(vypadokDoklad)).toEqual([expect.objectContaining({ status: 'failed', error_code: 'navrh_zlyhal', usage: null })]);
   }, 120_000);
 
   // Zmena druhu počas bežiaceho jobu zaradí ďalší. Druhá slučka workera ho
