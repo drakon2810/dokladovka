@@ -77,7 +77,7 @@ pocetFakturaciiVSubore: how many pages in this file actually BILL — each page 
 Answer in the given JSON shape. Write dovod in Slovak, one short sentence naming what convinced you.`;
 
 interface ResponsesParser {
-  parse(body: unknown): Promise<{ output_parsed?: unknown }>;
+  parse(body: unknown): Promise<{ output_parsed?: unknown; usage?: unknown }>;
 }
 
 export interface KlasifikaciaVstup {
@@ -140,7 +140,8 @@ export class OpenAIDocumentClassifier {
     }).responses as unknown as ResponsesParser);
   }
 
-  async classify(input: KlasifikaciaVstup): Promise<Klasifikacia | undefined> {
+  /** `priOdpovedi` dostane spotrebu tokenov — aj pri prázdnej odpovedi, model sa zaplatil. */
+  async classify(input: KlasifikaciaVstup, priOdpovedi?: (usage: unknown) => void): Promise<Klasifikacia | undefined> {
     const dataUrl = `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString('base64')}`;
     const filePart = input.mimeType === 'application/pdf'
       ? { type: 'input_file', filename: input.fileName, file_data: dataUrl }
@@ -180,6 +181,7 @@ ${input.pokyny}` : '',
       text: { format: zodTextFormat(klasifikaciaSchema, 'klasifikacia_dokladu') },
     });
 
+    priOdpovedi?.(response.usage);
     if (!response.output_parsed) return undefined;
     return klasifikaciaSchema.parse(response.output_parsed);
   }

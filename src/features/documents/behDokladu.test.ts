@@ -10,6 +10,11 @@ const beh = (promptVersion: string, status: ExtractionRun['status'], errorCode?:
 } as ExtractionRun);
 
 describe('popisBehu', () => {
+  it('klasifikácia a kontrola DPH majú vlastnú etapu', () => {
+    expect(popisBehu(beh('klasifikacia-v1', 'succeeded'))).toEqual({ etapa: 'klasifikacia', vysledok: 'uspech' });
+    expect(popisBehu(beh('dph-kontrola-v1', 'failed', 'openai_500'))).toEqual({ etapa: 'dph_kontrola', vysledok: 'chyba' });
+  });
+
   it('rozlíši etapu podľa verzie promptu', () => {
     expect(popisBehu(beh('invoice-sk-cz-v8', 'succeeded')).etapa).toBe('extrakcia');
     expect(popisBehu(beh('navrh-zauctovania-v1', 'succeeded')).etapa).toBe('zauctovanie');

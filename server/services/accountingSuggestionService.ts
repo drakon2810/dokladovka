@@ -10,6 +10,7 @@ import {
 } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
+import { zapisBehAi } from './behAi.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
 import { DOKLAD_KLUC_SQL, MIN_DOKLADOV, najdiPravidlo, variantyRozpisu } from './uctoPravidlaService.js';
@@ -1435,10 +1436,10 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
 }): Promise<void> {
   const navrh = await tx.query<{
     predkontacia_id?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
-    ciselny_rad_id?: string; stredisko_id?: string; source: string; confidence: string;
+    ciselny_rad_id?: string; stredisko_id?: string; source: string; confidence: string; stopa_id?: string | null;
     riadky?: Array<{ index?: number; popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number; podielDph?: number }> | null;
   } & Record<string, unknown>>(
-    `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, stredisko_id, source, confidence, riadky
+    `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, stredisko_id, source, confidence, riadky, stopa_id
        FROM accounting_suggestions WHERE document_id=$1 AND tenant_id=$2`,
     [input.documentId, input.tenantId],
   );
@@ -1466,13 +1467,13 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
   await tx.query(
     `INSERT INTO ucto_opravy
       (id,tenant_id,organization_id,document_id,document_type,podtyp,supplier_ico,supplier_name,
-       navrhnute,schvalene,zmenene,navrh_zdroj,navrh_confidence)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::text[],$12,$13)`,
+       navrhnute,schvalene,zmenene,navrh_zdroj,navrh_confidence,stopa_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::text[],$12,$13,$14)`,
     [randomUUID(), input.tenantId, input.organizationId, input.documentId,
       input.documentType ?? null, input.podtyp ?? null,
       String(strana.ico ?? '').replace(/\D/g, '') || null, normalizeName(strana.nazov) || null,
       JSON.stringify(navrhnute), JSON.stringify(schvalene), zmenene,
-      row?.source ?? null, row?.confidence ?? null],
+      row?.source ?? null, row?.confidence ?? null, row?.stopa_id ?? null],
   );
 }
 
@@ -2529,7 +2530,10 @@ export interface StopaNavrhu {
 }
 
 export interface ZmenaNavrhu {
-  pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod' | 'ciselnyRadId';
+  /** riadok = riadok rozpisu ako celok (vypadol, alebo ho nahradil rez z profilu). */
+  pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod' | 'ciselnyRadId' | 'riadok';
+  /** Index položky dokladu; bez neho sa zmena týka hlavičky. */
+  index?: number;
   z: string | null;
   na: string | null;
   dovod: string;
@@ -2650,16 +2654,20 @@ export async function maybeAiAccountingSuggestion(
       navrh.rule_id ?? null,
       navrh.riadky ? JSON.stringify(navrh.riadky) : null, stopaId],
   );
+  // Stopa pribúdala riadkom za každé volanie modelu a nemazal ju nikto. Staršie
+  // stopy dokladu už nič nevysvetľujú — návrh ukazuje na novú. Ostáva stopa,
+  // na ktorú ukazuje zapísaná oprava: z nej sa zisťuje, čo sa pomýlilo.
+  // Zlyhané upratanie nesmie zahodiť návrh, za ktorý sa už zaplatilo.
+  await database.query(
+    `DELETE FROM ucto_navrh_stopa t
+      WHERE t.tenant_id=$1 AND t.document_id=$2 AND t.id<>$3::uuid
+        AND NOT EXISTS (SELECT 1 FROM ucto_opravy o WHERE o.tenant_id=t.tenant_id AND o.stopa_id=t.id::text)`,
+    [input.tenantId, input.documentId, stopaId],
+  ).catch((chyba) => console.warn(`[ai-navrh] ${input.documentId}: upratanie starých stôp zlyhalo:`,
+    chyba instanceof Error ? chyba.message : chyba));
   return true;
 }
 
-/**
- * Beh AI návrhu zaúčtovania v logu behov dokladu. Je to najdrahšie volanie
- * dokladu (s web searchom), a kým sa nezapisovalo, cena dokladu zahŕňala len
- * extrakciu a výpadok či zdržanie modelu nebolo nikde vidieť. Zapisujú sa len
- * čísla a kódy: riadky behov idú každému prehliadaču v dátovom snapshote.
- * `result` ostáva prázdny — výsledok extrakcie hľadá beh s výsledkom.
- */
 /** Chyba vznikla pri volaní modelu (nie pri príprave) — len tá je neúspešný beh AI. */
 const VOLANIE_MODELU = Symbol('volanieModelu');
 function oznacVolanieModelu(cause: unknown): unknown {
@@ -2671,6 +2679,7 @@ function jeVolanieModelu(cause: unknown): boolean {
   return Boolean(cause && typeof cause === 'object' && (cause as Record<symbol, boolean>)[VOLANIE_MODELU]);
 }
 
+/** Beh AI návrhu zaúčtovania — najdrahšie volanie dokladu (s web searchom). */
 async function zapisBehNavrhu(
   database: Database,
   config: ServerConfig,
@@ -2678,30 +2687,12 @@ async function zapisBehNavrhu(
   zaciatok: number,
   beh: { usage?: Record<string, unknown>; zdrzanie?: string; chyba?: unknown },
 ): Promise<void> {
-  const usage = beh.usage as {
-    input_tokens?: number; output_tokens?: number; web_search_calls?: number;
-    input_tokens_details?: { cached_tokens?: number }; output_tokens_details?: { reasoning_tokens?: number };
-  } | undefined;
-  const status = (beh.chyba as { status?: number } | undefined)?.status;
-  await database.query(
-    `INSERT INTO extraction_runs
-      (id,tenant_id,organization_id,document_id,provider,model,prompt_version,schema_version,status,
-       error_code,error_message,latency_ms,usage,started_at,completed_at)
-     VALUES ($1,$2,$3,$4,'openai',$5,'navrh-zauctovania-v1','1',$6,$7,$8,$9,$10::jsonb,to_timestamp($11/1000.0),now())`,
-    [randomUUID(), input.tenantId, input.organizationId, input.documentId, config.openai.accountingModel,
-      beh.chyba ? 'failed' : 'succeeded',
-      beh.chyba ? (status ? `openai_${status}` : 'navrh_zlyhal') : beh.zdrzanie ?? null,
-      beh.chyba ? 'AI návrh zaúčtovania zlyhal' : null,
-      Date.now() - zaciatok,
-      usage ? JSON.stringify({
-        inputTokens: usage.input_tokens ?? null,
-        cachedTokens: usage.input_tokens_details?.cached_tokens ?? null,
-        outputTokens: usage.output_tokens ?? null,
-        reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? null,
-        webSearchCalls: usage.web_search_calls ?? 0,
-      }) : null,
-      zaciatok],
-  );
+  await zapisBehAi(database, {
+    tenantId: input.tenantId, organizationId: input.organizationId, documentId: input.documentId,
+    model: config.openai.accountingModel, promptVersion: 'navrh-zauctovania-v1', zaciatok,
+    usage: beh.usage, zdrzanie: beh.zdrzanie, chyba: beh.chyba ?? undefined,
+    kodChyby: 'navrh_zlyhal', spravaChyby: 'AI návrh zaúčtovania zlyhal',
+  });
 }
 
 /**
@@ -3153,8 +3144,8 @@ export async function navrhniZauctovanie(
   // „Prečo" vedelo povedať, kto hodnotu určil, bez ďalšieho volania modelu.
   // Zapisuje sa vedľa priradení nižšie — rozhodovanie samo sa tým nemení.
   const zmeny: ZmenaNavrhu[] = [];
-  const zmen = (pole: ZmenaNavrhu['pole'], z: string | null | undefined, na: string | null | undefined, dovod: string) => {
-    if ((z ?? null) !== (na ?? null)) zmeny.push({ pole, z: z ?? null, na: na ?? null, dovod });
+  const zmen = (pole: ZmenaNavrhu['pole'], z: string | null | undefined, na: string | null | undefined, dovod: string, index?: number) => {
+    if ((z ?? null) !== (na ?? null)) zmeny.push({ pole, ...(index === undefined ? {} : { index }), z: z ?? null, na: na ?? null, dovod });
   };
   zmen('predkontaciaId', parsed.predkontaciaId, validated.predkontacia_id, pravidlo.candidate.predkontacia_id
     ? 'pravidlo_uctovnika' : naDoklade.predkontaciaId ? 'kod_z_dokladu' : 'neplatny_kod');
@@ -3262,7 +3253,6 @@ export async function navrhniZauctovanie(
   };
   // Pravidlo účtovníka a kód vyčítaný z dokladu (odkaz na paragraf, ktorý model
   // v prompte nevidí) ostávajú nad AI aj tu — opravuje sa odpoveď modelu.
-  let hlavickaBezOdpoctu = false;
   if (!pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
     const nahrada = opravBezOdpoctu(validated.predkontacia_id, validated.clenenie_dph_id);
     if (nahrada) {
@@ -3270,16 +3260,19 @@ export async function navrhniZauctovanie(
         + ' — členenie prepísané na bez nároku');
       zmen('clenenieDphId', validated.clenenie_dph_id, nahrada, 'ucet_bez_odpoctu');
       validated.clenenie_dph_id = nahrada;
-      hlavickaBezOdpoctu = true;
     }
   }
 
   const kvZPravidla = kvNavrhuPreDruh(pravidlo.kvKod, druhDokladu);
   const kvZDokladu = kvNavrhuPreDruh(naDoklade.clenenieKvKod, druhDokladu);
-  // Sekciu modelu aj kategórie viazalo členenie s odpočtom, ktoré účet práve
-  // prepísal — k členeniu bez nároku nepatrí. Tak vznikala hlavička PN / B2
-  // bez jediného odpočtu. Rozhodne prax nového členenia, a keď ju firma nemá,
-  // KN: plnenie bez odpočtu do kontrolného výkazu nejde.
+  // Členenie bez nároku v hlavičke prijatého dokladu: sekciu modelu ani
+  // kategórie neberieme. Model ju vyberal k odpočtovému členeniu, ktoré potom
+  // prepísal účet alebo prax, a pri PN ju vie napísať aj sám — tak vznikala
+  // hlavička PN / B2 bez jediného odpočtu (ROFA, repre). Rozhodne prax firmy
+  // pri tomto členení (aj „PN s B2", keď ju firma naozaj má), inak KN.
+  const clenenieHlavicky = validated.clenenie_dph_id
+    ? vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id) : undefined;
+  const hlavickaBezOdpoctu = typ !== 'FV' && clenenieHlavicky !== undefined && !clenenieVyzeraNaOdpocet(clenenieHlavicky);
   const kvZModelu = hlavickaBezOdpoctu ? undefined : kvNavrhuPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu);
   // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do kontrolného
   // výkazu, a sémantického kandidáta viaže na doklad len rovnosť predkontácie —
@@ -3302,7 +3295,7 @@ export async function navrhniZauctovanie(
   zmen('clenenieKvKod', parsed.clenenieKvKod, kvKod, !validated.clenenie_dph_id ? 'kv_bez_clenenia'
     : kvZPravidla ? 'pravidlo_uctovnika'
     : kvZDokladu ? 'kod_z_dokladu'
-    : hlavickaBezOdpoctu ? 'ucet_bez_odpoctu'
+    : hlavickaBezOdpoctu ? 'kv_bez_odpoctu'
     : kvModeluUpravene ? 'kv_podla_druhu'
     : 'kv_podla_praxe_a_druhu');
 
@@ -3576,14 +3569,23 @@ export async function navrhniZauctovanie(
   }
 
   const pouziteIndexy = new Set<number>();
+  // Riadok, ktorý model vrátil a overenie ho zahodilo, patrí do stopy tiež —
+  // inak „Prečo" nevie povedať, kam sa podel rozpis, ktorý AI navrhla.
+  const vypadnute = new Set<number>();
+  const vypadol = (riadok: { index: number; predkontaciaId: string }, dovod: string) => {
+    if (!vypadnute.has(riadok.index)) zmen('riadok', riadok.predkontaciaId, null, dovod, riadok.index);
+    vypadnute.add(riadok.index);
+    return [];
+  };
   const riadky: RiadokNavrhu[] = (parsed.riadky ?? []).flatMap((riadok) => {
     const polozka = polozkyPreModel[riadok.index];
     const jeCast = jeRez(riadok.podiel) && !celePolozky.has(riadok.index);
     // Rozrezanie sa berie iba celé. Jedna časť bez svojich súrodencov by
     // z dokladu odkrojila kus sumy a zvyšok by sa stratil.
-    if (jeCast && !platneSkupiny.has(riadok.index)) return [];
-    if (!polozka || (!jeCast && pouziteIndexy.has(riadok.index))) return [];
-    if (!vPonukePredkontacii.has(riadok.predkontaciaId)) return [];
+    if (jeCast && !platneSkupiny.has(riadok.index)) return vypadol(riadok, 'rez_neuplny');
+    if (!polozka) return vypadol(riadok, 'polozka_neexistuje');
+    if (!jeCast && pouziteIndexy.has(riadok.index)) return vypadol(riadok, 'riadok_duplicitny');
+    if (!vPonukePredkontacii.has(riadok.predkontaciaId)) return vypadol(riadok, 'neplatny_kod');
     const zRiadku = riadok.clenenieDphId && vPonukeCleneni.has(riadok.clenenieDphId)
       ? riadok.clenenieDphId : undefined;
     // Účet bez odpočtu prepíše členenie aj na riadku. Keď riadok vlastné nemá,
@@ -3604,6 +3606,10 @@ export async function navrhniZauctovanie(
       && (clenenieDphId ?? validated.clenenie_dph_id) === validated.clenenie_dph_id
       && (clenenieKvKod ?? kvKod) === kvKod) return [];
     pouziteIndexy.add(riadok.index);
+    if (bezOdpoctu) {
+      zmen('clenenieDphId', zRiadku ?? validated.clenenie_dph_id, bezOdpoctu, 'ucet_bez_odpoctu', riadok.index);
+      zmen('clenenieKvKod', riadok.clenenieKvKod ?? kvKod, clenenieKvKod, 'ucet_bez_odpoctu', riadok.index);
+    }
     return [{
       index: riadok.index,
       popis: (polozka as { popis?: string }).popis ?? '',
@@ -3650,6 +3656,13 @@ export async function navrhniZauctovanie(
       if (!pravidlo) return;
       const podiel = podielZPercenta(pravidlo.percento);
       const podielDph = podielZPercenta(pravidlo.percentoDph ?? pravidlo.percento);
+      // Zapisuje sa vždy, aj keď model dal ten istý účet: riadok nahradilo
+      // nastavenie firmy, nie jeho voľba.
+      zmeny.push({
+        pole: 'riadok', index,
+        z: (parsed.riadky ?? []).find((riadok) => riadok.index === index)?.predkontaciaId ?? null,
+        na: pravidlo.predkontaciaId!, dovod: 'rez_podla_profilu',
+      });
       rezyProfilu.set(index, [
         { index, popis, predkontaciaId: pravidlo.predkontaciaId!, podiel, podielDph },
         {

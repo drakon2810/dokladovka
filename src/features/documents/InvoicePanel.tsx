@@ -226,6 +226,20 @@ export function InvoicePanel({
   // následne — zvlášť pre každé pole (iné zdroje), server ho kešuje.
   const [vysMap, setVysMap] = useState<Partial<Record<PrecoField, { stav: 'loading' | 'done'; data: PrecoVysvetlenie | null }>>>({});
 
+  // Návrh AI často dobehne až po otvorení dokladu. „Prečo?" sa načítava raz,
+  // takže by ukazovalo pôvod predošlého návrhu. Kľúč je z obsahu návrhu —
+  // createdAt sa pri jeho prepise nemení.
+  const klucNavrhu = suggestion
+    ? [suggestion.source, suggestion.confidence, suggestion.predkontaciaId, suggestion.clenenieDphId,
+      suggestion.clenenieKvKod, suggestion.reason].join('|')
+    : '';
+  useEffect(() => {
+    setPreco(null);
+    setPrecoState('idle');
+    setVysMap({});
+    setPrecoOpen(null);
+  }, [klucNavrhu]);
+
   const nacitajVysvetlenie = (field: PrecoField) => {
     setVysMap((current) => (current[field] ? current : { ...current, [field]: { stav: 'loading', data: null } }));
     getPrecoVysvetlenie(draft.id, field)
@@ -355,7 +369,12 @@ export function InvoicePanel({
     const nazovHodnoty = (hodnota: string | null) => (hodnota
       ? (field === 'kv' ? hodnota : preco.polozky[hodnota]?.kod ?? hodnota)
       : t('preco.prazdne'));
-    const zmenyPola = (preco.stopa?.zmeny ?? []).filter((zmena) => zmena.pole === polePola);
+    const zmenyPola = (preco.stopa?.zmeny ?? []).filter((zmena) => zmena.index == null && zmena.pole === polePola);
+    // Zmeny na položkách patria k predkontácii — tam je rozpis dokladu.
+    const zmenyRiadkov = field === 'predkontacia' ? (preco.stopa?.zmeny ?? []).filter((zmena) => zmena.index != null) : [];
+    const nazovVRiadku = (pole: string, hodnota: string | null) => (hodnota
+      ? (pole === 'clenenieKvKod' ? hodnota : preco.polozky[hodnota]?.kod ?? hodnota)
+      : t('preco.prazdne'));
     return (
       <div className="dv-preco-panel">
         {precoHead(<span className="dv-preco-src">{zdroj}</span>)}
@@ -376,6 +395,20 @@ export function InvoicePanel({
                 <span>{tv('preco.zmena', {
                   z: nazovHodnoty(zmena.z),
                   na: nazovHodnoty(zmena.na),
+                  dovod: dovodKey in sk ? t(dovodKey) : zmena.dovod,
+                })}</span>
+              </div>
+            );
+          })}
+          {zmenyRiadkov.map((zmena, index) => {
+            const dovodKey = `preco.dovod.${zmena.dovod}` as SkKey;
+            return (
+              <div key={`riadok-${zmena.index}-${zmena.pole}-${index}`} className="dv-preco-note">
+                <IcoLines />
+                <span>{tv('preco.zmenaRiadku', {
+                  n: String((zmena.index ?? 0) + 1),
+                  z: nazovVRiadku(zmena.pole, zmena.z),
+                  na: nazovVRiadku(zmena.pole, zmena.na),
                   dovod: dovodKey in sk ? t(dovodKey) : zmena.dovod,
                 })}</span>
               </div>

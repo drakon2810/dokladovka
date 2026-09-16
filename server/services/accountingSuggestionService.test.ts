@@ -779,7 +779,9 @@ describe('accounting suggestions', () => {
     expect((await database.query('SELECT 1 FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows).toHaveLength(0);
 
     // Členenie bez odpočtu prejde, ale sekcia A1 hlási DODÁVATEĽ — na prijatej
-    // faktúre neexistuje, takže sa zahodí namiesto uloženia do výkazu.
+    // faktúre neexistuje, takže sa zahodí. Firma prax pri tomto členení nemá,
+    // a plnenie bez odpočtu do kontrolného výkazu nejde: KN. Cudzia daň doň
+    // nepatrí tak či tak.
     const bezOdpoctu = {
       create: vi.fn().mockResolvedValue(aiOdpoved({
         predkontaciaId: pred, clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'A1',
@@ -790,7 +792,7 @@ describe('accounting suggestions', () => {
     const suggestion = (await database.query<Record<string, any>>(
       'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
     expect(suggestion).toMatchObject({ source: 'ai', predkontacia_id: pred, clenenie_dph_id: dphBezOdpoctu });
-    expect(suggestion.clenenie_kv_kod).toBeNull();
+    expect(suggestion.clenenie_kv_kod).toBe('KN');
   }, 90_000);
 
   it('denník: riadky tej istej protistrany idú do promptu prvé, aj keď text sedí menej', async () => {
@@ -2189,7 +2191,33 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
       `SELECT t.zmeny FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
       [documentId],
     )).rows[0];
-    expect(stopa.zmeny).toContainEqual({ pole: 'clenenieKvKod', z: 'B2', na: 'KN', dovod: 'ucet_bez_odpoctu' });
+    expect(stopa.zmeny).toContainEqual({ pole: 'clenenieKvKod', z: 'B2', na: 'KN', dovod: 'kv_bez_odpoctu' });
+  }, 90_000);
+
+  // To isté, keď členenie bez nároku vybral model sám alebo ho dalo iné
+  // pravidlo (členenie podľa účtu): sekcia B2 k nemu nepatrí, kým ju firma pri
+  // tom členení naozaj nepoužíva. ROFA: repre / PN / B2 bez jediného odpočtu.
+  it('členenie bez nároku v hlavičke nedostane sekciu B2 modelu, ak ju firma pri ňom nepoužíva', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Reprezentácia',
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.clenenie_dph_id).toBe(dphPn);
+    expect(navrh.clenenie_kv_kod).toBe('KN');
   }, 90_000);
 
   it('prepíše členenie riadku, aj keď hlavička odpočet uplatňuje', async () => {
@@ -2219,6 +2247,49 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
       index: 1, popis: 'Káva NESCAFÉ GOLD instantná 200 g',
       predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN',
     }]);
+    // Stopa nesie aj zmeny na riadku — s indexom položky, aby ich „Prečo"
+    // nepriradilo hlavičke.
+    const zmeny = (await database.query<Record<string, any>>(
+      `SELECT t.zmeny FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
+      [documentId],
+    )).rows[0].zmeny;
+    expect(zmeny).toContainEqual({ pole: 'clenenieDphId', index: 1, z: dphPd, na: dphPn, dovod: 'ucet_bez_odpoctu' });
+    expect(zmeny).toContainEqual({ pole: 'clenenieKvKod', index: 1, z: 'B2', na: 'KN', dovod: 'ucet_bez_odpoctu' });
+    expect(zmeny.filter((zmena: { index?: number }) => zmena.index === undefined)).toEqual([]);
+  }, 90_000);
+
+  // Stopa pribúdala riadkom za každé volanie modelu a nikto ju nemazal. Staré
+  // stopy dokladu sa zmažú — okrem tej, na ktorú ukazuje zapísaná oprava.
+  it('nechá len aktuálnu stopu dokladu a stopu, na ktorú ukazuje oprava', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Kancelárske potreby',
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    const stopy = async () => (await database.query<{ id: string }>(
+      'SELECT id::text AS id FROM ucto_navrh_stopa WHERE document_id=$1 ORDER BY created_at', [documentId])).rows.map((row) => row.id);
+
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+    const [prva] = await stopy();
+    await database.query(
+      `INSERT INTO ucto_opravy (id,tenant_id,organization_id,document_id,navrhnute,schvalene,zmenene,stopa_id)
+       VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,'{}'::text[],$5)`,
+      [randomUUID(), ...kde, documentId, prva],
+    );
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+    const aktualna = (await database.query<{ stopa_id: string }>(
+      'SELECT stopa_id FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0].stopa_id;
+    expect((await stopy()).sort()).toEqual([prva, aktualna].sort());
   }, 90_000);
 
   // Zberný účet služieb nesie oba režimy: 518100 ost.sl. má u ALPINY jednu
@@ -2578,12 +2649,18 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
     const riadky = (await database.query<Record<string, any>>(
       'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0].riadky as Array<Record<string, any>> | null;
-    return { riadky, phm, nadspotreba, dphPn };
+    const zmeny = (await database.query<Record<string, any>>(
+      `SELECT t.zmeny FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
+      [documentId],
+    )).rows[0]?.zmeny as Array<Record<string, unknown>> | undefined;
+    return { riadky, zmeny, phm, nadspotreba, dphPn };
   };
 
   it('rozreže palivo osobného auta a naftu do ťahača nechá celú', async () => {
-    const { riadky: vysledok, phm, nadspotreba, dphPn } = await rezPhm({}, {});
+    const { riadky: vysledok, zmeny, phm, nadspotreba, dphPn } = await rezPhm({}, {});
     const riadky = vysledok!;
+    expect(zmeny).toContainEqual({ pole: 'riadok', index: 0, z: null, na: phm, dovod: 'rez_podla_profilu' });
+    expect(zmeny).toContainEqual({ pole: 'riadok', index: 1, z: null, na: phm, dovod: 'rez_podla_profilu' });
     // Dve položky × dve časti; nafta do ťahača sa nedelí a v rozpise nie je.
     expect(riadky.map((riadok) => [riadok.index, riadok.predkontaciaId, riadok.podiel, riadok.podielDph])).toEqual([
       [0, phm, 0.8, 0.5],
@@ -2682,6 +2759,11 @@ describe('návrh rozrezania položky', () => {
       [1, 0.8, 0.5], [1, 0.2, 0.5], [2, undefined, undefined],
     ]);
     expect(riadky[1].predkontaciaId).toBe(nadspotreba);
+    const zmeny = (await database.query<Record<string, any>>(
+      `SELECT t.zmeny FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
+      [documentId],
+    )).rows[0].zmeny;
+    expect(zmeny).toContainEqual({ pole: 'riadok', index: 0, z: nadspotreba, na: null, dovod: 'rez_neuplny' });
   }, 90_000);
 
   // Súčet podielov sa overoval PRED filtrom, ktorý zahodí časť s predkontáciou

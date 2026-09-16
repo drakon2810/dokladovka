@@ -55,6 +55,23 @@ describe('OpenAIDocumentClassifier', () => {
     expect(vysledok).toMatchObject({ documentType: 'INY', podtyp: 'bezna', jeUctovnyDoklad: false });
   });
 
+  // Klasifikácia je samostatné platené volanie a jej spotreba sa zahadzovala —
+  // cena dokladu bez nej klamala.
+  it('spotrebu odpovede odovzdá volajúcemu', async () => {
+    const classifier = new OpenAIDocumentClassifier(config, {
+      parse: async () => ({
+        output_parsed: {
+          documentType: 'FP', podtyp: 'bezna', jeUctovnyDoklad: true, dovod: 'Faktúra.',
+          obsahZvazku: '', pocetFakturaciiVSubore: 1, istota: 0.9,
+        },
+        usage: { input_tokens: 812, output_tokens: 40 },
+      }),
+    });
+    let usage: unknown;
+    await classifier.classify(vstup, (spotreba) => { usage = spotreba; });
+    expect(usage).toEqual({ input_tokens: 812, output_tokens: 40 });
+  });
+
   it('signály z názvu sa modelu pribalia ako pomôcka, nie ako dôkaz', async () => {
     let odoslane = '';
     const classifier = new OpenAIDocumentClassifier(config, {

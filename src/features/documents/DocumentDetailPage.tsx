@@ -175,7 +175,9 @@ function cloneDocument(document: DocumentItem): DocumentItem {
 /** Názov etapy behu AI v zozname behov dokladu. */
 const ETAPA_BEHU: Record<EtapaBehu, SkKey> = {
   extrakcia: 'detail.zdroj.extrakcia',
+  klasifikacia: 'detail.zdroj.etapa.klasifikacia',
   zauctovanie: 'detail.zdroj.etapa.zauctovanie',
+  dph_kontrola: 'detail.zdroj.etapa.dph_kontrola',
   vysvetlenie: 'detail.zdroj.etapa.vysvetlenie',
 };
 

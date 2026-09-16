@@ -1,6 +1,6 @@
 import type { ExtractionRun } from '../../data/types';
 
-export type EtapaBehu = 'extrakcia' | 'zauctovanie' | 'vysvetlenie';
+export type EtapaBehu = 'extrakcia' | 'klasifikacia' | 'zauctovanie' | 'dph_kontrola' | 'vysvetlenie';
 export type VysledokBehu = 'uspech' | 'zdrzanie' | 'chyba' | 'prebieha';
 
 /**
@@ -15,6 +15,8 @@ export function popisBehu(run: Pick<ExtractionRun, 'promptVersion' | 'status' | 
 } {
   const etapa: EtapaBehu = run.promptVersion.startsWith('navrh-zauctovania') ? 'zauctovanie'
     : run.promptVersion.startsWith('preco-vysvetlenie') ? 'vysvetlenie'
+    : run.promptVersion.startsWith('klasifikacia') ? 'klasifikacia'
+    : run.promptVersion.startsWith('dph-kontrola') ? 'dph_kontrola'
     : 'extrakcia';
   const vysledok: VysledokBehu = run.status === 'failed' ? 'chyba'
     : run.status !== 'succeeded' ? 'prebieha'

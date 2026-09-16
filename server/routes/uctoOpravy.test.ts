@@ -67,6 +67,9 @@ describe('záznam opráv účtovníka', () => {
     const headers = sessionHeaders(login);
 
     const { documentId, navrhnuta, ina } = await pripravDoklad(database, seeded);
+    // Stopa rozhodnutia, z ktorej návrh vzišiel — oprava na ňu musí ukazovať,
+    // inak sa zo záznamu opravy nedá povedať, ktoré pravidlo sa pomýlilo.
+    await database.query("UPDATE accounting_suggestions SET stopa_id='stopa-1' WHERE document_id=$1", [documentId]);
     const approved = await app.inject({
       method: 'POST', url: `/api/documents/${documentId}/approve`, headers, payload: { expectedVersion: 1 },
     });
@@ -74,9 +77,9 @@ describe('záznam opráv účtovníka', () => {
 
     const oprava = await database.query<{
       zmenene: string[]; navrhnute: Record<string, string>; schvalene: Record<string, string>;
-      navrh_zdroj: string; supplier_ico: string;
+      navrh_zdroj: string; supplier_ico: string; stopa_id: string;
     } & Record<string, unknown>>(
-      'SELECT zmenene, navrhnute, schvalene, navrh_zdroj, supplier_ico FROM ucto_opravy WHERE document_id=$1',
+      'SELECT zmenene, navrhnute, schvalene, navrh_zdroj, supplier_ico, stopa_id FROM ucto_opravy WHERE document_id=$1',
       [documentId],
     );
     const row = oprava.rows[0];
@@ -89,6 +92,7 @@ describe('záznam opráv účtovníka', () => {
     // spôsob navrhovania sa mýli.
     expect(row.navrh_zdroj).toBe('ai');
     expect(row.supplier_ico).toBe('31386946');
+    expect(row.stopa_id).toBe('stopa-1');
 
     // Záznam musí prežiť zmazanie dokladu: pri accounting_suggestions to tak
     // nie je a s dokladmi odišli aj návrhy, kde bola oprava najpravdepodobnejšia.

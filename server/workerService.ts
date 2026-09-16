@@ -30,6 +30,7 @@ import { nacitajPokyny, pokynyPreModel } from './services/aiInstructionsService.
 import { matchStatementPayments } from './services/paymentService.js';
 import { doplnZKartyPartnera, upsertPartnerZDokladu } from './services/partnerService.js';
 import { profilPreKlasifikaciu } from './services/firemnyProfilService.js';
+import { zapisBehAi } from './services/behAi.js';
 import { analyzujUctovnyProfil, prepocitajPrax } from './services/uctoProfileService.js';
 import { zmerajPresnost } from './services/uctoPresnostService.js';
 import { opravSkDanoveCisla } from './services/skTaxIdsService.js';
@@ -344,11 +345,23 @@ async function storeAsOrganizationDocument(
     'SELECT sha256 FROM inbound_attachments WHERE id=$1', [context.id],
   );
   await database.transaction(async (tx) => {
+    // Spotreba extrakcie patrí do logu aj pri dokumente, z ktorého doklad nevznikol.
     await tx.query(
       `UPDATE extraction_runs SET status='succeeded', result=$1::jsonb, model=$2, latency_ms=$3,
-              document_id=NULL, completed_at=now()
+              usage=$6::jsonb, completed_at=now()
         WHERE id=$4 AND tenant_id=$5`,
-      [JSON.stringify(result), outcome.model ?? null, latencyMs, prepared.runId, job.tenant_id],
+      [JSON.stringify(result), outcome.model ?? null, latencyMs, prepared.runId, job.tenant_id, JSON.stringify({
+        inputTokens: outcome.usage?.inputTokens,
+        outputTokens: outcome.usage?.outputTokens,
+        requestId: outcome.requestId,
+      })],
+    );
+    // Placeholder sa nižšie zmaže. Behy k nemu (extrakcia aj klasifikácia, ktorá
+    // beží pred ňou) ostanú v logu organizácie, len bez dokladu — inak by ich
+    // cudzí kľúč zmazanie zablokoval.
+    await tx.query(
+      'UPDATE extraction_runs SET document_id=NULL WHERE document_id=$1 AND tenant_id=$2',
+      [prepared.documentId, job.tenant_id],
     );
     await tx.query(
       `INSERT INTO organization_documents
@@ -1146,6 +1159,16 @@ export async function processNextJob(
     // nesmie zhodiť spracovanie — extrakcia určí typ sama ako doteraz.
     let klasifikacia: Klasifikacia | undefined;
     if (provider.name === 'openai' && !dependencies.provider) {
+      // Klasifikácia je samostatné platené volanie: jej spotreba patrí do ceny
+      // dokladu a výpadok do logu behov — doteraz ho catch ticho zahodil.
+      const behKlasifikacie = {
+        tenantId: job.tenant_id, organizationId: job.organization_id, documentId: prepared.documentId,
+        model: config.openai.model, promptVersion: 'klasifikacia-v1', zaciatok: Date.now(),
+        kodChyby: 'klasifikacia_zlyhala', spravaChyby: 'Klasifikácia dokladu zlyhala',
+      };
+      const zapisBeh = (beh: { usage?: unknown; zdrzanie?: string; chyba?: unknown }) => zapisBehAi(database, { ...behKlasifikacie, ...beh })
+        .catch((chyba) => console.warn('[klasifikacia] zápis behu zlyhal', chyba instanceof Error ? chyba.message : chyba));
+      let usage: unknown;
       try {
         klasifikacia = await new OpenAIDocumentClassifier(config.openai).classify({
           bytes,
@@ -1166,9 +1189,14 @@ export async function processNextJob(
           // dokladu neplatilo: extrakcia ho poslúchla a klasifikácia typ hneď
           // prepísala, lebo pravidlá nevidela.
           pokyny,
+        }, (spotreba) => { usage = spotreba; });
+        await zapisBeh({ usage, zdrzanie: klasifikacia ? undefined : 'prazdna_odpoved' });
+      } catch (chyba) {
+        console.warn('[klasifikacia] zlyhala — typ určí extrakcia', {
+          documentId: prepared.documentId, chyba: chyba instanceof Error ? chyba.message : chyba,
         });
-      } catch {
         klasifikacia = undefined;
+        await zapisBeh({ usage, chyba });
       }
     }
     const startedAt = performance.now();

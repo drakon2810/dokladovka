@@ -247,6 +247,56 @@ describe('verdikt len k posúdenému druhu', () => {
 });
 
 
+// Kontrola DPH volá model raz, pri neistote dvakrát — a ani jedno volanie sa
+// nezapisovalo. Cena dokladu tak nezahŕňala kontrolu a výpadok druhého hlasu
+// nebolo nikde vidieť: doklad potichu dostal len prvú mienku.
+describe('záznam behov kontroly DPH', () => {
+  it('zapíše oba hlasy so spotrebou a zlyhaný druhý hlas ako chybu', async () => {
+    const database = await createTestDatabase();
+    try {
+      const { tenantId, organizationId } = await seedTestUser(database);
+      const documentId = randomUUID();
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph','PN','Nezahrňovať do priznania DPH','pohoda')`,
+        [randomUUID(), tenantId, organizationId],
+      );
+      await database.query(
+        `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+         VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,12.3,'EUR')`,
+        [documentId, tenantId, organizationId],
+      );
+      let volanie = 0;
+      const auditor = new DphAuditor(config, {
+        parse: async () => {
+          volanie += 1;
+          if (volanie === 2) throw Object.assign(new Error('výpadok'), { status: 500 });
+          return {
+            output_parsed: { verdikt: 'neisty', odporucaneClenenieKod: 'PN', odporucanaKvSekcia: null, dovod: 'Neviem.', istota: 0.5 },
+            usage: { input_tokens: 100, output_tokens: 20 },
+          };
+        },
+      });
+      await posudNavrhDokladu(database, testConfig(), {
+        tenantId, organizationId, documentId, documentType: 'FP', extracted: {},
+      }, auditor);
+
+      const behy = (await database.query<Record<string, any>>(
+        `SELECT prompt_version, status, error_code, usage FROM extraction_runs
+          WHERE document_id=$1 ORDER BY started_at, status DESC`, [documentId])).rows;
+      expect(behy).toEqual([
+        expect.objectContaining({ prompt_version: 'dph-kontrola-v1', status: 'succeeded', error_code: null,
+          usage: expect.objectContaining({ inputTokens: 100, outputTokens: 20 }) }),
+        expect.objectContaining({ prompt_version: 'dph-kontrola-v1', status: 'failed', error_code: 'openai_500', usage: null }),
+      ]);
+      // Prvá mienka platí ďalej.
+      expect((await database.query('SELECT 1 FROM dph_audit WHERE document_id=$1', [documentId])).rowCount).toBe(1);
+    } finally {
+      await database.close();
+    }
+  }, 60_000);
+});
+
 describe('zosuladSPraxou', () => {
   // PN aj PNnevymer zapisujú do priznania rovnako — nikam. Zákon medzi nimi
   // nerozhoduje, RCI má v knihách PN stokrát a PNnevymer ani raz.

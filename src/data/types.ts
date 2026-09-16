@@ -991,7 +991,8 @@ export interface DocumentPreco {
   stopa?: {
     vytvorena: string;
     model?: string;
-    zmeny: Array<{ pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod' | 'ciselnyRadId'; z: string | null; na: string | null; dovod: string }>;
+    /** Zmena s indexom patrí položke dokladu (pole riadok = riadok ako celok), bez neho hlavičke. */
+    zmeny: Array<{ pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod' | 'ciselnyRadId' | 'riadok'; index?: number; z: string | null; na: string | null; dovod: string }>;
     istota?: { modelu: number; strop: number; dovod: string };
   } | null;
 }

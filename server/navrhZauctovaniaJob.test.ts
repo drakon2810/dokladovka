@@ -123,10 +123,13 @@ describe('job nového návrhu zaúčtovania', () => {
     const behy = async (documentId: string) => (await database.query<Record<string, any>>(
       'SELECT status, prompt_version, usage, result, error_code FROM extraction_runs WHERE document_id=$1', [documentId],
     )).rows;
-    expect(await behy(otvoreny)).toEqual([{
+    // Kontrola DPH je tiež platené volanie a má vlastný beh.
+    const behyOtvoreneho = await behy(otvoreny);
+    expect(behyOtvoreneho).toHaveLength(2);
+    expect(behyOtvoreneho).toEqual(expect.arrayContaining([{
       status: 'succeeded', prompt_version: 'navrh-zauctovania-v1', result: null, error_code: null,
       usage: { inputTokens: 100, cachedTokens: 40, outputTokens: 20, reasoningTokens: null, webSearchCalls: 1 },
-    }]);
+    }, expect.objectContaining({ status: 'succeeded', prompt_version: 'dph-kontrola-v1', result: null })]));
     expect(auditovane.doklad.podtyp).toBe('dobropis');
     expect((await database.query<Record<string, any>>(
       'SELECT dovod, rozhodnutie FROM dph_audit WHERE document_id=$1', [otvoreny])).rows).toEqual([

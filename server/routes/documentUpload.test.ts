@@ -4,6 +4,7 @@ import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js'
 import { MemoryObjectStorage } from '../storage.js';
 import { processNextJob } from '../workerService.js';
 import { MockServerDocumentExtractionProvider } from '../extraction/mockProvider.js';
+import { zapisBehAi } from '../services/behAi.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -161,10 +162,28 @@ describe('POST /api/documents/upload', () => {
       { fileName: 'rozhodnutie-danovy-urad.pdf', mimeType: 'application/pdf', contentBase64: PDF },
     ]);
     // AI klasifikuje list z úradu ako INY — nemá sa z neho stať doklad.
-    expect(await processNextJob(database, config, 'test-worker', {
-      storage,
-      provider: new MockServerDocumentExtractionProvider({ documentType: 'INY' }),
-    })).toBe(true);
+    // Klasifikácia beží pred extrakciou a zapíše beh k placeholderu dokladu;
+    // placeholder sa potom maže a cudzí kľúč behu to nesmie zablokovať.
+    const mock = new MockServerDocumentExtractionProvider({ documentType: 'INY' });
+    const provider = Object.assign(Object.create(mock) as typeof mock, {
+      extract: async (input: Parameters<typeof mock.extract>[0]) => {
+        await zapisBehAi(database, {
+          tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: input.documentId,
+          model: 'gpt-test', promptVersion: 'klasifikacia-v1', zaciatok: Date.now(), kodChyby: 'x', spravaChyby: 'x',
+        });
+        return { ...await mock.extract(input), usage: { inputTokens: 500, outputTokens: 60 } };
+      },
+    });
+    expect(await processNextJob(database, config, 'test-worker', { storage, provider })).toBe(true);
+    // Spotreba ostáva v logu behov organizácie, aj keď doklad nevznikol.
+    const behy = await database.query<Record<string, any>>(
+      'SELECT prompt_version, document_id, status, usage FROM extraction_runs WHERE organization_id=$1 ORDER BY started_at',
+      [seeded.organizationId],
+    );
+    expect(behy.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ prompt_version: 'klasifikacia-v1', document_id: null }),
+      expect.objectContaining({ status: 'succeeded', document_id: null, usage: expect.objectContaining({ inputTokens: 500, outputTokens: 60 }) }),
+    ]));
 
     expect((await database.query('SELECT id FROM documents')).rowCount).toBe(0);
     const stored = await database.query<{ file_name: string; storage_key: string } & Record<string, unknown>>(
