@@ -1303,6 +1303,61 @@ function polozkyUctoJson(extracted: unknown, hlavicka: Record<string, string | u
   });
 }
 
+/**
+ * Účinné zaúčtovanie položiek v návrhu a v schválenom doklade, porovnateľné
+ * medzi sebou. Položka bez vlastného kódu dedí hlavičku — na OBOCH stranách
+ * schválenú, aby zmena samotnej hlavičky nevyzerala aj ako zmena riadkov.
+ * Časti rezu sa spoja späť na tlačenú položku (rozrezPolozku im dáva id
+ * „<id položky>-1", „-2") a nesú podiel na nej; celá položka má podiel 1.
+ * Návrh riadky adresuje popisom, lebo položky sa od návrhu mohli pohnúť.
+ */
+function riadkyOpravy(
+  extracted: unknown,
+  navrhnuteRiadky: ReadonlyArray<{ popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number }>,
+  hlavicka: Record<string, string | undefined>,
+): { navrhnute: RiadokOpravy[]; schvalene: RiadokOpravy[]; zmenene: boolean } | undefined {
+  const polozky: Array<Record<string, any>> = Array.isArray((extracted as any)?.polozky) ? (extracted as any).polozky : [];
+  if (polozky.length === 0) return undefined;
+  // Tlačená položka má id „<doklad>-li-<n>" alebo UUID (pridaná ručne); časť rezu o segment „-<n>" viac.
+  const castRezu = /^(.+-li-\d+|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})-\d+$/i;
+  const skupiny = new Map<string, Array<Record<string, any>>>();
+  polozky.forEach((polozka, index) => {
+    const id = typeof polozka?.id === 'string' ? polozka.id : `#${index}`;
+    const kluc = castRezu.exec(id)?.[1] ?? id;
+    skupiny.set(kluc, [...(skupiny.get(kluc) ?? []), polozka]);
+  });
+  const podiel = (hodnota: number) => Math.round(hodnota * 100) / 100;
+  const riadok = (popis: string, kody: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string }, cast: number): RiadokOpravy => ({
+    popis,
+    predkontaciaId: kody.predkontaciaId ?? hlavicka.predkontaciaId ?? null,
+    clenenieDphId: kody.clenenieDphId ?? hlavicka.clenenieDphId ?? null,
+    clenenieKvKod: kody.clenenieKvKod ?? hlavicka.clenenieKvKod ?? null,
+    podiel: podiel(cast),
+  });
+  const schvalene = [...skupiny.values()].flatMap((casti) => {
+    const spolu = casti.reduce((sucet, cast) => sucet + Math.abs(Number(cast?.sumaBezDph) || 0), 0);
+    return casti.map((cast) => riadok(normalizeName(cast?.popis).slice(0, 120), cast?.ucto ?? {},
+      casti.length > 1 && spolu > 0 ? Math.abs(Number(cast?.sumaBezDph) || 0) / spolu : 1));
+  });
+  const navrhnute = [...skupiny.values()].flatMap((casti) => {
+    const popis = normalizeName(casti[0]?.popis).slice(0, 120);
+    const preTuto = navrhnuteRiadky.filter((navrh) => normalizeName(navrh.popis).slice(0, 120) === popis);
+    return preTuto.length === 0
+      ? [riadok(popis, {}, 1)]
+      : preTuto.map((navrh) => riadok(popis, navrh, navrh.podiel ?? 1));
+  });
+  const kluc = (zoznam: RiadokOpravy[]) => zoznam.map((item) => JSON.stringify(item)).sort().join('\n');
+  return { navrhnute, schvalene, zmenene: kluc(navrhnute) !== kluc(schvalene) };
+}
+
+interface RiadokOpravy {
+  popis: string;
+  predkontaciaId: string | null;
+  clenenieDphId: string | null;
+  clenenieKvKod: string | null;
+  podiel: number;
+}
+
 /** Zápis do pamäte rozhodnutí pri schválení dokladu (spätná väzba = učenie).
  *  Kľúčom je protistrana: pri FV odberateľ, inak dodávateľ. */
 /** Polia zaúčtovania, ktoré účtovník na doklade rozhoduje a systém navrhuje. */
@@ -1328,8 +1383,9 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
   const navrh = await tx.query<{
     predkontacia_id?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
     ciselny_rad_id?: string; stredisko_id?: string; source: string; confidence: string;
+    riadky?: Array<{ popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number }> | null;
   } & Record<string, unknown>>(
-    `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, stredisko_id, source, confidence
+    `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, stredisko_id, source, confidence, riadky
        FROM accounting_suggestions WHERE document_id=$1 AND tenant_id=$2`,
     [input.documentId, input.tenantId],
   );
@@ -1343,8 +1399,16 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
     ciselnyRadId: row?.ciselny_rad_id ?? undefined,
     strediskoId: row?.stredisko_id ?? undefined,
   };
-  const schvalene = Object.fromEntries(POLIA_ZAUCTOVANIA.map((pole) => [pole, input.accounting[pole] ?? undefined]));
-  const zmenene = POLIA_ZAUCTOVANIA.filter((pole) => (navrhnute[pole] ?? null) !== (schvalene[pole] ?? null));
+  const schvalene: Record<string, unknown> = Object.fromEntries(POLIA_ZAUCTOVANIA.map((pole) => [pole, input.accounting[pole] ?? undefined]));
+  const zmenene: string[] = POLIA_ZAUCTOVANIA.filter((pole) => (navrhnute[pole] ?? null) !== (schvalene[pole] ?? null));
+  // Oprava len na položkách (iný účet riadku, rez, iné podiely) sa doteraz
+  // zapisovala ako súhlas: hlavička sedela, a nič iné sa neporovnávalo.
+  const riadky = riadkyOpravy(input.extracted, row?.riadky ?? [], input.accounting);
+  if (riadky) {
+    Object.assign(navrhnute, { riadky: riadky.navrhnute });
+    schvalene.riadky = riadky.schvalene;
+    if (riadky.zmenene) zmenene.push('riadky');
+  }
   const strana = protistranaDokladu(input.documentType, input.extracted);
   await tx.query(
     `INSERT INTO ucto_opravy

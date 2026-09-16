@@ -19,13 +19,13 @@ function sessionHeaders(response: { headers: Record<string, unknown>; json(): an
 async function pripravDoklad(
   database: Awaited<ReturnType<typeof createTestDatabase>>,
   seeded: { tenantId: string; organizationId: string },
+  // Ďalší doklad tej istej firmy použije jej číselníky — kód je v nej unikátny.
+  kody?: { navrhnuta: string; ina: string; clenenie: string; rad: string },
 ): Promise<{ documentId: string; navrhnuta: string; ina: string; clenenie: string; rad: string }> {
   const id = randomUUID();
-  const navrhnuta = randomUUID();
-  const ina = randomUUID();
-  const clenenie = randomUUID();
-  const rad = randomUUID();
-  for (const [cid, kind, code] of [
+  const { navrhnuta, ina, clenenie, rad } = kody
+    ?? { navrhnuta: randomUUID(), ina: randomUUID(), clenenie: randomUUID(), rad: randomUUID() };
+  for (const [cid, kind, code] of kody ? [] : [
     [navrhnuta, 'predkontacie', '518/321'], [ina, 'predkontacie', '501/321'],
     [clenenie, 'cleneniaDph', 'PD'], [rad, 'ciselneRady', '26FP'],
   ] as const) {
@@ -126,4 +126,57 @@ describe('záznam opráv účtovníka', () => {
 
     await app.close();
   }, 60_000);
+
+  // Hlavička sedí s návrhom, ale účtovník dal položke iný účet. Kým sa
+  // porovnávala len hlavička, zapísala sa taká oprava ako súhlas.
+  it('oprava len na položke sa zapíše ako zmena riadkov, rez podľa návrhu ako súhlas', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const headers = sessionHeaders(await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } }));
+    type Doklad = Awaited<ReturnType<typeof pripravDoklad>>;
+    const polozka = (id: string, zaklad: number, dph: number, predkontaciaId: string) => ({
+      id, popis: 'Oprava strechy', sadzbaDph: 23, mnozstvo: 1, jednotkovaCenaBezDph: zaklad,
+      sumaBezDph: zaklad, sumaDph: dph, sumaSpolu: Math.round((zaklad + dph) * 100) / 100, ucto: { predkontaciaId },
+    });
+    // Hlavička dokladu ostáva na navrhnutej predkontácii; mení sa len to, čo je na položkách.
+    let kody: Doklad | undefined;
+    const schval = async (polozky: (doklad: Doklad) => unknown[], riadky: (doklad: Doklad) => unknown[] | null) => {
+      const doklad = await pripravDoklad(database, seeded, kody);
+      kody ??= doklad;
+      await database.query(
+        `UPDATE documents SET accounting = accounting || jsonb_build_object('predkontaciaId',$2::text),
+                extracted = jsonb_set(extracted, '{polozky}', $3::jsonb) WHERE id=$1`,
+        [doklad.documentId, doklad.navrhnuta, JSON.stringify(polozky(doklad))],
+      );
+      const navrhRiadkov = riadky(doklad);
+      await database.query('UPDATE accounting_suggestions SET riadky=$2::jsonb WHERE document_id=$1',
+        [doklad.documentId, navrhRiadkov ? JSON.stringify(navrhRiadkov) : null]);
+      const approved = await app.inject({
+        method: 'POST', url: `/api/documents/${doklad.documentId}/approve`, headers, payload: { expectedVersion: 1 },
+      });
+      expect(approved.statusCode, approved.body).toBe(200);
+      return { doklad, oprava: (await database.query<Record<string, any>>(
+        'SELECT zmenene, schvalene FROM ucto_opravy WHERE document_id=$1', [doklad.documentId])).rows[0] };
+    };
+
+    const inyUcet = await schval((doklad) => [polozka('d1-li-0', 100, 23, doklad.ina)], () => null);
+    expect(inyUcet.oprava.zmenene).toEqual(['riadky']);
+    expect(inyUcet.oprava.schvalene.riadky).toEqual([
+      expect.objectContaining({ predkontaciaId: inyUcet.doklad.ina, podiel: 1 }),
+    ]);
+
+    // Rez 80/20 presne podľa návrhu: časti sa spoja na tlačenú položku a sedia.
+    const rez = await schval(
+      (doklad) => [polozka('d2-li-0-1', 80, 18.4, doklad.navrhnuta), polozka('d2-li-0-2', 20, 4.6, doklad.ina)],
+      (doklad) => [
+        { index: 0, popis: 'Oprava strechy', predkontaciaId: doklad.navrhnuta, podiel: 0.8 },
+        { index: 0, popis: 'Oprava strechy', predkontaciaId: doklad.ina, podiel: 0.2 },
+      ],
+    );
+    expect(rez.oprava.zmenene).toEqual([]);
+
+    await app.close();
+  }, 120_000);
 });
