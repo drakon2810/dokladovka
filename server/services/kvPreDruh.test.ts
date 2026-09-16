@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { kvPreDruh, platnyKvKod } from './accountingSuggestionService.js';
+import { kvNavrhuPreDruh, kvPreDruh, platnyKvKod } from './accountingSuggestionService.js';
 
 // Zámerne dve funkcie, nie jeden nepovinný parameter: druh dokladu potrebujú
 // štyri volania z trinástich a pri nepovinnom parametri by sa naň ticho
@@ -49,21 +49,40 @@ describe('kvPreDruh — sekcia pre TENTO doklad', () => {
     expect(kvPreDruh('B1', { typ: 'OZ', podtyp: 'dobropis' })).toBe('B1');
   });
 
-  // Bloček je zjednodušená faktúra (§74 ods. 3): s odpočtom B3, bez odpočtu KN.
-  // Sekciu nesie druh dokladu, nie účet — „501600 Auto" stojí v denníku klientov
-  // ako B2 na prijatej faktúre a ako B3 na tom istom nákupe z bločku. Zdroj
-  // návrhu prináša sekciu z faktúry, tak sa B1/B2 prepíše; odmietnuť ju by
-  // znamenalo prázdne pole a doklad, ktorý sa nedá schváliť.
-  it('pokladničný doklad berie B3, nie B2', () => {
-    expect(kvPreDruh('B2', { typ: 'PD', podtyp: 'bezna' })).toBe('B3');
+  // Pokladničný doklad je v POHODE AGENDA, nie druh faktúry. Bloček z e-kasy do
+  // 1 000 € je zjednodušená faktúra (§74 ods. 3) a patrí do B3; plná faktúra
+  // zaplatená v hotovosti však patrí do B2 — sekciu určuje druh faktúry, nie forma
+  // úhrady. Kontrola pri schválení preto B2 na pokladni pustí a nič neprepisuje.
+  it('pokladničný doklad pustí B2 aj B3, výstupné sekcie nie', () => {
+    expect(kvPreDruh('B2', { typ: 'PD', podtyp: 'bezna' })).toBe('B2');
     expect(kvPreDruh('B3', { typ: 'PD', podtyp: 'bezna' })).toBe('B3');
     expect(kvPreDruh('KN', { typ: 'PD', podtyp: 'bezna' })).toBe('KN');
-    // B1 (prenos daňovej povinnosti) nie je B2 v inej forme — nemlčky sa
-    // neprepisuje, pole ostane prázdne a sekciu určí účtovník.
+    // B1 (prenos daňovej povinnosti) na bločku nie je — pole ostane prázdne.
     expect(kvPreDruh('B1', { typ: 'PD', podtyp: 'bezna' })).toBeUndefined();
-    // Výstupné sekcie na bloček nepatria — ten je vždy na strane odberateľa.
     for (const kod of ['A1', 'A2', 'C1', 'C2', 'D1', 'D2']) {
       expect(kvPreDruh(kod, { typ: 'PD', podtyp: 'bezna' })).toBeUndefined();
     }
+  });
+});
+
+// Návrh je iná vec než kontrola: zdroj (pravidlo protistrany, denník, model)
+// si sekciu prináša z bežných faktúr, a v knihách klientov stojí pokladňa v B3
+// na 349 hlavičkách z 350. Do 1 000 € (a keď suma nie je známa) sa preto B2 na
+// pokladni navrhne ako B3; nad limitom zjednodušená faktúra byť nemôže, B2 ostáva.
+describe('kvNavrhuPreDruh — sekcia v návrhu', () => {
+  it('pokladňa do 1 000 € alebo bez sumy dostane B3', () => {
+    expect(kvNavrhuPreDruh('B2', { typ: 'PD', podtyp: 'bezna', sumaSpolu: 85.4 })).toBe('B3');
+    expect(kvNavrhuPreDruh('B2', { typ: 'PD', podtyp: 'bezna', sumaSpolu: 1000 })).toBe('B3');
+    expect(kvNavrhuPreDruh('B2', { typ: 'PD', podtyp: 'bezna' })).toBe('B3');
+  });
+
+  it('pokladňa nad 1 000 € si B2 ponechá', () => {
+    expect(kvNavrhuPreDruh('B2', { typ: 'PD', podtyp: 'bezna', sumaSpolu: 1480 })).toBe('B2');
+  });
+
+  it('ostatné správanie je zhodné s kontrolou', () => {
+    expect(kvNavrhuPreDruh('B1', { typ: 'PD', podtyp: 'bezna', sumaSpolu: 50 })).toBeUndefined();
+    expect(kvNavrhuPreDruh('B2', { typ: 'FP', podtyp: 'bezna', sumaSpolu: 50 })).toBe('B2');
+    expect(kvNavrhuPreDruh('A1', { typ: 'FP', podtyp: 'bezna' })).toBeUndefined();
   });
 });

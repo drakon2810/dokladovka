@@ -264,6 +264,16 @@ describe('zosuladSPraxou', () => {
     expect(zosuladSPraxou('PN', new Map([['PN', 75], ['PNnevymer', 3]]))).toBe('PN');
   });
 
+  // Rovnaké riadky priznania ešte neznamenajú rovnakú daň. PK kráti nárok
+  // koeficientom, PD nie; PDsluz je služba od zahraničného dodávateľa,
+  // PDnadEU nadobudnutie tovaru z EÚ. Zvyk firmy nesmie jedno ticho vymeniť
+  // za druhé — zámena ostáva len v rodine rovnakého kódu (PN ↔ PNnevymer).
+  it('rovnaké riadky priznania pri inej dani kód nevymenia', () => {
+    expect(zosuladSPraxou('PK', new Map([['PD', 500]]))).toBe('PK');
+    expect(zosuladSPraxou('PDsluz', new Map([['PDnadEU', 40]]))).toBe('PDsluz');
+    expect(zosuladSPraxou('PKnadEU', new Map([['PDnadEU', 40]]))).toBe('PKnadEU');
+  });
+
   it('bez zvyku a bez popisu sa nič nemení', () => {
     expect(zosuladSPraxou('PNnevymer', new Map())).toBe('PNnevymer');
     expect(zosuladSPraxou('VYMYSLENY', new Map([['PN', 10]]))).toBe('VYMYSLENY');

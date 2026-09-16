@@ -2239,6 +2239,43 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
     expect(navrh.clenenie_dph_id).toBe(dphPn);
     expect(navrh.clenenie_kv_kod).toBe('KN');
   }, 90_000);
+
+  // Dovoz tovaru: daň sa platí colnému úradu a odpočítava sa z colného
+  // rozhodnutia, ktoré do kontrolného výkazu nepatrí. PDtovar s KN je teda
+  // zákonná dvojica (v knihách klientov 9 hlavičiek OZ) — odpočet sa rušiť nesmie.
+  it('dovoz tovaru s KN si odpočet ponechá', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    const dphTovar = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'cleneniaDph','PDtovar','Dovoz tovaru','pohoda')`,
+      [dphTovar, ...kde],
+    );
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'OZ','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,170.65,'EUR')`,
+      [documentId, ...kde],
+    );
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphTovar, clenenieKvKod: 'KN',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Colné rozhodnutie', riadky: null,
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Colný úrad Bratislava' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input,
+      { ...kontext, documentType: 'OZ', supplierName: 'Colný úrad Bratislava' }, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.clenenie_dph_id).toBe(dphTovar);
+    expect(navrh.clenenie_kv_kod).toBe('KN');
+  }, 90_000);
 });
 
 // Položka, ktorú účtovník nechal tak, dedí v POHODE kódy hlavičky a import ich

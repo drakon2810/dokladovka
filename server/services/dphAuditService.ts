@@ -132,11 +132,17 @@ export function overeneFakty(vstup: DphAuditVstup): Record<string, unknown> {
  * Zámena sa smie stať LEN pri zhodnom správaní. Pri UDzahr a UN sa nikdy
  * nespustí — tie sa líšia riadkom 13 — takže zaužívaná chyba sa cez tento
  * krok späť nedostane.
+ *
+ * Zhodné riadky priznania ešte nie sú zhodná daň: PK a PD píšu do tých istých
+ * riadkov, ale PK kráti nárok koeficientom; PDsluz a PDnadEU tiež, hoci jedno
+ * je služba a druhé tovar z EÚ. Preto sa porovnáva aj referencia POHODY (P01,
+ * P02, …) — tú zdieľajú len kódy jednej rodiny, ako PN a PNnevymer.
  */
 export function zosuladSPraxou(kod: string | null, prax: ReadonlyMap<string, number>): string | null {
   const popis = popisKodu(kod);
   if (!kod || !popis || (prax.get(kod) ?? 0) > 0) return kod;
   const rovnake = POHODA_DPH_KODY.filter((iny) => iny.kod !== kod
+    && iny.ref === popis.ref
     && iny.strana === popis.strana
     && iny.sv === popis.sv
     && iny.riadky.length === popis.riadky.length

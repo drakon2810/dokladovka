@@ -127,6 +127,15 @@ export function popisKodu(kod: string | undefined | null): PohodaDphKod | undefi
 }
 
 /**
+ * Dovoz tovaru (PDtovar, PKtovar): daň z colného rozhodnutia sa odpočítava,
+ * ale do kontrolného výkazu nepatrí — KN pri ňom nie je rozpor s odpočtom.
+ * Pozná sa podľa riadku 22 priznania (dovoz), nie podľa názvu v číselníku.
+ */
+export function jeDovozTovaru(kod: string | undefined | null): boolean {
+  return popisKodu(kod)?.riadky.includes('22') ?? false;
+}
+
+/**
  * Kódy, ktoré smú stáť na doklade danej strany. Vydaná faktúra nesie U…,
  * prijatá P…; DD… je vymeranie dane na internom doklade a na faktúre nemá čo
  * robiť. Kód mimo referenčného zoznamu neprejde — nevieme, čo by spôsobil.

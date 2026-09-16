@@ -13,6 +13,7 @@ import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
 import { DOKLAD_KLUC_SQL, MIN_DOKLADOV, najdiPravidlo, variantyRozpisu } from './uctoPravidlaService.js';
+import { jeDovozTovaru } from './pohodaDphKody.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -264,11 +265,11 @@ const KV_KODY_PRE_TYP: Record<string, readonly string[]> = {
   FV: ['A1', 'A2', 'C1', 'D1', 'D2', 'KN'],
   FP: ['B1', 'B2', 'B3', 'C2', 'KN'],
   OZ: ['B1', 'B2', 'B3', 'C2', 'KN'],
-  // Pokladničný blok je zjednodušená faktúra (§74 ods. 3) — s odpočtom patrí do
-  // B3, bez odpočtu do KN. B2 je sekcia bežnej prijatej faktúry a na bločku
-  // nemá čo hľadať: v denníku klientov stojí PD spolu s B3 na 264 riadkoch
-  // z 266, kým na prijatých faktúrach PD spolu s B2 na 2328 z 2336.
-  PD: ['B3', 'KN'],
+  // Pokladničný doklad je agenda, nie druh faktúry. Bloček z e-kasy do 1 000 €
+  // je zjednodušená faktúra (§74 ods. 3) — s odpočtom B3, bez odpočtu KN. Plná
+  // faktúra zaplatená v hotovosti však patrí do B2: sekciu určuje druh faktúry,
+  // nie forma úhrady. Bez B2 v zozname ju účtovník nemohol ani schváliť.
+  PD: ['B2', 'B3', 'KN'],
 };
 
 /** Je to vôbec zákonná sekcia kontrolného výkazu? Bez ohľadu na doklad. */
@@ -302,20 +303,39 @@ export function kvPreDruh(
       return upper === oprava || upper === 'KN' ? upper : undefined;
     }
   }
-  // Sekciu určuje DRUH dokladu, nie účet: „501600 Auto" nesie v denníku B2 na
-  // prijatej faktúre a B3 na tom istom nákupe z bločku. Zdroj návrhu (pravidlo
-  // protistrany, riadok denníka, model) si sekciu prináša z faktúry, tak sa tu
-  // prepíše — samotné odmietnutie by nechalo pole prázdne a doklad by sa bez
-  // sekcie nedal schváliť, hoci odpočet je ten istý.
-  //
-  // Prepisuje sa LEN B2. B1 je prenos daňovej povinnosti na odberateľa, nie tá
-  // istá vec v inej forme — na bločku sa v denníku klientov nevyskytuje ani raz,
-  // takže je to skôr šum zdroja. Ten prepadne nižšie na undefined, pole ostane
-  // prázdne a rozhodne účtovník; tichá zámena za B3 by priznala odpočet, ktorý
-  // nikto nepotvrdil.
-  if (typ === 'PD' && upper === 'B2') return 'B3';
   const povolene = KV_KODY_PRE_TYP[typ];
   return !povolene || povolene.includes(upper) ? upper : undefined;
+}
+
+/** Nad touto sumou s DPH doklad nemôže byť zjednodušenou faktúrou (§74 ods. 3). */
+const LIMIT_ZJEDNODUSENEJ_FAKTURY = 1000;
+
+/**
+ * Sekcia KV pre NÁVRH. Kontrola (kvPreDruh) iba povie, čo je prípustné — návrh
+ * navyše opraví sekciu, ktorú si zdroj priniesol z iného druhu dokladu.
+ *
+ * Sekciu určuje DRUH dokladu, nie účet: „501600 Auto" nesie v denníku B2 na
+ * prijatej faktúre a B3 na tom istom nákupe z bločku. Zdroj návrhu (pravidlo
+ * protistrany, riadok denníka, model) si sekciu prináša z faktúry, a v knihách
+ * klientov je pokladňa v B3 na 349 hlavičkách z 350. B2 na pokladni sa preto
+ * navrhne ako B3 — ale len do limitu zjednodušenej faktúry alebo keď sumu
+ * nepoznáme. Nad limitom ide o plnú faktúru a B2 ostáva.
+ *
+ * Prepisuje sa LEN B2. B1 je prenos daňovej povinnosti na odberateľa, nie tá
+ * istá vec v inej forme; ten prepadne v kvPreDruh na undefined a rozhodne
+ * účtovník — tichá zámena za B3 by priznala odpočet, ktorý nikto nepotvrdil.
+ * ponytail: plná faktúra do 1 000 € zaplatená v hotovosti dostane návrh B3;
+ * rozlíšiť ju spoľahlivo vie až extrakcia druhu dokladu (bloček e-kasy vs. faktúra).
+ */
+export function kvNavrhuPreDruh(
+  kod: string | undefined,
+  druh: { typ: string; podtyp?: string; sumaSpolu?: number },
+): string | undefined {
+  const upper = platnyKvKod(kod);
+  const suma = druh.sumaSpolu;
+  const zjednodusena = typeof suma !== 'number' || !Number.isFinite(suma) || Math.abs(suma) <= LIMIT_ZJEDNODUSENEJ_FAKTURY;
+  if (druh.typ === 'PD' && upper === 'B2' && zjednodusena) return 'B3';
+  return kvPreDruh(upper, druh);
 }
 
 /**
@@ -1108,11 +1128,14 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
   // Sekcia sa preveruje aj proti agende dokladu: zdedená z pamäte či z pravidla
   // môže patriť opačnej strane (A1 na prijatej faktúre). Neplatná vypadne ešte
   // pred kvPreClenenie, aby sa stihol použiť kv_section zvoleného členenia.
-  const druhDokladu = { typ: documentType ?? '', podtyp: current.rows[0]?.podtyp };
-  kvKod = kvPreDruh(
+  const druhDokladu = {
+    typ: documentType ?? '', podtyp: current.rows[0]?.podtyp,
+    sumaSpolu: Number((current.rows[0]?.extracted as { sumaSpolu?: unknown } | undefined)?.sumaSpolu),
+  };
+  kvKod = kvNavrhuPreDruh(
     await kvPreClenenie(tx, input, candidate.clenenie_dph_id,
       (await agendyKorpusu(tx, input, documentType ?? '', podtyp, current.rows[0]?.pokladna_typ)).agendy,
-      kvPreDruh(kvKod, druhDokladu)),
+      kvNavrhuPreDruh(kvKod, druhDokladu)),
     druhDokladu,
   );
 
@@ -1521,7 +1544,7 @@ A1 — issued invoices where the payer is the person liable for Slovak tax, not 
 A2 — issued invoices with the domestic transfer of liability under §69 ods. 12 písm. f) to j).
 B1 — received invoices or another document where the RECIPIENT owes the tax under §69 ods. 2, 3, 6, 7 and 9 to 12.
 B2 — received invoices from another Slovak payer under §69 ods. 1, with deduction.
-B3 — simplified invoices under §74 ods. 3. A cash register receipt (documentType PD — bloček, účtenka, till slip) IS such a simplified invoice: whenever the firm deducts the tax on it the section is B3, never B2. The section follows the KIND of document, not the account — the very same predkontácia sits in B2 on a received invoice and in B3 on the same purchase made over the counter. Deducting or not is the firm's own practice for that kind of purchase, read from its history; when it does not deduct, the section is KN.
+B3 — simplified invoices under §74 ods. 3. A cash register receipt up to 1 000 EUR (documentType PD — bloček, účtenka, till slip) IS such a simplified invoice: whenever the firm deducts the tax on it the section is B3, not B2. Above 1 000 EUR a document cannot be a simplified invoice: a full invoice that was merely paid in cash stays B2 — the section follows the kind of invoice, not the form of payment. The section follows the KIND of document, not the account — the very same predkontácia sits in B2 on a received invoice and in B3 on the same purchase made over the counter. Deducting or not is the firm's own practice for that kind of purchase, read from its history; when it does not deduct, the section is KN.
 C1 / C2 — issued / received corrective invoices (§71 ods. 2, §25a).
 D1 — turnover recorded by an e-kasa cash register.
 D2 — supplies OTHER than those in A1 on which the payer owes tax IN SLOVAKIA, outside e-kasa.
@@ -3158,7 +3181,7 @@ export async function navrhniZauctovanie(
   // („Dodanie tovaru a služby" na prijatej faktúre) a denník firmy môže niesť
   // sekciu opačnej strany. Neplatná vypadne a rozhodne ďalší zdroj v poradí.
   const typ = documentContext.documentType;
-  const druhDokladu = { typ, podtyp: documentContext.podtyp };
+  const druhDokladu = { typ, podtyp: documentContext.podtyp, sumaSpolu: documentContext.totalAmount };
 
   // O odpočte rozhoduje ÚČET, a doteraz to nekontroloval nikto. Model si vie
   // vybrať účet reprezentácie a nechať pri ňom odpočtové členenie — na faktúre
@@ -3199,15 +3222,15 @@ export async function navrhniZauctovanie(
   }
 
   let kvKod = validated.clenenie_dph_id
-    ? kvPreDruh(await kvPreClenenie(
+    ? kvNavrhuPreDruh(await kvPreClenenie(
         database, input, validated.clenenie_dph_id, korpus.agendy,
-        kvPreDruh(pravidlo.kvKod, druhDokladu) ?? kvPreDruh(naDoklade.clenenieKvKod, druhDokladu)
-          ?? kvPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu)
+        kvNavrhuPreDruh(pravidlo.kvKod, druhDokladu) ?? kvNavrhuPreDruh(naDoklade.clenenieKvKod, druhDokladu)
+          ?? kvNavrhuPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu)
           // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do
           // kontrolného výkazu, a sémantického kandidáta viaže na doklad len
           // rovnosť predkontácie — tú istú nesie viac kategórií, takže by sem
           // sekciu doniesla kategória, ktorá s dokladom nemá spoločné slovo.
-          ?? kvPreDruh(
+          ?? kvNavrhuPreDruh(
             kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu),
         asOf,
       ), druhDokladu)
@@ -3230,7 +3253,7 @@ export async function navrhniZauctovanie(
   // v kvPreClenenie, 90 % a tri riadky). Kľúčom je členenie, nie agenda sama:
   // PN na prijatej faktúre firma legitímne dáva do KN, a to ostane.
   if (kvKod === 'KN' && validated.clenenie_dph_id && !pravidlo.kvKod && !naDoklade.clenenieKvKod) {
-    const prax = kvPreDruh(await kvPreClenenie(
+    const prax = kvNavrhuPreDruh(await kvPreClenenie(
       database, input, validated.clenenie_dph_id, korpus.agendy, undefined, asOf,
     ), druhDokladu);
     if (prax && prax !== 'KN') {
@@ -3256,10 +3279,14 @@ export async function navrhniZauctovanie(
   // označí za odpočtové. Pravidlo potom vydanú faktúru „opravilo" na členenie
   // bez nároku: ROFA mala na vydaných faktúrach DPH 0 zo 4, v logu doslova
   // „členenie UD uplatňuje odpočet, ale sekcia KV je KN — prepisujem".
+  //
+  // Dovoz tovaru nie je rozpor: daň sa odpočítava z colného rozhodnutia, ktoré
+  // do kontrolného výkazu nepatrí. KN pri PDtovar je zákonná dvojica.
   const zvoleneClenenie = validated.clenenie_dph_id
     ? vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)
     : undefined;
   if (typ !== 'FV' && kvKod === 'KN' && zvoleneClenenie && clenenieVyzeraNaOdpocet(zvoleneClenenie)
+    && !jeDovozTovaru(zvoleneClenenie.kod)
     && !pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
     // Členenie z profilu klienta, inak to, ktorým firma na tejto agende
     // neodpočítava najčastejšie. Keď nemá ani jedno, nemáme čím nahradiť
@@ -3496,7 +3523,7 @@ export async function navrhniZauctovanie(
     const clenenieKvKod = bezOdpoctu
       // Plnenie bez odpočtu do kontrolného výkazu nepatrí, nech model napísal čokoľvek.
       ? kvPreDruh('KN', druhDokladu)
-      : kvPreDruh(riadok.clenenieKvKod ?? undefined, druhDokladu);
+      : kvNavrhuPreDruh(riadok.clenenieKvKod ?? undefined, druhDokladu);
     // Zahodí sa len riadok, ktorý sa od hlavičky nelíši NIČÍM. Samotná zhodná
     // predkontácia nestačí: faktúra Print-Office má hlavičku „repre / PD / B2"
     // a položku reprezentácie s TOU ISTOU predkontáciou, ale s členením PN

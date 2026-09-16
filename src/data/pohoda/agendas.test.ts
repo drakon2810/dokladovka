@@ -98,4 +98,13 @@ describe('kvKodyPreTyp', () => {
     expect(kvKodyPreTyp(CLENENIE_KV_KODY, { typ: 'FP', podtyp: 'zalohova' })).toEqual(['KN']);
     expect(kvKodyPreTyp(CLENENIE_KV_KODY, { typ: 'FV', podtyp: 'zalohova' })).toEqual(['KN']);
   });
+
+  // Plná faktúra zaplatená v hotovosti patrí do B2 — účtovník ju musí vedieť
+  // vybrať aj na pokladničnom doklade. Výstupné sekcie tam nepatria.
+  it('pokladničný doklad ponúka B2 aj B3', () => {
+    const kody = kvKodyPreTyp(CLENENIE_KV_KODY, bezny('PD'));
+    expect(kody).toContain('B2');
+    expect(kody).toContain('B3');
+    expect(kody).not.toContain('A1');
+  });
 });
