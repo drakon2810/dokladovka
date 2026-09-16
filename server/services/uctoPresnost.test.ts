@@ -218,6 +218,35 @@ describe('meranie presnosti zaúčtovania', () => {
     expect(vysledok.vysledokNovaProtistrana.FP).toMatchObject({ dokladov: 1, zdrzanie: 1 });
   }, 60_000);
 
+  // Rovnaké meno s iným IČO je iná firma — spoločné meno ju nesmie zaradiť medzi
+  // známe. Riadok histórie bez IČO sa však ešte smie spárovať menom (staré
+  // importy IČO nemali). Doklad bez IČO aj mena nie je „známy", ale neznámy.
+  it('nová protistrana sa pozná podľa IČO a doklad bez identity je neznámy', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const predkontacia = await kod('predkontacie', '518/321');
+    await riadok({
+      doklad_cislo: '26FP001', datum: '2026-02-15', predkontacia_id: predkontacia, predkontacia_kod: '518/321',
+      supplier_ico: '11111111', supplier_name_normalized: 'preprava s.r.o.',
+    });
+    await riadok({
+      doklad_cislo: '26FP002', datum: '2026-02-16', predkontacia_id: predkontacia, predkontacia_kod: '518/321',
+      supplier_name_normalized: 'stary import s.r.o.',
+    });
+    const meranie = { predkontacia_id: predkontacia, predkontacia_kod: '518/321' };
+    await riadok({ ...meranie, doklad_cislo: '26FP090', datum: '2026-08-20', supplier_ico: '22222222', supplier_name_normalized: 'preprava s.r.o.' });
+    await riadok({ ...meranie, doklad_cislo: '26FP091', datum: '2026-08-21', supplier_ico: '33333333', supplier_name_normalized: 'stary import s.r.o.' });
+    await riadok({ ...meranie, doklad_cislo: '26FP092', datum: '2026-08-22', supplier_name_normalized: null });
+
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
+    const podlaCisla = Object.fromEntries(vysledok.doklady.map((doklad) =>
+      [doklad.doklad, [doklad.novaProtistrana ?? false, doklad.neznamaProtistrana ?? false]]));
+    expect(podlaCisla).toEqual({
+      '26FP090': [true, false],
+      '26FP091': [false, false],
+      '26FP092': [false, true],
+    });
+  }, 60_000);
+
   // Spor praxí: protistrana má dve ustálené zaúčtovania a ani jedno neprevažuje,
   // takže pravidlo príde bez účtu. Základná čiara to nesmie brať ako odpoveď —
   // inak by spor vyzeral ako zdržanie, hoci denník tej istej protistrany odpoveď má.
@@ -543,6 +572,18 @@ describe('vzorka a interval', () => {
     // Viac agend než miest: rozpočet vyhrá a vypadnú najmenšie.
     expect(new Set(vyberVzorku(agendy({ FP: 10, FV: 5, OZ: 3 }), 2).map((doklad) => doklad.agenda)))
       .toEqual(new Set(['FP', 'FV']));
+  });
+
+  // Bootstrap na samých správnych dokladoch vracal [1, 1] — sľuboval istotu,
+  // ktorú 20 dokladov nedá. Wilsonov interval pri 20 z 20 začína okolo 84 %.
+  it('20 z 20 správnych nedá interval sto percent', () => {
+    const doklady = Array.from({ length: 20 }, () => ({
+      hodnotenie: { predkontacia: { navrhnute: true, spravne: true }, clenenieDph: null, kv: null, rad: null, tvar: null },
+    }));
+    const [dolna, horna] = intervalSpolahlivosti(doklady, 'predkontacia')!;
+    expect(dolna).toBeGreaterThan(0.83);
+    expect(dolna).toBeLessThan(0.85);
+    expect(horna).toBe(1);
   });
 
   it('interval spoľahlivosti obopína podiel a je opakovateľný', () => {

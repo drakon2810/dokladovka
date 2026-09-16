@@ -177,6 +177,40 @@ describe('záznam opráv účtovníka', () => {
     );
     expect(rez.oprava.zmenene).toEqual([]);
 
+    // Dve samostatné položky s rovnakým textom a ich návrhy bez zmeny: každá
+    // skupina si dovtedy zobrala OBA návrhy a súhlas vyzeral ako oprava.
+    const dvojica = await schval(
+      (doklad) => [polozka('d3-li-0', 50, 11.5, doklad.navrhnuta), polozka('d3-li-1', 50, 11.5, doklad.navrhnuta)],
+      (doklad) => [
+        { index: 0, popis: 'Oprava strechy', predkontaciaId: doklad.navrhnuta },
+        { index: 1, popis: 'Oprava strechy', predkontaciaId: doklad.navrhnuta },
+      ],
+    );
+    expect(dvojica.oprava.zmenene).toEqual([]);
+    expect(dvojica.oprava.schvalene.riadky).toHaveLength(2);
+
+    // Zmena len podielu dane: návrh 80/20 so základom a DPH 50/50, schválené
+    // DPH 80/20. Tie isté kódy aj podiely základu — doteraz to vyšlo ako súhlas.
+    const dan = await schval(
+      (doklad) => [polozka('d4-li-0-1', 80, 18.4, doklad.navrhnuta), polozka('d4-li-0-2', 20, 4.6, doklad.ina)],
+      (doklad) => [
+        { index: 0, popis: 'Oprava strechy', predkontaciaId: doklad.navrhnuta, podiel: 0.8, podielDph: 0.5 },
+        { index: 0, popis: 'Oprava strechy', predkontaciaId: doklad.ina, podiel: 0.2, podielDph: 0.5 },
+      ],
+    );
+    expect(dan.oprava.zmenene).toEqual(['riadky']);
+
+    // Opakovaný rez časti („-li-0-1-2") patrí stále k tlačenej položke 0.
+    const vnoreny = await schval(
+      (doklad) => [
+        polozka('d5-li-0-1-1', 40, 9.2, doklad.navrhnuta), polozka('d5-li-0-1-2', 40, 9.2, doklad.navrhnuta),
+        polozka('d5-li-0-2', 20, 4.6, doklad.navrhnuta),
+      ],
+      () => null,
+    );
+    expect(vnoreny.oprava.schvalene.riadky.map((riadok: { podiel: number }) => riadok.podiel).sort())
+      .toEqual([0.2, 0.4, 0.4]);
+
     await app.close();
-  }, 120_000);
+  }, 180_000);
 });

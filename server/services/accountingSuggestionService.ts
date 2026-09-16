@@ -1340,18 +1340,23 @@ function polozkyUctoJson(extracted: unknown, hlavicka: Record<string, string | u
  * medzi sebou. Položka bez vlastného kódu dedí hlavičku — na OBOCH stranách
  * schválenú, aby zmena samotnej hlavičky nevyzerala aj ako zmena riadkov.
  * Časti rezu sa spoja späť na tlačenú položku (rozrezPolozku im dáva id
- * „<id položky>-1", „-2") a nesú podiel na nej; celá položka má podiel 1.
- * Návrh riadky adresuje popisom, lebo položky sa od návrhu mohli pohnúť.
+ * „<id položky>-1", „-2", pri opakovanom reze „-1-2") a nesú podiel na nej
+ * zvlášť za základ a za DPH; celá položka má oba podiely 1. Zmena len podielu
+ * dane (50/50 namiesto 80/20) je oprava — odpočet sa krátil inak.
+ * Návrh riadky adresuje popisom, lebo položky sa od návrhu mohli pohnúť. Keď
+ * rovnaký text nesie viac položiek, rozhodne poradie — inak by si každá
+ * zobrala návrhy všetkých a súhlas by vyzeral ako oprava.
  */
 function riadkyOpravy(
   extracted: unknown,
-  navrhnuteRiadky: ReadonlyArray<{ popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number }>,
+  navrhnuteRiadky: ReadonlyArray<{ index?: number; popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number; podielDph?: number }>,
   hlavicka: Record<string, string | undefined>,
 ): { navrhnute: RiadokOpravy[]; schvalene: RiadokOpravy[]; zmenene: boolean } | undefined {
   const polozky: Array<Record<string, any>> = Array.isArray((extracted as any)?.polozky) ? (extracted as any).polozky : [];
   if (polozky.length === 0) return undefined;
-  // Tlačená položka má id „<doklad>-li-<n>" alebo UUID (pridaná ručne); časť rezu o segment „-<n>" viac.
-  const castRezu = /^(.+-li-\d+|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})-\d+$/i;
+  // Tlačená položka má id „<doklad>-li-<n>" alebo UUID (pridaná ručne); časť rezu
+  // o jeden či viac segmentov „-<n>" viac (rez časti je opäť časť tej istej položky).
+  const castRezu = /^(.+?-li-\d+|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:-\d+)+$/i;
   const skupiny = new Map<string, Array<Record<string, any>>>();
   polozky.forEach((polozka, index) => {
     const id = typeof polozka?.id === 'string' ? polozka.id : `#${index}`;
@@ -1359,24 +1364,39 @@ function riadkyOpravy(
     skupiny.set(kluc, [...(skupiny.get(kluc) ?? []), polozka]);
   });
   const podiel = (hodnota: number) => Math.round(hodnota * 100) / 100;
-  const riadok = (popis: string, kody: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string }, cast: number): RiadokOpravy => ({
+  const riadok = (
+    popis: string,
+    kody: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string },
+    cast: number,
+    castDph: number,
+  ): RiadokOpravy => ({
     popis,
     predkontaciaId: kody.predkontaciaId ?? hlavicka.predkontaciaId ?? null,
     clenenieDphId: kody.clenenieDphId ?? hlavicka.clenenieDphId ?? null,
     clenenieKvKod: kody.clenenieKvKod ?? hlavicka.clenenieKvKod ?? null,
     podiel: podiel(cast),
+    podielDph: podiel(castDph),
   });
-  const schvalene = [...skupiny.values()].flatMap((casti) => {
+  const zoznamSkupin = [...skupiny.values()];
+  const schvalene = zoznamSkupin.flatMap((casti) => {
     const spolu = casti.reduce((sucet, cast) => sucet + Math.abs(Number(cast?.sumaBezDph) || 0), 0);
-    return casti.map((cast) => riadok(normalizeName(cast?.popis).slice(0, 120), cast?.ucto ?? {},
-      casti.length > 1 && spolu > 0 ? Math.abs(Number(cast?.sumaBezDph) || 0) / spolu : 1));
+    const spoluDph = casti.reduce((sucet, cast) => sucet + Math.abs(Number(cast?.sumaDph) || 0), 0);
+    return casti.map((cast) => {
+      const zaklad = casti.length > 1 && spolu > 0 ? Math.abs(Number(cast?.sumaBezDph) || 0) / spolu : 1;
+      // Časti bez dane (nulová DPH) delia daň rovnako ako základ.
+      const dan = casti.length > 1 && spoluDph > 0 ? Math.abs(Number(cast?.sumaDph) || 0) / spoluDph : zaklad;
+      return riadok(normalizeName(cast?.popis).slice(0, 120), cast?.ucto ?? {}, zaklad, dan);
+    });
   });
-  const navrhnute = [...skupiny.values()].flatMap((casti) => {
-    const popis = normalizeName(casti[0]?.popis).slice(0, 120);
-    const preTuto = navrhnuteRiadky.filter((navrh) => normalizeName(navrh.popis).slice(0, 120) === popis);
+  const popisy = zoznamSkupin.map((casti) => normalizeName(casti[0]?.popis).slice(0, 120));
+  const navrhnute = zoznamSkupin.flatMap((_, poradie) => {
+    const popis = popisy[poradie];
+    const rovnakyText = popisy.filter((iny) => iny === popis).length > 1;
+    const preTuto = navrhnuteRiadky.filter((navrh) => normalizeName(navrh.popis).slice(0, 120) === popis
+      && (!rovnakyText || navrh.index === undefined || navrh.index === poradie));
     return preTuto.length === 0
-      ? [riadok(popis, {}, 1)]
-      : preTuto.map((navrh) => riadok(popis, navrh, navrh.podiel ?? 1));
+      ? [riadok(popis, {}, 1, 1)]
+      : preTuto.map((navrh) => riadok(popis, navrh, navrh.podiel ?? 1, navrh.podielDph ?? navrh.podiel ?? 1));
   });
   const kluc = (zoznam: RiadokOpravy[]) => zoznam.map((item) => JSON.stringify(item)).sort().join('\n');
   return { navrhnute, schvalene, zmenene: kluc(navrhnute) !== kluc(schvalene) };
@@ -1388,6 +1408,7 @@ interface RiadokOpravy {
   clenenieDphId: string | null;
   clenenieKvKod: string | null;
   podiel: number;
+  podielDph: number;
 }
 
 /** Zápis do pamäte rozhodnutí pri schválení dokladu (spätná väzba = učenie).
@@ -1415,7 +1436,7 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
   const navrh = await tx.query<{
     predkontacia_id?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
     ciselny_rad_id?: string; stredisko_id?: string; source: string; confidence: string;
-    riadky?: Array<{ popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number }> | null;
+    riadky?: Array<{ index?: number; popis?: string; predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string; podiel?: number; podielDph?: number }> | null;
   } & Record<string, unknown>>(
     `SELECT predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id, stredisko_id, source, confidence, riadky
        FROM accounting_suggestions WHERE document_id=$1 AND tenant_id=$2`,

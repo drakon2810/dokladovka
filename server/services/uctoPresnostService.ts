@@ -113,6 +113,8 @@ export interface VysledokDokladu {
   istota?: number;
   /** Protistrana, ktorú firma pred dátumom dokladu nemala v žiadnej agende. */
   novaProtistrana?: boolean;
+  /** Doklad bez IČO aj mena — nevie sa, či je protistrana nová. */
+  neznamaProtistrana?: boolean;
 }
 
 export interface PresnostVysledok {
@@ -253,35 +255,29 @@ export function presnostNadPrahom(
 }
 
 /**
- * 95 % interval presnosti poľa bootstrapom po dokladoch. Pri desiatkach
- * dokladov je rozdiel dvoch behov často menší než šírka intervalu — bez neho
- * by sa „zlepšenie" z 81 na 84 % čítalo ako fakt.
- * Generátor je pevne nasadený, aby ten istý beh dal ten istý interval.
+ * 95 % interval presnosti poľa (Wilsonov). Pri desiatkach dokladov je rozdiel
+ * dvoch behov často menší než šírka intervalu — bez neho by sa „zlepšenie"
+ * z 81 na 84 % čítalo ako fakt.
+ *
+ * Bootstrap, ktorý tu bol predtým, na samých správnych dokladoch vracal [1, 1]:
+ * prevzorkovanie jednotiek dá zase jednotky a nevidí chybu, ktorá v malej vzorke
+ * len nenastala. Wilson pri 20 z 20 začína okolo 84 %.
+ * ponytail: predpokladá nezávislé doklady — opakované faktúry jednej
+ * protistrany robia interval optimistickejším; presnejšie by bolo prevzorkovať
+ * po protistranách.
  */
 export function intervalSpolahlivosti(
   doklady: Array<Pick<VysledokDokladu, 'hodnotenie'>>,
   pole: Pole,
-  opakovani = 1000,
 ): [number, number] | null {
-  const hodnoty = doklady.map((doklad) => doklad.hodnotenie[pole]).filter((hodnota) => hodnota !== null)
-    .map((hodnota) => hodnota!.spravne);
-  if (hodnoty.length === 0) return null;
-  let stav = 1;
-  // mulberry32
-  const nahodne = () => {
-    stav = (stav + 0x6D2B79F5) | 0;
-    let t = Math.imul(stav ^ (stav >>> 15), 1 | stav);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const podiely = Array.from({ length: opakovani }, () => {
-    let spravne = 0;
-    for (let index = 0; index < hodnoty.length; index += 1) {
-      if (hodnoty[Math.floor(nahodne() * hodnoty.length)]) spravne += 1;
-    }
-    return spravne / hodnoty.length;
-  }).sort((a, b) => a - b);
-  return [podiely[Math.floor(0.025 * opakovani)], podiely[Math.ceil(0.975 * opakovani) - 1]];
+  const hodnoty = doklady.map((doklad) => doklad.hodnotenie[pole]).filter((hodnota) => hodnota !== null);
+  const n = hodnoty.length;
+  if (n === 0) return null;
+  const p = hodnoty.filter((hodnota) => hodnota!.spravne).length / n;
+  const z = 1.959964;
+  const stred = (p + (z * z) / (2 * n)) / (1 + (z * z) / n);
+  const polovica = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / (1 + (z * z) / n);
+  return [Math.max(0, stred - polovica), Math.min(1, stred + polovica)];
 }
 
 /**
@@ -589,10 +585,17 @@ export async function zmerajPresnost(
     let odpovedModelu: unknown;
     const kontext = kontextZKorpusu(doklad);
     // Len z histórie pred dátumom dokladu, ako všetko ostatné v meraní.
-    const novaProtistrana = Boolean(doklad.supplierIco || doklad.supplierName) && (await database.query(
+    // S IČO sa porovnáva IČO: rovnaké meno s iným IČO je iná firma. Menom sa
+    // smie spárovať len riadok histórie bez IČO (staré importy ho nemali).
+    // Doklad bez IČO aj mena nie je „známy" — je neznámy a počíta sa zvlášť.
+    const maIdentitu = Boolean(doklad.supplierIco || doklad.supplierName);
+    const novaProtistrana = maIdentitu && (await database.query(
       `SELECT 1 FROM ucto_historia
         WHERE tenant_id=$1 AND organization_id=$2 AND datum < $3::date
-          AND (supplier_ico=$4 OR supplier_name_normalized=$5) LIMIT 1`,
+          AND CASE WHEN $4::text IS NOT NULL
+                   THEN supplier_ico = $4 OR (supplier_ico IS NULL AND supplier_name_normalized = $5)
+                   ELSE supplier_name_normalized = $5 END
+        LIMIT 1`,
       [input.tenantId, input.organizationId, doklad.datum, doklad.supplierIco ?? null, doklad.supplierName ?? null],
     )).rows.length === 0;
     try {
@@ -655,6 +658,7 @@ export async function zmerajPresnost(
       ...(odpovedModelu !== undefined ? { odpovedModelu } : {}),
       ...(navrh ? { istota: navrh.confidence } : {}),
       ...(novaProtistrana ? { novaProtistrana } : {}),
+      ...(maIdentitu ? {} : { neznamaProtistrana: true }),
     });
   }
 

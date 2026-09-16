@@ -132,3 +132,8 @@ for (const { firma, vysledok } of behy) {
   });
   console.log(`${firma.slice(0, 24).padEnd(24)} dokl. ${dokladov}, zdržal sa ${zdrzanie} | ${polia.join(' | ')}`);
 }
+// Doklady bez IČO aj mena: nevie sa, či je protistrana nová, tak sa aspoň počítajú.
+for (const { firma, vysledok } of behy) {
+  const neznamych = vysledok.doklady.filter((doklad) => doklad.neznamaProtistrana).length;
+  if (neznamych > 0) console.log(`${firma.slice(0, 24).padEnd(24)} neznáma protistrana: ${neznamych} dokl.`);
+}
