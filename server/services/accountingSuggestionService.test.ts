@@ -1990,7 +1990,9 @@ describe('návrh rozpisu po riadkoch', () => {
       'SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0];
     expect(suggestion.riadky).toEqual([
-      { index: 1, popis: 'Káva pre klientov', predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu, clenenieKvKod: 'KN' },
+      // Káva nesie DPH a na doklade sa odpočítava: faktúra ide do B2 celá, aj
+      // s položkou bez nároku. Sekciu dedí z hlavičky, KN od modelu neplatí.
+      { index: 1, popis: 'Káva pre klientov', predkontaciaId: predk.get('513/321'), clenenieDphId: dphBezOdpoctu },
       // Podiel 1 aj 0 prejdú ako celá položka, nie ako neúplný rez.
       { index: 2, popis: 'Poštovné', predkontaciaId: predk.get('548/321') },
       { index: 3, popis: 'Voda pre vodičov', predkontaciaId: predk.get('513/321') },
@@ -2290,7 +2292,7 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
     expect(navrh.clenenie_dph_id).toBe(dphPd);
     expect(navrh.riadky).toEqual([{
       index: 1, popis: 'Káva NESCAFÉ GOLD instantná 200 g',
-      predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN',
+      predkontaciaId: repre, clenenieDphId: dphPn,
     }]);
     // Stopa nesie aj zmeny na riadku — s indexom položky, aby ich „Prečo"
     // nepriradilo hlavičke.
@@ -2299,8 +2301,74 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
       [documentId],
     )).rows[0].zmeny;
     expect(zmeny).toContainEqual({ pole: 'clenenieDphId', index: 1, z: dphPd, na: dphPn, dovod: 'ucet_bez_odpoctu' });
-    expect(zmeny).toContainEqual({ pole: 'clenenieKvKod', index: 1, z: 'B2', na: 'KN', dovod: 'ucet_bez_odpoctu' });
+    // Sekcia riadku sa nemení: dedí B2 hlavičky, ako mala od modelu.
+    expect(zmeny.some((zmena: { pole: string; index?: number }) => zmena.pole === 'clenenieKvKod' && zmena.index === 1)).toBe(false);
     expect(zmeny.filter((zmena: { index?: number }) => zmena.index === undefined)).toEqual([]);
+  }, 90_000);
+
+  // Hlavička PD, no každá položka prešla na účet bez odpočtu: na doklade sa
+  // neodpočítava nič a do B2 nepatrí — POHODA by ho vykázala celý bez odpočtu.
+  it('doklad, na ktorom po riadkoch neostal odpočet, ide do KN celý', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Pohostenie',
+        riadky: [
+          { index: 0, predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2' },
+          { index: 1, predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2' },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.clenenie_kv_kod).toBe('KN');
+    expect((navrh.riadky as Array<Record<string, unknown>>).map((riadok) => [riadok.clenenieDphId, riadok.clenenieKvKod]))
+      .toEqual([[dphPn, undefined], [dphPn, undefined]]);
+  }, 90_000);
+
+  // Sekcia KV patrí dokladu, nie riadku. Faktúra, z ktorej sa aspoň časť
+  // odpočítava, ide do B2 celá — aj so základom a daňou položky bez nároku.
+  // Do KN patrí len položka bez dane. Tak účtujú všetky firmy v histórii
+  // (riadky PN s DPH pod hlavičkou PD/B2 majú B2, riadky bez DPH KN).
+  it('riadok bez nároku s DPH dedí sekciu dokladu, riadok bez dane ide do KN', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Kancelárske potreby s pohostením',
+        riadky: [
+          { index: 1, predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2' },
+          { index: 2, predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2' },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, {
+      ...kontext,
+      lineDescriptions: [...kontext.lineDescriptions, 'vratný obal'],
+      polozky: [...kontext.polozky, { popis: 'Vratný obal', sadzbaDph: 0, suma: 0.5 }],
+    }, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.riadky).toEqual([
+      { index: 1, popis: 'Káva NESCAFÉ GOLD instantná 200 g', predkontaciaId: repre, clenenieDphId: dphPn },
+      { index: 2, popis: 'Vratný obal', predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN' },
+    ]);
   }, 90_000);
 
   // Stopa pribúdala riadkom za každé volanie modelu a nikto ju nemazal. Staré
@@ -2713,8 +2781,10 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
       [1, phm, 0.8, 0.5],
       [1, nadspotreba, 0.2, 0.5],
     ]);
-    // Nedaňová časť má vlastné členenie a do kontrolného výkazu nepatrí.
-    expect(riadky[1]).toMatchObject({ clenenieDphId: dphPn, clenenieKvKod: 'KN' });
+    // Nedaňová časť má vlastné členenie, no nesie polovicu dane — faktúra ide do
+    // B2 celá, sekciu dedí z hlavičky (ALPINA DF260181: 13,17 základu, 7,57 dane).
+    expect(riadky[1]).toMatchObject({ clenenieDphId: dphPn });
+    expect(riadky[1].clenenieKvKod).toBeUndefined();
   }, 90_000);
 
   // Daň 50/50 pri osobnom aute zaviedol od 1. 1. 2026 § 85n. Pravidlo s dátumom
@@ -2864,6 +2934,63 @@ describe('návrh rozrezania položky', () => {
     // na 70 % sumy alebo so zápornou daňou.
     const rezy = (riadky ?? []).filter((riadok) => riadok.podiel != null);
     expect(rezy).toEqual([]);
+  }, 90_000);
+});
+
+// Sekcia KV riadku bez nároku ide s faktúrou do B2 len vtedy, keď nesie
+// SLOVENSKÚ daň. Časť rezu bez podielu dane a položka s cudzou sadzbou (rakúskych
+// 20 % v roku 2026) do kontrolného výkazu nepatria — ostávajú v KN.
+describe('sekcia KV časti bez dane a cudzej sadzby', () => {
+  it('časť rezu bez podielu dane aj položka s cudzou sadzbou ostanú v KN', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const [phm, nadspotreba, dphPd, dphPn] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    for (const [id, kod, ucet] of [[phm, 'PHM-501200', '501200'], [nadspotreba, 'PHM-Nadspotreba', '501201']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda',$5,'321100')`,
+        [id, ...kde, kod, ucet],
+      );
+    }
+    for (const [id, kod, nazov] of [[dphPd, 'PD', 'Tuzemské plnenia'], [dphPn, 'PN', 'Nezahrňovať do priznania DPH']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,'cleneniaDph',$4,$5,'pohoda')`,
+        [id, ...kde, kod, nazov],
+      );
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,135,'EUR')`,
+      [documentId, ...kde],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: phm, clenenieDphId: dphPd, clenenieKvKod: 'B2', ciselnyRadId: null, confidence: 0.8, reason: 'Palivo',
+        riadky: [
+          { index: 0, predkontaciaId: phm, clenenieDphId: dphPd, clenenieKvKod: 'B2', podiel: 0.8, podielDph: 1 },
+          { index: 0, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: 'KN', podiel: 0.2, podielDph: 0 },
+          { index: 1, predkontaciaId: nadspotreba, clenenieDphId: dphPn, clenenieKvKod: 'KN' },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Palivová karta s.r.o.' };
+    const context = {
+      documentType: 'FP', supplierName: 'Palivová karta s.r.o.', supplierKrajina: 'SK', datumVystavenia: '2026-07-01',
+      totalAmount: 135, currency: 'EUR', lineDescriptions: ['Natural 95', 'Mýto AT'],
+      polozky: [{ popis: 'Natural 95', sadzbaDph: 23, suma: 123 }, { popis: 'Mýto AT', sadzbaDph: 20, suma: 12 }],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const riadky = (await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky as Array<Record<string, unknown>>;
+    expect(riadky.map((riadok) => [riadok.index, riadok.predkontaciaId, riadok.clenenieKvKod])).toEqual([
+      [0, phm, 'B2'], [0, nadspotreba, 'KN'], [1, nadspotreba, 'KN'],
+    ]);
   }, 90_000);
 });
 

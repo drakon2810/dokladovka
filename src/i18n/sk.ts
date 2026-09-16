@@ -1673,6 +1673,7 @@ export const sk = {
   'preco.dovod.ucet_bez_odpoctu': 'na tomto účte firma daň neodpočítava',
   'preco.dovod.kv_bez_clenenia': 'bez členenia DPH sa sekcia KV neposiela',
   'preco.dovod.kv_podla_praxe_a_druhu': 'sekciu určila prax firmy pri tomto členení a druh dokladu',
+  'preco.dovod.kv_ciastocny_odpocet': 'na doklade sa odpočítava — položka s DPH bez nároku patrí s faktúrou do sekcie hlavičky, nie do KN',
   'preco.dovod.kv_bez_odpoctu': 'pri členení bez odpočtu určuje sekciu prax firmy, inak KN',
   'preco.dovod.kv_podla_druhu': 'sekciu upravil druh dokladu (napr. pokladničný doklad do 1 000 € patrí do B3)',
   'preco.dovod.kn_proti_praxi': 'KN odporuje praxi firmy pri tomto členení',

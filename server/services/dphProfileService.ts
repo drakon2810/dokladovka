@@ -35,7 +35,10 @@ export interface DphPravidloOdpoctu {
    */
   predkontaciaId?: string;
   predkontaciaNedanovaId?: string;
-  /** Členenie DPH nedaňovej časti; sekcia KV je pri nej KN (overiť v POHODE pri čiastočnom odpočte). */
+  /**
+   * Členenie DPH nedaňovej časti. Sekciu KV nedaňová časť nemá vlastnú: kým nesie
+   * časť dane, patrí s faktúrou do B2/B3 hlavičky; KN len bez dane.
+   */
   clenenieDphNedanoveId?: string;
 }
 

@@ -6,7 +6,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
 import {
-  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph, pravidloPlati,
+  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph, pravidloPlati, sadzbyDphPre,
 } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
@@ -1660,7 +1660,7 @@ A category in "kategorie" may carry its own "rozpis" — the settled shapes of l
 When "pravidlo" carries "konflikt": true, the firm has no single settled practice for this counterparty and "varianty" lists the practices it did use (each with its header codes, "tvar" — the parts of the items posted differently from the header with their shares — and how many documents between which dates): choose the single variant that fits this document and never combine codes from different variants.
 HOW DOCUMENTS LIKE THIS ONE GET POSTED — "doklady". These are past documents of this firm, each with its header ("hlavicka") and its lines exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. The items of the document in front of you use the same names: "suma" is the base without VAT and "sumaSDph" the amount with VAT (an item without a VAT rate carries only "sumaSDph"), so compare a base with a base. A document carrying "vsetkyPolozky": true lists ALL its lines; only such a document carries its total base ("suma") and each line's share of that whole base ("podielDokladu") and VAT ("podielDphDokladu") — a share of the document, not the fraction of a cut item, which you compute from the sums of its parts. A document without it may be missing lines that had neither a text nor a posting of their own, so what its lines add up to is not the whole document. "agenda" is the kind of document it was. "rovnakych" counts the documents of that counterparty posted in exactly this shape; you see the newest of them. A document without "polozky" was recorded with its header only. A document with "tejProtistrany": true comes from THIS counterparty: it is not a hint, it is the record of a decision the firm has already made. Read the shape of it and reproduce that shape on the document in front of you. A document without it is the same kind of supply posted for another counterparty: weaker evidence — use it for the shape and the accounts of a supply this counterparty's own documents do not show, never to depart from what they do show. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed. Lines carrying "zdedene": true are the ones the accountant left alone — they hold the header's codes, so they show the shape of the document and the amounts a ratio is computed from, but they decide no account of their own; read them the same way as inherited rows in "dennik" above.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
-An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification and the KN section even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction and puts them in the control statement.
+An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction. Their KV section follows the DOCUMENT, not the item: an invoice on which anything is deducted is reported in B2/B3 whole, with the base and VAT of every item including those without the right to deduct, so an item that carries VAT keeps the header's section (return its "clenenieKvKod" as null). Only an item without any VAT, or a document on which nothing at all is deducted, takes KN.
 CUTTING ONE ITEM IN TWO. Sometimes the firm does not move a whole item elsewhere but divides the item itself, and the second line does not exist on the invoice — the accountant creates it. In "doklady" this shows as two lines of one document whose texts name parts of one supply (a percentage, or a word for the deductible and the non-deductible half) on different predkontácie. To propose one, return several "riadky" entries with the SAME index, each carrying "podiel", the fraction of that item it takes — every fraction smaller than 1. An item that goes somewhere WHOLE carries "podiel": null — 0 and 1 are read the same way. A cut is only a fraction strictly between them, so never describe a whole item as a cut of one part. "podielDokladu" and "podielDphDokladu" in the evidence are never a value for "podiel": a line that is a whole item of the document in front of you carries "podiel": null, however small its share of the document. The fractions must add up to 1 and there must be at least two of them; anything else is dropped whole, because a partial cut would lose money from the document.
 "podielDph" is the fraction of that item's VAT, for when the tax does not follow the base. Compute "podiel" from the sums of the parts and "podielDph" from their VAT, each on its own — one does not follow from the other and in practice they differ, because a deduction can be capped by law while the cost is divided by use. Leave "podielDph" out when the tax follows the base.
 Do not wait for the document to announce any of this. An invoice never says which part is non-deductible, and its silence is not evidence against the split — the evidence is what the firm did before.
@@ -3656,6 +3656,30 @@ export async function navrhniZauctovanie(
     }
   }
 
+  // Sekcia KV riadku bez odpočtu. Sekcia patrí dokladu, nie riadku: faktúra,
+  // z ktorej sa aspoň časť odpočítava, ide do B2/B3 CELÁ — so základom a daňou
+  // všetkých položiek, aj tých bez nároku (odpočítaná daň je potom znížená).
+  // Položka bez odpočtu, ktorá DPH nesie, preto sekciu dedí z hlavičky; KN patrí
+  // len položke bez dane. Tak účtujú všetky firmy v histórii: riadky PN s DPH
+  // pod hlavičkou PD s B2/B3 majú B2/B3, riadky bez DPH KN. Pevné KN vyradilo
+  // z výkazu napr. nedaňovú časť PHM (ALPINA DF260181: 13,17 základu, 7,57 dane).
+  // Keď sa na doklade neodpočítava nič, dedí KN hlavičky. Daň musí byť
+  // SLOVENSKÁ: sadzba platná v deň plnenia a dodávateľ, ktorý neúčtuje vlastnú
+  // daň — rakúskych 20 % v roku 2026 do výkazu nepatrí. Časť rezu bez podielu
+  // dane nenesie nič. Sadzba neznáma → KN ako doteraz.
+  const hlavickaSOdpoctom = (() => {
+    const hlavicka = vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id);
+    return typ !== 'FV' && Boolean(hlavicka) && clenenieVyzeraNaOdpocet(hlavicka!);
+  })();
+  const datumPlnenia = ulozeny.datumDodania ?? ulozeny.datumVystavenia ?? documentContext.datumVystavenia ?? undefined;
+  const sadzbyPlnenia = sadzbyDphPre(datumPlnenia);
+  const cudziDodavatel = jeCudziDodavatel({ icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina });
+  const kvBezOdpoctu = (sadzbaDph: number | undefined, nesieDan = true) => {
+    const slovenskaDan = typeof sadzbaDph === 'number' && sadzbaDph > 0 && !cudziDodavatel && sadzbyPlnenia !== undefined
+      && [sadzbyPlnenia.high, sadzbyPlnenia.low, sadzbyPlnenia.third].includes(sadzbaDph);
+    return slovenskaDan && nesieDan ? undefined : kvPreDruh('KN', druhDokladu);
+  };
+
   const pouziteIndexy = new Set<number>();
   // Riadok, ktorý model vrátil a overenie ho zahodilo, patrí do stopy tiež —
   // inak „Prečo" nevie povedať, kam sa podel rozpis, ktorý AI navrhla.
@@ -3681,10 +3705,19 @@ export async function navrhniZauctovanie(
     // odpočet na reprezentácii: riadok mlčal a hlavička odpočet uplatňovala.
     const bezOdpoctu = opravBezOdpoctu(riadok.predkontaciaId, zRiadku ?? validated.clenenie_dph_id);
     const clenenieDphId = bezOdpoctu ?? zRiadku;
-    const clenenieKvKod = bezOdpoctu
-      // Plnenie bez odpočtu do kontrolného výkazu nepatrí, nech model napísal čokoľvek.
-      ? kvPreDruh('KN', druhDokladu)
-      : kvNavrhuPreDruh(riadok.clenenieKvKod ?? undefined, druhDokladu);
+    const sadzbaPolozky = (polozka as { sadzbaDph?: number }).sadzbaDph;
+    const castNesieDan = !jeCast || (riadok.podielDph ?? riadok.podiel ?? 1) > 0;
+    const kvModelu = kvNavrhuPreDruh(riadok.clenenieKvKod ?? undefined, druhDokladu);
+    // KN, ktoré model dal položke bez nároku s DPH na doklade s odpočtom, je
+    // rovnaká chyba ako pevné KN nižšie — sekcia sa zdedí z hlavičky.
+    const clenenieRiadku = vsetkyClenenia.find((item) => item.id === (clenenieDphId ?? validated.clenenie_dph_id));
+    const knCiastocnehoOdpoctu = !bezOdpoctu && kvModelu === 'KN' && hlavickaSOdpoctom
+      && kvKod !== undefined && kvKod !== 'KN'
+      && clenenieRiadku !== undefined && !clenenieVyzeraNaOdpocet(clenenieRiadku)
+      && kvBezOdpoctu(sadzbaPolozky, castNesieDan) === undefined;
+    const clenenieKvKod = bezOdpoctu ? kvBezOdpoctu(sadzbaPolozky, castNesieDan)
+      : knCiastocnehoOdpoctu ? undefined
+      : kvModelu;
     // Zahodí sa len riadok, ktorý sa od hlavičky nelíši NIČÍM. Samotná zhodná
     // predkontácia nestačí: faktúra Print-Office má hlavičku „repre / PD / B2"
     // a položku reprezentácie s TOU ISTOU predkontáciou, ale s členením PN
@@ -3696,8 +3729,12 @@ export async function navrhniZauctovanie(
     pouziteIndexy.add(riadok.index);
     if (bezOdpoctu) {
       zmen('clenenieDphId', zRiadku ?? validated.clenenie_dph_id, bezOdpoctu, 'ucet_bez_odpoctu', riadok.index);
-      zmen('clenenieKvKod', riadok.clenenieKvKod ?? kvKod, clenenieKvKod, 'ucet_bez_odpoctu', riadok.index);
+      // Zmena sekcie sa pripíše len tomu, čo ju naozaj spravilo: úpravu podľa
+      // druhu dokladu (pokladňa do 1 000 € → B3) urobil už kvNavrhuPreDruh.
+      const naKv = clenenieKvKod ?? kvKod;
+      zmen('clenenieKvKod', kvModelu ?? kvKod, naKv, naKv === 'KN' ? 'ucet_bez_odpoctu' : 'kv_ciastocny_odpocet', riadok.index);
     }
+    if (knCiastocnehoOdpoctu) zmen('clenenieKvKod', 'KN', kvKod, 'kv_ciastocny_odpocet', riadok.index);
     return [{
       index: riadok.index,
       popis: (polozka as { popis?: string }).popis ?? '',
@@ -3725,7 +3762,6 @@ export async function navrhniZauctovanie(
   // (posudDph) a pokynom do promptu (dphPokynyPreAi), ako doteraz.
   const aktivnePredkontacie = new Set(codeLists.rows
     .filter((row) => row.kind === 'predkontacie').map((row) => row.id));
-  const datumPlnenia = ulozeny.datumDodania ?? ulozeny.datumVystavenia ?? documentContext.datumVystavenia ?? undefined;
   const pravidlaRezu = (dphProfil?.pravidlaAut ?? []).filter((pravidlo) =>
     pravidlo.klucoveSlova.length > 0
     && pravidloPlati(pravidlo, datumPlnenia)
@@ -3735,7 +3771,6 @@ export async function navrhniZauctovanie(
     && aktivnePredkontacie.has(pravidlo.predkontaciaNedanovaId));
   const rezyProfilu = new Map<number, RiadokNavrhu[]>();
   if (pravidlaRezu.length > 0) {
-    const kvNedanovej = kvPreDruh('KN', druhDokladu);
     const podielZPercenta = (percento: number) => Math.round((percento / 100) * 10_000) / 10_000;
     polozkyPreModel.forEach((polozka, index) => {
       const popis = String((polozka as { popis?: string }).popis ?? '');
@@ -3758,8 +3793,10 @@ export async function navrhniZauctovanie(
           popis,
           predkontaciaId: pravidlo.predkontaciaNedanovaId!,
           ...(pravidlo.clenenieDphNedanoveId ? { clenenieDphId: pravidlo.clenenieDphNedanoveId } : {}),
-          // Nedaňová časť do kontrolného výkazu nepatrí.
-          ...(kvNedanovej ? { clenenieKvKod: kvNedanovej } : {}),
+          // Nedaňová časť, ktorá nesie časť dane, patrí s faktúrou do B2/B3
+          // (sekcia sa zdedí z hlavičky); KN len keď daň celá ostala daňovej časti.
+          ...((kvNed) => (kvNed ? { clenenieKvKod: kvNed } : {}))(
+            kvBezOdpoctu((polozka as { sadzbaDph?: number }).sadzbaDph, podielDph < 1)),
           podiel: Math.round((1 - podiel) * 10_000) / 10_000,
           podielDph: Math.round((1 - podielDph) * 10_000) / 10_000,
         },
@@ -3772,6 +3809,29 @@ export async function navrhniZauctovanie(
     ? riadky
     : [...riadky.filter((riadok) => !rezyProfilu.has(riadok.index)), ...[...rezyProfilu.values()].flat()]
       .sort((prvy, druhy) => prvy.index - druhy.index);
+
+  // Hlavička odpočítava, no po riadkoch neostal odpočet nikde — každá položka
+  // prešla na členenie bez nároku. Taký doklad do B2/B3 nepatrí: POHODA by ho
+  // vykázala celý bez jediného odpočtu. Riadky bez vlastnej sekcie dedia
+  // hlavičku, takže stačí KN hlavičky. Položka mimo riadkov (aj za stropom 200)
+  // dedí hlavičku s odpočtom, takže odpočet ostáva.
+  if (hlavickaSOdpoctom && kvKod !== undefined && kvKod !== 'KN' && polozkyPreModel.length > 0
+    && polozkyDokladu.length === polozkyPreModel.length) {
+    const odpocitava = (clenenieDphId: string | undefined) => {
+      const clenenie = vsetkyClenenia.find((item) => item.id === (clenenieDphId ?? validated.clenenie_dph_id));
+      return clenenie !== undefined && clenenieVyzeraNaOdpocet(clenenie);
+    };
+    const zostalOdpocet = polozkyPreModel.some((_, index) => {
+      const casti = vsetkyRiadky.filter((riadok) => riadok.index === index);
+      return casti.length === 0
+        || casti.some((cast) => odpocitava(cast.clenenieDphId) && (cast.podielDph ?? cast.podiel ?? 1) > 0);
+    });
+    if (!zostalOdpocet) {
+      const kn = kvPreDruh('KN', druhDokladu);
+      zmen('clenenieKvKod', kvKod, kn, 'kv_bez_odpoctu');
+      kvKod = kn;
+    }
+  }
 
   // Model rozpis opísal v dôvode, ale do poľa ho nedal — alebo dal a overenie
   // ho zahodilo celé. Z uloženého návrhu sa to nerozozná, tak nech to povie log.
