@@ -3,7 +3,7 @@ import { loadConfig } from '../config.js';
 import { createDatabase } from '../db/database.js';
 import { HttpError } from '../http.js';
 import {
-  POLIA, intervalSpolahlivosti, zmerajPresnost, type OknoMerania, type PresnostVysledok, type RezimMerania,
+  POLIA, intervalSpolahlivosti, presnostNadPrahom, zmerajPresnost, type OknoMerania, type PresnostVysledok, type RezimMerania,
 } from '../services/uctoPresnostService.js';
 
 /**
@@ -101,4 +101,18 @@ for (const pole of POLIA) {
     ? ` (95 % ${(najhorsia.interval[0] * 100).toFixed(1)}–${(najhorsia.interval[1] * 100).toFixed(1)} %)` : '';
   console.log(`${pole.padEnd(12)} mikro ${mikro}  makro ${makro}  najhoršia ${najhorsia.firma} `
     + `${podiel(najhorsia.spravne, najhorsia.znamych)}${interval}`);
+}
+
+// Predvyplnenie od istoty 0,9: aká presná je hodnota, ktorú účtovník neotvorí,
+// a koľko dokladov sa tak vyplní. Pod 20 dokladmi nad prahom len „málo dokladov".
+console.log('\nnad prahom predvyplnenia (istota ≥ 0,9)');
+for (const { firma, vysledok } of behy) {
+  const polia = POLIA.map((pole) => {
+    const nad = presnostNadPrahom(vysledok.doklady, pole);
+    const pokrytie = `pokrytie ${(nad.pokrytie * 100).toFixed(0)} %`;
+    if (!nad.interval) return `${pole} málo dokladov (${nad.navrhnutych}), ${pokrytie}`;
+    return `${pole} ${podiel(nad.spravnych, nad.navrhnutych)} (95 % ${(nad.interval[0] * 100).toFixed(1)}–`
+      + `${(nad.interval[1] * 100).toFixed(1)} %), ${pokrytie}`;
+  });
+  console.log(`${firma.slice(0, 24).padEnd(24)} ${polia.join(' | ')}`);
 }

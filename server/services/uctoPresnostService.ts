@@ -109,6 +109,8 @@ export interface VysledokDokladu {
   navrh: { predkontacia: string | null; clenenieDph: string | null; kv: string | null; rad: string | null } | null;
   /** Surová odpoveď modelu (len režim ai) — prehodnotenie bez nového volania. */
   odpovedModelu?: unknown;
+  /** Istota návrhu. Od nej závisí predvyplnenie — bez nej sa prah nedá overiť. */
+  istota?: number;
 }
 
 export interface PresnostVysledok {
@@ -219,6 +221,30 @@ export function scitajPoAgendach(doklady: VysledokDokladu[]): Record<string, Age
     }
   }
   return vysledok;
+}
+
+/**
+ * Presnosť nad prahom predvyplnenia: z dokladov, ktoré by sa vyplnili samy
+ * (istota aspoň prah) a pole navrhli, koľko je správne — a akú časť dokladov
+ * so známou skutočnosťou to pokrýva. Presnosť tu nie je spravne/znamych:
+ * doklad pod prahom účtovník otvára sám, takže sa nepočíta ani ako chyba.
+ * Pod minDokladov je interval null — malá firma dostane „málo dokladov",
+ * nie percento, ktoré vyzerá presne.
+ */
+export function presnostNadPrahom(
+  doklady: Array<Pick<VysledokDokladu, 'hodnotenie' | 'istota'>>,
+  pole: Pole,
+  prah = 0.9,
+  minDokladov = 20,
+): { navrhnutych: number; spravnych: number; pokrytie: number; interval: [number, number] | null } {
+  const znamych = doklady.filter((doklad) => doklad.hodnotenie[pole] !== null).length;
+  const nadPrahom = doklady.filter((doklad) => (doklad.istota ?? 0) >= prah && doklad.hodnotenie[pole]?.navrhnute);
+  return {
+    navrhnutych: nadPrahom.length,
+    spravnych: nadPrahom.filter((doklad) => doklad.hodnotenie[pole]!.spravne).length,
+    pokrytie: znamych > 0 ? nadPrahom.length / znamych : 0,
+    interval: nadPrahom.length >= minDokladov ? intervalSpolahlivosti(nadPrahom, pole) : null,
+  };
 }
 
 /**
@@ -615,6 +641,7 @@ export async function zmerajPresnost(
         clenenieKvKod: navrh.clenenie_kv_kod, rad: kod.get(navrh.ciselny_rad_id ?? ''),
       }) : null,
       ...(odpovedModelu !== undefined ? { odpovedModelu } : {}),
+      ...(navrh ? { istota: navrh.confidence } : {}),
     });
   }
 

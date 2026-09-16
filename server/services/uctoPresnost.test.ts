@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/database.js';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import {
-  intervalSpolahlivosti, jeRozpisany, ohodnot, scitajPoAgendach, vyberVzorku, zmerajPresnost,
+  intervalSpolahlivosti, jeRozpisany, ohodnot, presnostNadPrahom, scitajPoAgendach, vyberVzorku, zmerajPresnost,
   type Skutocnost, type VysledokDokladu,
 } from './uctoPresnostService.js';
 import { prepocitajPravidla } from './uctoPravidlaService.js';
@@ -195,6 +195,8 @@ describe('meranie presnosti zaúčtovania', () => {
     await riadok({ doklad_cislo: '26FP090', datum: '2026-08-20', predkontacia_id: predkontacia, predkontacia_kod: '518/321' });
     const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
     expect(vysledok.vysledok.FP.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
+    // Istota sa ukladá k dokladu — bez nej sa prah predvyplnenia nedá overiť.
+    expect(vysledok.doklady[0].istota).toBe(0.8);
   }, 60_000);
 
   // Spor praxí: protistrana má dve ustálené zaúčtovania a ani jedno neprevažuje,
@@ -535,5 +537,24 @@ describe('vzorka a interval', () => {
     expect(interval![1]).toBeGreaterThan(0.8);
     expect(intervalSpolahlivosti(doklady, 'predkontacia')).toEqual(interval);
     expect(intervalSpolahlivosti(doklady, 'kv')).toBeNull();
+  });
+
+  // Predvypĺňa sa od istoty 0,9. Presnosť tam je presnosť dokladov, ktoré
+  // účtovník neotvorí — doklady pod prahom ju nesmú ani zlepšiť, ani zhoršiť.
+  it('presnosť nad prahom počíta len doklady, ktoré by sa predvyplnili', () => {
+    const doklad = (istota: number, spravne: boolean) => ({
+      istota,
+      hodnotenie: { predkontacia: { navrhnute: true, spravne }, clenenieDph: null, kv: null, rad: null, tvar: null },
+    });
+    const doklady = [
+      ...Array.from({ length: 30 }, (_, index) => doklad(0.95, index < 27)),
+      ...Array.from({ length: 30 }, () => doklad(0.8, false)),
+    ];
+    const vysledok = presnostNadPrahom(doklady, 'predkontacia');
+    expect(vysledok).toMatchObject({ navrhnutych: 30, spravnych: 27, pokrytie: 0.5 });
+    expect(vysledok.interval![0]).toBeLessThan(0.9);
+    expect(vysledok.interval![1]).toBeGreaterThan(0.9);
+    // Päť dokladov nad prahom: interval by klamal presnosťou, ktorú nemá.
+    expect(presnostNadPrahom(doklady.slice(25, 35), 'predkontacia').interval).toBeNull();
   });
 });
