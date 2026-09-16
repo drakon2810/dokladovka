@@ -116,3 +116,19 @@ for (const { firma, vysledok } of behy) {
   });
   console.log(`${firma.slice(0, 24).padEnd(24)} ${polia.join(' | ')}`);
 }
+
+// Nová protistrana: pravidlo ani denník protistrany tu nepomôžu, rozhoduje druh
+// plnenia. V celkovom čísle ju prekryjú známi dodávatelia, preto zvlášť.
+console.log('\nnová protistrana (firma ju pred dátumom dokladu nemala)');
+for (const { firma, vysledok } of behy) {
+  const agendy = Object.values(vysledok.vysledokNovaProtistrana);
+  const dokladov = agendy.reduce((spolu, skore) => spolu + skore.dokladov, 0);
+  if (dokladov === 0) continue;
+  const zdrzanie = agendy.reduce((spolu, skore) => spolu + skore.zdrzanie, 0);
+  const polia = POLIA.map((pole) => {
+    const spravne = agendy.reduce((spolu, skore) => spolu + skore[pole].spravne, 0);
+    const znamych = agendy.reduce((spolu, skore) => spolu + skore[pole].znamych, 0);
+    return `${pole} ${spravne}/${znamych} ${podiel(spravne, znamych)}`;
+  });
+  console.log(`${firma.slice(0, 24).padEnd(24)} dokl. ${dokladov}, zdržal sa ${zdrzanie} | ${polia.join(' | ')}`);
+}

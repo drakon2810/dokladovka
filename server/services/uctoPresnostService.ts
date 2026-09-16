@@ -111,6 +111,8 @@ export interface VysledokDokladu {
   odpovedModelu?: unknown;
   /** Istota návrhu. Od nej závisí predvyplnenie — bez nej sa prah nedá overiť. */
   istota?: number;
+  /** Protistrana, ktorú firma pred dátumom dokladu nemala v žiadnej agende. */
+  novaProtistrana?: boolean;
 }
 
 export interface PresnostVysledok {
@@ -122,6 +124,9 @@ export interface PresnostVysledok {
   deliciDatum: string;
   vzorka: number;
   vysledok: Record<string, AgendaSkore>;
+  /** To isté len pre doklady novej protistrany — tam nepomôže pravidlo ani
+   *  denník protistrany, rozhoduje druh plnenia. Celkové číslo ich prekryje. */
+  vysledokNovaProtistrana: Record<string, AgendaSkore>;
   rozdiely: VysledokDokladu[];
   doklady: VysledokDokladu[];
   manifest: Record<string, unknown>;
@@ -583,6 +588,13 @@ export async function zmerajPresnost(
     let chyba: string | undefined;
     let odpovedModelu: unknown;
     const kontext = kontextZKorpusu(doklad);
+    // Len z histórie pred dátumom dokladu, ako všetko ostatné v meraní.
+    const novaProtistrana = Boolean(doklad.supplierIco || doklad.supplierName) && (await database.query(
+      `SELECT 1 FROM ucto_historia
+        WHERE tenant_id=$1 AND organization_id=$2 AND datum < $3::date
+          AND (supplier_ico=$4 OR supplier_name_normalized=$5) LIMIT 1`,
+      [input.tenantId, input.organizationId, doklad.datum, doklad.supplierIco ?? null, doklad.supplierName ?? null],
+    )).rows.length === 0;
     try {
       const vysledok = await navrhniZauctovanie(database, config, {
         tenantId: input.tenantId, organizationId: input.organizationId,
@@ -642,6 +654,7 @@ export async function zmerajPresnost(
       }) : null,
       ...(odpovedModelu !== undefined ? { odpovedModelu } : {}),
       ...(navrh ? { istota: navrh.confidence } : {}),
+      ...(novaProtistrana ? { novaProtistrana } : {}),
     });
   }
 
@@ -678,6 +691,7 @@ export async function zmerajPresnost(
   };
 
   const vysledok = scitajPoAgendach(doklady);
+  const vysledokNovaProtistrana = scitajPoAgendach(doklady.filter((doklad) => doklad.novaProtistrana));
   const rozdiely = doklady.filter((doklad) => doklad.chyba
     || POLIA.some((pole) => doklad.hodnotenie[pole]?.navrhnute && !doklad.hodnotenie[pole]?.spravne));
   const trvanieMs = Date.now() - zaciatok;
@@ -693,7 +707,8 @@ export async function zmerajPresnost(
     );
   }
   return {
-    id, metodika: 2, rezim, deliciDatum: od, vzorka: merane.length, vysledok, rozdiely, doklady, manifest, trvanieMs,
+    id, metodika: 2, rezim, deliciDatum: od, vzorka: merane.length, vysledok, vysledokNovaProtistrana, rozdiely, doklady,
+    manifest, trvanieMs,
   };
 }
 

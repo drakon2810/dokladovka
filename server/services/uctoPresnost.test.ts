@@ -199,6 +199,25 @@ describe('meranie presnosti zaúčtovania', () => {
     expect(vysledok.doklady[0].istota).toBe(0.8);
   }, 60_000);
 
+  // Nová protistrana: pravidlo ani denník protistrany nepomôžu, rozhoduje druh
+  // plnenia. V celkovom čísle by sa stratila medzi známymi dodávateľmi.
+  it('doklady novej protistrany sa počítajú aj zvlášť', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const predkontacia = await kod('predkontacie', '518/321');
+    await riadok({ doklad_cislo: '26FP001', datum: '2026-02-15', predkontacia_id: predkontacia, predkontacia_kod: '518/321' });
+    await riadok({ doklad_cislo: '26FP090', datum: '2026-08-20', predkontacia_id: predkontacia, predkontacia_kod: '518/321' });
+    await riadok({
+      doklad_cislo: '26FP091', datum: '2026-08-21', predkontacia_id: predkontacia, predkontacia_kod: '518/321',
+      supplier_name_normalized: 'nova preprava s.r.o.',
+    });
+
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
+    expect(vysledok.doklady.map((doklad) => [doklad.doklad, doklad.novaProtistrana ?? false])).toEqual([
+      ['26FP090', false], ['26FP091', true],
+    ]);
+    expect(vysledok.vysledokNovaProtistrana.FP).toMatchObject({ dokladov: 1, zdrzanie: 1 });
+  }, 60_000);
+
   // Spor praxí: protistrana má dve ustálené zaúčtovania a ani jedno neprevažuje,
   // takže pravidlo príde bez účtu. Základná čiara to nesmie brať ako odpoveď —
   // inak by spor vyzeral ako zdržanie, hoci denník tej istej protistrany odpoveď má.
