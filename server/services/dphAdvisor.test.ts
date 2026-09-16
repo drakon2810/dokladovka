@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dphPokynyPreAi, posudDph } from './dphAdvisor.js';
-import type { DphProfil } from './dphProfileService.js';
+import { clenenieVyzeraNaOdpocet, dphPokynyPreAi, posudDph } from './dphAdvisor.js';
+import { predvolenyDphProfil, type DphProfil } from './dphProfileService.js';
 
 function profil(overrides: Partial<DphProfil> = {}): DphProfil {
   return {
@@ -78,6 +78,18 @@ describe('dphAdvisor — posudDph', () => {
     expect(kandidat?.clenenieKvKod).toBe('B1');
   });
 
+  it('samozdanenie počíta sadzbou platnou v deň plnenia, nie dnešnou', () => {
+    const vysledok = posudDph(dokument({
+      dodavatel: { nazov: 'Alza.cz a.s.', icDph: 'CZ27082440' },
+      datumDodania: '2024-11-20',
+      mena: 'EUR',
+      rozpisDph: [{ sadzba: 0, zaklad: 200, dph: 0 }],
+      sumaSpolu: 200,
+    }), profil({ samozdanenieAktivne: true }));
+    const kandidat = vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat');
+    expect(kandidat?.sprava).toContain('DPH 20 % = 40.00');
+  });
+
   it('slovenský dodávateľ s DPH nie je kandidát na samozdanenie', () => {
     const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({ samozdanenieAktivne: true }));
     expect(vysledok.navrhy.some((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat')).toBe(false);
@@ -91,6 +103,15 @@ describe('dphAdvisor — posudDph', () => {
     expect(varovanie).toBeDefined();
     expect(varovanie?.percento).toBe(80);
     expect(varovanie?.sprava).toContain('80 %');
+  });
+
+  it('pravidlo pre autá s obdobím platnosti mlčí mimo neho', () => {
+    const pravidlaAut = [{ kategoria: 'Osobné auto', percento: 80, percentoDph: 50, klucoveSlova: ['PHM'], platnostOd: '2026-01-01' }];
+    const vlani = posudDph(dokument({ ...FAKTURA_S_DPH, datumDodania: '2025-12-15' }), profil({ pravidlaAut }));
+    expect(vlani.varovania.some((zistenie) => zistenie.kod === 'dph_auto_odpocet')).toBe(false);
+    const tento = posudDph(dokument(FAKTURA_S_DPH), profil({ pravidlaAut }));
+    expect(tento.varovania.some((zistenie) => zistenie.kod === 'dph_auto_odpocet')).toBe(true);
+    expect(dphPokynyPreAi(profil({ pravidlaAut })).join(' ')).toContain('od 2026-01-01');
   });
 
   it('kľúčové slová sa zhodujú bez diakritiky a veľkosti písmen', () => {
@@ -124,6 +145,22 @@ describe('dphAdvisor — posudDph', () => {
     const navrh = vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_koeficient');
     expect(navrh?.sprava).toContain('0,87');
     expect(navrh?.sprava).toContain('2026');
+  });
+
+  it('koeficient iného roka sa nepoužije; ročný z minulého roka platí ako zálohový', () => {
+    const stary = posudDph(dokument(FAKTURA_S_DPH), profil({ koeficient: [{ rok: 2024, typ: 'rocny', hodnota: 0.8 }] }));
+    expect(stary.navrhy.some((zistenie) => zistenie.kod === 'dph_koeficient')).toBe(false);
+    const minuly = posudDph(dokument(FAKTURA_S_DPH), profil({ koeficient: [{ rok: 2025, typ: 'rocny', hodnota: 0.9 }] }));
+    expect(minuly.navrhy.find((zistenie) => zistenie.kod === 'dph_koeficient')?.percento).toBe(90);
+  });
+
+  it('firma bez profilu nie je platiteľ ani neplatiteľ', () => {
+    const nezname = predvolenyDphProfil('tenant-1', 'org-1');
+    expect(nezname.platitelDph).toBe('nezname');
+    expect(dphPokynyPreAi(nezname).join(' ')).not.toContain('bez odpočtu');
+    const vysledok = posudDph(dokument(FAKTURA_S_DPH, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), nezname);
+    expect(vysledok.blokacie).toHaveLength(0);
+    expect(vysledok.navrhy.some((zistenie) => zistenie.kod === 'dph_bez_odpoctu')).toBe(false);
   });
 
   it('prenesenie DP (§69): SK doklad bez DPH s bežným členením varuje', () => {
@@ -235,6 +272,54 @@ describe('dphAdvisor — posudDph', () => {
     }));
     expect(vysledok.varovania.some((zistenie) => zistenie.kod === 'dph_auto_odpocet')).toBe(false);
     expect(vysledok.navrhy.some((zistenie) => zistenie.kod === 'dph_koeficient')).toBe(false);
+  });
+});
+
+// Dáta z produkcie (16. 9. 2026): 675 dokladov má hlavičku PD s B2 a riadky PN —
+// čiastočný odpočet, zákonný. Podozrivý je až doklad, na ktorom sa neodpočítava
+// NIČ, a predsa ide do B2/B3. Ani vtedy nie blokácia, len návrh KN.
+describe('dphAdvisor — sekcia B2/B3 bez odpočtu na celom doklade', () => {
+  const PN = { id: 'cl-pn', kod: 'PN', nazov: 'Nezahrňovať do priznania DPH' };
+  const PD = { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' };
+  const posud = (accounting: Record<string, string>, polozky: Array<Record<string, unknown>> = []) => posudDph({
+    documentType: 'FP',
+    extracted: { ...FAKTURA_S_DPH, polozky },
+    accounting,
+    clenenieDph: [PN, PD].find((clenenie) => clenenie.id === accounting.clenenieDphId),
+    cleneniaPoloziek: [PN, PD],
+  }, profil());
+  const kvNavrh = (vysledok: ReturnType<typeof posudDph>) => vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_kv_bez_odpoctu');
+
+  it('hlavička PN so sekciou B2 a žiadny odpočet: návrh KN, nie blokácia', () => {
+    const vysledok = posud({ clenenieDphId: PN.id, clenenieKvKod: 'B2' }, [{ popis: 'Káva' }]);
+    expect(kvNavrh(vysledok)).toMatchObject({ clenenieKvKod: 'KN' });
+    expect(vysledok.blokacie).toHaveLength(0);
+  });
+
+  it('aspoň jeden riadok s odpočtom: PN s B2 inde je v poriadku', () => {
+    const vysledok = posud({ clenenieDphId: PN.id, clenenieKvKod: 'B2' },
+      [{ popis: 'Káva' }, { popis: 'Papier', ucto: { clenenieDphId: PD.id } }]);
+    expect(kvNavrh(vysledok)).toBeUndefined();
+  });
+
+  it('riadok so sekciou B3 pod hlavičkou KN bez odpočtu sa tiež ozve', () => {
+    const vysledok = posud({ clenenieDphId: PN.id, clenenieKvKod: 'KN' }, [{ popis: 'Káva', ucto: { clenenieKvKod: 'B3' } }]);
+    expect(kvNavrh(vysledok)).toBeDefined();
+  });
+
+  it('odpočet v hlavičke alebo sekcia KN: nič', () => {
+    expect(kvNavrh(posud({ clenenieDphId: PD.id, clenenieKvKod: 'B2' }))).toBeUndefined();
+    expect(kvNavrh(posud({ clenenieDphId: PN.id, clenenieKvKod: 'KN' }))).toBeUndefined();
+  });
+});
+
+describe('dphAdvisor — clenenieVyzeraNaOdpocet', () => {
+  it('známy kód POHODY rozhoduje podľa riadkov priznania, nie podľa názvu', () => {
+    // „Nadobudnutie tovaru prvým odberateľom" do priznania nevstupuje — názov o tom mlčí.
+    expect(clenenieVyzeraNaOdpocet({ kod: 'PD1odb', nazov: 'Nadobudnutie tovaru prvým odberateľom' })).toBe(false);
+    expect(clenenieVyzeraNaOdpocet({ kod: 'PDtovar', nazov: 'Dovoz tovaru' })).toBe(true);
+    expect(clenenieVyzeraNaOdpocet({ kod: 'X1', nazov: 'Vlastné' })).toBe(true);
+    expect(clenenieVyzeraNaOdpocet({ kod: 'X2', nazov: 'Bez nároku na odpočet' })).toBe(false);
   });
 });
 

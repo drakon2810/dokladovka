@@ -30,12 +30,28 @@ interface PravidloDraft {
   predkontaciaId: string;
   predkontaciaNedanovaId: string;
   clenenieDphNedanoveId: string;
+  /** Obdobie platnosti (YYYY-MM-DD); prázdne = bez hranice. */
+  platnostOd: string;
+  platnostDo: string;
 }
 
 const PRAZDNE_PRAVIDLO: PravidloDraft = {
   kategoria: '', percento: '100', klucoveSlova: '',
   percentoDph: '', predkontaciaId: '', predkontaciaNedanovaId: '', clenenieDphNedanoveId: '',
+  platnostOd: '', platnostDo: '',
 };
+
+const pravidloDoDraftu = (pravidlo: DphProfil['pravidlaAut'][number]): PravidloDraft => ({
+  kategoria: pravidlo.kategoria,
+  percento: String(pravidlo.percento),
+  klucoveSlova: pravidlo.klucoveSlova.join(', '),
+  percentoDph: pravidlo.percentoDph == null ? '' : String(pravidlo.percentoDph),
+  predkontaciaId: pravidlo.predkontaciaId ?? '',
+  predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId ?? '',
+  clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId ?? '',
+  platnostOd: pravidlo.platnostOd ?? '',
+  platnostDo: pravidlo.platnostDo ?? '',
+});
 
 interface BezNarokuDraft {
   kategoria: string;
@@ -78,24 +94,8 @@ function draftFromProfile(profil?: DphProfil): ProfilDraft {
       typ: zaznam.typ,
       hodnota: String(zaznam.hodnota),
     })),
-    pomerneOdpocitanie: (profil?.pomerneOdpocitanie ?? []).map((pravidlo) => ({
-      kategoria: pravidlo.kategoria,
-      percento: String(pravidlo.percento),
-      klucoveSlova: pravidlo.klucoveSlova.join(', '),
-      percentoDph: pravidlo.percentoDph == null ? '' : String(pravidlo.percentoDph),
-      predkontaciaId: pravidlo.predkontaciaId ?? '',
-      predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId ?? '',
-      clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId ?? '',
-    })),
-    pravidlaAut: (profil?.pravidlaAut ?? []).map((pravidlo) => ({
-      kategoria: pravidlo.kategoria,
-      percento: String(pravidlo.percento),
-      klucoveSlova: pravidlo.klucoveSlova.join(', '),
-      percentoDph: pravidlo.percentoDph == null ? '' : String(pravidlo.percentoDph),
-      predkontaciaId: pravidlo.predkontaciaId ?? '',
-      predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId ?? '',
-      clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId ?? '',
-    })),
+    pomerneOdpocitanie: (profil?.pomerneOdpocitanie ?? []).map(pravidloDoDraftu),
+    pravidlaAut: (profil?.pravidlaAut ?? []).map(pravidloDoDraftu),
     bezNaroku: (profil?.bezNaroku ?? []).map((kategoria) => ({
       kategoria: kategoria.kategoria,
       klucoveSlova: kategoria.klucoveSlova.join(', '),
@@ -152,6 +152,8 @@ export function ClientProfileTab() {
         ? { predkontaciaNedanovaId: pravidlo.predkontaciaNedanovaId } : {}),
       ...(pravidlo.clenenieDphNedanoveId
         ? { clenenieDphNedanoveId: pravidlo.clenenieDphNedanoveId } : {}),
+      ...(pravidlo.platnostOd ? { platnostOd: pravidlo.platnostOd } : {}),
+      ...(pravidlo.platnostDo ? { platnostDo: pravidlo.platnostDo } : {}),
     }));
     const pomerneOdpocitanie = pravidla(draft.pomerneOdpocitanie);
     const pravidlaAut = pravidla(draft.pravidlaAut);
@@ -372,6 +374,26 @@ export function ClientProfileTab() {
                   value={pravidlo.percentoDph}
                   onChange={(event) => update({
                     [key]: draft[key].map((item, i) => (i === index ? { ...item, percentoDph: event.target.value } : item)),
+                  } as Partial<ProfilDraft>)}
+                />
+                <input
+                  type="date"
+                  className="input w-40"
+                  aria-label={t('nast.dph.platnostOd')}
+                  title={t('nast.dph.platnostOd')}
+                  value={pravidlo.platnostOd}
+                  onChange={(event) => update({
+                    [key]: draft[key].map((item, i) => (i === index ? { ...item, platnostOd: event.target.value } : item)),
+                  } as Partial<ProfilDraft>)}
+                />
+                <input
+                  type="date"
+                  className="input w-40"
+                  aria-label={t('nast.dph.platnostDo')}
+                  title={t('nast.dph.platnostDo')}
+                  value={pravidlo.platnostDo}
+                  onChange={(event) => update({
+                    [key]: draft[key].map((item, i) => (i === index ? { ...item, platnostDo: event.target.value } : item)),
                   } as Partial<ProfilDraft>)}
                 />
                 <input

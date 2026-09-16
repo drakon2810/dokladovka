@@ -278,9 +278,9 @@ interface VatTotals {
 }
 
 /**
- * Slovenské sadzby DPH podľa dátumu zdaniteľného plnenia. Zhoda so
- * SK_SADZBY_DPH v server/pohodaXml.ts — tam je zdôvodnenie aj to, prečo sa
- * neposiela percentVAT.
+ * Slovenské sadzby DPH podľa dátumu zdaniteľného plnenia. Kópia
+ * SK_SADZBY_DPH zo server/services/dphAdvisor.ts (tam je zdôvodnenie); prečo
+ * sa neposiela percentVAT, vysvetľuje server/pohodaXml.ts.
  */
 const SK_SADZBY_DPH: ReadonlyArray<{ od: string; high: number; low: number; third?: number }> = [
   { od: '2025-01-01', high: 23, low: 19, third: 5 },

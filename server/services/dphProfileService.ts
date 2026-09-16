@@ -18,17 +18,24 @@ export interface DphPravidloOdpoctu {
   /**
    * Podiel DANE, keď sa líši od podielu základu. Pri aute používanom aj
    * súkromne je to bežné: základ sa delí 80/20 (§ 19 ods. 2 písm. l) zákona
-   * o dani z príjmov), ale odpočet dane je krátený na polovicu (§ 49 ods. 5
-   * zákona o DPH). Bez neho daň sleduje základ.
+   * o dani z príjmov), ale odpočet dane je od 2026 spravidla polovičný (§ 85n
+   * zákona o DPH) — dve rôzne dane, dve rôzne čísla. Bez neho daň sleduje základ.
    */
   percentoDph?: number;
+  /**
+   * Obdobie, v ktorom pravidlo platí (deň plnenia, vrátane oboch hraníc). Režim
+   * § 85n platí od 1. 1. 2026 — to isté pravidlo na plnení z roku 2025 by
+   * odpočet krátilo neprávom. Bez dátumov platí vždy.
+   */
+  platnostOd?: string;
+  platnostDo?: string;
   /**
    * Účty oboch častí. Kým ich pravidlo nemá, ostáva iba upozornením a pokynom
    * do promptu — rozrezať doklad sa s percentom bez účtov nedá.
    */
   predkontaciaId?: string;
   predkontaciaNedanovaId?: string;
-  /** Členenie DPH nedaňovej časti; sekcia KV je pri nej vždy KN. */
+  /** Členenie DPH nedaňovej časti; sekcia KV je pri nej KN (overiť v POHODE pri čiastočnom odpočte). */
   clenenieDphNedanoveId?: string;
 }
 
@@ -40,7 +47,8 @@ export interface DphKategoriaBezNaroku {
 export interface DphProfil {
   organizationId: string;
   tenantId: string;
-  platitelDph: 'platitel' | 'neplatitel' | 'registracia_7a';
+  /** nezname = profil nevyplnený; uložiť sa nedá, len predvolený profil ho nesie. */
+  platitelDph: 'platitel' | 'neplatitel' | 'registracia_7a' | 'nezname';
   obdobieDph: 'mesacne' | 'stvrtrocne';
   uzavreteDo?: string;
   koeficient: DphKoeficientZaznam[];
@@ -94,7 +102,9 @@ export function predvolenyDphProfil(tenantId: string, organizationId: string): D
   return {
     organizationId,
     tenantId,
-    platitelDph: 'platitel',
+    // Nie „platiteľ": firma bez profilu sa tak tichým predpokladom stala
+    // platiteľom s nárokom na odpočet. Kým to účtovník nevyplní, nevieme.
+    platitelDph: 'nezname',
     obdobieDph: 'stvrtrocne',
     koeficient: [],
     pomerneOdpocitanie: [],

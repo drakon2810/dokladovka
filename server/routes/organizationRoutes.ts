@@ -39,6 +39,8 @@ const dphPravidloSchema = z.object({
   predkontaciaId: z.string().optional(),
   predkontaciaNedanovaId: z.string().optional(),
   clenenieDphNedanoveId: z.string().optional(),
+  platnostOd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  platnostDo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 }).strict();
 
 const dphProfilSchema = z.object({

@@ -2161,6 +2161,37 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
     expect(stopa.istota).toMatchObject({ modelu: 0.9, strop: expect.any(Number), dovod: expect.any(String) });
   }, 90_000);
 
+  // Sekcia B2 patrila odpočtovému členeniu, ktoré model vybral. Keď ho účet
+  // prepíše na členenie bez nároku, B2 ostala visieť: hlavička PN / B2 bez
+  // jediného odpočtu. Sekcia sa preto určí nanovo podľa praxe nového členenia.
+  it('po prepise na členenie bez nároku neostane v hlavičke sekcia B2 modelu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const documentId = await doklad(database, kde);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Reprezentácia',
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh.clenenie_dph_id).toBe(dphPn);
+    expect(navrh.clenenie_kv_kod).toBe('KN');
+    const stopa = (await database.query<Record<string, any>>(
+      `SELECT t.zmeny FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
+      [documentId],
+    )).rows[0];
+    expect(stopa.zmeny).toContainEqual({ pole: 'clenenieKvKod', z: 'B2', na: 'KN', dovod: 'ucet_bez_odpoctu' });
+  }, 90_000);
+
   it('prepíše členenie riadku, aj keď hlavička odpočet uplatňuje', async () => {
     const database = await createTestDatabase();
     databases.push(database);
@@ -2477,7 +2508,7 @@ describe('číselný rad nového dodávateľa podľa krajiny', () => {
 // s tou istou faktúrou účtujú inak a obe správne. Preto to nie je odhad
 // z histórie, ale nastavenie klienta, ktoré platí od PRVÉHO dokladu.
 describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
-  it('rozreže palivo osobného auta a naftu do ťahača nechá celú', async () => {
+  const rezPhm = async (pravidloNavyse: Record<string, unknown>, extracted: Record<string, unknown>) => {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
@@ -2505,7 +2536,7 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
         [id, ...kde, kod, nazov],
       );
     }
-    // Nastavenie klienta: základ 80/20, daň 50/50 (§ 49 ods. 5), oba účty.
+    // Nastavenie klienta: základ 80/20, daň 50/50 (od 2026 § 85n), oba účty.
     await database.query(
       `INSERT INTO organization_dph_profiles (organization_id,tenant_id,pravidla_aut)
        VALUES ($2,$1,$3::jsonb)`,
@@ -2513,14 +2544,15 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
         kategoria: 'Osobné auto', percento: 80, percentoDph: 50,
         klucoveSlova: ['natural 95', 'premiová nafta'],
         predkontaciaId: phm, predkontaciaNedanovaId: nadspotreba, clenenieDphNedanoveId: dphPn,
+        ...pravidloNavyse,
       }])],
     );
 
     const documentId = randomUUID();
     await database.query(
       `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
-       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,270,'EUR')`,
-      [documentId, ...kde],
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,270,'EUR')`,
+      [documentId, ...kde, JSON.stringify(extracted)],
     );
 
     const parser = {
@@ -2545,7 +2577,13 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
 
     const riadky = (await database.query<Record<string, any>>(
       'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
-    )).rows[0].riadky as Array<Record<string, any>>;
+    )).rows[0].riadky as Array<Record<string, any>> | null;
+    return { riadky, phm, nadspotreba, dphPn };
+  };
+
+  it('rozreže palivo osobného auta a naftu do ťahača nechá celú', async () => {
+    const { riadky: vysledok, phm, nadspotreba, dphPn } = await rezPhm({}, {});
+    const riadky = vysledok!;
     // Dve položky × dve časti; nafta do ťahača sa nedelí a v rozpise nie je.
     expect(riadky.map((riadok) => [riadok.index, riadok.predkontaciaId, riadok.podiel, riadok.podielDph])).toEqual([
       [0, phm, 0.8, 0.5],
@@ -2555,6 +2593,13 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
     ]);
     // Nedaňová časť má vlastné členenie a do kontrolného výkazu nepatrí.
     expect(riadky[1]).toMatchObject({ clenenieDphId: dphPn, clenenieKvKod: 'KN' });
+  }, 90_000);
+
+  // Daň 50/50 pri osobnom aute zaviedol od 1. 1. 2026 § 85n. Pravidlo s dátumom
+  // platnosti nesmie rozrezať decembrové tankovanie z roku 2025.
+  it('pravidlo s dátumom platnosti nereže plnenie spred neho', async () => {
+    const { riadky } = await rezPhm({ platnostOd: '2026-01-01' }, { datumDodania: '2025-12-15', datumVystavenia: '2026-01-05' });
+    expect((riadky ?? []).some((riadok) => riadok.podiel != null)).toBe(false);
   }, 90_000);
 });
 

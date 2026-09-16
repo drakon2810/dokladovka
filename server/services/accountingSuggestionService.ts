@@ -6,7 +6,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
 import {
-  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph,
+  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph, pravidloPlati,
 } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
@@ -3262,6 +3262,7 @@ export async function navrhniZauctovanie(
   };
   // Pravidlo účtovníka a kód vyčítaný z dokladu (odkaz na paragraf, ktorý model
   // v prompte nevidí) ostávajú nad AI aj tu — opravuje sa odpoveď modelu.
+  let hlavickaBezOdpoctu = false;
   if (!pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
     const nahrada = opravBezOdpoctu(validated.predkontacia_id, validated.clenenie_dph_id);
     if (nahrada) {
@@ -3269,24 +3270,29 @@ export async function navrhniZauctovanie(
         + ' — členenie prepísané na bez nároku');
       zmen('clenenieDphId', validated.clenenie_dph_id, nahrada, 'ucet_bez_odpoctu');
       validated.clenenie_dph_id = nahrada;
+      hlavickaBezOdpoctu = true;
     }
   }
 
   const kvZPravidla = kvNavrhuPreDruh(pravidlo.kvKod, druhDokladu);
   const kvZDokladu = kvNavrhuPreDruh(naDoklade.clenenieKvKod, druhDokladu);
-  const kvZModelu = kvNavrhuPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu);
+  // Sekciu modelu aj kategórie viazalo členenie s odpočtom, ktoré účet práve
+  // prepísal — k členeniu bez nároku nepatrí. Tak vznikala hlavička PN / B2
+  // bez jediného odpočtu. Rozhodne prax nového členenia, a keď ju firma nemá,
+  // KN: plnenie bez odpočtu do kontrolného výkazu nejde.
+  const kvZModelu = hlavickaBezOdpoctu ? undefined : kvNavrhuPreDruh(parsed.clenenieKvKod ?? undefined, druhDokladu);
   // Iba kategória s doloženou zhodou v slovníku. Sekcia KV ide do kontrolného
   // výkazu, a sémantického kandidáta viaže na doklad len rovnosť predkontácie —
   // tú istú nesie viac kategórií, takže by sem sekciu doniesla kategória, ktorá
   // s dokladom nemá spoločné slovo.
-  const kvZKategorie = kvNavrhuPreDruh(
+  const kvZKategorie = hlavickaBezOdpoctu ? undefined : kvNavrhuPreDruh(
     kategoriaZhoda?.kosinus === undefined ? kategoriaZhoda?.clenenie_kv_kod : undefined, druhDokladu);
   let kvKod = validated.clenenie_dph_id
     ? kvNavrhuPreDruh(await kvPreClenenie(
         database, input, validated.clenenie_dph_id, korpus.agendy,
         kvZPravidla ?? kvZDokladu ?? kvZModelu ?? kvZKategorie,
         asOf,
-      ), druhDokladu)
+      ) ?? (hlavickaBezOdpoctu ? 'KN' : undefined), druhDokladu)
     : undefined;
   // Dôvod podľa zdroja, ktorý sekciu naozaj dal — nie podľa toho, či pravidlo
   // nejakú sekciu nesie. Pravidlo s A1 na prijatej faktúre sa nepoužije a zmena
@@ -3296,6 +3302,7 @@ export async function navrhniZauctovanie(
   zmen('clenenieKvKod', parsed.clenenieKvKod, kvKod, !validated.clenenie_dph_id ? 'kv_bez_clenenia'
     : kvZPravidla ? 'pravidlo_uctovnika'
     : kvZDokladu ? 'kod_z_dokladu'
+    : hlavickaBezOdpoctu ? 'ucet_bez_odpoctu'
     : kvModeluUpravene ? 'kv_podla_druhu'
     : 'kv_podla_praxe_a_druhu');
 
@@ -3624,8 +3631,10 @@ export async function navrhniZauctovanie(
   // (posudDph) a pokynom do promptu (dphPokynyPreAi), ako doteraz.
   const aktivnePredkontacie = new Set(codeLists.rows
     .filter((row) => row.kind === 'predkontacie').map((row) => row.id));
+  const datumPlnenia = ulozeny.datumDodania ?? ulozeny.datumVystavenia ?? documentContext.datumVystavenia ?? undefined;
   const pravidlaRezu = (dphProfil?.pravidlaAut ?? []).filter((pravidlo) =>
     pravidlo.klucoveSlova.length > 0
+    && pravidloPlati(pravidlo, datumPlnenia)
     && pravidlo.percento > 0 && pravidlo.percento < 100
     && pravidlo.predkontaciaId && pravidlo.predkontaciaNedanovaId
     && aktivnePredkontacie.has(pravidlo.predkontaciaId)

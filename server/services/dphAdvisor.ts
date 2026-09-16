@@ -3,6 +3,7 @@ import type {
   DphPravidloOdpoctu,
   DphProfil,
 } from './dphProfileService.js';
+import { popisKodu } from './pohodaDphKody.js';
 
 // dphAdvisor — čistá funkcia posudDph(dokument, profil). Jediný zdroj pravdy
 // pre DPH kontroly: worker (návrhy pre AI), approve (blokácie) a detail
@@ -52,6 +53,29 @@ function bezDiakritiky(value: string): string {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Slovenské sadzby DPH podľa dňa zdaniteľného plnenia (§ 27 zákona o DPH) —
+ * jediná tabuľka na serveri, číta ju export do POHODY aj DPH poradca. Od
+ * 1. 1. 2025 základná 23 %, znížené 19 % a 5 %; predtým základná 20 % a znížená
+ * 10 %, k nim od 1. 1. 2023 aj 5 % (štátom podporované nájomné bývanie).
+ * Rozhoduje deň plnenia, nie vystavenia — decembrová dodávka fakturovaná
+ * v januári 2025 nesie ešte 20 %.
+ *
+ * ponytail: plnenie pred rokom 2011 (vtedy 19 % a 10 %) tabuľka nepozná;
+ * riadok pridať, keď taký doklad príde. Klient má kópiu
+ * v src/data/xml/pohodaDataPack.ts — meniť obe naraz.
+ */
+export const SK_SADZBY_DPH: ReadonlyArray<{ od: string; high: number; low: number; third?: number }> = [
+  { od: '2025-01-01', high: 23, low: 19, third: 5 },
+  { od: '2023-01-01', high: 20, low: 10, third: 5 },
+  { od: '2011-01-01', high: 20, low: 10 },
+];
+
+/** Sadzby platné v deň plnenia; bez dátumu dnešné. */
+export function sadzbyDphPre(datum: string | undefined) {
+  return SK_SADZBY_DPH.find((riadok) => !datum || riadok.od <= datum.slice(0, 10));
 }
 
 interface ExtraktDokladu {
@@ -120,8 +144,15 @@ export function jeCudziDodavatel(dodavatel: { icDph?: string; krajina?: string }
   return krajina !== '' && krajina !== 'SK' && prefix !== 'SK';
 }
 
-/** Heuristika: členenie DPH podľa kódu/názvu nevyzerá ako „bez odpočtu“. */
+/**
+ * Uplatňuje členenie odpočet? Kód z referenčného zoznamu POHODY rozhoduje
+ * podľa riadkov priznania, do ktorých zapisuje — názov v číselníku o tom môže
+ * mlčať („Nadobudnutie tovaru prvým odberateľom" do priznania nevstupuje).
+ * Vlastný kód firmy sa posúdi heuristikou podľa kódu a názvu.
+ */
 export function clenenieVyzeraNaOdpocet(clenenie: { kod: string; nazov: string }): boolean {
+  const popis = popisKodu(clenenie.kod);
+  if (popis?.strana === 'P') return popis.riadky.length > 0;
   const text = bezDiakritiky(`${clenenie.kod} ${clenenie.nazov}`);
   if (/bez\s*(naroku|odpoctu)/.test(text)) return false;
   if (/neodpocitava|neplatitel|mimo\s*dph|nezahrnovat/.test(text)) return false;
@@ -130,23 +161,41 @@ export function clenenieVyzeraNaOdpocet(clenenie: { kod: string; nazov: string }
   return true;
 }
 
+/**
+ * Koeficient pre rok plnenia. Keď na ten rok zápis chýba, platí ročný
+ * koeficient predchádzajúceho roka — počas roka sa odpočet kráti práve ním
+ * (§ 50 ods. 4). Starší sa nepoužije: koeficient z roku 2024 na doklade z roku
+ * 2026 je iné číslo, nie odhad.
+ */
 function koeficientPre(zaznamy: DphKoeficientZaznam[], duzp?: string): DphKoeficientZaznam | undefined {
-  if (zaznamy.length === 0) return undefined;
-  const rok = duzp ? Number(duzp.slice(0, 4)) : undefined;
-  const preRok = rok ? zaznamy.filter((zaznam) => zaznam.rok === rok) : [];
-  const kandidati = preRok.length > 0
-    ? preRok
-    : [...zaznamy].sort((a, b) => b.rok - a.rok).filter((zaznam, _, all) => zaznam.rok === all[0].rok);
-  return kandidati.find((zaznam) => zaznam.typ === 'zalohovy') ?? kandidati[0];
+  if (!duzp) return undefined;
+  const datum = duzp.slice(0, 10);
+  const rok = Number(datum.slice(0, 4));
+  const platne = zaznamy.filter((zaznam) => pravidloPlati(zaznam, datum));
+  const preRok = platne.filter((zaznam) => zaznam.rok === rok);
+  return preRok.find((zaznam) => zaznam.typ === 'zalohovy') ?? preRok[0]
+    ?? platne.find((zaznam) => zaznam.rok === rok - 1 && zaznam.typ === 'rocny');
+}
+
+/**
+ * Platí pravidlo (alebo koeficient) pre plnenie k danému dňu? Bez dátumov
+ * platí vždy. S dátumami a bez dňa plnenia nie — nevieme, či doň patrí.
+ */
+export function pravidloPlati(pravidlo: { platnostOd?: string; platnostDo?: string }, datum: string | undefined): boolean {
+  if (!pravidlo.platnostOd && !pravidlo.platnostDo) return true;
+  if (!datum) return false;
+  const den = datum.slice(0, 10);
+  return (!pravidlo.platnostOd || pravidlo.platnostOd <= den) && (!pravidlo.platnostDo || den <= pravidlo.platnostDo);
 }
 
 function pravidloVarovanie(
   kod: string,
   pravidla: DphPravidloOdpoctu[],
   texty: string[],
+  duzp: string | undefined,
 ): DphZistenie[] {
   const zistenia: DphZistenie[] = [];
-  for (const pravidlo of pravidla) {
+  for (const pravidlo of pravidla.filter((item) => pravidloPlati(item, duzp))) {
     const zhoda = najdiKlucoveSlovo(texty, pravidlo.klucoveSlova);
     if (!zhoda) continue;
     zistenia.push({
@@ -164,7 +213,9 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
   const varovania: DphZistenie[] = [];
   const blokacie: DphZistenie[] = [];
   const doklad = extrakt(dokument);
-  const bezNarokuNaOdpocet = profil.platitelDph !== 'platitel';
+  // Firma bez profilu (nezname) nie je ani platiteľ, ani neplatiteľ: blokácie
+  // odpočtu ani kontroly krátenia pre ňu nebežia, kým to účtovník nevyplní.
+  const bezNarokuNaOdpocet = profil.platitelDph === 'neplatitel' || profil.platitelDph === 'registracia_7a';
   // Členenia, ktoré doklad naozaj uplatní: hlavička a každá položka s vlastným
   // členením (prázdne pole položky dedí hlavičku). Export ich posiela za riadok,
   // takže odpočet na položke je odpočet aj pod hlavičkou „bez odpočtu" — kým sa
@@ -215,10 +266,12 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
   const relevantneSamozdanenie = profil.samozdanenieAktivne || profil.nakupyZEu || profil.sluzbyZEu
     || profil.platitelDph === 'registracia_7a';
   if (relevantneSamozdanenie && jeEuDodavatel && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
-    const dph23 = round2(doklad.zaklad * 0.23);
+    const sadzba = sadzbyDphPre(doklad.duzp)?.high;
+    const dan = sadzba
+      ? ` DPH ${sadzba} % = ${round2((doklad.zaklad * sadzba) / 100).toFixed(2)} na vstupe aj výstupe.` : '';
     navrhy.push({
       kod: 'dph_samozdanenie_kandidat',
-      sprava: `Kandidát na samozdanenie: dodávateľ s IČ DPH ${prefix} fakturuje bez DPH. DPH 23 % = ${dph23.toFixed(2)} na vstupe aj výstupe.`,
+      sprava: `Kandidát na samozdanenie: dodávateľ s IČ DPH ${prefix} fakturuje bez DPH.${dan}`,
       clenenieDphId: profil.samozdanenieClenenieDphId,
       clenenieKvKod: profil.samozdanenieClenenieKvKod,
     });
@@ -254,10 +307,35 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
     });
   }
 
+  // Sekcia B2/B3 patrí plneniu, pri ktorom sa odpočítava (§ 78a). Posudzuje sa
+  // celý doklad: hlavička PD s B2 a riadky PN sú čiastočný odpočet, zákonný —
+  // takých má produkcia 675. Podozrivý je až doklad, na ktorom sa neodpočítava
+  // nič. Ani vtedy nie blokácia: „PN s B2" môže mať vysvetlenie (odpočet
+  // v inom období, lízing), preto len návrh KN a rozhodne účtovník. Členenie,
+  // ktoré sa nedá rozpísať z číselníka, nič nedokazuje — vtedy mlčíme.
+  const kvHlavicky = dokument.accounting?.clenenieKvKod;
+  const riadkyDokladu = [
+    { clenenie: dokument.clenenieDph, kv: kvHlavicky },
+    ...polozky.map((polozka) => ({
+      clenenie: polozka?.ucto?.clenenieDphId
+        ? dokument.cleneniaPoloziek?.find((clenenie) => clenenie.id === polozka.ucto.clenenieDphId)
+        : dokument.clenenieDph,
+      kv: polozka?.ucto?.clenenieKvKod || kvHlavicky,
+    })),
+  ];
+  if (riadkyDokladu.some((riadok) => riadok.kv === 'B2' || riadok.kv === 'B3')
+    && riadkyDokladu.every((riadok) => riadok.clenenie && !clenenieVyzeraNaOdpocet(riadok.clenenie))) {
+    navrhy.push({
+      kod: 'dph_kv_bez_odpoctu',
+      sprava: 'Doklad má sekciu B.2/B.3, ale nenašli sme uplatnený odpočet DPH. Overte celý doklad a obdobie odpočtu.',
+      clenenieKvKod: 'KN',
+    });
+  }
+
   // Pravidlá pre autá a pomerné odpočítanie — len pre platiteľa.
-  if (!bezNarokuNaOdpocet) {
-    varovania.push(...pravidloVarovanie('dph_auto_odpocet', profil.pravidlaAut, doklad.texty));
-    varovania.push(...pravidloVarovanie('dph_pomerny_odpocet', profil.pomerneOdpocitanie, doklad.texty));
+  if (profil.platitelDph === 'platitel') {
+    varovania.push(...pravidloVarovanie('dph_auto_odpocet', profil.pravidlaAut, doklad.texty, doklad.duzp));
+    varovania.push(...pravidloVarovanie('dph_pomerny_odpocet', profil.pomerneOdpocitanie, doklad.texty, doklad.duzp));
 
     for (const kategoria of profil.bezNaroku) {
       const zhoda = najdiKlucoveSlovo(doklad.texty, kategoria.klucoveSlova);
@@ -288,7 +366,7 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
  */
 export function dphPokynyPreAi(profil: DphProfil): string[] {
   const pokyny: string[] = [];
-  if (profil.platitelDph !== 'platitel') {
+  if (profil.platitelDph === 'neplatitel' || profil.platitelDph === 'registracia_7a') {
     pokyny.push('Organizácia nemá nárok na odpočet DPH — vždy vyber členenie DPH bez odpočtu.');
   }
   if (profil.samozdanenieAktivne || profil.nakupyZEu || profil.sluzbyZEu) {
@@ -300,7 +378,11 @@ export function dphPokynyPreAi(profil: DphProfil): string[] {
   }
   for (const pravidlo of [...profil.pravidlaAut, ...profil.pomerneOdpocitanie]) {
     if (pravidlo.klucoveSlova.length === 0) continue;
-    pokyny.push(`Ak sa v doklade vyskytuje ${pravidlo.klucoveSlova.map((slovo) => `„${slovo}“`).join(', ')}, odpočet je len ${pravidlo.percento} % (${pravidlo.kategoria}).`);
+    // Pokyny sú nezávislé od dokladu, preto obdobie ide do textu — model ho
+    // porovná s dňom plnenia sám a deterministický rez ho aj tak overí.
+    const obdobie = [pravidlo.platnostOd && `od ${pravidlo.platnostOd}`, pravidlo.platnostDo && `do ${pravidlo.platnostDo}`]
+      .filter(Boolean).join(' ');
+    pokyny.push(`Ak sa v doklade vyskytuje ${pravidlo.klucoveSlova.map((slovo) => `„${slovo}“`).join(', ')}, odpočet je len ${pravidlo.percento} % (${pravidlo.kategoria}${obdobie ? `; platí pre plnenie ${obdobie}` : ''}).`);
   }
   for (const kategoria of profil.bezNaroku) {
     if (kategoria.klucoveSlova.length === 0) continue;

@@ -1,5 +1,5 @@
 import { HttpError } from './http.js';
-import { jeCudziDodavatel } from './services/dphAdvisor.js';
+import { jeCudziDodavatel, SK_SADZBY_DPH } from './services/dphAdvisor.js';
 
 export function escapeXml(value: unknown): string {
   return String(value ?? '')
@@ -131,27 +131,15 @@ function amount(value: unknown): string {
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
 /**
- * Slovenské sadzby DPH podľa dátumu zdaniteľného plnenia (§ 27 zákona o DPH):
- * od 1. 1. 2025 základná 23 %, znížené 19 % a 5 %; predtým základná 20 %
- * a znížená 10 %, k nim od 1. 1. 2023 aj 5 % (štátom podporované nájomné
- * bývanie). Rozhoduje deň plnenia, nie vystavenia — decembrová dodávka
- * fakturovaná v januári 2025 nesie ešte 20 %. Bez dátumu sa 20 % z roku 2024
- * tvárilo ako cudzia daň a odpočet v POHODE zmizol (audit R2).
+ * Sadzby podľa dňa plnenia sú v SK_SADZBY_DPH (dphAdvisor.ts). Bez dátumu sa
+ * 20 % z roku 2024 tvárilo ako cudzia daň a odpočet v POHODE zmizol (audit R2).
  *
  * POHODA dostáva len kategóriu high/low/third, percentVAT neposielame: percento
  * si ku kategórii dosadí z vlastnej tabuľky sadzieb podľa dateTax, ktorý ide
  * z toho istého dátumu. percentVAT je podľa invoice.xsd „historická sadzba",
  * patrí k historyHigh/historyLow a POHODA ho prijme, len keď ho klient povolil
  * v Globálnom nastavení — inak by import spadol.
- *
- * ponytail: plnenie pred rokom 2011 (vtedy 19 % a 10 %) dostane „none"; riadok
- * tabuľky pridať, keď taký doklad príde. Zhoda so src/data/xml/pohodaDataPack.ts.
  */
-const SK_SADZBY_DPH: ReadonlyArray<{ od: string; high: number; low: number; third?: number }> = [
-  { od: '2025-01-01', high: 23, low: 19, third: 5 },
-  { od: '2023-01-01', high: 20, low: 10, third: 5 },
-  { od: '2011-01-01', high: 20, low: 10 },
-];
 
 type SadzbaPohody = 'high' | 'low' | 'third' | 'none';
 
