@@ -163,10 +163,10 @@ describe('výber celých dokladov histórie', () => {
 
     expect(priklad).toMatchObject({ suma: 65.85, hlavicka: { text: 'phm', predkontaciaKod: 'PHM' } });
     expect(priklad.polozky).toEqual([
-      expect.objectContaining({ riadok: 1, podiel: 0.8, podielDph: 0.5003, zdedene: true }),
+      expect.objectContaining({ riadok: 1, podielDokladu: 0.8, podielDphDokladu: 0.5003, zdedene: true }),
       expect.not.objectContaining({ zdedene: true }),
     ]);
-    expect(priklad.polozky![1]).toMatchObject({ podiel: 0.2, podielDph: 0.4997 });
+    expect(priklad.polozky![1]).toMatchObject({ podielDokladu: 0.2, podielDphDokladu: 0.4997 });
   });
 
   const cast = (riadok: number, text: string, predkontaciaKod: string, suma?: number, sumaDph?: number) =>
@@ -195,7 +195,7 @@ describe('výber celých dokladov histórie', () => {
     });
     const priklad = (vzor: DokladHistorie) =>
       zoradDokladyPrikladov([vzor], { polozky: ['natural 95'], ico: vzor.ico })[0].priklad;
-    const podiely = (vzor: DokladHistorie) => priklad(vzor).polozky!.map((polozka) => polozka.podiel);
+    const podiely = (vzor: DokladHistorie) => priklad(vzor).polozky!.map((polozka) => polozka.podielDokladu);
 
     // Rozúčtovaný s vlastným textom hlavičky: korpus nesie všetko.
     const cely = doklad('1', 'phm', [cast(1, 'natural 95 80', 'PHM', 80, 11.5), cast(2, 'natural 95 20', 'PHM-N', 20, 11.5)]);

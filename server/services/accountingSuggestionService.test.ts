@@ -2774,10 +2774,13 @@ describe('doklady histórie idú do promptu celé', () => {
       vsetkyPolozky: true,
       suma: 200,
       polozky: [
-        { riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, podiel: 0.8334, predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0], zdedene: true },
-        { riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, podiel: 0.1667, predkontaciaKod: NEDANOVE[1], predkontaciaId: NEDANOVE[0] },
+        { riadok: 1, text: 'dialničná známka', suma: 166.67, sumaDph: 0, podielDokladu: 0.8334, predkontaciaKod: POPLATOK[1], predkontaciaId: POPLATOK[0], zdedene: true },
+        { riadok: 2, text: 'dph', suma: 33.33, sumaDph: 0, podielDokladu: 0.1667, predkontaciaKod: NEDANOVE[1], predkontaciaId: NEDANOVE[0] },
       ],
     }]);
+    // „podiel" je v odpovedi zlomok rezanej položky. Podiel dokladu pod tým istým
+    // menom model odpisoval do odpovede a overenie rozpis zahodilo.
+    expect(JSON.stringify(prompt)).not.toContain('"podiel"');
 
     // Stopa: presne tie doklady, ktoré odišli modelu, s riadkami korpusu a hashom poslaného JSON-u.
     const stopaId = async () => (await database.query<Record<string, any>>(
@@ -2818,7 +2821,7 @@ describe('doklady histórie idú do promptu celé', () => {
     expect(refy).not.toContain('FP|26FP500|2026-06-01');
     const cely = prompt.doklady.find((item: any) => item.ref === 'FP|26FP400|2026-04-01');
     expect(cely.polozky).toHaveLength(30);
-    for (const pole of ['podiel', 'podielDph']) {
+    for (const pole of ['podielDokladu', 'podielDphDokladu']) {
       expect(Math.abs(cely.polozky.reduce((spolu: number, polozka: any) => spolu + polozka[pole], 0) - 1)).toBeLessThan(0.001);
     }
   }, 90_000);
