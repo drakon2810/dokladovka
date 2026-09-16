@@ -221,6 +221,26 @@ describe('meranie presnosti zaúčtovania', () => {
     expect(vysledok.doklady[0].zdrzanie ?? null).toBeNull();
     expect(vysledok.vysledok.FP.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
   }, 60_000);
+
+  // Interný doklad samozdanenia nesie DPH, ktorú si firma vypočítala sama.
+  // Faktúra zahraničného dodávateľa za ním je bez dane — kým meranie tú daň
+  // podstrčilo ako daň dodávateľa, kontrola DPH ju brala za cudziu daň
+  // a každé samozdanenie zablokovala.
+  it('daň interného dokladu nie je daň, ktorú účtoval dodávateľ', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const aInt = await kod('predkontacie', 'aInt');
+    const pdSluz = await kod('cleneniaDph', 'PDsluz');
+    const samozdanenie = {
+      agenda: 'INT', supplier_name_normalized: 'geschwandtner gmbh', krajina: 'DE', suma_dph: 23, sadzba_dph: 23,
+      predkontacia_id: aInt, predkontacia_kod: 'aInt', clenenie_dph_id: pdSluz,
+    };
+    await riadok({ ...samozdanenie, doklad_cislo: '26SAM001', datum: '2026-02-15' });
+    await riadok({ ...samozdanenie, doklad_cislo: '26SAM090', datum: '2026-08-20' });
+
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
+    expect(vysledok.doklady[0].zdrzanie ?? null).toBeNull();
+    expect(vysledok.vysledok.INT.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
+  }, 60_000);
 });
 
 // Neskorší doklad ani nič, čo vzniklo po dátume dokladu, nesmie zmeniť to, čo

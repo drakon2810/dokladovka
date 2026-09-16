@@ -327,6 +327,11 @@ async function nacitajDoklady(
   const podlaDokladu = new Map<string, Skutocnost & { hlavicka: { popis?: string; suma?: number; sumaDph?: number; sadzbaDph?: number } }>();
   for (const row of rows) {
     const kluc = `${row.agenda}|${row.doklad_cislo}|${row.datum}`;
+    // DPH na internom doklade (samozdanenie, §69) si vypočítala firma sama —
+    // doklad protistrany za ním je bez dane. Podstrčená ako daň dodávateľa
+    // vyzerala pri zahraničnej protistrane ako cudzia daň a kontrola DPH každé
+    // samozdanenie zablokovala.
+    if (row.agenda === 'INT') { row.suma_dph = null; row.sadzba_dph = null; }
     if (Number(row.riadok_index ?? 0) === 0) {
       podlaDokladu.set(kluc, {
         agenda: row.agenda,
