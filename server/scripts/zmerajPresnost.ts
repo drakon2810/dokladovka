@@ -3,7 +3,7 @@ import { loadConfig } from '../config.js';
 import { createDatabase } from '../db/database.js';
 import { HttpError } from '../http.js';
 import {
-  POLIA, intervalSpolahlivosti, presnostNadPrahom, zmerajPresnost, type OknoMerania, type PresnostVysledok, type RezimMerania,
+  POLIA, castostOtazok, intervalSpolahlivosti, presnostNadPrahom, zmerajPresnost, type OknoMerania, type PresnostVysledok, type RezimMerania,
 } from '../services/uctoPresnostService.js';
 
 /**
@@ -131,6 +131,15 @@ for (const { firma, vysledok } of behy) {
     return `${pole} ${spravne}/${znamych} ${podiel(spravne, znamych)}`;
   });
   console.log(`${firma.slice(0, 24).padEnd(24)} dokl. ${dokladov}, zdržal sa ${zdrzanie} | ${polia.join(' | ')}`);
+}
+// Koľko otázok by účtovník dostal, keby sa systém pýtal namiesto hádania (R09).
+console.log('\notázky účtovníkovi (spor praxí v DPH/KV alebo nová protistrana; cieľ ≤ 10–15 %)');
+for (const { firma, vysledok } of behy) {
+  const castost = castostOtazok(vysledok.doklady);
+  if (castost.dokladov === 0) continue;
+  console.log(`${firma.slice(0, 24).padEnd(24)} otázky ${castost.otazky}/${castost.dokladov} ${podiel(castost.otazky, castost.dokladov)}`
+    + ` (spor v DPH/KV ${castost.sporDph}, nová protistrana ${castost.novaProtistrana})`
+    + ` | ponuka bez predvyplnenia (spor len v účte) ${castost.ponukyBezPredvyplnenia}`);
 }
 // Doklady bez IČO aj mena: nevie sa, či je protistrana nová, tak sa aspoň počítajú.
 for (const { firma, vysledok } of behy) {

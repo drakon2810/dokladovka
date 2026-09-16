@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/database.js';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import {
-  intervalSpolahlivosti, jeRozpisany, ohodnot, presnostNadPrahom, scitajPoAgendach, vyberVzorku, zmerajPresnost,
+  castostOtazok, intervalSpolahlivosti, jeRozpisany, ohodnot, presnostNadPrahom, scitajPoAgendach, vyberVzorku, zmerajPresnost,
   type Skutocnost, type VysledokDokladu,
 } from './uctoPresnostService.js';
-import { prepocitajPravidla } from './uctoPravidlaService.js';
+import { prepocitajPravidla, sporPraxe } from './uctoPravidlaService.js';
 
 // Meranie stojí a padá na jednej veci: meraný doklad NESMIE vidieť seba ani
 // nič, čo vzniklo po ňom. Korpus je zrkadlo toho, čo účtovník urobil, takže
@@ -544,6 +544,30 @@ describe('hodnotenie tvaru', () => {
     const bezDph = { ...doklad([{ popis: 'tovar' }]), clenenieDphId: undefined };
     expect(ohodnot(bezDph, navrh(null), new Map()).clenenieDph).toBeNull();
     expect(ohodnot(bezDph, navrh(null), new Map()).rad).toBeNull();
+  });
+});
+
+// Kedy by sa systém pýtal účtovníka namiesto hádania (R09). Pred zapnutím
+// otázok treba vedieť, na koľkých dokladoch by sa pýtal — cieľ je najviac
+// 10–15 %. Spor praxí protistrany, ktorý mení DPH alebo sekciu KV, je otázka;
+// spor len v účte je ponuka bez predvyplnenia; nová protistrana je otázka.
+describe('častosť otázok', () => {
+  it('spor praxí rozlíši DPH od účtu', () => {
+    const variant = (predkontaciaKod: string, clenenieDphKod: string, clenenieKvKod: string) => ({
+      predkontaciaKod, clenenieDphKod, clenenieKvKod, tvar: [], dokladov: 3, od: '2026-01-01', do: '2026-06-01',
+    });
+    expect(sporPraxe(undefined)).toBeUndefined();
+    expect(sporPraxe({ konflikt: false, varianty: [variant('501', 'PD', 'B2'), variant('518', 'PN', 'KN')] })).toBeUndefined();
+    expect(sporPraxe({ konflikt: true, varianty: [variant('501', 'PD', 'B2'), variant('518', 'PD', 'B2')] })).toBe('ucet');
+    expect(sporPraxe({ konflikt: true, varianty: [variant('513', 'PN', 'KN'), variant('513', 'PN', 'B2')] })).toBe('dph');
+  });
+
+  it('spočíta otázky a ponuky bez predvyplnenia na doklad, nie na dôvod', () => {
+    const doklady = [
+      { spor: 'dph' as const }, { spor: 'dph' as const, novaProtistrana: true },
+      { spor: 'ucet' as const }, { novaProtistrana: true }, {}, {}, {}, {}, {}, {},
+    ];
+    expect(castostOtazok(doklady)).toEqual({ dokladov: 10, otazky: 3, sporDph: 2, novaProtistrana: 2, ponukyBezPredvyplnenia: 1 });
   });
 });
 

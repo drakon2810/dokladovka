@@ -115,6 +115,27 @@ export interface VysledokDokladu {
   novaProtistrana?: boolean;
   /** Doklad bez IČO aj mena — nevie sa, či je protistrana nová. */
   neznamaProtistrana?: boolean;
+  /** Spor praxí protistrany: v DPH/KV (otázka) alebo len v účte (ponuka). */
+  spor?: 'dph' | 'ucet';
+}
+
+/**
+ * Na koľkých dokladoch by sa systém pýtal účtovníka (R09) — meria sa skôr, než
+ * sa otázky zapnú; cieľ je najviac 10–15 %. Otázka: spor praxí, ktorý mení DPH
+ * alebo sekciu KV, a nová protistrana. Ponuka bez predvyplnenia: spor len
+ * v účte. Doklad sa ráta raz, aj keď má dôvodov viac.
+ * ponytail: nejasný účel nákupu (repre / stravovanie / tovar) sa nemeria —
+ * na to treba druh plnenia (R18).
+ */
+export function castostOtazok(doklady: Array<Pick<VysledokDokladu, 'spor' | 'novaProtistrana'>>) {
+  const otazka = (doklad: Pick<VysledokDokladu, 'spor' | 'novaProtistrana'>) => doklad.spor === 'dph' || Boolean(doklad.novaProtistrana);
+  return {
+    dokladov: doklady.length,
+    otazky: doklady.filter(otazka).length,
+    sporDph: doklady.filter((doklad) => doklad.spor === 'dph').length,
+    novaProtistrana: doklady.filter((doklad) => doklad.novaProtistrana).length,
+    ponukyBezPredvyplnenia: doklady.filter((doklad) => doklad.spor === 'ucet' && !otazka(doklad)).length,
+  };
 }
 
 export interface PresnostVysledok {
@@ -582,6 +603,7 @@ export async function zmerajPresnost(
     let navrh: NavrhZauctovania | undefined;
     let zdrzanie: string | undefined;
     let chyba: string | undefined;
+    let spor: VysledokDokladu['spor'];
     let odpovedModelu: unknown;
     const kontext = kontextZKorpusu(doklad);
     // Len z histórie pred dátumom dokladu, ako všetko ostatné v meraní.
@@ -627,6 +649,7 @@ export async function zmerajPresnost(
         sKategoriami: moznosti.kategorie,
       });
       // Samotné členenie DPH bez účtu nie je zaúčtovanie — zdržanie, nie zlý tvar.
+      spor = vysledok.spor;
       if ('navrh' in vysledok && vysledok.navrh.predkontacia_id) navrh = vysledok.navrh;
       else zdrzanie = 'zdrzanie' in vysledok ? vysledok.zdrzanie : 'bez_predkontacie';
       for (const [pole, kluc] of [['vstup', 'input_tokens'], ['vystup', 'output_tokens'], ['spolu', 'total_tokens']] as const) {
@@ -659,6 +682,7 @@ export async function zmerajPresnost(
       ...(navrh ? { istota: navrh.confidence } : {}),
       ...(novaProtistrana ? { novaProtistrana } : {}),
       ...(maIdentitu ? {} : { neznamaProtistrana: true }),
+      ...(spor ? { spor } : {}),
     });
   }
 

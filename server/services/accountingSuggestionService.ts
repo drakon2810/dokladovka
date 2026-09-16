@@ -13,7 +13,7 @@ import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { zapisBehAi } from './behAi.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
-import { DOKLAD_KLUC_SQL, MIN_DOKLADOV, najdiPravidlo, variantyRozpisu } from './uctoPravidlaService.js';
+import { DOKLAD_KLUC_SQL, MIN_DOKLADOV, najdiPravidlo, sporPraxe, variantyRozpisu } from './uctoPravidlaService.js';
 import { jeDovozTovaru } from './pohodaDphKody.js';
 
 interface SuggestionInput {
@@ -1185,6 +1185,17 @@ export async function updateRuleFeedback(tx: Queryable, input: {
     [input.documentId, input.tenantId],
   );
   const row = suggestion.rows[0];
+  // Samokontrola ráta doklady, nie schválenia. Doklad schválený už predtým
+  // (schválenie sa medzitým zrušilo) pravidlo raz posúdil — tri schválenia toho
+  // istého dokladu by inak vypli pravidlo, ktoré sa pomýlilo raz. Beží pred
+  // zaznamenajOpravu, takže existujúca oprava je z predošlého schválenia.
+  // ponytail: zmenené rozhodnutie pri opätovnom schválení samokontrolu
+  // neopraví; na to treba spätný prepočet z ucto_opravy.
+  const skorsieSchvalenie = await tx.query(
+    'SELECT 1 FROM ucto_opravy WHERE tenant_id=$1 AND document_id=$2 LIMIT 1',
+    [input.tenantId, input.documentId],
+  );
+  if ((skorsieSchvalenie.rowCount ?? 0) > 0) return;
   // Rozhoduje rule_id, nie source: pravidlo prispieva do návrhu aj vtedy, keď
   // ho AI analýza doplnila o ostatné polia (source='ai') — inak by neúplné
   // pravidlá stratili samokontrolu a chybné by sa už nikdy nedeaktivovali.
@@ -1512,10 +1523,18 @@ export async function recordUctoDecision(tx: Queryable, input: {
   );
 }
 
-/** Zrušenie schválenia: rozhodnutie už nie je potvrdené, z pamäte sa odstráni. */
+/**
+ * Zrušenie schválenia: rozhodnutie už nie je potvrdené, z pamäte sa odstráni
+ * a zapísaná oprava sa označí ako zrušená. Volajú ho všetky cesty, ktoré
+ * schválenie rušia (úprava, zamietnutie, karanténa, rozdelenie, nová extrakcia).
+ */
 export async function forgetUctoDecision(tx: Queryable, tenantId: string, documentId: string): Promise<void> {
   await tx.query(
     `DELETE FROM ucto_decisions WHERE tenant_id=$1 AND document_id=$2 AND source='approved'`,
+    [tenantId, documentId],
+  );
+  await tx.query(
+    'UPDATE ucto_opravy SET zrusena_at=now() WHERE tenant_id=$1 AND document_id=$2 AND zrusena_at IS NULL',
     [tenantId, documentId],
   );
 }
@@ -2540,6 +2559,8 @@ export interface ZmenaNavrhu {
 }
 
 export type VysledokNavrhu = ({ navrh: NavrhZauctovania; dokazy: StopaNavrhu } | { zdrzanie: string }) & {
+  /** Spor praxí protistrany (sporPraxe) — meranie častosti otázok ho číta aj pri zdržaní. */
+  spor?: 'dph' | 'ucet';
   /** Spotreba tokenov z odpovede modelu — meranie ju sčíta do manifestu. */
   usage?: Record<string, unknown>;
   /** Surový JSON modelu: beh sa dá prehodnotiť bez nového volania. */
@@ -2818,6 +2839,7 @@ export async function navrhniZauctovanie(
   const pravidloProtistrany = await najdiPravidlo(
     database, input, korpus.agendy, protistranaKontextu,
     documentContext.historiaDoDatumu);
+  const spor = sporPraxe(pravidloProtistrany);
   // Model nevie účtovať na účet — vyberá predkontáciu. Ku každému účtu rozpadu
   // preto idú predkontácie, ktoré na tento účet účtujú; bez nich by mu ostalo
   // len číslo účtu, ktoré v číselníku nemá čo vybrať.
@@ -3105,7 +3127,7 @@ export async function navrhniZauctovanie(
   const hladani = Array.isArray(response.output)
     ? response.output.filter((item) => (item as { type?: string } | null)?.type === 'web_search_call').length : 0;
   const usage = response.usage && hladani > 0 ? { ...response.usage, web_search_calls: hladani } : response.usage;
-  if (!odpoved) return { zdrzanie: 'prazdna_odpoved', usage };
+  if (!odpoved) return { zdrzanie: 'prazdna_odpoved', usage, spor };
   // Vo formáte pre model je „riadky" povinné pole (structured outputs iné
   // nepustia), pri čítaní odpovede sa ale nevynucuje: chýbajúci rozpis je
   // „doklad sa nedelí", a kvôli nemu nemá padnúť celý návrh.
@@ -3191,7 +3213,7 @@ export async function navrhniZauctovanie(
     }
   }
 
-  if (!hasAccounting(validated)) return { zdrzanie: 'bez_zauctovania', usage, odpovedModelu: odpoved };
+  if (!hasAccounting(validated)) return { zdrzanie: 'bez_zauctovania', usage, odpovedModelu: odpoved, spor };
 
   // Členenie z účtu. Prebíja LEN odpoveď modelu: pravidlo účtovníka aj to, čo
   // je na doklade (extrakcia z neho číta odkaz na paragraf, ktorý model
@@ -3409,7 +3431,7 @@ export async function navrhniZauctovanie(
       },
       clenenieDph: clenenie,
     }, profil);
-    if (posudok.blokacie.length > 0) return { zdrzanie: 'posudok_dph', usage, odpovedModelu: odpoved };
+    if (posudok.blokacie.length > 0) return { zdrzanie: 'posudok_dph', usage, odpovedModelu: odpoved, spor };
   }
 
   // Strop istoty: bežný AI návrh ostáva na 0.8, teda pod hranicou
@@ -3699,6 +3721,7 @@ export async function navrhniZauctovanie(
   }
 
   return {
+    spor,
     navrh: {
       predkontacia_id: validated.predkontacia_id,
       clenenie_dph_id: validated.clenenie_dph_id,

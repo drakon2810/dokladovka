@@ -103,6 +103,55 @@ describe('záznam opráv účtovníka', () => {
     await app.close();
   }, 60_000);
 
+  // Zrušené schválenie oprava nepoznala a opätovné schválenie zapísalo druhú —
+  // ten istý doklad sa tak rátal dvakrát, aj v samokontrole pravidla: tri
+  // schválenia jedného dokladu vypli pravidlo, ktoré sa pomýlilo raz.
+  it('zrušené schválenie označí opravu a opätovné schválenie pravidlo nepotrestá druhýkrát', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    const { documentId, navrhnuta } = await pripravDoklad(database, seeded);
+    const ruleId = randomUUID();
+    await database.query(
+      `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_name_normalized,predkontacia_id,origin)
+       VALUES ($1,$2,$3,'rainside',$4,'manual')`,
+      [ruleId, seeded.tenantId, seeded.organizationId, navrhnuta],
+    );
+    await database.query('UPDATE accounting_suggestions SET rule_id=$2 WHERE document_id=$1', [documentId, ruleId]);
+    const schval = async () => {
+      const verzia = (await database.query<{ version: number }>('SELECT version FROM documents WHERE id=$1', [documentId])).rows[0].version;
+      const odpoved = await app.inject({
+        method: 'POST', url: `/api/documents/${documentId}/approve`, headers, payload: { expectedVersion: Number(verzia) },
+      });
+      expect(odpoved.statusCode, odpoved.body).toBe(200);
+    };
+    const opravy = async () => (await database.query<{ zrusena: boolean }>(
+      'SELECT zrusena_at IS NOT NULL AS zrusena FROM ucto_opravy WHERE document_id=$1 ORDER BY created_at', [documentId])).rows;
+    const pocetOprav = async () => Number((await database.query<{ corrections_count: number }>(
+      'SELECT corrections_count FROM accounting_rules WHERE id=$1', [ruleId])).rows[0].corrections_count);
+
+    await schval();
+    expect(await pocetOprav()).toBe(1);
+    const verzia = (await database.query<{ version: number }>('SELECT version FROM documents WHERE id=$1', [documentId])).rows[0].version;
+    const zamietnutie = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/reject`, headers,
+      payload: { expectedVersion: Number(verzia), reason: 'Zlý dodávateľ' },
+    });
+    expect(zamietnutie.statusCode, zamietnutie.body).toBe(200);
+    expect(await opravy()).toEqual([{ zrusena: true }]);
+
+    await database.query(`UPDATE documents SET status='na_kontrole' WHERE id=$1`, [documentId]);
+    await schval();
+    expect(await opravy()).toEqual([{ zrusena: true }, { zrusena: false }]);
+    expect(await pocetOprav()).toBe(1);
+
+    await app.close();
+  }, 60_000);
+
   it('súhlas s návrhom sa zapíše ako prázdny zoznam zmien, nie ako chýbajúci záznam', async () => {
     const database = await createTestDatabase();
     databases.push(database);

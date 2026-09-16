@@ -45,6 +45,19 @@ export interface TvarCast {
  * Jedna podoba praxe: hlavička a tvar položiek, ktoré sa v dokladoch
  * vyskytli SPOLU. Nič z nej nie je poskladané z rôznych dokladov.
  */
+/**
+ * Spor praxí protistrany pre otázku účtovníkovi (R09). Keď sa podoby líšia
+ * v členení DPH alebo sekcii KV, mení sa daň a hádať nemá kto — to je otázka.
+ * Keď len v účte, stačí ponuka bez predvyplnenia.
+ */
+export function sporPraxe(
+  pravidlo: { konflikt: boolean; varianty: Array<Pick<PraxVariant, 'clenenieDphKod' | 'clenenieKvKod'>> } | undefined,
+): 'dph' | 'ucet' | undefined {
+  if (!pravidlo?.konflikt) return undefined;
+  const dane = new Set(pravidlo.varianty.map((variant) => `${variant.clenenieDphKod ?? ''}|${variant.clenenieKvKod ?? ''}`));
+  return dane.size > 1 ? 'dph' : 'ucet';
+}
+
 export interface PraxVariant {
   predkontaciaKod?: string;
   clenenieDphKod?: string;
