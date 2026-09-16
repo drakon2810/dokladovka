@@ -122,6 +122,42 @@ describe('rozdelenie dokladu', () => {
     await app.close();
   }, 120_000);
 
+  // Rozdelenie ruší schválenie. Rozhodnutie z pamäte však ostávalo ako
+  // „schválené" a ďalšie doklady tej protistrany sa podľa neho predvypĺňali.
+  it('rozdelenie schváleného dokladu vyradí jeho rozhodnutie z pamäte', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const headers = sessionHeaders(await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
+    }));
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency,approved_version)
+       VALUES ($1,$2,$3,'MZDY','schvaleny','ready_for_review',$4::jsonb,'{}'::jsonb,3000,'EUR',1)`,
+      [documentId, seeded.tenantId, seeded.organizationId, JSON.stringify(EXTRACTED)],
+    );
+    await database.query(
+      `INSERT INTO ucto_decisions (id,tenant_id,organization_id,document_id,supplier_name_normalized,line_text_normalized,source)
+       VALUES ($1,$2,$3,$4,'zamestnavatel s.r.o.','hrube mzdy','approved')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, documentId],
+    );
+
+    const split = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/split`, headers,
+      payload: { polozkaIds: ['p2'], typ: 'OZ', expectedVersion: 1 },
+    });
+    expect(split.statusCode, split.body).toBe(201);
+    const povodny = await database.query<Record<string, any>>('SELECT status, approved_version FROM documents WHERE id=$1', [documentId]);
+    expect(povodny.rows[0]).toMatchObject({ status: 'na_kontrole', approved_version: null });
+    const pamat = await database.query(
+      `SELECT 1 FROM ucto_decisions WHERE document_id=$1 AND source='approved'`, [documentId],
+    );
+    expect(pamat.rows).toHaveLength(0);
+    await app.close();
+  }, 120_000);
+
   it('odmietne zastaranú verziu, prázdny výber aj odobratie všetkých položiek', async () => {
     const database = await createTestDatabase();
     databases.push(database);

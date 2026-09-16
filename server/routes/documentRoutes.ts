@@ -277,6 +277,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           id, auth.tenantId, body.expectedVersion, podtyp],
       );
       if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
+      // Úprava schváleného dokladu ruší potvrdenie — rozhodnutie sa vyradí
+      // z pamäte v tej istej transakcii, inak by pád medzi zápismi nechal
+      // neschválený doklad s potvrdeným rozhodnutím.
+      if (approvedChanged) await forgetUctoDecision(tx, auth.tenantId, id);
       // Rad pre nový druh — návrh k dokladu byť nemusí, tak sa drží aj tu.
       let radNovehoDruhu: string | null = null;
       if (druhZmeneny) {
@@ -340,8 +344,6 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         text: extracted?.textPolozky,
       });
     }
-    // Úprava schváleného dokladu ruší potvrdenie — rozhodnutie sa vyradí z pamäte.
-    if (approvedChanged) await forgetUctoDecision(database, auth.tenantId, id);
     return saved;
   });
 
@@ -799,15 +801,21 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           JSON.stringify([{ ts: teraz, user: auth.name, akcia: `Doklad vznikol rozdelením dokladu ${extracted.cisloFaktury ?? id}` }]),
           id, auth.tenantId],
       );
-      await tx.query(
+      const povodny = await tx.query(
         `UPDATE documents SET extracted=$1::jsonb, total_amount=$2, version=version+1,
                 status=CASE WHEN status='schvaleny' THEN 'na_kontrole' ELSE status END,
                 approved_version=NULL, approved_snapshot=NULL, history=$3::jsonb, updated_at=now()
-          WHERE id=$4 AND tenant_id=$5 AND version=$6`,
+          WHERE id=$4 AND tenant_id=$5 AND version=$6 RETURNING id`,
         [JSON.stringify(povodnyExtracted), povodnyExtracted.sumaSpolu,
           JSON.stringify([...document.history, { ts: teraz, user: auth.name, akcia: `Z dokladu bolo oddelených ${vybrane.length} položiek` }]),
           id, auth.tenantId, body.expectedVersion],
       );
+      // Súbežná zmena medzi načítaním a zápisom: nová časť by inak ostala
+      // a položky by existovali v dvoch dokladoch naraz.
+      if (!povodny.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad medzitým niekto zmenil, načítajte ho znova');
+      // Rozdelenie ruší schválenie — rozhodnutie von z pamäte, inak by ďalšie
+      // doklady tej protistrany predvypĺňalo ako potvrdené.
+      await forgetUctoDecision(tx, auth.tenantId, id);
     });
     await writeAudit(database, {
       tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,
