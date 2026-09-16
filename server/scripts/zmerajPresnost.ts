@@ -13,7 +13,7 @@ import {
  *
  * Produkcia, len na čítanie — databáza každý pokus o zápis odmietne:
  *   docker compose exec -T -e PGOPTIONS='-c default_transaction_read_only=on' api node build/server/scripts/zmerajPresnost.js --rezim bez_ai
- * Voľby: --rezim bez_ai|ai  --okno test|validacia  --vzorka N  --max-volani N  --kategorie
+ * Voľby: --rezim bez_ai|ai  --okno test|validacia  --vzorka N  --max-volani N  --kategorie  --firma časť_názvu|id
  * Režim ai stojí peniaze a posiela texty dokladov do OpenAI — len so súhlasom.
  * --max-volani je rozpočet CELÉHO behu (predvolene 100), nie na firmu; delí sa
  * rovnomerne a nevyčerpaný zvyšok prejde na ďalšie firmy. S --kategorie volá
@@ -26,10 +26,11 @@ const { values } = parseArgs({
     vzorka: { type: 'string' },
     'max-volani': { type: 'string' },
     kategorie: { type: 'boolean', default: false },
+    firma: { type: 'string' },
   },
 });
 if (!['bez_ai', 'ai'].includes(values.rezim) || !['test', 'validacia'].includes(values.okno)) {
-  throw new Error('Použitie: --rezim bez_ai|ai --okno test|validacia [--vzorka N] [--max-volani N] [--kategorie]');
+  throw new Error('Použitie: --rezim bez_ai|ai --okno test|validacia [--vzorka N] [--max-volani N] [--kategorie] [--firma časť_názvu|id]');
 }
 
 const config = loadConfig();
@@ -37,8 +38,12 @@ const database = await createDatabase(config);
 const behy: Array<{ firma: string; vysledok: PresnostVysledok }> = [];
 try {
   const firmy = (await database.query<{ id: string; tenant_id: string; name: string } & Record<string, unknown>>(
-    'SELECT id, tenant_id, name FROM organizations WHERE archived=false ORDER BY name',
+    `SELECT id, tenant_id, name FROM organizations
+      WHERE archived=false AND ($1::text IS NULL OR id=$1 OR name ILIKE '%' || $1 || '%')
+      ORDER BY name`,
+    [values.firma ?? null],
   )).rows;
+  if (firmy.length === 0) throw new Error(`Žiadna firma nezodpovedá „${values.firma}".`);
   const sAi = values.rezim === 'ai';
   let zostatok = values['max-volani'] ? Number(values['max-volani']) : 100;
   if (sAi) console.error(`Režim ai: najviac ${zostatok} volaní modelu spolu pre ${firmy.length} firiem.`);
