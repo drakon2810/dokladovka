@@ -152,6 +152,72 @@ describe('záznam opráv účtovníka', () => {
     await app.close();
   }, 60_000);
 
+  // R09 „Vždy pre tohto dodávateľa": podoba, ktorú účtovník vybral, sa stane
+  // pravidlom protistrany. Staré pravidlo len pre dodávateľa by inak vyhralo
+  // (pravidlá sa skladajú od najstaršieho) — deaktivuje sa, nemaže.
+  it('výber podoby praxe vytvorí pravidlo dodávateľa a zruší otázku na jeho dokladoch', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    const kody = await pripravDoklad(database, seeded);
+    const druhy = await pripravDoklad(database, seeded, kody);
+    const stare = randomUUID();
+    // Staré pravidlo nesie aj rad — nový výber ho nesmie ticho zahodiť.
+    await database.query(
+      `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_ico,predkontacia_id,ciselny_rad_id,origin)
+       VALUES ($1,$2,$3,'31386946',$4,$5,'ai')`,
+      [stare, seeded.tenantId, seeded.organizationId, kody.navrhnuta, kody.rad],
+    );
+    const otazka = JSON.stringify({ spor: 'dph', varianty: [] });
+    await database.query('UPDATE accounting_suggestions SET otazka=$1::jsonb WHERE document_id = ANY($2::text[])',
+      [otazka, [kody.documentId, druhy.documentId]]);
+
+    const zle = await app.inject({
+      method: 'POST', url: `/api/documents/${kody.documentId}/pravidlo-protistrany`, headers,
+      payload: { predkontaciaId: randomUUID(), clenenieDphId: kody.clenenie, clenenieKvKod: 'B2' },
+    });
+    expect(zle.statusCode, zle.body).toBe(422);
+
+    const ok = await app.inject({
+      method: 'POST', url: `/api/documents/${kody.documentId}/pravidlo-protistrany`, headers,
+      payload: { predkontaciaId: kody.ina, clenenieDphId: kody.clenenie, clenenieKvKod: 'B2' },
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+    const pravidla = (await database.query<Record<string, any>>(
+      'SELECT id, active, origin, dovod_source, supplier_ico, predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id FROM accounting_rules WHERE organization_id=$1',
+      [seeded.organizationId],
+    )).rows;
+    expect(pravidla.find((pravidlo) => pravidlo.id === stare)?.active).toBe(false);
+    expect(pravidla.find((pravidlo) => pravidlo.id === ok.json().ruleId)).toMatchObject({
+      active: true, origin: 'manual', dovod_source: 'human', supplier_ico: '31386946',
+      predkontacia_id: kody.ina, clenenie_dph_id: kody.clenenie, clenenie_kv_kod: 'B2', ciselny_rad_id: kody.rad,
+    });
+    // Druhý otvorený doklad dodávateľa dostane nový návrh — s pravidlom, nie so starou podobou.
+    expect((await database.query(
+      "SELECT 1 FROM processing_jobs WHERE document_id=$1 AND kind='navrh_zauctovania' AND status='queued'", [druhy.documentId],
+    )).rowCount).toBe(1);
+    const otazky = (await database.query<Record<string, any>>(
+      'SELECT otazka FROM accounting_suggestions WHERE document_id = ANY($1::text[])', [[kody.documentId, druhy.documentId]],
+    )).rows;
+    expect(otazky).toEqual([{ otazka: null }, { otazka: null }]);
+    expect((await database.query("SELECT 1 FROM audit_logs WHERE action='ucto.pravidlo_z_otazky'")).rowCount).toBe(1);
+
+    // Vydaná faktúra pravidlo dodávateľa nevytvorí: pravidlá nemajú druh
+    // dokladu a pravidlo zákazníka by prebilo prijaté faktúry toho istého partnera.
+    await database.query("UPDATE documents SET document_type='FV' WHERE id=$1", [druhy.documentId]);
+    const fv = await app.inject({
+      method: 'POST', url: `/api/documents/${druhy.documentId}/pravidlo-protistrany`, headers,
+      payload: { predkontaciaId: kody.ina, clenenieDphId: kody.clenenie },
+    });
+    expect(fv.statusCode, fv.body).toBe(422);
+
+    await app.close();
+  }, 60_000);
+
   it('súhlas s návrhom sa zapíše ako prázdny zoznam zmien, nie ako chýbajúci záznam', async () => {
     const database = await createTestDatabase();
     databases.push(database);

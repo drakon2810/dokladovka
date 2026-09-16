@@ -2941,6 +2941,29 @@ export async function saveRuleDovod(organizationId: string, ruleId: string, dovo
   );
 }
 
+/**
+ * R09 „Vždy pre tohto dodávateľa": vybraná podoba praxe sa stane pravidlom
+ * protistrany dokladu. Dodávateľa určí server z dokladu.
+ */
+export async function ulozPravidloProtistrany(
+  documentId: string,
+  variant: { predkontaciaId: string; clenenieDphId: string; clenenieKvKod?: string },
+): Promise<string> {
+  if (!REST_DATA_MODE) throw new Error('Pravidlá vyžadujú spustený backend');
+  const odpoved = await restRequest<{ ruleId: string }>(
+    `/api/documents/${encodeURIComponent(documentId)}/pravidlo-protistrany`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        predkontaciaId: variant.predkontaciaId,
+        clenenieDphId: variant.clenenieDphId,
+        ...(variant.clenenieKvKod ? { clenenieKvKod: variant.clenenieKvKod } : {}),
+      }),
+    },
+  );
+  return odpoved.ruleId;
+}
+
 /** Úhrada dokladu (bez sumy = celý zvyšok). Reálna funkcia backendu; mock režim ju nemá. */
 export async function addDocumentPayment(
   documentId: string,

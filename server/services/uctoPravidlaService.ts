@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../db/database.js';
 import { pocetZhodSlov } from './accountingSuggestionService.js';
 import { clenenieVyzeraNaOdpocet } from './dphAdvisor.js';
+import { popisKodu } from './pohodaDphKody.js';
 import { loadDphProfil } from './dphProfileService.js';
 
 /**
@@ -51,11 +52,44 @@ export interface TvarCast {
  * Keď len v účte, stačí ponuka bez predvyplnenia.
  */
 export function sporPraxe(
-  pravidlo: { konflikt: boolean; varianty: Array<Pick<PraxVariant, 'clenenieDphKod' | 'clenenieKvKod'>> } | undefined,
+  pravidlo: { konflikt: boolean; varianty: Array<Pick<PraxVariant, 'clenenieDphKod' | 'clenenieKvKod' | 'okrajovy'>> } | undefined,
 ): 'dph' | 'ucet' | undefined {
   if (!pravidlo?.konflikt) return undefined;
-  const dane = new Set(pravidlo.varianty.map((variant) => `${variant.clenenieDphKod ?? ''}|${variant.clenenieKvKod ?? ''}`));
-  return dane.size > 1 ? 'dph' : 'ucet';
+  if (podobySporuDph(pravidlo).length > 0) return 'dph';
+  return [...podobyPodlaStrany(pravidlo.varianty).values()].some((skupina) => skupina.length > 1) ? 'ucet' : undefined;
+}
+
+/**
+ * Podoby praxe podľa strany DPH, bez okrajových. Podoby na rôznych stranách nie
+ * sú dve praxe, ale dva doklady jednej: samozdanenie vystaví interný doklad,
+ * ktorý daň priznáva (DD…), a druhý, ktorý ju odpočítava (PD…) — robili 40
+ * z 87 konfliktov ALPINY. Okrajový doklad (jeden odchýlený z mnohých) sporom
+ * tiež nie je.
+ */
+function podobyPodlaStrany<T extends Pick<PraxVariant, 'clenenieDphKod' | 'okrajovy'>>(varianty: T[]): Map<string, T[]> {
+  const podlaStrany = new Map<string, T[]>();
+  for (const variant of varianty.filter((item) => !item.okrajovy)) {
+    // Oddeľuje sa len strana samozdanenia (DD…). Vlastný kód firmy či chýbajúce
+    // členenie sa s PD porovnávajú — inak by sa skutočný spor stratil.
+    const strana = popisKodu(variant.clenenieDphKod)?.strana === 'DD' ? 'DD' : 'ine';
+    podlaStrany.set(strana, [...(podlaStrany.get(strana) ?? []), variant]);
+  }
+  return podlaStrany;
+}
+
+/** Podoby praxe, ktoré tvoria spor v DPH či sekcii KV — len strany DPH, na ktorých spor naozaj je. */
+export function podobySporuDph<T extends Pick<PraxVariant, 'clenenieDphKod' | 'clenenieKvKod' | 'okrajovy'>>(
+  pravidlo: { konflikt: boolean; varianty: T[] } | undefined,
+): T[] {
+  if (!pravidlo?.konflikt) return [];
+  return [...podobyPodlaStrany(pravidlo.varianty).values()]
+    .filter((skupina) => new Set(skupina.map((variant) => danovyKluc(variant))).size > 1)
+    .flat();
+}
+
+/** Daň podoby na porovnanie: členenie DPH a sekcia KV (prázdna pri členení bez odpočtu = KN). */
+export function danovyKluc(variant: Pick<PraxVariant, 'clenenieDphKod' | 'clenenieKvKod'>): string {
+  return `${kod(variant.clenenieDphKod) ?? ''}|${sekciaKvKluc(variant.clenenieDphKod, variant.clenenieKvKod)}`;
 }
 
 export interface PraxVariant {
@@ -70,6 +104,11 @@ export interface PraxVariant {
   vitaz?: boolean;
   /** Pri uloženom pravidle: podoba vyhrala ako novší režim, nie počtom. */
   zmenaRezimu?: boolean;
+  /**
+   * Odchýlený doklad (pod MIN_DOKLADOV a pod 10 % dokladov protistrany): ostáva
+   * medzi podobami, no víťaza ani spor praxí neurčuje.
+   */
+  okrajovy?: boolean;
 }
 
 export interface UctoPravidlo {
@@ -147,9 +186,18 @@ function prevaha<T>(hodnoty: Array<T | undefined>): { hodnota?: T; pocet: number
 
 const porovnaj = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const kod = (hodnota?: string) => hodnota?.trim() || undefined;
+/**
+ * Sekcia KV na porovnanie podôb. Pri členení bez odpočtu je prázdna sekcia to
+ * isté ako KN — do výkazu nejde ani jedna. Kým sa porovnávali doslova, jedna
+ * prax „PN bez sekcie / PN s KN" bola dvomi a protistrana padla do konfliktu.
+ */
+export function sekciaKvKluc(clenenieDphKod?: string, clenenieKvKod?: string): string {
+  const dph = kod(clenenieDphKod);
+  return kod(clenenieKvKod) ?? (dph && !clenenieVyzeraNaOdpocet({ kod: dph, nazov: '' }) ? 'KN' : '');
+}
 /** Zaúčtovanie riadku ako JEDNA hodnota — účet, DPH a KV sa nikdy neberú zvlášť. */
 const trojica = (riadok: { predkontaciaKod?: string; clenenieDphKod?: string; clenenieKvKod?: string }) =>
-  `${kod(riadok.predkontaciaKod) ?? ''}/${kod(riadok.clenenieDphKod) ?? ''}/${kod(riadok.clenenieKvKod) ?? ''}`;
+  `${kod(riadok.predkontaciaKod) ?? ''}/${kod(riadok.clenenieDphKod) ?? ''}/${sekciaKvKluc(riadok.clenenieDphKod, riadok.clenenieKvKod)}`;
 const naPatiny = (podiel: number) => Math.round(podiel * 20) / 20;
 
 /**
@@ -335,15 +383,33 @@ export function odvodPrax(doklady: DokladPraxe[], asOf?: string): Prax {
       || porovnaj(b.variant.do, a.variant.do) || porovnaj(klucA, klucB))
     .map(([, skupina]) => skupina);
 
-  const najnovsia = zoradene
+  // Okrajová podoba — odchýlený doklad pod MIN_DOKLADOV a pod 10 % dokladov
+  // protistrany — víťaza neurčuje: nezruší zmenu režimu a nepočíta sa do
+  // prevahy. PACCAR (46 × prenájom s odpočtom, 1 × bez) bol inak v konflikte.
+  // Počíta sa na hlavičke a účtoch rezu BEZ podielov: prax, ktorej rez sa mení
+  // doklad od dokladu, má samé podoby po jednom doklade, a tie okrajové nie sú.
+  const hrubyKluc = (skupina: typeof zoradene[number]) =>
+    `${trojica(skupina.doklady[0].hlavicka!)}#${skupina.variant.tvar.map((cast) => trojica(cast)).join(',')}`;
+  const hrubePocty = new Map<string, number>();
+  for (const skupina of zoradene) {
+    hrubePocty.set(hrubyKluc(skupina), (hrubePocty.get(hrubyKluc(skupina)) ?? 0) + skupina.variant.dokladov);
+  }
+  const okrajova = (skupina: typeof zoradene[number]) => {
+    const pocet = hrubePocty.get(hrubyKluc(skupina)) ?? 0;
+    return pocet < MIN_DOKLADOV && pocet < platne.length * 0.1;
+  };
+  for (const skupina of zoradene) if (okrajova(skupina)) skupina.variant.okrajovy = true;
+  const podstatne = zoradene.filter((skupina) => !okrajova(skupina));
+  const dokladovPodstatnych = podstatne.reduce((sucet, skupina) => sucet + skupina.variant.dokladov, 0);
+  const najnovsia = podstatne
     .filter((skupina) => skupina.variant.dokladov >= MIN_DOKLADOV)
     .reduce<typeof zoradene[number] | undefined>((naj, skupina) =>
       (!naj || skupina.variant.od > naj.variant.od ? skupina : naj), undefined);
-  const prechod = najnovsia && zoradene.length > 1
-    && zoradene.every((skupina) => skupina === najnovsia || skupina.variant.do < najnovsia.variant.od)
+  const prechod = najnovsia && podstatne.length > 1
+    && podstatne.every((skupina) => skupina === najnovsia || skupina.variant.do < najnovsia.variant.od)
     ? najnovsia : undefined;
   const vitaz = prechod
-    ?? (zoradene[0] && zoradene[0].variant.dokladov >= platne.length * MIN_ZHODA ? zoradene[0] : undefined);
+    ?? (podstatne[0] && podstatne[0].variant.dokladov >= dokladovPodstatnych * MIN_ZHODA ? podstatne[0] : undefined);
   const polozky = (vitaz?.doklady ?? []).map((doklad) => doklad.polozky).filter((riadky) => riadky.length > 0);
   return {
     dokladov: platne.length,

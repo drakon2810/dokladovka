@@ -197,6 +197,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         ciselnyRadId: row.ciselny_rad_id ?? undefined, strediskoId: row.stredisko_id ?? undefined,
         clenenieKvKod: row.clenenie_kv_kod ?? undefined,
         riadky: row.riadky ?? undefined,
+        otazka: row.otazka ?? undefined,
         source: row.source, confidence: Number(row.confidence), reason: row.reason,
         basedOnDocumentId: row.based_on_document_id ?? undefined, createdAt: iso(row.created_at),
       })),

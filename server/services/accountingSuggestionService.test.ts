@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
-import { forgetUctoDecision, maybeAiAccountingSuggestion, mesiacZNazvu, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
+import { forgetUctoDecision, maybeAiAccountingSuggestion, mesiacZNazvu, otazkaPraxe, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
 import { prepocitajPravidla } from './uctoPravidlaService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
@@ -3269,7 +3269,7 @@ describe('istota pri ustálenom pravidle protistrany', () => {
   async function priprava(
     dokladov: number,
     zhoda: number,
-    moznosti: { dph?: { pravidlo: string; navrh: string }; konflikt?: boolean; dennik?: number; priklad?: boolean } = {},
+    moznosti: { dph?: { pravidlo: string; navrh: string }; konflikt?: boolean; dennik?: number; priklad?: boolean; pravidloDph?: string } = {},
   ) {
     const database = await createTestDatabase();
     databases.push(database);
@@ -3309,6 +3309,14 @@ describe('istota pri ustálenom pravidle protistrany', () => {
         [randomUUID(), ...kde, predkontacia],
       );
     }
+    // Pravidlo účtovníka pre DPH protistrany — o spore rozhodol človek.
+    if (moznosti.pravidloDph) {
+      await database.query(
+        `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_name_normalized,clenenie_dph_id,origin)
+         VALUES ($1,$2,$3,'preprava s.r.o.',$4,'manual')`,
+        [randomUUID(), ...kde, clenenia.get(moznosti.pravidloDph)],
+      );
+    }
     const variant = (clenenieDphKod: string, pocet: number) =>
       ({ predkontaciaKod: '518/321', clenenieDphKod, tvar: [], dokladov: pocet, od: '2025-01-05', do: '2025-12-20' });
     await database.query(
@@ -3340,9 +3348,9 @@ describe('istota pri ustálenom pravidle protistrany', () => {
       parser,
     );
     const navrh = (await database.query<Record<string, any>>(
-      'SELECT confidence, reason FROM accounting_suggestions WHERE document_id=$1', [documentId],
+      'SELECT confidence, reason, otazka FROM accounting_suggestions WHERE document_id=$1', [documentId],
     )).rows[0];
-    return { ...navrh, prompt: JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text) };
+    return { ...navrh, clenenia, predkontacia, prompt: JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text) };
   }
 
   it('pri 58 zo 60 pustí návrh nad hranicu a povie prečo', async () => {
@@ -3386,6 +3394,26 @@ describe('istota pri ustálenom pravidle protistrany', () => {
     expect(Number((await priprava(60, 58, { dph: { pravidlo: 'PD', navrh: 'PD' } })).confidence)).toBeGreaterThanOrEqual(0.9);
   }, 120_000);
 
+  // R09: firma účtuje protistranu dvoma spôsobmi s inou daňou — hádať nemá
+  // kto. Účtovník dostane obe podoby s id číselníka, aby vybral jedným klikom.
+  it('spor praxí v DPH dá účtovníkovi otázku s oboma podobami', async () => {
+    const navrh = await priprava(60, 58, { konflikt: true, dph: { pravidlo: 'PD', navrh: 'PD' } });
+    expect(Number(navrh.confidence)).toBeLessThan(0.9);
+    expect(navrh.otazka).toEqual({
+      spor: 'dph',
+      varianty: [
+        expect.objectContaining({ predkontaciaId: navrh.predkontacia, clenenieDphId: navrh.clenenia.get('PD'), dokladov: 30,
+          kody: expect.objectContaining({ clenenieDph: 'PD' }) }),
+        expect.objectContaining({ predkontaciaId: navrh.predkontacia, clenenieDphId: navrh.clenenia.get('PN'), clenenieKvKod: 'KN', dokladov: 28 }),
+      ],
+    });
+  }, 90_000);
+
+  it('keď o DPH protistrany rozhodlo pravidlo účtovníka, otázka nevznikne', async () => {
+    const navrh = await priprava(60, 58, { konflikt: true, dph: { pravidlo: 'PD', navrh: 'PD' }, pravidloDph: 'PD' });
+    expect(navrh.otazka).toBeNull();
+  }, 90_000);
+
   it('pravidlo s viacerými praxami ide modelu s podobami a istotu nedvíha', async () => {
     const navrh = await priprava(60, 58, { konflikt: true });
     expect(Number(navrh.confidence)).toBeLessThan(0.9);
@@ -3394,6 +3422,41 @@ describe('istota pri ustálenom pravidle protistrany', () => {
       varianty: [{ clenenieDphKod: 'PD', dokladov: 30, od: '2025-01-05' }, { clenenieDphKod: 'PN', dokladov: 28 }],
     });
   }, 90_000);
+});
+
+// Otázka z podôb praxe — čistá funkcia: preklad kódov na id číselníka firmy,
+// zlúčenie podôb s rovnakou hlavičkou a len strana DPH, na ktorej je spor.
+describe('otázka pri spore praxí', () => {
+  const predkontacie = [{ id: 'p-518', kod: '518/321' }, { id: 'p-513', kod: '513 - Repre' }];
+  const clenenia = [{ id: 'd-pd', kod: 'PD' }, { id: 'd-pn', kod: 'PN' }, { id: 'd-dd', kod: 'DDsl§69' }];
+  const variant = (pred: string, dph: string, kv: string, dokladov: number, od = '2026-01-01', doDna = '2026-06-30') =>
+    ({ predkontaciaKod: pred, clenenieDphKod: dph, clenenieKvKod: kv, tvar: [], dokladov, od, do: doDna });
+
+  it('ponúkne podoby sporu v DPH preložené na id a zlúči rovnakú hlavičku', () => {
+    expect(otazkaPraxe({ konflikt: true, varianty: [
+      variant('518/321', 'PD', 'B2', 4),
+      variant('518/321', 'PD', 'B2', 2, '2025-10-01', '2026-02-01'),
+      variant('513 - Repre', 'PN', '', 3),
+      // Predkontácia, ktorú firma už nemá, sa neponúkne.
+      variant('999', 'PD', 'B2', 5),
+      // Druhý doklad samozdanenia nie je podoba sporu.
+      variant('518/321', 'DDsl§69', 'B1', 4),
+    ] }, predkontacie, clenenia)).toEqual({ spor: 'dph', varianty: [
+      { predkontaciaId: 'p-518', clenenieDphId: 'd-pd', clenenieKvKod: 'B2', dokladov: 6, od: '2025-10-01', do: '2026-06-30',
+        kody: { predkontacia: '518/321', clenenieDph: 'PD', clenenieKv: 'B2' } },
+      { predkontaciaId: 'p-513', clenenieDphId: 'd-pn', clenenieKvKod: 'KN', dokladov: 3, od: '2026-01-01', do: '2026-06-30',
+        kody: { predkontacia: '513 - Repre', clenenieDph: 'PN', clenenieKv: 'KN' } },
+    ] });
+  });
+
+  it('bez sporu v DPH alebo s jedinou preložiteľnou podobou otázku nedá', () => {
+    expect(otazkaPraxe({ konflikt: false, varianty: [variant('518/321', 'PD', 'B2', 4), variant('513 - Repre', 'PN', 'KN', 3)] },
+      predkontacie, clenenia)).toBeUndefined();
+    expect(otazkaPraxe({ konflikt: true, varianty: [variant('518/321', 'PD', 'B2', 4), variant('513 - Repre', 'PD', 'B2', 3)] },
+      predkontacie, clenenia)).toBeUndefined();
+    expect(otazkaPraxe({ konflikt: true, varianty: [variant('518/321', 'PD', 'B2', 4), variant('999', 'PN', 'KN', 3)] },
+      predkontacie, clenenia)).toBeUndefined();
+  });
 });
 
 // Reťaz účet → členenie → sekcia KV skladá hlavičku z troch samostatných

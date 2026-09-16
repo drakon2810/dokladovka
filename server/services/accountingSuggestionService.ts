@@ -13,7 +13,10 @@ import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { zapisBehAi } from './behAi.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
-import { DOKLAD_KLUC_SQL, MIN_DOKLADOV, najdiPravidlo, sporPraxe, variantyRozpisu } from './uctoPravidlaService.js';
+import {
+  DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, sekciaKvKluc, sporPraxe, variantyRozpisu,
+  type PraxVariant,
+} from './uctoPravidlaService.js';
 import { jeDovozTovaru } from './pohodaDphKody.js';
 
 interface SuggestionInput {
@@ -1192,7 +1195,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
        source=excluded.source, confidence=excluded.confidence, reason=excluded.reason,
        based_on_document_id=excluded.based_on_document_id, rule_id=excluded.rule_id,
        -- Deterministický návrh z dôkazov AI nečerpal — stará stopa by klamala.
-       vysvetlenia=NULL, stopa_id=NULL, updated_at=now()`,
+       -- Otázku počíta AI návrh, ktorý po ňom nasleduje; stará by mohla neplatiť.
+       vysvetlenia=NULL, stopa_id=NULL, otazka=NULL, updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
       candidate.predkontacia_id ?? null, candidate.clenenie_dph_id ?? null,
       candidate.ciselny_rad_id ?? null, candidate.stredisko_id ?? null, kvKod ?? null,
@@ -2590,9 +2594,65 @@ export interface ZmenaNavrhu {
   dovod: string;
 }
 
+/** Podoba praxe na výber účtovníkovi — kódy preložené na id číselníka firmy. */
+export interface VariantOtazky {
+  predkontaciaId: string;
+  clenenieDphId: string;
+  clenenieKvKod?: string;
+  dokladov: number;
+  od: string;
+  do: string;
+  kody: { predkontacia: string; clenenieDph: string; clenenieKv?: string };
+}
+
+/** Otázka účtovníkovi (R09): protistrana má viac praxí s inou daňou. */
+export interface OtazkaPraxe {
+  spor: 'dph';
+  varianty: VariantOtazky[];
+}
+
+/**
+ * Otázka z podôb praxe protistrany. Ponúkajú sa len podoby strany DPH, na ktorej
+ * je spor (podobySporuDph), s kódmi, ktoré firma v číselníku ešte má. Podoby
+ * s rovnakou hlavičkou (líšia sa len tvarom položiek) sa zlúčia — účtovník
+ * vyberá hlavičku, nie tvar. Bez dvoch podôb s rôznou daňou otázka nie je.
+ */
+export function otazkaPraxe(
+  pravidlo: { konflikt: boolean; varianty: PraxVariant[] },
+  predkontacie: Array<{ id: string; kod: string }>,
+  clenenia: Array<{ id: string; kod: string }>,
+): OtazkaPraxe | undefined {
+  const zlucene = new Map<string, VariantOtazky & { dan: string }>();
+  for (const variant of podobySporuDph(pravidlo)) {
+    const predkontacia = predkontacie.find((item) => item.kod.trim() === variant.predkontaciaKod?.trim());
+    const clenenie = clenenia.find((item) => item.kod.trim() === variant.clenenieDphKod?.trim());
+    if (!predkontacia || !clenenie) continue;
+    const kv = sekciaKvKluc(variant.clenenieDphKod, variant.clenenieKvKod) || undefined;
+    const kluc = `${predkontacia.id}|${clenenie.id}|${kv ?? ''}`;
+    const doterajsi = zlucene.get(kluc);
+    if (doterajsi) {
+      doterajsi.dokladov += variant.dokladov;
+      if (variant.od < doterajsi.od) doterajsi.od = variant.od;
+      if (variant.do > doterajsi.do) doterajsi.do = variant.do;
+      continue;
+    }
+    zlucene.set(kluc, {
+      predkontaciaId: predkontacia.id, clenenieDphId: clenenie.id, ...(kv ? { clenenieKvKod: kv } : {}),
+      dokladov: variant.dokladov, od: variant.od, do: variant.do,
+      kody: { predkontacia: predkontacia.kod.trim(), clenenieDph: clenenie.kod.trim(), ...(kv ? { clenenieKv: kv } : {}) },
+      dan: danovyKluc(variant),
+    });
+  }
+  const varianty = [...zlucene.values()].sort((a, b) => b.dokladov - a.dokladov);
+  if (new Set(varianty.map((variant) => variant.dan)).size < 2) return undefined;
+  return { spor: 'dph', varianty: varianty.map(({ dan: _dan, ...variant }) => variant) };
+}
+
 export type VysledokNavrhu = ({ navrh: NavrhZauctovania; dokazy: StopaNavrhu } | { zdrzanie: string }) & {
   /** Spor praxí protistrany (sporPraxe) — meranie častosti otázok ho číta aj pri zdržaní. */
   spor?: 'dph' | 'ucet';
+  /** Otázka účtovníkovi, keď spor v DPH nerozhodlo pravidlo účtovníka. */
+  otazka?: OtazkaPraxe;
   /** Spotreba tokenov z odpovede modelu — meranie ju sčíta do manifestu. */
   usage?: Record<string, unknown>;
   /** Surový JSON modelu: beh sa dá prehodnotiť bez nového volania. */
@@ -2667,7 +2727,16 @@ export async function maybeAiAccountingSuggestion(
     }).catch((chyba) => console.warn(`[ai-navrh] ${input.documentId}: zápis behu zlyhal:`,
       chyba instanceof Error ? chyba.message : chyba));
   }
-  if (!('navrh' in vysledok)) return false;
+  if (!('navrh' in vysledok)) {
+    // Zdržanie: deterministický návrh dokladu ostáva, no otázka k nemu patrí —
+    // model sa medzi praxami nerozhodol, o to viac ju má vidieť účtovník.
+    // Zdržanie bez otázky zruší staršiu, ktorá už neplatí.
+    await database.query(
+      'UPDATE accounting_suggestions SET otazka=$3::jsonb WHERE document_id=$1 AND tenant_id=$2',
+      [input.documentId, input.tenantId, vysledok.otazka ? JSON.stringify(vysledok.otazka) : null],
+    );
+    return false;
+  }
   const { navrh, dokazy } = vysledok;
 
   // Stopa dôkazov ide do vlastnej tabuľky, nie do návrhu: accounting_suggestions
@@ -2687,8 +2756,8 @@ export async function maybeAiAccountingSuggestion(
   await database.query(
     `INSERT INTO accounting_suggestions
       (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,
-       clenenie_kv_kod,source,confidence,reason,based_on_document_id,rule_id,riadky,stopa_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ai',$9,$10,NULL,$11,$12::jsonb,$13)
+       clenenie_kv_kod,source,confidence,reason,based_on_document_id,rule_id,riadky,stopa_id,otazka)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ai',$9,$10,NULL,$11,$12::jsonb,$13,$14::jsonb)
      ON CONFLICT (document_id) DO UPDATE SET
        predkontacia_id=excluded.predkontacia_id, clenenie_dph_id=excluded.clenenie_dph_id,
        ciselny_rad_id=excluded.ciselny_rad_id, stredisko_id=excluded.stredisko_id,
@@ -2697,7 +2766,7 @@ export async function maybeAiAccountingSuggestion(
        based_on_document_id=NULL, rule_id=excluded.rule_id, riadky=excluded.riadky,
        -- Vysvetlenie z „Prečo" patrilo predošlému návrhu: otvorený panel ho
        -- mohol nakešovať medzi deterministickým návrhom a týmto zápisom.
-       stopa_id=excluded.stopa_id, vysvetlenia=NULL, updated_at=now()`,
+       stopa_id=excluded.stopa_id, otazka=excluded.otazka, vysvetlenia=NULL, updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
       navrh.predkontacia_id ?? null, navrh.clenenie_dph_id ?? null,
       navrh.ciselny_rad_id ?? null,
@@ -2705,7 +2774,8 @@ export async function maybeAiAccountingSuggestion(
       navrh.confidence, navrh.reason,
       // Pravidlo, ktoré do návrhu prispelo — nesie si samokontrolu (updateRuleFeedback).
       navrh.rule_id ?? null,
-      navrh.riadky ? JSON.stringify(navrh.riadky) : null, stopaId],
+      navrh.riadky ? JSON.stringify(navrh.riadky) : null, stopaId,
+      vysledok.otazka ? JSON.stringify(vysledok.otazka) : null],
   );
   // Stopa pribúdala riadkom za každé volanie modelu a nemazal ju nikto. Staršie
   // stopy dokladu už nič nevysvetľujú — návrh ukazuje na novú. Ostáva stopa,
@@ -3192,6 +3262,15 @@ export async function navrhniZauctovanie(
         supplierName: normalizeName(documentContext.supplierName) || undefined,
       };
   const pravidlo = await zhodnePravidla(database, input, protistrana, lineText, asOf);
+  // Otázka účtovníkovi (R09): o DPH protistrany rozhoduje pravidlo účtovníka,
+  // ak ho má — vtedy spor nie je a pýtať sa nemá čo. Inak sa z podôb praxe
+  // s inou daňou stane výber, ktorý karta dokladu ukáže.
+  const sporPoPravidle = pravidlo.candidate.clenenie_dph_id ? undefined : spor;
+  const otazka = sporPoPravidle === 'dph' && pravidloProtistrany
+    ? otazkaPraxe(pravidloProtistrany,
+      codeLists.rows.filter((row) => row.kind === 'predkontacie').map((row) => ({ id: row.id, kod: row.code })),
+      vsetkyClenenia)
+    : undefined;
   // Čo na doklade UŽ je: kódy, ktoré určila extrakcia podľa pravidiel účtovníka
   // (napr. „§ 48 ods. 8 → UNodpS"), prípadne to, čo účtovník vyplnil sám.
   // Model text s odkazom na paragraf nevidí — v prompte sú len popisy položiek —
@@ -3256,7 +3335,7 @@ export async function navrhniZauctovanie(
     }
   }
 
-  if (!hasAccounting(validated)) return { zdrzanie: 'bez_zauctovania', usage, odpovedModelu: odpoved, spor };
+  if (!hasAccounting(validated)) return { zdrzanie: 'bez_zauctovania', usage, odpovedModelu: odpoved, spor: sporPoPravidle, otazka };
 
   // Členenie z účtu. Prebíja LEN odpoveď modelu: pravidlo účtovníka aj to, čo
   // je na doklade (extrakcia z neho číta odkaz na paragraf, ktorý model
@@ -3474,7 +3553,7 @@ export async function navrhniZauctovanie(
       },
       clenenieDph: clenenie,
     }, profil);
-    if (posudok.blokacie.length > 0) return { zdrzanie: 'posudok_dph', usage, odpovedModelu: odpoved, spor };
+    if (posudok.blokacie.length > 0) return { zdrzanie: 'posudok_dph', usage, odpovedModelu: odpoved, spor: sporPoPravidle, otazka };
   }
 
   // Strop istoty: bežný AI návrh ostáva na 0.8, teda pod hranicou
@@ -3523,7 +3602,9 @@ export async function navrhniZauctovanie(
     && Boolean(kodPredkontacie)
     && kodPredkontacie === pravidloProtistrany.predkontaciaKod
     && (!pravidloProtistrany.clenenieDphKod || kodClenenia === pravidloProtistrany.clenenieDphKod)
-    && (!pravidloProtistrany.clenenieKvKod || kvKod === pravidloProtistrany.clenenieKvKod);
+    // Sekcia sa porovnáva ako pri podobách praxe: prázdna pri členení bez odpočtu = KN.
+    && (!pravidloProtistrany.clenenieKvKod
+      || sekciaKvKluc(kodClenenia, kvKod) === sekciaKvKluc(kodClenenia, pravidloProtistrany.clenenieKvKod));
   // Kombinácia, akú firma ešte nemala, sa nepredvyplní, nech ju podporí čokoľvek.
   // Spor praxí protistrany doklad nepredvyplní, nech sa zhoduje čokoľvek iné —
   // firma u nej robí dve rôzne veci a vybrať má účtovník. Jeden schválený
@@ -3847,7 +3928,8 @@ export async function navrhniZauctovanie(
   }
 
   return {
-    spor,
+    spor: sporPoPravidle,
+    otazka,
     navrh: {
       predkontacia_id: validated.predkontacia_id,
       clenenie_dph_id: validated.clenenie_dph_id,

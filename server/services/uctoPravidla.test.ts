@@ -208,6 +208,46 @@ describe('prax protistrany z celých dokladov', () => {
       .toEqual([['PHM/PD/B2', 'DPH/PN/KN'], ['PHM/PN/KN', 'DPH/PD/B2']]);
   });
 
+  // Šum, ktorý robil z jednej praxe dve (R09): pri členení bez odpočtu je prázdna
+  // sekcia KV to isté ako KN — obe do výkazu nejdú.
+  it('prázdna sekcia KV a KN pri členení bez odpočtu sú jedna prax', () => {
+    const sKv = (item: DokladPraxe, kv: string): DokladPraxe => ({ ...item, hlavicka: { ...item.hlavicka!, clenenieKvKod: kv } });
+    const prax = odvodPrax([
+      ...Array.from({ length: 4 }, (_, i) => sKv(doklad(`P${i}`, den(i), ['A', 'PN']), '')),
+      ...Array.from({ length: 3 }, (_, i) => sKv(doklad(`K${i}`, den(i + 10), ['A', 'PN']), 'KN')),
+    ]);
+    expect(prax).toMatchObject({ konflikt: false, vitaz: { predkontaciaKod: 'A', dokladov: 7 } });
+    expect(prax.varianty).toHaveLength(1);
+  });
+
+  // Jeden odchýlený doklad (PACCAR: 46 × prenájom s odpočtom, 1 × bez) nesmie
+  // zhodiť väčšinu do konfliktu. Ostáva medzi podobami, ale označený.
+  it('osamotený doklad väčšine neprekáža a je označený ako okrajový', () => {
+    const prax = odvodPrax([
+      ...Array.from({ length: 6 }, (_, i) => doklad(`A${i}`, den(i * 5), ['A', 'PD'])),
+      ...Array.from({ length: 4 }, (_, i) => doklad(`B${i}`, den(i * 5 + 2), ['A2', 'PD'])),
+      doklad('C0', den(12), ['C', 'PN']),
+    ]);
+    expect(prax).toMatchObject({ konflikt: false, vitaz: { predkontaciaKod: 'A', dokladov: 6 } });
+    expect(prax.varianty.find((variant) => variant.predkontaciaKod === 'C')).toMatchObject({ okrajovy: true });
+    expect(prax.varianty.find((variant) => variant.predkontaciaKod === 'A2')?.okrajovy).toBeUndefined();
+  });
+
+  // Okrajovosť sa posudzuje na hlavičke a účtoch rezu, nie na podieloch. Prax,
+  // ktorej rez sa mení doklad od dokladu, má inak samé podoby po jednom
+  // doklade — tie by vyšli ako okrajové a polovica histórie by vyhrala.
+  it('prax s meniacim sa podielom rezu nie je okrajová — spor ostáva', () => {
+    const bezRezu = Array.from({ length: 20 }, (_, i) => doklad(`N${i}`, den(i * 2), ['518', 'PD']));
+    const sRezom = Array.from({ length: 20 }, (_, i) => {
+      const nedanove = 5 + i * 4.5;
+      return doklad(`R${i}`, den(i * 2 + 1), ['518', 'PD'],
+        [['518', 'PD', 100 - nedanove, 23, 'B2'], ['513', 'PN', nedanove, 0, 'KN']]);
+    });
+    const prax = odvodPrax([...bezRezu, ...sRezom]);
+    expect(prax.konflikt).toBe(true);
+    expect(prax.varianty.some((variant) => variant.okrajovy)).toBe(false);
+  });
+
   it('nová prax po konci starej vyhrá so zmenou režimu, prekrývajúca sa nie', () => {
     const stare = Array.from({ length: 20 }, (_, i) =>
       doklad(`S${i}`, `2025-${String((i % 12) + 1).padStart(2, '0')}-10`, ['A', 'PD']));

@@ -562,6 +562,25 @@ describe('častosť otázok', () => {
     expect(sporPraxe({ konflikt: true, varianty: [variant('513', 'PN', 'KN'), variant('513', 'PN', 'B2')] })).toBe('dph');
   });
 
+  it('spor nie je šum: strany samozdanenia, prázdne KV pri PN ani okrajový doklad', () => {
+    const variant = (predkontaciaKod: string, clenenieDphKod: string, clenenieKvKod: string, okrajovy?: boolean) => ({
+      predkontaciaKod, clenenieDphKod, clenenieKvKod, tvar: [], dokladov: 5, od: '2026-01-01', do: '2026-06-01',
+      ...(okrajovy ? { okrajovy } : {}),
+    });
+    // Samozdanenie: jeden interný doklad daň priznáva (DD…), druhý ju odpočítava
+    // (PD…). Sú to dva doklady jednej praxe, nie dve praxe.
+    expect(sporPraxe({ konflikt: true, varianty: [variant('343', 'DDsl§69', 'B1'), variant('343', 'PDsluz', 'B1')] })).toBeUndefined();
+    // Prázdna sekcia a KN pri členení bez odpočtu — rovnaká daň, spor len v účte.
+    expect(sporPraxe({ konflikt: true, varianty: [variant('518', 'PN', ''), variant('548', 'PN', 'KN')] })).toBe('ucet');
+    // Okrajový doklad sporom nie je.
+    expect(sporPraxe({ konflikt: true, varianty: [variant('518', 'PD', 'B2'), variant('1', 'PN', 'KN', true)] })).toBeUndefined();
+    // Vlastný kód firmy či chýbajúce členenie sa od PD neoddeľujú — len strana DD.
+    expect(sporPraxe({ konflikt: true, varianty: [variant('518', 'PD', 'B2'), variant('518', '', '')] })).toBe('dph');
+    expect(sporPraxe({ konflikt: true, varianty: [variant('518', 'PD', 'B2'), variant('518', 'PDvlastny', 'KN')] })).toBe('dph');
+    // Skutočný spor v rámci jednej strany ostáva.
+    expect(sporPraxe({ konflikt: true, varianty: [variant('518', 'PD', 'B2'), variant('518', 'PN', 'KN'), variant('343', 'DDsl§69', 'B1')] })).toBe('dph');
+  });
+
   it('spočíta otázky a ponuky bez predvyplnenia na doklad, nie na dôvod', () => {
     const doklady = [
       { spor: 'dph' as const }, { spor: 'dph' as const, novaProtistrana: true },

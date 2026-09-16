@@ -948,6 +948,22 @@ export interface NavrhRiadku {
   podielDph?: number;
 }
 
+/** Podoba praxe protistrany na výber — id z číselníka firmy a kódy na zobrazenie. */
+export interface VariantOtazky {
+  predkontaciaId: string;
+  clenenieDphId: string;
+  clenenieKvKod?: string;
+  dokladov: number;
+  od: string;
+  do: string;
+  kody: { predkontacia: string; clenenieDph: string; clenenieKv?: string };
+}
+
+export interface OtazkaPraxe {
+  spor: 'dph';
+  varianty: VariantOtazky[];
+}
+
 export interface AccountingSuggestion {
   tenantId: string;
   organizationId: string;
@@ -959,6 +975,8 @@ export interface AccountingSuggestion {
   clenenieKvKod?: string;
   /** Rozpis po položkách — doklad, ktorý firma spravidla delí. */
   riadky?: NavrhRiadku[];
+  /** Otázka účtovníkovi: protistrana má viac praxí s inou daňou (R09). */
+  otazka?: OtazkaPraxe;
   source: SuggestionSource;
   confidence: number;
   reason: string;

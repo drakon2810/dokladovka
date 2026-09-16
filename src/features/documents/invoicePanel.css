@@ -503,6 +503,12 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 }
 .dv-preco-navrh-btn:hover { border-color: #7FBEE6; background: #F7FBFE; }
 
+/* Otázka na prax protistrany (R09): stojí nad zaúčtovaním, nie v „prečo?" —
+   o dani sa má rozhodnúť skôr, než účtovník doklad schváli. */
+.dv-otazka { margin: 0 0 12px; border-color: #F2D49B; background: #FFFBF2; }
+.dv-otazka .dk-card-title { color: #7A4B00; }
+.dv-otazka-vzdy { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: #5B4A2E; }
+
 /* „?" s návrhom poradcu nesie bodku — inak by o skrytom texte nikto nevedel. */
 .dv-preco-btn.dv-preco-ma-navrh { position: relative; }
 .dv-preco-btn.dv-preco-ma-navrh::after {

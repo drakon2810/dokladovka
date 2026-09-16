@@ -5,9 +5,9 @@
 // a draft.ucto. Panel „Prečo?" (pôvod zaúčtovania) ostáva pri poliach
 // predkontácie, členenia DPH a kontrolného výkazu.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AccountingSuggestion, DocumentPodtyp, DphAudit, DphZistenie, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VatBreakdownRow, VatRate } from '../../data/types';
+import type { AccountingSuggestion, DocumentPodtyp, DphAudit, DphZistenie, CodeListItem, DocumentExtractedData, DocumentItem, DocumentLineItem, DocumentPreco, DocumentType, DocumentUcto, VariantOtazky, VatBreakdownRow, VatRate } from '../../data/types';
 import { CLENENIE_KV_KODY, FORMY_UHRADY } from '../../data/types';
-import { getCachedSnapshot, getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, type PrecoVysvetlenie } from '../../data/api';
+import { getCachedSnapshot, getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod, ulozPravidloProtistrany, type PrecoVysvetlenie } from '../../data/api';
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { druh, kvKodyPreTyp, predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
@@ -19,6 +19,7 @@ import { sk, t, tv, type SkKey } from '../../i18n/sk';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, pouziNavrhNaPolozky, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
+import { patchVariantu, polozkyInakoNezPodoba, zobrazOtazku } from './predvyplnenie';
 import './invoicePanel.css';
 import './sourceHighlight.css';
 
@@ -206,6 +207,28 @@ export function InvoicePanel({
   const ucto = draft.ucto;
 
   const [itemsOn, setItemsOn] = useState((ex.polozky ?? []).length > 0);
+  // Otázka na prax protistrany (R09). „Vždy" sa uloží až pri výbere podoby,
+  // nie pri zaškrtnutí — účtovník si ešte môže rozmyslieť, ktorú.
+  const [otazkaVzdy, setOtazkaVzdy] = useState(false);
+  const [otazkaUklada, setOtazkaUklada] = useState(false);
+  const pouziVariant = async (variant: VariantOtazky) => {
+    // S „Vždy" sa najprv uloží pravidlo: keby sa hlavička zmenila skôr a uloženie
+    // zlyhalo, otázka by zmizla a zopakovať by sa to nedalo.
+    if (otazkaVzdy) {
+      setOtazkaUklada(true);
+      try {
+        await ulozPravidloProtistrany(draft.id, variant);
+        showToast(t('otazka.ulozene'), { tone: 'success' });
+      } catch (chyba) {
+        showToast(chyba instanceof Error ? chyba.message : String(chyba), { tone: 'error' });
+        return;
+      } finally {
+        setOtazkaUklada(false);
+      }
+    }
+    updateUcto(patchVariantu(variant));
+    if (polozkyInakoNezPodoba(ex.polozky ?? [], variant)) showToast(t('otazka.polozky'), { tone: 'info' });
+  };
   // Položky odložené vypnutým prepínačom — aby ich omylom prepnutý prepínač
   // nezmazal nenávratne skôr, než sa doklad uloží.
   const [odlozene, setOdlozene] = useState<DocumentLineItem[]>([]);
@@ -918,6 +941,36 @@ export function InvoicePanel({
             </span>
           )}
       </div>
+
+      {suggestion?.otazka && zobrazOtazku(suggestion.otazka, ucto, draft.status, readOnly, draft.podtyp) && (
+        <div className="dk-card dv-otazka">
+          <div className="dk-card-title">{t('otazka.titul')}</div>
+          <div className="dv-preco-navrhy">
+            {suggestion.otazka.varianty.map((variant) => (
+              <div key={`${variant.predkontaciaId}|${variant.clenenieDphId}|${variant.clenenieKvKod ?? ''}`} className="dv-preco-navrh">
+                <span>
+                  <strong>
+                    {variant.kody.predkontacia} · {variant.kody.clenenieDph}{variant.kody.clenenieKv ? ` · ${variant.kody.clenenieKv}` : ''}
+                  </strong>
+                  {' — '}
+                  {tv('otazka.variant', { dokladov: String(variant.dokladov), od: formatDateSk(variant.od), do: formatDateSk(variant.do) })}
+                </span>
+                <button type="button" className="dv-preco-navrh-btn" disabled={otazkaUklada} onClick={() => void pouziVariant(variant)}>
+                  {t('otazka.pouzit')}
+                </button>
+              </div>
+            ))}
+          </div>
+          {/* Pravidlo sa vytvára len z prijatých dokladov — pravidlá nemajú druh
+              dokladu a pravidlo zákazníka by prebilo prijaté faktúry partnera. */}
+          {!vydana && (
+            <label className="dv-otazka-vzdy">
+              <input type="checkbox" checked={otazkaVzdy} disabled={otazkaUklada} onChange={(event) => setOtazkaVzdy(event.target.checked)} />
+              {t('otazka.vzdy')}
+            </label>
+          )}
+        </div>
+      )}
 
       <div className="dk-two">
         {/* Základné informácie */}
