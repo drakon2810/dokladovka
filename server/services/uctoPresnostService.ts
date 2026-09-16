@@ -439,6 +439,8 @@ function kontextZKorpusu(doklad: Skutocnost): AiSuggestionDocumentContext {
     popis: polozka.popis,
     sadzbaDph: polozka.sadzbaDph,
     suma: polozka.suma === undefined ? undefined : Number((polozka.suma + (polozka.sumaDph ?? 0)).toFixed(2)),
+    // Základ korpus pozná priamo — ako extrakcia v produkcii (sumaBezDph).
+    zaklad: polozka.suma,
   }));
   const sumy = polozky.map((polozka) => polozka.suma).filter((suma): suma is number => suma !== undefined);
   return {

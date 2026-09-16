@@ -720,6 +720,51 @@ describe('accounting suggestions', () => {
     expect(payload.dokument.zhrnutie).toBe('Nákup športového tovaru');
   }, 90_000);
 
+  // ALPINA DF260200 (platené meranie): položka prišla so sumou S DPH (549,99),
+  // kým predchodca toho istého dodávateľa v „doklady" niesol základ (420).
+  // Model porovnal nesúmerné čísla a notebook zaradil nad hranicu 500 €.
+  it('položka nesie základ ako v dôkazoch aj sumu s DPH, pomenované zvlášť', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,549.99,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'predkontacie','32110Drobný HM','Drobný HM do 500€','pohoda')`,
+      [pred, seeded.tenantId, seeded.organizationId],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: pred, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.5, reason: 'Notebook',
+      })),
+    };
+    const context = {
+      documentType: 'FP', supplierName: 'wabez', totalAmount: 549.99, currency: 'EUR',
+      lineDescriptions: ['Notebook', 'Kábel'],
+      polozky: [
+        { popis: 'Notebook', sadzbaDph: 23, suma: 549.99 }, { popis: 'Kábel', suma: 3 },
+        // Riadok vytlačený bez DPH so sadzbou: základ z extrakcie, nie delenie sadzbou.
+        { popis: 'Monitor', sadzbaDph: 23, suma: 480, zaklad: 480 },
+      ],
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'wabez' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(payload.dokument.polozky).toEqual([
+      { index: 0, popis: 'Notebook', sadzbaDph: 23, suma: 447.15, sumaSDph: 549.99 },
+      // Bez sadzby sa základ nedá odvodiť — ide len suma s DPH.
+      { index: 1, popis: 'Kábel', sumaSDph: 3 },
+      { index: 2, popis: 'Monitor', sadzbaDph: 23, suma: 480, sumaSDph: 480 },
+    ]);
+  }, 90_000);
+
   it('zahraničná faktúra: odpočet cudzej dane sa neuloží a sekcia A1 na FP vypadne', async () => {
     const database = await createTestDatabase();
     databases.push(database);
@@ -2819,6 +2864,67 @@ describe('návrh rozrezania položky', () => {
     // na 70 % sumy alebo so zápornou daňou.
     const rezy = (riadky ?? []).filter((riadok) => riadok.podiel != null);
     expect(rezy).toEqual([]);
+  }, 90_000);
+});
+
+// ALPINA 26PK497 (platené meranie): model dal riadkom 1 a 2 správny účet, ale do
+// „podiel" vpísal ich podiel na doklade (0,16 a 0,19 z 1,00 €) — skopíroval
+// podielDokladu z dôkazov. Jedna časť na položku neprešla ako rez a riadky
+// vypadli aj so správnym účtom. Časť, ktorej podiel je presne podiel položky
+// na doklade, je celá položka.
+describe('osamotený podiel rovný podielu položky na doklade', () => {
+  it('ostane ako celá položka, skutočný neúplný rez vypadne', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const [parkovne, nedanove] = [randomUUID(), randomUUID()];
+    for (const [id, kod] of [[parkovne, '379700-PK-parkovne'], [nedanove, '379700-PK-nedanove']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda','512100','379700')`,
+        [id, ...kde, kod],
+      );
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'OZ','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,1,'EUR')`,
+      [documentId, ...kde],
+    );
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: parkovne, clenenieDphId: null, clenenieKvKod: null,
+        ciselnyRadId: null, confidence: 0.8, reason: 'Parkovné s nedaňovou časťou',
+        riadky: [
+          { index: 1, predkontaciaId: nedanove, clenenieDphId: null, clenenieKvKod: null, podiel: 0.128, podielDph: null },
+          { index: 2, predkontaciaId: nedanove, clenenieDphId: null, clenenieKvKod: null, podiel: 0.152, podielDph: null },
+          // Položka 0 tvorí 0,65 dokladu, model z nej odkrojil 0,5 — to je neúplný rez.
+          { index: 0, predkontaciaId: nedanove, clenenieDphId: null, clenenieKvKod: null, podiel: 0.5, podielDph: null },
+          // Položka 3 tvorí presne 0,2 dokladu, ale 0,2 je okrúhly rez 80/20 — ostáva neúplným rezom.
+          { index: 3, predkontaciaId: nedanove, clenenieDphId: null, clenenieKvKod: null, podiel: 0.2, podielDph: null },
+        ],
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Parkovisko' };
+    const context = {
+      documentType: 'OZ', supplierName: 'Parkovisko', totalAmount: 1, currency: 'EUR',
+      lineDescriptions: ['parkovné', 'nedaňová časť', 'dph nedaňovo', 'palivo'],
+      polozky: [
+        { popis: 'parkovné (daňová časť 80 %)', sadzbaDph: 0, suma: 0.52 },
+        { popis: 'parkovné (nedaňová časť 20 %)', sadzbaDph: 0, suma: 0.128 },
+        { popis: 'dph nedaňovo', sadzbaDph: 0, suma: 0.152 },
+        { popis: 'palivo', sadzbaDph: 0, suma: 0.2 },
+      ],
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser)).toBe(true);
+
+    const riadky = (await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky as Array<Record<string, unknown>>;
+    expect(riadky.map((riadok) => [riadok.index, riadok.predkontaciaId, riadok.podiel])).toEqual([
+      [1, nedanove, undefined], [2, nedanove, undefined],
+    ]);
   }, 90_000);
 });
 

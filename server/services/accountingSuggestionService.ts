@@ -498,6 +498,8 @@ interface DokladRadu extends Record<string, unknown> {
   krajina: string | null;
   mesiac: number;
   predkontacia: string | null;
+  /** Syntetický účet Dal predkontácie (prvé tri číslice), keď ju číselník pozná. */
+  synteticky_dal: string | null;
 }
 
 /** Najčastejší rad skupiny dokladov a jeho podiel v nej. */
@@ -526,7 +528,7 @@ async function vyberRadZDokladov(
   input: Pick<SuggestionInput, 'tenantId' | 'organizationId'>,
   agenda: string,
   doklady: DokladRadu[],
-  novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number; predkontacia: string },
+  novy: { ico: string; nazov: string; tuzemsky: boolean | null; mesiac: number; predkontacia: string; syntetickyDal: string },
   rok: number,
 ): Promise<{ rad: string | null; rozhodnyRad: string | null }> {
   // Mesačná firma: aspoň dva mesiace s tromi a viac dokladmi, každý takmer celý
@@ -561,6 +563,18 @@ async function vyberRadZDokladov(
     },
     {
       doklady: novy.predkontacia === '' ? [] : doklady.filter((doklad) => doklad.predkontacia === novy.predkontacia),
+      minimum: 3,
+      zModelu: true,
+    },
+    // Syntetický účet Dal predkontácie delí súbežné rady aj tam, kde presná
+    // predkontácia dokladov nemá: ALPINA vedie záväzky na 325 v 26OZ (97 %)
+    // a platby kartou na 379 v 26PK. Nová či zriedkavá predkontácia na 325 bez
+    // tejto skupiny padla do väčšiny celej agendy (26PK, 32 %) a prebila rad,
+    // ktorý model vrátil správne. Tiež len z modelu — nastavenie neprebije.
+    // ponytail: len Dal; firma, ktorá rady delí podľa účtu MD (napr. výnosy na
+    // vydaných faktúrach), by potrebovala aj skupinu MD.
+    {
+      doklady: novy.syntetickyDal === '' ? [] : doklady.filter((doklad) => doklad.synteticky_dal === novy.syntetickyDal),
       minimum: 3,
       zModelu: true,
     },
@@ -625,11 +639,20 @@ async function radZHistorie(
   const doklady = async (rokDokladov: number) => (await tx.query<DokladRadu>(
     `SELECT DISTINCT ON (h.agenda, h.doklad_cislo)
             c.id AS rad_id, h.supplier_ico, h.supplier_name_normalized, h.krajina,
-            extract(month FROM h.datum)::int AS mesiac, btrim(h.predkontacia_kod) AS predkontacia
+            extract(month FROM h.datum)::int AS mesiac, btrim(h.predkontacia_kod) AS predkontacia,
+            p.synteticky AS synteticky_dal
        FROM ucto_historia h
        JOIN code_list_items c
          ON c.tenant_id=h.tenant_id AND c.organization_id=h.organization_id AND c.kind='ciselneRady'
         AND c.active=true AND c.external_id=h.rad_external_id
+       -- Jeden prechod číselníkom namiesto poddopytu na každý riadok histórie.
+       LEFT JOIN (
+         SELECT DISTINCT ON (btrim(code)) btrim(code) AS kod,
+                left(regexp_replace(ucet_dal, '[^0-9]', '', 'g'), 3) AS synteticky
+           FROM code_list_items
+          WHERE tenant_id=$1 AND organization_id=$2 AND kind='predkontacie' AND ucet_dal IS NOT NULL
+          ORDER BY btrim(code), active DESC
+       ) p ON p.kod=btrim(h.predkontacia_kod)
       WHERE h.tenant_id=$1 AND h.organization_id=$2 AND h.agenda=ANY($3::text[])
         AND h.rad_external_id IS NOT NULL AND h.doklad_cislo IS NOT NULL
         AND h.datum >= make_date($4::int, 1, 1) AND h.datum < make_date($4::int + 1, 1, 1)
@@ -643,6 +666,14 @@ async function radZHistorie(
     tuzemsky: tuzemskaProtistrana(protistrana),
     mesiac: Number(datum.slice(5, 7)),
     predkontacia: predkontaciaKod?.trim() ?? '',
+    syntetickyDal: predkontaciaKod?.trim()
+      ? (await tx.query<{ synteticky: string | null } & Record<string, unknown>>(
+        `SELECT left(regexp_replace(ucet_dal, '[^0-9]', '', 'g'), 3) AS synteticky FROM code_list_items
+          WHERE tenant_id=$1 AND organization_id=$2 AND kind='predkontacie' AND btrim(code)=$3 AND ucet_dal IS NOT NULL
+          LIMIT 1`,
+        [input.tenantId, input.organizationId, predkontaciaKod.trim()],
+      )).rows[0]?.synteticky ?? ''
+      : '',
   };
 
   const tohtoRoka = await doklady(rok);
@@ -1627,7 +1658,7 @@ If "profilKlienta" is present, follow its "pokyny" strictly — they are the acc
 A category in "kategorie" may carry its own "rozpis" — the settled shapes of lines for that KIND of supply. Unlike "pravidlo" it holds for a supplier the firm has never had, so use it when the counterparty is new and the kind of supply is familiar. It is a LIST of shapes, each with "pocet", how many documents were posted that way, and "riadky", the lines themselves: one kind of supply is bought under different regimes and each has its own shape. Fuel is the plain case — the same category holds a domestic card split into a deductible and a non-deductible part, and foreign refuelling split into the fuel and that country's VAT. Choose the shape whose accounts and VAT classifications fit the document in front of you, never the one with the highest "pocet"; when none of them fits, follow the category's own account and say so in the reason.
 "pravidlo" — what this firm does with documents from THIS counterparty, counted from its whole history without a model: the header codes it settled on, in how many of how many documents, and "rozpis", the settled shape of the lines. A line there carrying "podielDokladu" takes that same share of the whole document every time — a share of the document, not a cut of an item. This is the summary; when it is present, follow it unless the document in front of you plainly contradicts it, and say in the reason which part you followed. A document whose items belong to several different accounts does NOT contradict it. The header is only what the lines you do not mark inherit, so a mixture is a reason to name the exceptions in "riadky" — never a reason to move the header off the account this counterparty settled on, not even when the exceptional lines carry most of the money. A category never overrides "pravidlo" either: a category speaks about a kind of supply, "pravidlo" about this very counterparty.
 When "pravidlo" carries "konflikt": true, the firm has no single settled practice for this counterparty and "varianty" lists the practices it did use (each with its header codes, "tvar" — the parts of the items posted differently from the header with their shares — and how many documents between which dates): choose the single variant that fits this document and never combine codes from different variants.
-HOW DOCUMENTS LIKE THIS ONE GET POSTED — "doklady". These are past documents of this firm, each with its header ("hlavicka") and its lines exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. A document carrying "vsetkyPolozky": true lists ALL its lines; only such a document carries its total base ("suma") and each line's share of that whole base ("podielDokladu") and VAT ("podielDphDokladu") — a share of the document, not the fraction of a cut item, which you compute from the sums of its parts. A document without it may be missing lines that had neither a text nor a posting of their own, so what its lines add up to is not the whole document. "agenda" is the kind of document it was. "rovnakych" counts the documents of that counterparty posted in exactly this shape; you see the newest of them. A document without "polozky" was recorded with its header only. A document with "tejProtistrany": true comes from THIS counterparty: it is not a hint, it is the record of a decision the firm has already made. Read the shape of it and reproduce that shape on the document in front of you. A document without it is the same kind of supply posted for another counterparty: weaker evidence — use it for the shape and the accounts of a supply this counterparty's own documents do not show, never to depart from what they do show. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed. Lines carrying "zdedene": true are the ones the accountant left alone — they hold the header's codes, so they show the shape of the document and the amounts a ratio is computed from, but they decide no account of their own; read them the same way as inherited rows in "dennik" above.
+HOW DOCUMENTS LIKE THIS ONE GET POSTED — "doklady". These are past documents of this firm, each with its header ("hlavicka") and its lines exactly as the accountant entered them: the text of each line, its "suma" (base) and "sumaDph" (VAT), its predkontácia, its VAT classification and its KV section. The items of the document in front of you use the same names: "suma" is the base without VAT and "sumaSDph" the amount with VAT (an item without a VAT rate carries only "sumaSDph"), so compare a base with a base. A document carrying "vsetkyPolozky": true lists ALL its lines; only such a document carries its total base ("suma") and each line's share of that whole base ("podielDokladu") and VAT ("podielDphDokladu") — a share of the document, not the fraction of a cut item, which you compute from the sums of its parts. A document without it may be missing lines that had neither a text nor a posting of their own, so what its lines add up to is not the whole document. "agenda" is the kind of document it was. "rovnakych" counts the documents of that counterparty posted in exactly this shape; you see the newest of them. A document without "polozky" was recorded with its header only. A document with "tejProtistrany": true comes from THIS counterparty: it is not a hint, it is the record of a decision the firm has already made. Read the shape of it and reproduce that shape on the document in front of you. A document without it is the same kind of supply posted for another counterparty: weaker evidence — use it for the shape and the accounts of a supply this counterparty's own documents do not show, never to depart from what they do show. The commonest shapes are a line of VAT posted to a non-deductible account of its own, and a payment divided into its parts — principal and interest, taxed and untaxed. Lines carrying "zdedene": true are the ones the accountant left alone — they hold the header's codes, so they show the shape of the document and the amounts a ratio is computed from, but they decide no account of their own; read them the same way as inherited rows in "dennik" above.
 Return the result in "riadky": one entry per item that differs from the header in ANYTHING — the account, the VAT classification, or the KV section. Each entry carries the item's index, the predkontaciaId of the right account, and, when the VAT treatment differs, its own clenenieDphId and clenenieKvKod. Leave out ONLY an item that matches the header in all three; leaving it out is what makes it inherit the header.
 An item whose account is the header's but whose VAT treatment is not still belongs in "riadky", and this is the case that matters most. Representation has no right to deduct; VAT on a foreign toll is not reclaimed either. Such items need the firm's non-deductible classification and the KN section even when their predkontácia is the header's — leaving them out does not make them neutral, it silently hands them the header's deduction and puts them in the control statement.
 CUTTING ONE ITEM IN TWO. Sometimes the firm does not move a whole item elsewhere but divides the item itself, and the second line does not exist on the invoice — the accountant creates it. In "doklady" this shows as two lines of one document whose texts name parts of one supply (a percentage, or a word for the deductible and the non-deductible half) on different predkontácie. To propose one, return several "riadky" entries with the SAME index, each carrying "podiel", the fraction of that item it takes — every fraction smaller than 1. An item that goes somewhere WHOLE carries "podiel": null — 0 and 1 are read the same way. A cut is only a fraction strictly between them, so never describe a whole item as a cut of one part. "podielDokladu" and "podielDphDokladu" in the evidence are never a value for "podiel": a line that is a whole item of the document in front of you carries "podiel": null, however small its share of the document. The fractions must add up to 1 and there must be at least two of them; anything else is dropped whole, because a partial cut would lose money from the document.
@@ -2448,7 +2479,8 @@ export interface AiSuggestionDocumentContext {
   currency?: string;
   lineDescriptions: string[];
   /** Položky so sadzbou DPH — sadzba na doklade je pre model dôkaz o režime. */
-  polozky?: Array<{ popis?: string; sadzbaDph?: number; suma?: number }>;
+  /** suma = s DPH; zaklad = základ z extrakcie či korpusu, keď je známy. */
+  polozky?: Array<{ popis?: string; sadzbaDph?: number; suma?: number; zaklad?: number }>;
   /**
    * Sadzby z rozpisu DPH. Bloček sa často prečíta bez položiek, ale s rozpisom
    * — a sadzby sa doteraz zbierali VÝLUČNE z položiek, takže model dostal
@@ -2953,7 +2985,7 @@ export async function navrhniZauctovanie(
   // dostane počet vynechaných a riadok pre vynechanú položku overením neprejde.
   // ponytail: 200 položiek × 120 znakov popisu; hromadný doklad nad strop by
   // potreboval dávky po položkách a zlúčenie rozpisu.
-  const polozkyDokladu: Array<{ popis?: string; sadzbaDph?: number; suma?: number }> = documentContext.polozky
+  const polozkyDokladu: Array<{ popis?: string; sadzbaDph?: number; suma?: number; zaklad?: number }> = documentContext.polozky
     ?? documentContext.lineDescriptions.map((popis) => ({ popis }));
   const polozkyPreModel = polozkyDokladu.slice(0, 200);
 
@@ -2992,8 +3024,19 @@ export async function navrhniZauctovanie(
             // a poradie v poli je príliš krehký dohovor na to, aby o ňom
             // rozhodovalo zaúčtovanie.
             // Popis sa skracuje len v prompte — rozpis aj profil klienta čítajú celý.
-            polozky: polozkyPreModel.map((polozka, index) => ({
+            // Suma položky prichádza S DPH (sumaSpolu), kým dôkazy v „doklady"
+            // nesú základ. Model tak porovnal notebook za 549,99 s predchodcom
+            // za 420 (základ) a zaradil ho nad hranicu 500 € (ALPINA DF260200).
+            // Ide teda základ pod tým istým menom ako v dôkazoch a suma s DPH zvlášť.
+            // Základ z extrakcie má prednosť: riadok vytlačený bez DPH či
+            // prenesenie daňovej povinnosti nesú sadzbu, ale sumu bez dane —
+            // delenie sadzbou by z 480 € spravilo 390 €. Odvodí sa len, keď chýba.
+            polozky: polozkyPreModel.map(({ suma, zaklad, ...polozka }, index) => ({
               index, ...polozka, popis: polozka.popis?.slice(0, 120),
+              ...(typeof zaklad === 'number' ? { suma: zaklad }
+                : typeof suma === 'number' && typeof polozka.sadzbaDph === 'number'
+                  ? { suma: Math.round((suma / (1 + polozka.sadzbaDph / 100)) * 100) / 100 } : {}),
+              ...(typeof suma === 'number' ? { sumaSDph: suma } : {}),
             })),
             polozkyVynechane: polozkyDokladu.length > polozkyPreModel.length
               ? polozkyDokladu.length - polozkyPreModel.length : undefined,
@@ -3560,9 +3603,32 @@ export async function navrhniZauctovanie(
   // ponytail: hranica z pozorovaných hodnôt; pri firme, ktorá delí jemnejšie
   // než na dvadsatinu, ju treba znížiť.
   const CELA_POLOZKA_OD = 0.95;
+  // Osamotená časť, ktorej podiel je presne podiel položky na doklade, je tiež
+  // celá položka: model skopíroval „podielDokladu" z dôkazov do „podiel" (prompt
+  // to zakazuje, a predsa). ALPINA 26PK497: riadky 0,16 a 0,19 dokladu na 1,00 €
+  // vypadli ako neúplný rez aj so správnym účtom. Podiel sa overuje so DPH aj
+  // bez nej — dôkazy nesú podiel zo základu. Skutočný rez s jedinou časťou sa
+  // s podielom položky zhoduje len náhodou.
+  const sumyPoloziek = polozkyPreModel.map((polozka) => {
+    const suma = Math.abs(Number(polozka.suma ?? 0)) || 0;
+    return { suma, zaklad: suma / (1 + (Number(polozka.sadzbaDph ?? 0) || 0) / 100) };
+  });
+  const spolu = sumyPoloziek.reduce((a, b) => ({ suma: a.suma + b.suma, zaklad: a.zaklad + b.zaklad }), { suma: 0, zaklad: 0 });
+  const jePodielPolozky = (index: number, podiel: number) => {
+    const polozka = sumyPoloziek[index];
+    if (!polozka || spolu.suma <= 0) return false;
+    return Math.abs(polozka.suma / spolu.suma - podiel) <= 0.005
+      || (spolu.zaklad > 0 && Math.abs(polozka.zaklad / spolu.zaklad - podiel) <= 0.005);
+  };
+  // Okrúhly podiel (násobok 0,05: 0,5, 0,8, 0,2) je skôr zámerný rez, z ktorého
+  // model vrátil len časť — ten sa ďalej zahadzuje, aby celá položka ticho
+  // neodišla na účet rezu. Skopírovaný podiel dokladu okrúhly spravidla nie je.
+  const okruhlyPodiel = (podiel: number) => Math.abs(podiel * 20 - Math.round(podiel * 20)) < 1e-6;
   const celePolozky = new Set<number>();
   for (const [index, casti] of skupiny) {
-    if (casti.length === 1 && (casti[0].podiel ?? 0) >= CELA_POLOZKA_OD) celePolozky.add(index);
+    const podiel = casti[0].podiel ?? 0;
+    if (casti.length === 1 && (podiel >= CELA_POLOZKA_OD
+      || (!okruhlyPodiel(podiel) && jePodielPolozky(index, podiel)))) celePolozky.add(index);
   }
   for (const index of celePolozky) skupiny.delete(index);
 

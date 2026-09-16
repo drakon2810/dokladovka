@@ -460,6 +460,7 @@ function polozkyPreModel(extracted: unknown) {
     popis: typeof polozka.popis === 'string' ? polozka.popis : undefined,
     sadzbaDph: typeof polozka.sadzbaDph === 'number' ? polozka.sadzbaDph : undefined,
     suma: typeof polozka.sumaSpolu === 'number' ? polozka.sumaSpolu : undefined,
+    zaklad: typeof polozka.sumaBezDph === 'number' ? polozka.sumaBezDph : undefined,
   }));
 }
 

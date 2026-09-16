@@ -318,6 +318,34 @@ describe('číselný rad z histórie firmy', () => {
     expect(await resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, '501/325')).toBe(oz);
   }, 90_000);
 
+  // ALPINA OZ: rad určuje syntetický účet Dal predkontácie (325 → 26OZ, 379 →
+  // 26PK), nie jej presný kód. Nová alebo zriedkavá predkontácia na 325 nemala
+  // skupinu a padla do väčšiny celej agendy (26PK, 32 %) — hoci model rad
+  // vrátil správne a účet ho rozhodoval v 97 % dokladov.
+  it('zriedkavú predkontáciu zaradí rad podľa syntetického účtu Dal', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const oz = await rad('26OZ', 'Ostatné záväzky', 'ostatni_zavazky', '2026');
+    const pk = await rad('26PK', 'Platby kartou', 'ostatni_zavazky', '2026');
+    for (const [kod, dal] of [['379-PK-parkovne', '379700'], ['325-popl-a', '325100'], ['325-popl-b', '325110'],
+      ['325-popl-c', '325100'], ['325-popl-novy', '325100']] as const) {
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md,ucet_dal)
+         VALUES ($1,$2,$3,'predkontacie',$4,$4,'pohoda','518100',$5)`,
+        [randomUUID(), kde.tenantId, kde.organizationId, kod, dal],
+      );
+    }
+    for (let i = 1; i <= 10; i += 1) await doklad('OZ', pk, '2026-03-05', `karta ${i}`, null, '379-PK-parkovne');
+    // Tri záväzky na 325, každý s inou predkontáciou — žiadna nemá tri doklady.
+    await doklad('OZ', oz, '2026-03-06', 'urad a', null, '325-popl-a');
+    await doklad('OZ', oz, '2026-03-07', 'urad b', null, '325-popl-b');
+    await doklad('OZ', oz, '2026-03-08', 'urad c', null, '325-popl-c');
+
+    const rad2026 = (kod?: string) => resolveSeriesDefault(database, kde, 'OZ', '2026-03-20', undefined, {}, undefined, undefined, kod);
+    expect(await rad2026('325-popl-novy')).toBe(oz);
+    expect(await rad2026('379-PK-parkovne')).toBe(pk);
+    expect(await rad2026()).toBe(pk);
+  }, 90_000);
+
   // Nastavenie „2611" bez jediného dokladu proti rozhodnej histórii 26OZ: história
   // ho prebíjala a skupina podľa predkontácie ho nesmie vzkriesiť — rozhodnosť sa
   // posudzuje bez nej, predkontácia už len vyberá medzi radmi histórie.
