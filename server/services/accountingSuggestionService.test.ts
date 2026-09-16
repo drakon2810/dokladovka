@@ -164,11 +164,29 @@ describe('accounting suggestions', () => {
       'SELECT source, confidence, predkontacia_id, clenenie_kv_kod FROM accounting_suggestions WHERE document_id=$1', [currentId],
     )).rows[0];
 
-    // Presná zhoda dodávateľa + textu položiek: 0.95, pamäť vyhráva nad históriou.
+    // Presná zhoda dodávateľa + textu položiek vyhráva nad históriou. Jedno
+    // potvrdenie však doklad nepredvyplní — na to treba päť rovnakých.
     await rebuildAccountingSuggestion(database, input);
     let suggestion = await suggestionRow();
     expect(suggestion).toMatchObject({ source: 'decision_memory', predkontacia_id: pred, clenenie_kv_kod: 'B3' });
+    expect(Number(suggestion.confidence)).toBeLessThan(0.9);
+
+    const kopie = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    for (const kopia of kopie) {
+      await database.query(
+        `INSERT INTO ucto_decisions
+          (id,tenant_id,organization_id,supplier_ico,supplier_name_normalized,line_text_normalized,
+           predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type,podtyp)
+         SELECT $1,tenant_id,organization_id,supplier_ico,supplier_name_normalized,line_text_normalized,
+                predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,clenenie_kv_kod,source,document_type,podtyp
+           FROM ucto_decisions WHERE document_id=$2`,
+        [kopia, historyId],
+      );
+    }
+    await rebuildAccountingSuggestion(database, input);
+    suggestion = await suggestionRow();
     expect(Number(suggestion.confidence)).toBeCloseTo(0.95);
+    await database.query('DELETE FROM ucto_decisions WHERE id = ANY($1)', [kopie]);
 
     // Iný text položiek: zhoda len podľa dodávateľa, 0.88.
     await database.query(
@@ -534,9 +552,9 @@ describe('accounting suggestions', () => {
         [id, seeded.tenantId, seeded.organizationId, kind, code],
       );
     }
-    // Denník: 3 riadky FV histórie s rovnakým zaúčtovaním (prax firmy) + FP šum,
-    // ktorý sa do FV denníka nesmie dostať.
-    for (let index = 0; index < 3; index += 1) {
+    // Denník: 5 riadkov FV histórie s rovnakým zaúčtovaním (prax firmy — päť je
+    // hranica predvyplnenia) + FP šum, ktorý sa do FV denníka nesmie dostať.
+    for (let index = 0; index < 5; index += 1) {
       await database.query(
         `INSERT INTO ucto_historia
           (id,tenant_id,organization_id,agenda,line_text_normalized,predkontacia_kod,predkontacia_id,clenenie_dph_kod,clenenie_dph_id,clenenie_kv_kod,source,riadok_hash)
@@ -580,10 +598,10 @@ describe('accounting suggestions', () => {
     expect(payload.dokument.zhrnutie).toBe('Door to door removal service');
     // Denník nesie len FV riadky, zoskupené s počtom výskytov.
     expect(payload.dennik).toHaveLength(1);
-    expect(payload.dennik[0]).toMatchObject({ predkontaciaKod: '602100 sťahov.-tuz.', clenenieKvKod: 'D2', pocet: 3 });
+    expect(payload.dennik[0]).toMatchObject({ predkontaciaKod: '602100 sťahov.-tuz.', clenenieKvKod: 'D2', pocet: 5 });
 
     let suggestion = (await database.query<Record<string, any>>('SELECT * FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
-    // KV od modelu sa uloží; zhoda s denníkom (3×, podobný text) pustí istotu nad 0.8.
+    // KV od modelu sa uloží; zhoda s denníkom (5×, podobný text) pustí istotu nad 0.8.
     expect(suggestion).toMatchObject({ source: 'ai', predkontacia_id: pred, clenenie_dph_id: dph, clenenie_kv_kod: 'D2' });
     expect(Number(suggestion.confidence)).toBeCloseTo(0.9);
     expect(String(suggestion.reason)).toContain('denníka');
@@ -2891,7 +2909,7 @@ describe('istota pri ustálenom pravidle protistrany', () => {
   async function priprava(
     dokladov: number,
     zhoda: number,
-    moznosti: { dph?: { pravidlo: string; navrh: string }; konflikt?: boolean } = {},
+    moznosti: { dph?: { pravidlo: string; navrh: string }; konflikt?: boolean; dennik?: number; priklad?: boolean } = {},
   ) {
     const database = await createTestDatabase();
     databases.push(database);
@@ -2910,6 +2928,25 @@ describe('istota pri ustálenom pravidle protistrany', () => {
         `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
          VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
         [clenenia.get(kod), ...kde, kod],
+      );
+    }
+    // Riadky denníka tej istej protistrany s rovnakým textom a účtom.
+    for (let index = 0; index < (moznosti.dennik ?? 0); index++) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,line_text_normalized,
+           predkontacia_id,predkontacia_kod,riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'FP',$4,'2026-03-10','preprava s.r.o.','preprava tovaru',$5,'518/321',0,'mdb',$6)`,
+        [randomUUID(), ...kde, `D${index}`, predkontacia, randomUUID()],
+      );
+    }
+    // Jediný potvrdený doklad s takmer rovnakým textom.
+    if (moznosti.priklad) {
+      await database.query(
+        `INSERT INTO ucto_decisions
+          (id,tenant_id,organization_id,supplier_name_normalized,line_text_normalized,predkontacia_id,source,document_type)
+         VALUES ($1,$2,$3,'preprava s.r.o.','preprava tovaru',$4,'approved','FP')`,
+        [randomUUID(), ...kde, predkontacia],
       );
     }
     const variant = (clenenieDphKod: string, pocet: number) =>
@@ -2952,6 +2989,29 @@ describe('istota pri ustálenom pravidle protistrany', () => {
     const navrh = await priprava(60, 58);
     expect(Number(navrh.confidence)).toBeGreaterThanOrEqual(0.9);
     expect(navrh.reason).toContain('58 z 60');
+  }, 90_000);
+
+  // Rozhodnutie vlastníka: na predvyplnenie stačí päť dokladov — ale všetkých
+  // rovnakých. 4 z 5 je zvyk s výnimkou, nie ustálené pravidlo.
+  it('päť rovnakých dokladov predvyplní, 4 z 5 nie', async () => {
+    expect(Number((await priprava(5, 5)).confidence)).toBeGreaterThanOrEqual(0.9);
+    expect(Number((await priprava(5, 4)).confidence)).toBeLessThan(0.9);
+  }, 120_000);
+
+  it('denník predvyplní až pri piatich rovnakých riadkoch', async () => {
+    expect(Number((await priprava(3, 2, { dennik: 5 })).confidence)).toBeGreaterThanOrEqual(0.9);
+    expect(Number((await priprava(3, 2, { dennik: 4 })).confidence)).toBeLessThan(0.9);
+  }, 120_000);
+
+  // Spor praxí protistrany: nech sa zhoduje denník či kategória, doklad sa
+  // nepredvyplní — firma robí u tejto protistrany dve rôzne veci.
+  it('spor praxí nepredvyplní ani so zhodou v denníku', async () => {
+    expect(Number((await priprava(60, 58, { konflikt: true, dennik: 6 })).confidence)).toBeLessThan(0.9);
+  }, 90_000);
+
+  // Jeden schválený podobný doklad je príklad, nie prax firmy.
+  it('jeden potvrdený podobný doklad nepredvyplní', async () => {
+    expect(Number((await priprava(3, 2, { priklad: true })).confidence)).toBeLessThan(0.9);
   }, 90_000);
 
   it('pri 6 z 10 ostáva pod hranicou — to je zvyk, nie pravidlo', async () => {

@@ -182,6 +182,14 @@ export function jeBezPredkontacia(kod: string | undefined | null): boolean {
  */
 const KATEGORIA_ISTOTA_OD = 20;
 
+/**
+ * Koľko ROVNAKÝCH dokladov tej istej praxe treba, aby sa doklad predvyplnil sám.
+ * Rozhodnutie vlastníka produktu (nie štatistika): päť. Pri 5 z 5 je dolná
+ * hranica 95 % Wilsonovho intervalu len okolo 57 % — preto predvyplnenie nikdy
+ * neschvaľuje a presnosť nad hranicou sa sleduje bezplatným meraním po firmách.
+ */
+const MIN_DOKLADOV_PREDVYPLNENIA = 5;
+
 /** Koľko kategórií vidí model. Zoznam sa NIKDY nezúži na prázdno, keď je čo skórovať. */
 const KATEGORII_V_PONUKE = 5;
 
@@ -997,7 +1005,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
       candidate = sPodrzanymStrediskom(exact, candidate);
       kvKod = exact.clenenie_kv_kod ?? undefined;
       source = 'decision_memory';
-      confidence = 0.95;
+      // Jedno potvrdenie je príklad, nie prax — predvyplní až päť rovnakých.
+      confidence = rovnake >= MIN_DOKLADOV_PREDVYPLNENIA ? 0.95 : 0.85;
       reason = `Návrh z pamäte: rovnaký dodávateľ aj text položiek (${rovnake}× potvrdené).`;
     }
   }
@@ -3366,7 +3375,7 @@ export async function navrhniZauctovanie(
   // Zdedený riadok nie je prax firmy, len kópia hlavičky — doklad predvyplniť
   // nesmie. Práve tak sa „kuchynské utierky" dostali na účet reprezentácie:
   // jediný riadok, ktorý o nich korpus mal, zdedil hlavičku repre.
-  const dennikZhoda = dennik.find((riadok) => riadok.podobnost >= 0.5 && riadok.pocet >= 3
+  const dennikZhoda = dennik.find((riadok) => riadok.podobnost >= 0.5 && riadok.pocet >= MIN_DOKLADOV_PREDVYPLNENIA
     && !riadok.zdedene
     && riadok.predkontaciaId && riadok.predkontaciaId === validated.predkontacia_id
     && (!riadok.clenenieDphId || riadok.clenenieDphId === validated.clenenie_dph_id));
@@ -3392,18 +3401,21 @@ export async function navrhniZauctovanie(
   // v konflikte nemá víťaza, s ktorým by sa návrh mohol zhodovať.
   const silnePravidlo = pravidloProtistrany
     && !pravidloProtistrany.konflikt
-    && pravidloProtistrany.dokladov >= 10
+    && pravidloProtistrany.zhoda >= MIN_DOKLADOV_PREDVYPLNENIA
     && pravidloProtistrany.zhoda / pravidloProtistrany.dokladov >= 0.9
     && Boolean(kodPredkontacie)
     && kodPredkontacie === pravidloProtistrany.predkontaciaKod
     && (!pravidloProtistrany.clenenieDphKod || kodClenenia === pravidloProtistrany.clenenieDphKod)
     && (!pravidloProtistrany.clenenieKvKod || kvKod === pravidloProtistrany.clenenieKvKod);
   // Kombinácia, akú firma ešte nemala, sa nepredvyplní, nech ju podporí čokoľvek.
-  const strop = nevidenaKombinacia
+  // Spor praxí protistrany doklad nepredvyplní, nech sa zhoduje čokoľvek iné —
+  // firma u nej robí dve rôzne veci a vybrať má účtovník. Jeden schválený
+  // podobný doklad (prikladZhoda) je príklad, nie prax, a istotu nedvíha.
+  const strop = nevidenaKombinacia || pravidloProtistrany?.konflikt
     ? 0.8
     : silnePravidlo
     ? 0.95
-    : (rozdelenie ? 0.8 : (overenaKategoria || dennikZhoda || prikladZhoda ? 0.95 : 0.8));
+    : (rozdelenie ? 0.8 : (overenaKategoria || dennikZhoda ? 0.95 : 0.8));
   // Upozornenie ide na začiatok dôvodu: dôvod sa reže na 500 znakov a na konci
   // by ho dlhé zdôvodnenie modelu odstrihlo.
   const varovanie = (nevidenaKombinacia

@@ -80,6 +80,7 @@ import {
 import './sourceHighlight.css';
 import { AssistantPanel } from '../assistant/AssistantPanel';
 import { pouziNavrhNaPolozky } from './ItemsSection';
+import { danovaKontrolaBrzdi } from './predvyplnenie';
 import {
   createMostikExportJob,
   getOrganizationMostikStatus,
@@ -448,14 +449,20 @@ export function DocumentDetailPage() {
     if (dirty) return;
     // KV chýbajúce v návrhu sa odvodí zo sekcie KV členenia DPH — rovnako ako
     // tlačidlo „Automatické účtovanie" a ručný výber členenia.
-    const kvKod = suggestion.clenenieKvKod
-      ?? data?.codeLists.cleneniaDph.find((item) => item.id === suggestion.clenenieDphId)?.kvSekcia;
+    const clenenieNavrhu = data?.codeLists.cleneniaDph.find((item) => item.id === suggestion.clenenieDphId);
+    const kvKod = suggestion.clenenieKvKod ?? clenenieNavrhu?.kvSekcia;
+    // Kontrola DPH, ktorá o navrhnutom členení pochybuje, zastaví daňovú časť:
+    // vpíše sa len účet, členenie, sekciu KV a rozpis potvrdí účtovník.
+    // ponytail: kontrola, ktorá dobehne až po otvorení dokladu, už vpísané
+    // polia nevráti — upozornenie v paneli DPH sa však ukáže.
+    const danBrzdi = danovaKontrolaBrzdi(
+      (data?.dphAudit ?? []).find((item) => item.documentId === draft.id), clenenieNavrhu?.kod);
     const doplnene = {
       ...(suggestion.predkontaciaId && !draft.ucto.predkontaciaId ? { predkontaciaId: suggestion.predkontaciaId } : {}),
-      ...(suggestion.clenenieDphId && !draft.ucto.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
+      ...(!danBrzdi && suggestion.clenenieDphId && !draft.ucto.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
       ...(suggestion.ciselnyRadId && !draft.ucto.ciselnyRadId ? { ciselnyRadId: suggestion.ciselnyRadId } : {}),
       ...(suggestion.strediskoId && !draft.ucto.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
-      ...(kvKod && !draft.ucto.clenenieKvKod ? { clenenieKvKod: kvKod } : {}),
+      ...(!danBrzdi && kvKod && !draft.ucto.clenenieKvKod ? { clenenieKvKod: kvKod } : {}),
     };
     // Rozpis po položkách sa predvyplní spolu s hlavičkou. Dovtedy sa doklad
     // rozdelený podľa ustáleného pravidla protistrany zastavil na istote 0,8
@@ -463,7 +470,7 @@ export function DocumentDetailPage() {
     // a hlavička v 94 %. Istotu nad 0,9 dostane len návrh, ktorý sa zhoduje
     // s pravidlom protistrany, takže sem sa rozpis dostane iba vtedy.
     const polozky = draft.extracted.polozky ?? [];
-    const sRozpisom = pouziNavrhNaPolozky(polozky, suggestion.riadky ?? []);
+    const sRozpisom = danBrzdi ? polozky : pouziNavrhNaPolozky(polozky, suggestion.riadky ?? []);
     autoFilledFor.current = draft.id;
     if (Object.keys(doplnene).length === 0 && sRozpisom === polozky) return;
     setDraft((current) => current && {
