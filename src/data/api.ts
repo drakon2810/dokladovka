@@ -3380,6 +3380,41 @@ export async function removeSharePointFolders(organizationId: string): Promise<v
   await restRequest(`/api/sharepoint/folders/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
 }
 
+/** Priečinok, z ktorého okno „Nahrať zo SharePointu" berie súbory. */
+export type SharePointZdroj = 'nespracovane' | 'chybne';
+
+export interface SharePointSubor {
+  id: string;
+  nazov: string;
+  velkost: number;
+  upravene: string | null;
+  /**
+   * nove — dá sa vybrať; caka — už vybraný, práve sa nahráva; nahrate — už je
+   * v Dokladovke a v „nespracované" len čaká na prenos do POHODY.
+   */
+  stav: 'nove' | 'caka' | 'nahrate';
+}
+
+/** Živý výpis priečinka firmy. `nastavene: false` = priečinok „chybné" nie je nastavený. */
+export async function nacitajSharePointSubory(
+  organizationId: string,
+  zdroj: SharePointZdroj,
+): Promise<{ nastavene: boolean; subory: SharePointSubor[] }> {
+  return restRequest(`/api/sharepoint/files/${encodeURIComponent(organizationId)}?zdroj=${zdroj}`);
+}
+
+/** Zaradí vybrané súbory na nahratie; server ich stiahne na pozadí. */
+export async function nahrajZoSharePointu(
+  organizationId: string,
+  zdroj: SharePointZdroj,
+  itemIds: string[],
+): Promise<{ zaradene: number; preskocene: number }> {
+  return restRequest(`/api/sharepoint/import/${encodeURIComponent(organizationId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ zdroj, itemIds }),
+  });
+}
+
 /** Pole merania: presnosť je spravne/znamych, pokrytie navrhnutych/znamych. */
 export interface PresnostPole {
   spravne: number;

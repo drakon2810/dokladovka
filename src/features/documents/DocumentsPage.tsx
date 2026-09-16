@@ -9,7 +9,9 @@ import {
   rejectDocuments,
   deleteDocument,
   restoreDocument,
+  loadSharePointState,
 } from '../../data/api';
+import { SharePointPickerModal } from './SharePointPickerModal';
 import { useDataQuery } from '../../data/query';
 import type {
   DocumentItem,
@@ -304,6 +306,18 @@ export function DocumentsPage() {
   const [bulkRejectReason, setBulkRejectReason] = useState('');
   const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  // Firmy s nastavenými priečinkami SharePointu. Bez nich tlačidlo „Nahrať zo
+  // SharePointu" nemá kam siahnuť, tak sa neukáže. Načíta sa raz; chyba (napr.
+  // demo režim) znamená jednoducho žiadne tlačidlo.
+  const [sharePointFirmy, setSharePointFirmy] = useState<Set<string>>(new Set());
+  const [sharePointOtvorene, setSharePointOtvorene] = useState(false);
+  useEffect(() => {
+    loadSharePointState()
+      .then((stav) => setSharePointFirmy(new Set(
+        stav.connection ? stav.folders.filter((folder) => folder.active).map((folder) => folder.organizationId) : [],
+      )))
+      .catch(() => setSharePointFirmy(new Set()));
+  }, []);
   const [dropActive, setDropActive] = useState(false);
   const [droppedFiles, setDroppedFiles] = useState<File[]>();
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -839,6 +853,19 @@ export function DocumentsPage() {
         </div>
         {data.role !== 'schvalovatel' && (
           <div className="flex items-center gap-2">
+            {/* Každá firma má vlastný priečinok — pri „všetkých firmách" nie je
+                jasné, ktorý otvoriť, tak tlačidlo povie, nech sa firma vyberie. */}
+            {sharePointFirmy.size > 0 && (currentOrgId === 'all' || sharePointFirmy.has(currentOrgId)) && (
+              <button
+                type="button"
+                className="btn"
+                disabled={currentOrgId === 'all'}
+                title={currentOrgId === 'all' ? t('sp.picker.vyberteFirmu') : undefined}
+                onClick={() => setSharePointOtvorene(true)}
+              >
+                {t('sp.picker.tlacidlo')}
+              </button>
+            )}
             <button type="button" className="btn btn-primary" onClick={() => setUploadModalOpen(true)}>
               {t('doklady.nahrat.tlacidlo')}
             </button>
@@ -1483,6 +1510,13 @@ export function DocumentsPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {sharePointOtvorene && currentOrgId !== 'all' && organizationMap.get(currentOrgId) && (
+        <SharePointPickerModal
+          organization={organizationMap.get(currentOrgId)!}
+          onClose={() => setSharePointOtvorene(false)}
+        />
+      )}
 
       {uploadModalOpen && (
         <UploadModal

@@ -4,13 +4,13 @@ import type { Database } from '../db/database.js';
 import { decryptSecret, encryptSecret } from '../security.js';
 import { MemoryObjectStorage } from '../storage.js';
 import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
-import { pollAllFolders, pollFolder, type SharePointFolderRow } from './sharepointPollService.js';
+import { pollAllFolders, pollFolder, pribudliZiadosti, type SharePointFolderRow } from './sharepointPollService.js';
 import { SharePointError, type SharePointClient, type SharePointFile } from './sharepointService.js';
 
 const PDF = Buffer.from('%PDF-1.7\nfaktura');
 const config = testConfig();
 
-/** Fake SharePoint: pole súborov v priečinku a záznam presunov. */
+/** Fake SharePoint: pole súborov v priečinku a záznam presunov aj stiahnutí. */
 function fakeClient(subory: SharePointFile[], prepis: Partial<SharePointClient> = {}) {
   const presuny: Array<{ itemId: string; ciel: string; nazov: string }> = [];
   const stiahnute: string[] = [];
@@ -50,44 +50,76 @@ async function pripravDb(): Promise<{ database: Database; storage: MemoryObjectS
   };
 }
 
+/** Účtovník v okne „Nahrať zo SharePointu" vybral tieto súbory. */
+async function vyber(database: Database, folder: SharePointFolderRow, subory: Array<{ id: string; name: string }>, zdroj = 'nespracovane') {
+  for (const subor of subory) {
+    await database.query(
+      `INSERT INTO sharepoint_import_requests (id,tenant_id,organization_id,drive_id,item_id,file_name,zdroj)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [randomUUID(), folder.tenant_id, folder.organization_id, folder.drive_id, subor.id, subor.name, zdroj],
+    );
+  }
+}
+
+async function cakajuce(database: Database): Promise<number> {
+  return (await database.query('SELECT 1 FROM sharepoint_import_requests WHERE done_at IS NULL')).rowCount;
+}
+
 // Každý test si stavia vlastnú PGlite so všetkými migráciami; predvolených
 // 5 s na to nestačí.
 describe('prechod priečinkom', { timeout: 60_000 }, () => {
-  it('nový súbor prijme a zapamätá si, odkiaľ je', async () => {
+  // Jadro zmeny: poller doteraz sťahoval všetko, čo v priečinku pribudlo.
+  it('bez výberu účtovníka z priečinka nič nesťahuje', async () => {
     const { database, storage, folder } = await pripravDb();
-    const { client } = fakeClient([{ id: 'item-1', name: 'faktura.pdf', size: PDF.length }]);
+    const { client, stiahnute } = fakeClient([{ id: 'item-1', name: 'faktura.pdf', size: PDF.length }]);
+    expect(await pollFolder({ database, storage, config }, folder, client)).toMatchObject({ prijate: 0 });
+    expect(stiahnute).toEqual([]);
+    expect((await database.query('SELECT 1 FROM inbound_attachments')).rowCount).toBe(0);
+  });
+
+  it('nahrá len vybrané súbory a zapamätá si, odkiaľ sú', async () => {
+    const { database, storage, folder } = await pripravDb();
+    const { client, stiahnute } = fakeClient([
+      { id: 'item-1', name: 'faktura.pdf', size: PDF.length },
+      { id: 'item-2', name: 'ina.pdf', size: PDF.length },
+    ]);
+    await vyber(database, folder, [{ id: 'item-1', name: 'faktura.pdf' }]);
     expect(await pollFolder({ database, storage, config }, folder, client))
       .toMatchObject({ videne: 1, prijate: 1, chybne: 0 });
+    expect(stiahnute).toEqual(['item-1']);
 
     const priloha = await database.query<{ sharepoint_item_id: string; status: string }>(
       'SELECT sharepoint_item_id, status FROM inbound_attachments',
     );
-    expect(priloha.rows[0]).toMatchObject({ sharepoint_item_id: 'item-1', status: 'queued' });
+    expect(priloha.rows).toHaveLength(1);
     // Bez odkazu na zdroj by sa súbor nemal ako vrátiť do „spracované".
+    expect(priloha.rows[0]).toMatchObject({ sharepoint_item_id: 'item-1', status: 'queued' });
     expect((await database.query('SELECT 1 FROM processing_jobs')).rowCount).toBe(1);
+    expect(await cakajuce(database)).toBe(0);
   });
 
-  it('ten istý súbor druhýkrát ani nesťahuje', async () => {
+  it('už nahratý súbor druhýkrát ani nesťahuje', async () => {
     const { database, storage, folder } = await pripravDb();
-    const subory = [{ id: 'item-1', name: 'faktura.pdf', size: PDF.length }];
-    const prvy = fakeClient(subory);
-    await pollFolder({ database, storage, config }, folder, prvy.client);
-    const druhy = fakeClient(subory);
+    await vyber(database, folder, [{ id: 'item-1', name: 'faktura.pdf' }]);
+    await pollFolder({ database, storage, config }, folder, fakeClient([]).client);
+
+    // Druhé okno, druhý účtovník — ten istý súbor vybraný znova.
+    await vyber(database, folder, [{ id: 'item-1', name: 'faktura.pdf' }]);
+    const druhy = fakeClient([]);
     expect(await pollFolder({ database, storage, config }, folder, druhy.client))
-      .toMatchObject({ videne: 1, prijate: 0, preskocene: 1 });
-    // Doklad čaká na prenos dni — sťahovať ho každé tri minúty je zbytočné.
+      .toMatchObject({ prijate: 0, preskocene: 1 });
     expect(druhy.stiahnute).toEqual([]);
+    expect(await cakajuce(database)).toBe(0);
   });
 
   it('už známy doklad ide do „spracované", nie medzi chybné', async () => {
     const { database, storage, folder } = await pripravDb();
     // Ten istý obsah pod dvoma rôznymi položkami: klient poslal faktúru
     // e-mailom a potom ju ešte hodil do priečinka.
-    await pollFolder({ database, storage, config }, folder,
-      fakeClient([{ id: 'prvy', name: 'faktura.pdf', size: PDF.length }]).client);
-    const druhy = fakeClient([{ id: 'druhy', name: 'faktura.pdf', size: PDF.length }]);
-
-    expect(await pollFolder({ database, storage, config }, folder, druhy.client))
+    await vyber(database, folder, [{ id: 'prvy', name: 'faktura.pdf' }]);
+    await pollFolder({ database, storage, config }, folder, fakeClient([]).client);
+    await vyber(database, folder, [{ id: 'druhy', name: 'faktura.pdf' }]);
+    expect(await pollFolder({ database, storage, config }, folder, fakeClient([]).client))
       .toMatchObject({ duplicity: 1, chybne: 0, prijate: 0 });
 
     // Presun rieši až ďalší cyklus — do „chybné" nepatrí, klient by videl svoju
@@ -99,10 +131,8 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
 
   it('nepoužiteľný súbor odsunie do „chybné"', async () => {
     const { database, storage, folder } = await pripravDb();
-    const { client, presuny } = fakeClient(
-      [{ id: 'item-2', name: 'fotka.heic', size: 10 }],
-      { download: async () => Buffer.from('nie je to doklad') },
-    );
+    await vyber(database, folder, [{ id: 'item-2', name: 'fotka.heic' }]);
+    const { client } = fakeClient([], { download: async () => Buffer.from('nie je to doklad') });
     expect(await pollFolder({ database, storage, config }, folder, client))
       .toMatchObject({ prijate: 0, chybne: 1 });
     // Odsun rieši ďalší cyklus, aby sa dal po zlyhaní zopakovať.
@@ -111,41 +141,62 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
     expect(dalsi.presuny).toEqual([{ itemId: 'item-2', ciel: 'chybne', nazov: 'fotka.heic' }]);
   });
 
+  // Súbor v „chybné" už raz v systéme bol (karanténa). Nesmie to zablokovať
+  // nové nahratie — inak by karta „Chybné" v okne nemala zmysel.
+  it('súbor z „chybné" sa dá nahrať znova', async () => {
+    const { database, storage, folder } = await pripravDb();
+    await vyber(database, folder, [{ id: 'item-7', name: 'faktura.pdf' }]);
+    await pollFolder({ database, storage, config }, folder,
+      fakeClient([], { download: async () => Buffer.from('pokazené') }).client);
+
+    await vyber(database, folder, [{ id: 'item-7', name: 'faktura.pdf' }], 'chybne');
+    const opravene = fakeClient([]);
+    expect(await pollFolder({ database, storage, config }, folder, opravene.client))
+      .toMatchObject({ prijate: 1 });
+    expect(opravene.stiahnute).toEqual(['item-7']);
+  });
+
   it('bez priečinka „chybné" súbor nechá ležať, ale nespadne', async () => {
     const { database, storage, folder } = await pripravDb();
-    const { client, presuny } = fakeClient(
-      [{ id: 'item-3', name: 'fotka.heic', size: 10 }],
-      { download: async () => Buffer.from('nie je to doklad') },
-    );
+    const { client, presuny } = fakeClient([], { download: async () => Buffer.from('nie je to doklad') });
     // Priečinok musí chýbať v databáze, nielen v odovzdanom objekte — cieľ
     // presunu si `najdiNaPresun` číta z nej.
     await database.query('UPDATE sharepoint_folders SET chybne_folder_id=NULL');
     const bezChybne = { ...folder, chybne_folder_id: null };
+    await vyber(database, folder, [{ id: 'item-3', name: 'fotka.heic' }]);
     expect(await pollFolder({ database, storage, config }, bezChybne, client)).toMatchObject({ chybne: 1 });
     await pollFolder({ database, storage, config }, bezChybne, client);
     expect(presuny).toEqual([]);
   });
 
-  it('vypršané prihlásenie zastaví priečinok, nebije Graph ďalšími súbormi', async () => {
+  it('vypršané prihlásenie zastaví priečinok a výber počká na nové prihlásenie', async () => {
     const { database, storage, folder } = await pripravDb();
+    await vyber(database, folder, [{ id: 'a', name: 'a.pdf' }, { id: 'b', name: 'b.pdf' }]);
     const download = vi.fn(async () => { throw new SharePointError('expired', 'auth_expired'); });
-    const { client } = fakeClient(
-      [{ id: 'a', name: 'a.pdf', size: 9 }, { id: 'b', name: 'b.pdf', size: 9 }],
-      { download },
-    );
-    await pollFolder({ database, storage, config }, folder, client);
+    await pollFolder({ database, storage, config }, folder, fakeClient([], { download }).client);
+    // Graph sa zbytočne nebije ďalšími súbormi.
     expect(download).toHaveBeenCalledTimes(1);
-  });
-
-  it('chybu zapíše, aby sa dala ukázať v nastaveniach', async () => {
-    const { database, storage, folder } = await pripravDb();
-    const { client } = fakeClient([], { list: async () => { throw new SharePointError('expired', 'auth_expired'); } });
-    await pollFolder({ database, storage, config }, folder, client);
+    // Účtovník nemusí vyberať znova — po prihlásení sa nahrajú samy.
+    expect(await cakajuce(database)).toBe(2);
     const stav = await database.query<{ last_error: string | null; last_poll_at: Date | null }>(
       'SELECT last_error, last_poll_at FROM sharepoint_folders WHERE id=$1', [folder.id],
     );
+    // Chyba sa zapíše, aby sa dala ukázať v nastaveniach.
     expect(stav.rows[0].last_error).toBe('expired');
     expect(stav.rows[0].last_poll_at).not.toBeNull();
+  });
+
+  // Klient súbor medzi výberom a stiahnutím zmazal alebo presunul. Žiadosť sa
+  // musí uzavrieť, inak by sa sťahovala každý cyklus donekonečna.
+  it('súbor, ktorý medzitým zmizol, uzavrie s dôvodom a neskúša ho dokola', async () => {
+    const { database, storage, folder } = await pripravDb();
+    await vyber(database, folder, [{ id: 'zmizol', name: 'faktura.pdf' }]);
+    const download = vi.fn(async () => { throw new SharePointError('item not found', 'not_found'); });
+    await pollFolder({ database, storage, config }, folder, fakeClient([], { download }).client);
+    await pollFolder({ database, storage, config }, folder, fakeClient([], { download }).client);
+    expect(download).toHaveBeenCalledTimes(1);
+    const ziadost = await database.query<{ error: string | null }>('SELECT error FROM sharepoint_import_requests');
+    expect(ziadost.rows[0].error).toBe('item not found');
   });
 
   it('cyklus cez všetky firmy odšifruje token a rotovaný uloží späť zašifrovaný', async () => {
@@ -159,14 +210,15 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
        VALUES ($1,$2,'ms-tenant','ucto@firma.sk',$3)`,
       [randomUUID(), folder.tenant_id, encryptSecret('rt-povodny', conf.secretEncryptionKey)],
     );
+    await vyber(database, folder, [{ id: 'item-9', name: 'f.pdf' }]);
 
     let videnyToken: string | undefined;
     const vysledky = await pollAllFolders({ database, storage, config: conf }, (options) => {
       videnyToken = options.tokens.refreshToken;
-      const { client } = fakeClient([{ id: 'item-9', name: 'f.pdf', size: PDF.length }]);
+      const { client } = fakeClient([]);
       // Microsoft rotuje refresh token pri každom obnovení; ak sa neuloží,
       // pripojenie po prvom vypršaní odumrie.
-      return { ...client, list: async () => { await options.tokens.onRefreshTokenRotated('rt-novy'); return [{ id: 'item-9', name: 'f.pdf', size: PDF.length }]; } };
+      return { ...client, download: async () => { await options.tokens.onRefreshTokenRotated('rt-novy'); return PDF; } };
     });
 
     expect(videnyToken).toBe('rt-povodny');
@@ -183,12 +235,23 @@ describe('prechod priečinkom', { timeout: 60_000 }, () => {
     expect((await pollAllFolders({ database, storage, config }, () => { throw new Error('nemá sa volať'); })).size).toBe(0);
   });
 
-  it('veľký nával rozdelí na viac cyklov', async () => {
+  it('veľký výber rozdelí na viac cyklov', async () => {
     const { database, storage, folder } = await pripravDb();
-    const subory = Array.from({ length: 25 }, (_, i) => ({ id: `f${i}`, name: `f${i}.pdf`, size: PDF.length }));
+    await vyber(database, folder, Array.from({ length: 25 }, (_, i) => ({ id: `f${i}`, name: `f${i}.pdf` })));
     // Každý súbor musí byť iný, inak ich zastaví kontrola duplicity obsahu.
-    const { client } = fakeClient(subory, { download: async (_d, id) => Buffer.concat([PDF, Buffer.from(id)]) });
+    const { client } = fakeClient([], { download: async (_d, id) => Buffer.concat([PDF, Buffer.from(id)]) });
     expect(await pollFolder({ database, storage, config }, folder, client)).toMatchObject({ prijate: 20 });
-    expect(await pollFolder({ database, storage, config }, folder, client)).toMatchObject({ prijate: 5, preskocene: 20 });
+    expect(await pollFolder({ database, storage, config }, folder, client)).toMatchObject({ prijate: 5 });
+  });
+
+  // Proces sa po kliknutí „Nahrať" zobudí hneď — ale staré čakajúce žiadosti
+  // (po vypršanom prihlásení) ho burcovať nesmú, inak by každých 5 s bil Graph.
+  it('zobudí sa len na novú žiadosť, nie na staré čakajúce', async () => {
+    const { database, folder } = await pripravDb();
+    await vyber(database, folder, [{ id: 'stara', name: 'stara.pdf' }]);
+    const zaciatokCyklu = new Date(Date.now() + 1_000);
+    expect(await pribudliZiadosti(database, zaciatokCyklu)).toBe(false);
+    await database.query(`UPDATE sharepoint_import_requests SET created_at = now() + interval '1 hour'`);
+    expect(await pribudliZiadosti(database, zaciatokCyklu)).toBe(true);
   });
 });

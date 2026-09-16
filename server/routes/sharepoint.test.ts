@@ -183,3 +183,103 @@ describe('SharePoint — pripojenie a priečinky', { timeout: 60_000 }, () => {
     expect(telo).not.toContain('refresh');
   });
 });
+
+describe('SharePoint — okno „Nahrať zo SharePointu"', { timeout: 60_000 }, () => {
+  const SUBORY = [
+    { id: 'stary', name: 'stary.pdf', size: 100, modifiedAt: '2026-09-01T08:00:00Z' },
+    { id: 'novy', name: 'novy.pdf', size: 200, modifiedAt: '2026-09-15T08:00:00Z' },
+    { id: 'caka', name: 'caka.pdf', size: 300, modifiedAt: '2026-09-10T08:00:00Z' },
+  ];
+
+  function klientSoSubormi(subory = SUBORY, prepis: Partial<SharePointClient> = {}): SharePointClient {
+    return { ...fakeClient(REFS), list: async () => subory, ...prepis };
+  }
+
+  async function sPriecinkami(client: SharePointClient, chybne: string | null = 'c1') {
+    const prostr = await prostredie(client);
+    await pripoj(prostr.database, prostr.seeded.tenantId);
+    await prostr.database.query(
+      `INSERT INTO sharepoint_folders
+        (id,tenant_id,organization_id,site_id,drive_id,nespracovane_folder_id,spracovane_folder_id,chybne_folder_id)
+       VALUES ($1,$2,$3,'drive-1','drive-1','n1','s1',$4)`,
+      [randomUUID(), prostr.seeded.tenantId, prostr.seeded.organizationId, chybne],
+    );
+    return prostr;
+  }
+
+  // Doklad ostáva v „nespracované", kým neprejde do POHODY — teda dni. Bez stavu
+  // „nahraté" by ho účtovník v okne videl ako nový a nahral znova.
+  it('ukáže obsah priečinka so stavom každého súboru, najnovšie navrch', async () => {
+    const { app, database, seeded, headers } = await sPriecinkami(klientSoSubormi());
+    const emailId = randomUUID();
+    await database.query(
+      `INSERT INTO inbound_emails
+        (id, tenant_id, organization_id, provider, provider_message_id, envelope_recipients, received_at, status, attachment_count, correlation_id)
+       VALUES ($1,$2,$3,'sharepoint',$4,'[]'::jsonb,now(),'received',1,$5)`,
+      [emailId, seeded.tenantId, seeded.organizationId, randomUUID(), randomUUID()],
+    );
+    await database.query(
+      `INSERT INTO inbound_attachments
+        (id,tenant_id,inbound_email_id,organization_id,original_file_name,safe_file_name,declared_mime_type,byte_size,sha256,status,sharepoint_drive_id,sharepoint_item_id)
+       VALUES ($1,$2,$3,$4,'stary.pdf','stary.pdf','application/pdf',100,'x','queued','drive-1','stary')`,
+      [randomUUID(), seeded.tenantId, emailId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO sharepoint_import_requests (id,tenant_id,organization_id,drive_id,item_id,file_name,zdroj)
+       VALUES ($1,$2,$3,'drive-1','caka','caka.pdf','nespracovane')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId],
+    );
+
+    const odpoved = await app.inject({ method: 'GET', url: `/api/sharepoint/files/${seeded.organizationId}`, headers });
+    expect(odpoved.statusCode, odpoved.body).toBe(200);
+    expect(odpoved.json().subory.map((subor: { id: string; stav: string }) => [subor.id, subor.stav])).toEqual([
+      ['novy', 'nove'], ['caka', 'caka'], ['stary', 'nahrate'],
+    ]);
+  });
+
+  // Id z požiadavky by inak dovolilo stiahnuť čokoľvek z knižnice dokumentov.
+  it('nahrať prijme len súbory, ktoré v priečinku firmy naozaj sú', async () => {
+    const { app, database, seeded, headers } = await sPriecinkami(klientSoSubormi());
+    const odpoved = await app.inject({
+      method: 'POST', url: `/api/sharepoint/import/${seeded.organizationId}`, headers,
+      payload: { zdroj: 'nespracovane', itemIds: ['novy', 'cudzi-subor-z-inej-firmy', 'novy'] },
+    });
+    expect(odpoved.statusCode, odpoved.body).toBe(202);
+    expect(odpoved.json()).toEqual({ zaradene: 1, preskocene: 1 });
+    const ziadosti = await database.query<{ item_id: string; file_name: string }>(
+      'SELECT item_id, file_name FROM sharepoint_import_requests',
+    );
+    expect(ziadosti.rows).toEqual([{ item_id: 'novy', file_name: 'novy.pdf' }]);
+
+    // Dvojklik: ten istý súbor druhýkrát nezaradí.
+    const znova = await app.inject({
+      method: 'POST', url: `/api/sharepoint/import/${seeded.organizationId}`, headers,
+      payload: { zdroj: 'nespracovane', itemIds: ['novy'] },
+    });
+    expect(znova.json()).toEqual({ zaradene: 0, preskocene: 1 });
+  });
+
+  it('firma bez priečinkov povie, kde ich nastaviť', async () => {
+    const { app, database, seeded, headers } = await prostredie(klientSoSubormi());
+    await pripoj(database, seeded.tenantId);
+    const odpoved = await app.inject({ method: 'GET', url: `/api/sharepoint/files/${seeded.organizationId}`, headers });
+    expect(odpoved.statusCode).toBe(409);
+    expect(odpoved.json().code).toBe('sharepoint_folders_missing');
+  });
+
+  it('bez priečinka „chybné" karta povie, že nie je nastavený', async () => {
+    const { app, seeded, headers } = await sPriecinkami(klientSoSubormi(), null);
+    const odpoved = await app.inject({ method: 'GET', url: `/api/sharepoint/files/${seeded.organizationId}?zdroj=chybne`, headers });
+    expect(odpoved.json()).toEqual({ nastavene: false, subory: [] });
+  });
+
+  it('vypršané prihlásenie povie rovno, že treba pripojiť znova', async () => {
+    const { SharePointError } = await import('../services/sharepointService.js');
+    const { app, seeded, headers } = await sPriecinkami(klientSoSubormi(SUBORY, {
+      list: async () => { throw new SharePointError('expired', 'auth_expired'); },
+    }));
+    const odpoved = await app.inject({ method: 'GET', url: `/api/sharepoint/files/${seeded.organizationId}`, headers });
+    expect(odpoved.statusCode).toBe(409);
+    expect(odpoved.json().code).toBe('sharepoint_auth_expired');
+  });
+});

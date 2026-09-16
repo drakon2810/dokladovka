@@ -11,6 +11,8 @@ export interface SharePointFile {
   id: string;
   name: string;
   size: number;
+  /** Kedy sa súbor naposledy zmenil (ISO) — v okne „Nahrať zo SharePointu" podľa neho účtovník spozná nové. */
+  modifiedAt?: string;
 }
 
 export interface SharePointFolderRef {
@@ -241,16 +243,16 @@ export function graphClient(options: GraphClientOptions): SharePointClient {
     async list(driveId, folderId) {
       const files: SharePointFile[] = [];
       let path: string | undefined =
-        `/drives/${driveId}/items/${folderId}/children?$select=id,name,size,file&$top=200`;
+        `/drives/${driveId}/items/${folderId}/children?$select=id,name,size,file,lastModifiedDateTime&$top=200`;
       while (path) {
         const body = (await (await graph(path)).json()) as {
-          value?: Array<{ id?: string; name?: string; size?: number; file?: unknown }>;
+          value?: Array<{ id?: string; name?: string; size?: number; file?: unknown; lastModifiedDateTime?: string }>;
           '@odata.nextLink'?: string;
         };
         for (const entry of body.value ?? []) {
           // Bez `file` je to priečinok — do spracovania nepatrí.
           if (!entry.file || !entry.id || !entry.name) continue;
-          files.push({ id: entry.id, name: entry.name, size: entry.size ?? 0 });
+          files.push({ id: entry.id, name: entry.name, size: entry.size ?? 0, modifiedAt: entry.lastModifiedDateTime });
         }
         path = body['@odata.nextLink']?.replace(GRAPH, '');
       }

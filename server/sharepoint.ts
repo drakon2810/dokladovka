@@ -1,14 +1,13 @@
 // SharePoint poller — samostatný proces, ako imap/monitor.
 //
-// Beží na serveri, nie na počítači účtovníka: klient hodí doklad do priečinka
-// v sobotu v noci a o pár minút je v projekte, bez toho, aby bol niekto pri
-// počítači. Presun do „spracované" rieši job pri potvrdení prenosu, nie tento
-// proces — ten iba prináša.
+// Dve úlohy: nahrá súbory, ktoré si účtovník vybral v okne „Nahrať zo
+// SharePointu", a presunie do „spracované" tie, ktorých doklad prešiel do
+// POHODY. Sám od seba z priečinka nič nesťahuje.
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db/database.js';
 import { migrateDatabase } from './db/migrate.js';
-import { pollAllFolders } from './services/sharepointPollService.js';
+import { pollAllFolders, pribudliZiadosti } from './services/sharepointPollService.js';
 import { graphClient } from './services/sharepointService.js';
 import { createObjectStorage } from './storage.js';
 
@@ -36,7 +35,11 @@ process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
 log(`štart, interval ${config.sharepoint.pollIntervalSeconds}s`);
+/** Ako často sa pri čakaní pozrie, či účtovník niečo nevybral — len databáza, nie Graph. */
+const KONTROLA_ZIADOSTI_MS = 5_000;
+
 while (!stopping) {
+  const zaciatokCyklu = new Date();
   try {
     // pollAllFolders sa bez registrácie aplikácie vráti prázdny — kontrola je
     // tu len preto, aby sa zbytočne nechodilo do databázy.
@@ -56,6 +59,17 @@ while (!stopping) {
   } catch (error) {
     log(`cyklus zlyhal — ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!stopping) await delay(config.sharepoint.pollIntervalSeconds * 1000);
+  // Čaká sa celý interval — kvôli presunom po prenose do POHODY. Nová žiadosť
+  // z okna „Nahrať zo SharePointu" však spustí cyklus hneď: účtovník po kliknutí
+  // nemá minútu pozerať, ako sa nič nedeje.
+  const koniecCakania = Date.now() + config.sharepoint.pollIntervalSeconds * 1000;
+  while (!stopping && Date.now() < koniecCakania) {
+    await delay(KONTROLA_ZIADOSTI_MS);
+    try {
+      if (nakonfigurovane && await pribudliZiadosti(database, zaciatokCyklu)) break;
+    } catch {
+      // Výpadok databázy počká na riadny cyklus, ten ho zapíše do logu.
+    }
+  }
 }
 await database.close();

@@ -1,8 +1,10 @@
-// Jeden prechod priečinkom „nespracované" pre jednu firmu.
+// Jeden prechod pre jednu firmu: presun vybavených súborov a nahratie tých,
+// ktoré si účtovník vybral.
 //
-// Beží dokola každých pár minút, takže musí byť lacný a musí zniesť, že tie
-// isté súbory uvidí stokrát: doklad zostáva v priečinku, kým nie je prenesený
-// do POHODY, a to trvá dni.
+// Poller už NEsťahuje všetko, čo v priečinku „nespracované" pribudne. Účtovník
+// si v okne „Nahrať zo SharePointu" vyberie súbory a poller zoberie len tie
+// (sharepoint_import_requests). Presun do „spracované" po prenose do POHODY
+// ostáva, ako bol — odvodzuje sa zo stavu dokladov.
 import { randomUUID } from 'node:crypto';
 import type { ServerConfig } from '../config.js';
 import type { Queryable } from '../db/database.js';
@@ -26,9 +28,10 @@ export interface SharePointFolderRow {
 }
 
 export interface PollResult {
+  /** Súbory vybrané na nahratie, ktoré tento cyklus spracoval. */
   videne: number;
   prijate: number;
-  /** Už sme ich videli v predošlom behu — nesťahovali sa znova. */
+  /** Vybrané, ale medzitým už nahraté — nesťahovali sa znova. */
   preskocene: number;
   chybne: number;
   /** Súbor, ktorý v systéme už je — prišiel skôr inou cestou. Nie je to chyba. */
@@ -39,24 +42,71 @@ export interface PollResult {
 }
 
 /**
- * Ktoré súbory sme už raz zobrali. Kľúčom je id položky v SharePointe, nie
- * obsah: obsah rieši až `isTechnicalDuplicate` pri ukladaní, ale to by
- * znamenalo stiahnuť súbor zakaždým nanovo. Pri desiatkach čakajúcich faktúr
- * a cykle každé tri minúty je to rozdiel medzi „lacné" a „sťahujeme to isté
- * celý deň dokola".
+ * Ktoré súbory sú v Dokladovke už nahraté. Kľúčom je id položky v SharePointe,
+ * nie obsah — obsah rieši až `isTechnicalDuplicate`, ale to by znamenalo súbor
+ * najprv stiahnuť.
+ *
+ * „Nahratý" znamená to isté, čo pre `isTechnicalDuplicate`: súbor sa práve
+ * spracúva, alebo z neho vznikol doklad, ktorý nie je zamietnutý. Fotka v
+ * karanténe ani odmietnutá duplicita nahratie znova neblokuje — práve preto
+ * sa dá súbor z „chybné" nahrať ešte raz.
  */
-async function uzVidene(
+export async function uzNahrate(
   database: Queryable,
   scope: { tenantId: string; organizationId: string },
   itemIds: string[],
 ): Promise<Set<string>> {
   if (itemIds.length === 0) return new Set();
   const result = await database.query<{ sharepoint_item_id: string }>(
-    `SELECT DISTINCT sharepoint_item_id FROM inbound_attachments
-      WHERE tenant_id=$1 AND organization_id=$2 AND sharepoint_item_id = ANY($3::text[])`,
+    `SELECT DISTINCT a.sharepoint_item_id FROM inbound_attachments a
+       LEFT JOIN documents d ON d.id = a.document_id
+      WHERE a.tenant_id=$1 AND a.organization_id=$2 AND a.sharepoint_item_id = ANY($3::text[])
+        AND (a.status IN ('queued','processing')
+          OR (a.status='document_created' AND (a.document_id IS NULL OR d.status <> 'zamietnuty')))`,
     [scope.tenantId, scope.organizationId, itemIds],
   );
   return new Set(result.rows.map((row) => row.sharepoint_item_id));
+}
+
+/** Súbory, ktoré už čakajú na nahratie — v okne sa nedajú vybrať znova. */
+export async function cakajuNaNahratie(
+  database: Queryable,
+  scope: { tenantId: string; organizationId: string },
+): Promise<Set<string>> {
+  const result = await database.query<{ item_id: string }>(
+    `SELECT item_id FROM sharepoint_import_requests
+      WHERE tenant_id=$1 AND organization_id=$2 AND done_at IS NULL`,
+    [scope.tenantId, scope.organizationId],
+  );
+  return new Set(result.rows.map((row) => row.item_id));
+}
+
+/**
+ * Pribudla od `od` žiadosť, ktorá ešte čaká? Podľa toho sa proces zobudí skôr
+ * než o celý interval — účtovník po kliknutí „Nahrať" nemá minútu pozerať
+ * na nič. Staršie čakajúce (napr. po vypršanom prihlásení) proces neburcujú,
+ * inak by každých pár sekúnd bil Graph neplatným tokenom.
+ */
+export async function pribudliZiadosti(database: Queryable, od: Date): Promise<boolean> {
+  const result = await database.query(
+    'SELECT 1 FROM sharepoint_import_requests WHERE done_at IS NULL AND created_at > $1 LIMIT 1',
+    [od.toISOString()],
+  );
+  return result.rowCount > 0;
+}
+
+interface ZiadostRow extends Record<string, unknown> {
+  id: string;
+  drive_id: string;
+  item_id: string;
+  file_name: string;
+}
+
+async function uzavriZiadost(database: Queryable, id: string, chyba: string | null): Promise<void> {
+  await database.query(
+    'UPDATE sharepoint_import_requests SET done_at=now(), error=$1 WHERE id=$2',
+    [chyba?.slice(0, 500) ?? null, id],
+  );
 }
 
 export async function pollFolder(
@@ -76,37 +126,39 @@ export async function pollFolder(
   // ktorý ticho leží v „nespracované" a nikto nevie prečo.
   if (presun.chyba) vysledok.chyba = presun.chyba;
 
-  let subory;
-  try {
-    subory = await client.list(folder.drive_id, folder.nespracovane_folder_id);
-  } catch (error) {
-    // Zlyhanie výpisu je zlyhanie celého priečinka — zapíše sa a skúsi znova.
-    vysledok.chyba = error instanceof Error ? error.message : String(error);
-    await zapisStav(deps.database, folder.id, vysledok.chyba);
-    return vysledok;
-  }
-  vysledok.videne = subory.length;
+  // Len súbory, ktoré si účtovník vybral. Priečinok sa tu vôbec nevypisuje —
+  // čo v ňom je, ukazuje okno „Nahrať zo SharePointu", keď ho niekto otvorí.
+  const ziadosti = (await deps.database.query<ZiadostRow>(
+    `SELECT id, drive_id, item_id, file_name FROM sharepoint_import_requests
+      WHERE tenant_id=$1 AND organization_id=$2 AND done_at IS NULL
+      ORDER BY created_at LIMIT $3`,
+    [scope.tenantId, scope.organizationId, MAX_NA_CYKLUS],
+  )).rows;
+  vysledok.videne = ziadosti.length;
+  const nahrate = await uzNahrate(deps.database, scope, ziadosti.map((ziadost) => ziadost.item_id));
 
-  const videne = await uzVidene(deps.database, scope, subory.map((s) => s.id));
-  const nove = subory.filter((s) => !videne.has(s.id));
-  vysledok.preskocene = subory.length - nove.length;
-
-  for (const subor of nove.slice(0, MAX_NA_CYKLUS)) {
+  for (const ziadost of ziadosti) {
+    // Medzitým ho nahral niekto iný (dve okná, dvaja účtovníci) — nesťahuje sa.
+    if (nahrate.has(ziadost.item_id)) {
+      vysledok.preskocene += 1;
+      await uzavriZiadost(deps.database, ziadost.id, null);
+      continue;
+    }
     try {
-      const bytes = await client.download(folder.drive_id, subor.id);
+      const bytes = await client.download(ziadost.drive_id, ziadost.item_id);
       const prijem = await ingestFiles(
         deps,
         { ...scope, correlationId: randomUUID() },
         {
           provider: 'sharepoint', storagePrefix: 'sharepoint',
-          subject: `SharePoint — ${subor.name}`, senderName: 'SharePoint',
+          subject: `SharePoint — ${ziadost.file_name}`, senderName: 'SharePoint',
         },
         [{
-          fileName: subor.name,
+          fileName: ziadost.file_name,
           // Skutočný typ určí magic-byte detekcia; SharePoint nám ho tu nedáva.
           declaredMimeType: 'application/octet-stream',
           bytes,
-          sharePoint: { driveId: folder.drive_id, itemId: subor.id },
+          sharePoint: { driveId: ziadost.drive_id, itemId: ziadost.item_id },
         }],
       );
       // Presun sa tu nerobí. Duplicity aj karanténu odnesie `presunVybavene`
@@ -118,13 +170,19 @@ export async function pollFolder(
       if (stav?.status === 'queued') vysledok.prijate += 1;
       else if (stav?.status === 'duplicate') vysledok.duplicity += 1;
       else vysledok.chybne += 1;
+      await uzavriZiadost(deps.database, ziadost.id, null);
     } catch (error) {
       vysledok.chybne += 1;
       const dovod = error instanceof Error ? error.message : String(error);
       vysledok.chyba = dovod;
       // Vypršané prihlásenie zastaví celý priečinok — ďalšie súbory by padli
-      // rovnako a len by sme Graph zbytočne bili.
+      // rovnako a len by sme Graph zbytočne bili. Žiadosť ostáva čakať a po
+      // novom prihlásení sa nahrá sama; účtovník ju nemusí vyberať znova.
       if (error instanceof SharePointError && error.code === 'auth_expired') break;
+      // Ostatné (súbor medzitým zmizol, Graph ho nevydal) sa uzavrú s dôvodom —
+      // inak by sa sťahoval každý cyklus donekonečna. V okne je potom znova
+      // „nový" a dá sa vybrať ešte raz.
+      await uzavriZiadost(deps.database, ziadost.id, dovod);
     }
   }
 

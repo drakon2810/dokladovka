@@ -16,6 +16,7 @@ import {
   authorizeUrl, exchangeCodeForTokens, graphClient, SharePointError,
   type SharePointClient,
 } from '../services/sharepointService.js';
+import { cakajuNaNahratie, uzNahrate } from '../services/sharepointPollService.js';
 
 /** Koľko má účtovník na dokončenie prihlásenia. */
 const STATE_PLATNOST_MS = 15 * 60 * 1000;
@@ -281,5 +282,126 @@ export function registerSharePointRoutes(
       [auth.tenantId, organizationId],
     );
     return { ok: true };
+  });
+
+  // ─── Okno „Nahrať zo SharePointu" ─────────────────────────────────────────
+  // Poller už nesťahuje všetko, čo v priečinku pribudne. Účtovník si pozrie
+  // obsah priečinka firmy, vyberie súbory a poller zoberie len tie.
+
+  interface PriecinkyRow extends Record<string, unknown> {
+    drive_id: string;
+    nespracovane_folder_id: string;
+    chybne_folder_id: string | null;
+  }
+
+  async function priecinkyFirmy(tenantId: string, organizationId: string): Promise<PriecinkyRow> {
+    const result = await database.query<PriecinkyRow>(
+      `SELECT drive_id, nespracovane_folder_id, chybne_folder_id FROM sharepoint_folders
+        WHERE tenant_id=$1 AND organization_id=$2 AND active=true`,
+      [tenantId, organizationId],
+    );
+    if (!result.rows[0]) {
+      throw new HttpError(409, 'sharepoint_folders_missing', 'Firma nemá nastavené priečinky SharePointu (Nastavenia → SharePoint)');
+    }
+    return result.rows[0];
+  }
+
+  /** Výpis priečinka. Vypršané prihlásenie sa dá opraviť len v nastaveniach — povie to rovno. */
+  async function vypisPriecinka(tenantId: string, driveId: string, folderId: string) {
+    const client = await klientPreTenant(tenantId);
+    try {
+      return await client.list(driveId, folderId);
+    } catch (error) {
+      if (error instanceof SharePointError && error.code === 'auth_expired') {
+        throw new HttpError(409, 'sharepoint_auth_expired',
+          'Prihlásenie do SharePointu vypršalo — pripojte ho znova v Nastavenia → SharePoint');
+      }
+      throw new HttpError(502, 'sharepoint_list_failed',
+        `Priečinok sa nepodarilo načítať: ${error instanceof Error ? error.message : 'neznáma chyba'}`);
+    }
+  }
+
+  const zdrojSchema = z.enum(['nespracovane', 'chybne']);
+
+  // Obsah priečinka firmy — vždy živý výpis zo SharePointu, nič sa neukladá.
+  app.get('/api/sharepoint/files/:organizationId', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    const { zdroj } = z.object({ zdroj: zdrojSchema.default('nespracovane') }).parse(request.query);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const priecinky = await priecinkyFirmy(auth.tenantId, organizationId);
+    const folderId = zdroj === 'chybne' ? priecinky.chybne_folder_id : priecinky.nespracovane_folder_id;
+    // „Chybné" je nepovinné — bez neho karta povie, že priečinok nie je nastavený.
+    if (!folderId) return { nastavene: false, subory: [] };
+
+    const subory = await vypisPriecinka(auth.tenantId, priecinky.drive_id, folderId);
+    const scope = { tenantId: auth.tenantId, organizationId };
+    const [nahrate, cakaju] = await Promise.all([
+      uzNahrate(database, scope, subory.map((subor) => subor.id)),
+      cakajuNaNahratie(database, scope),
+    ]);
+    return {
+      nastavene: true,
+      subory: subory
+        .map((subor) => ({
+          id: subor.id,
+          nazov: subor.name,
+          velkost: subor.size,
+          upravene: subor.modifiedAt ?? null,
+          // Doklad ostáva v „nespracované", kým neprejde do POHODY — teda dni po
+          // nahratí. Bez tohto stavu by ho účtovník videl ako nový a nahral znova.
+          stav: nahrate.has(subor.id) ? 'nahrate' : cakaju.has(subor.id) ? 'caka' : 'nove',
+        }))
+        // Najnovšie navrch: to, čo klient práve hodil, je to, čo účtovník hľadá.
+        .sort((a, b) => (b.upravene ?? '').localeCompare(a.upravene ?? '')),
+    };
+  });
+
+  app.post('/api/sharepoint/import/:organizationId', async (request, reply) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      zdroj: zdrojSchema,
+      itemIds: z.array(z.string().min(1).max(200)).min(1).max(200),
+    }).strict().parse(request.body);
+    await requireOrganizationAccess(database, auth, organizationId);
+    const priecinky = await priecinkyFirmy(auth.tenantId, organizationId);
+    const folderId = body.zdroj === 'chybne' ? priecinky.chybne_folder_id : priecinky.nespracovane_folder_id;
+    if (!folderId) throw new HttpError(409, 'sharepoint_folder_missing', 'Priečinok „chybné" nie je nastavený');
+
+    // Prijmú sa len súbory, ktoré v tom priečinku naozaj sú. Id z požiadavky by
+    // inak dovolilo stiahnuť čokoľvek z celej knižnice dokumentov — aj súbory
+    // inej firmy alebo mimo priečinkov.
+    const vPriecinku = new Map(
+      (await vypisPriecinka(auth.tenantId, priecinky.drive_id, folderId)).map((subor) => [subor.id, subor]),
+    );
+    const scope = { tenantId: auth.tenantId, organizationId };
+    const nahrate = await uzNahrate(database, scope, body.itemIds);
+
+    let zaradene = 0;
+    let preskocene = 0;
+    await database.transaction(async (tx) => {
+      for (const itemId of new Set(body.itemIds)) {
+        const subor = vPriecinku.get(itemId);
+        if (!subor || nahrate.has(itemId)) { preskocene += 1; continue; }
+        const vlozene = await tx.query(
+          `INSERT INTO sharepoint_import_requests
+            (id, tenant_id, organization_id, drive_id, item_id, file_name, zdroj, requested_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT DO NOTHING`,
+          [randomUUID(), auth.tenantId, organizationId, priecinky.drive_id, itemId, subor.name, body.zdroj, auth.userId],
+        );
+        // Už čaká (dvojklik, druhé okno) — nič sa nestane.
+        if (vlozene.rowCount > 0) zaradene += 1; else preskocene += 1;
+      }
+    });
+    await writeAudit(database, {
+      tenantId: auth.tenantId, organizationId, actorType: 'user', actorId: auth.userId,
+      action: 'sharepoint.import_requested', entityType: 'sharepoint_folders', entityId: organizationId,
+      correlationId: request.id, metadata: { zdroj: body.zdroj, zaradene, preskocene },
+    });
+    return reply.code(202).send({ zaradene, preskocene });
   });
 }
