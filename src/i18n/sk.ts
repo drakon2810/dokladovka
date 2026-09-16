@@ -1646,6 +1646,20 @@ export const sk = {
   'uctoProfil.deleniaPriklad': 'napr.',
   'uctoProfil.deleniaKategoria': 'Delenie položky',
   'uctoProfil.deleniaLenAdmin': 'Pravidlo do DPH profilu klienta môže pridať len administrátor.',
+  // Stopa rozhodnutia v „Prečo": čo vybral model a ktoré pravidlo to zmenilo.
+  'preco.zmena': 'AI navrhla „{z}", výsledok je „{na}" — {dovod}.',
+  'preco.prazdne': 'nič',
+  'preco.dovod.pravidlo_uctovnika': 'rozhodlo pravidlo účtovníka',
+  'preco.dovod.kod_z_dokladu': 'hodnota už bola na doklade',
+  'preco.dovod.neplatny_kod': 'AI vybrala kód, ktorý nie je aktívny v číselníku',
+  'preco.dovod.rad_firmy': 'rad určuje nastavenie a história firmy, nie AI',
+  'preco.dovod.clenenie_mimo_agendy': 'toto členenie firma na tomto druhu dokladu nikdy nepoužila',
+  'preco.dovod.clenenie_podla_uctu': 'na tomto účte firma iné členenie nemala',
+  'preco.dovod.ucet_bez_odpoctu': 'na tomto účte firma daň neodpočítava',
+  'preco.dovod.kv_bez_clenenia': 'bez členenia DPH sa sekcia KV neposiela',
+  'preco.dovod.kv_podla_praxe_a_druhu': 'sekciu určila prax firmy pri tomto členení a druh dokladu',
+  'preco.dovod.kn_proti_praxi': 'KN odporuje praxi firmy pri tomto členení',
+  'preco.dovod.kn_s_odpoctom': 'odpočet a sekcia KN sa vylučujú',
 } as const;
 
 export type SkKey = keyof typeof sk;

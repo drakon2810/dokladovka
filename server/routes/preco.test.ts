@@ -136,6 +136,60 @@ describe('Prečo? — provenience zaúčtovania', () => {
 });
 
 describe('Prečo? — AI vysvetlenie', () => {
+  // „Prečo" číta stopu rozhodnutia: čo vybral model a ktoré pravidlo to zmenilo,
+  // s názvami kódov — bez ďalšieho volania modelu.
+  it('vráti stopu rozhodnutia s názvami kódov, ktoré model vybral', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const headers = sessionHeaders(await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } }));
+    const { documentId, clenenieDphId } = await seedDocumentWithSuggestion(database, seeded);
+    const modelovo = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+       VALUES ($1,$2,$3,'cleneniaDph','PD','Tuzemské plnenie s odpočtom','manual')`,
+      [modelovo, seeded.tenantId, seeded.organizationId],
+    );
+    const stopaId = randomUUID();
+    await database.query(
+      `INSERT INTO ucto_navrh_stopa (id,tenant_id,organization_id,document_id,agendy,model,odpoved,zmeny,istota)
+       VALUES ($1,$2,$3,$4,'{FP}','gpt-test',$5::jsonb,$6::jsonb,'{"modelu":0.9,"strop":0.8,"dovod":"bez_zhody"}'::jsonb)`,
+      [stopaId, seeded.tenantId, seeded.organizationId, documentId,
+        JSON.stringify({ clenenieDphId: modelovo }),
+        JSON.stringify([{ pole: 'clenenieDphId', z: modelovo, na: clenenieDphId, dovod: 'ucet_bez_odpoctu' }])],
+    );
+    await database.query('UPDATE accounting_suggestions SET stopa_id=$1 WHERE document_id=$2', [stopaId, documentId]);
+
+    const body = (await app.inject({ method: 'GET', url: `/api/documents/${documentId}/preco`, headers })).json();
+    expect(body.stopa).toMatchObject({
+      model: 'gpt-test',
+      zmeny: [{ pole: 'clenenieDphId', z: modelovo, na: clenenieDphId, dovod: 'ucet_bez_odpoctu' }],
+      istota: { strop: 0.8, dovod: 'bez_zhody' },
+    });
+    expect(body.polozky[modelovo].kod).toBe('PD');
+    await app.close();
+  }, 120_000);
+
+  // Model odpovedá sekundy. Keď sa návrh medzitým prepíše, vysvetlenie
+  // starého návrhu sa k novému nesmie uložiť.
+  it('vysvetlenie sa neuloží k návrhu, ktorý sa medzitým zmenil', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const { documentId } = await seedDocumentWithSuggestion(database, seeded);
+    const scope = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId };
+    const parser = {
+      parse: async () => {
+        await database.query(`UPDATE accounting_suggestions SET predkontacia_id=NULL, source='ai' WHERE document_id=$1`, [documentId]);
+        return { output_parsed: { vysvetlenie: 'Preprava patrí do 518.', zdroje: [] }, usage: { input_tokens: 1, output_tokens: 1 } };
+      },
+    };
+    await precoVysvetlenie(database, testConfig(), scope, 'predkontacia', parser);
+    const ulozene = await database.query<Record<string, any>>('SELECT vysvetlenia FROM accounting_suggestions WHERE document_id=$1', [documentId]);
+    expect(ulozene.rows[0].vysvetlenia).toBeNull();
+  }, 120_000);
+
   it('vygeneruje raz, kešuje, účtuje spotrebu; prepočet návrhu kešu nuluje', async () => {
     const database = await createTestDatabase();
     databases.push(database);

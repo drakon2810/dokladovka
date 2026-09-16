@@ -15,7 +15,7 @@ import { lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
-import { t } from '../../i18n/sk';
+import { sk, t, tv, type SkKey } from '../../i18n/sk';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, pouziNavrhNaPolozky, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
@@ -350,6 +350,12 @@ export function InvoicePanel({
     const pravidlo = preco.pravidlo;
     const zdroj = SOURCE_LABEL[preco.source] ?? preco.source;
     const vysvetlenie = vysMap[field];
+    // Stopa rozhodnutia: ktoré pravidlo zmenilo to, čo AI pre toto pole vybrala.
+    const polePola = field === 'kv' ? 'clenenieKvKod' : field === 'predkontacia' ? 'predkontaciaId' : 'clenenieDphId';
+    const nazovHodnoty = (hodnota: string | null) => (hodnota
+      ? (field === 'kv' ? hodnota : preco.polozky[hodnota]?.kod ?? hodnota)
+      : t('preco.prazdne'));
+    const zmenyPola = (preco.stopa?.zmeny ?? []).filter((zmena) => zmena.pole === polePola);
     return (
       <div className="dv-preco-panel">
         {precoHead(<span className="dv-preco-src">{zdroj}</span>)}
@@ -362,6 +368,19 @@ export function InvoicePanel({
             <span className="dv-preco-chip"><IcoLines />{zdroj}</span>
           </div>
           {preco.reason && <div className="dv-preco-reason">{preco.reason}</div>}
+          {zmenyPola.map((zmena, index) => {
+            const dovodKey = `preco.dovod.${zmena.dovod}` as SkKey;
+            return (
+              <div key={`${zmena.dovod}-${index}`} className="dv-preco-note">
+                <IcoLines />
+                <span>{tv('preco.zmena', {
+                  z: nazovHodnoty(zmena.z),
+                  na: nazovHodnoty(zmena.na),
+                  dovod: dovodKey in sk ? t(dovodKey) : zmena.dovod,
+                })}</span>
+              </div>
+            );
+          })}
           {lisiSa && (
             <div className="dv-preco-note">
               <IcoWarn />

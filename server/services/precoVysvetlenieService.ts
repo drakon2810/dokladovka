@@ -99,6 +99,7 @@ export async function precoVysvetlenie(
   const meta = POLE_META[pole];
   const suggestion = (await database.query<Record<string, any>>(
     `SELECT s.source, s.confidence, s.reason, s.rule_id, s.clenenie_kv_kod, s.vysvetlenia,
+            s.predkontacia_id, s.clenenie_dph_id, s.stopa_id,
             p.code AS predkontacia_kod, p.name AS predkontacia_nazov,
             d.code AS dph_kod, d.name AS dph_nazov
        FROM accounting_suggestions s
@@ -197,12 +198,19 @@ export async function precoVysvetlenie(
     // nemôže podsunúť cudziu doménu ani zdroj patriaci k inému poľu.
     const zdroje = parsed.zdroje.filter((zdroj) => domenaPovolena(zdroj.url, meta.domeny));
 
+    // Model odpovedá sekundy a návrh sa medzitým môže prepísať (AI návrh po
+    // deterministickom). Vysvetlenie sa uloží len k tomu návrhu, ku ktorému
+    // vzniklo — a updated_at sa nehýbe: kešovanie textu nie je zmena návrhu.
     await database.query(
       `UPDATE accounting_suggestions
-          SET vysvetlenia = COALESCE(vysvetlenia,'{}'::jsonb) || $1::jsonb, updated_at=now()
-        WHERE document_id=$2 AND tenant_id=$3 AND organization_id=$4`,
+          SET vysvetlenia = COALESCE(vysvetlenia,'{}'::jsonb) || $1::jsonb
+        WHERE document_id=$2 AND tenant_id=$3 AND organization_id=$4
+          AND stopa_id IS NOT DISTINCT FROM $5 AND predkontacia_id IS NOT DISTINCT FROM $6
+          AND clenenie_dph_id IS NOT DISTINCT FROM $7 AND clenenie_kv_kod IS NOT DISTINCT FROM $8`,
       [JSON.stringify({ [pole]: { text: parsed.vysvetlenie, zdroje } }),
-        scope.documentId, scope.tenantId, scope.organizationId],
+        scope.documentId, scope.tenantId, scope.organizationId,
+        suggestion.stopa_id ?? null, suggestion.predkontacia_id ?? null,
+        suggestion.clenenie_dph_id ?? null, suggestion.clenenie_kv_kod ?? null],
     );
     // Účtovanie spotreby do existujúceho logu behov — spend je potom jeden GROUP BY.
     await database.query(

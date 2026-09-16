@@ -2403,6 +2403,19 @@ export interface StopaNavrhu {
   doklady: Array<{ ref: string; riadky: string[]; hash: string }>;
   /** id riadkov ucto_decisions poslaných ako „priklady". */
   priklady: string[];
+  /** Čo model v hlavičke vybral, skôr než doň siahli pravidlá. */
+  odpoved: { predkontaciaId: string | null; clenenieDphId: string | null; clenenieKvKod: string | null; ciselnyRadId: string | null };
+  /** Každá zmena poľa po odpovedi modelu, v poradí, s kódom dôvodu. */
+  zmeny: ZmenaNavrhu[];
+  /** Istota modelu, strop návrhu a čo strop určilo. */
+  istota: { modelu: number; strop: number; dovod: string };
+}
+
+export interface ZmenaNavrhu {
+  pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod' | 'ciselnyRadId';
+  z: string | null;
+  na: string | null;
+  dovod: string;
 }
 
 export type VysledokNavrhu = ({ navrh: NavrhZauctovania; dokazy: StopaNavrhu } | { zdrzanie: string }) & {
@@ -2482,10 +2495,13 @@ export async function maybeAiAccountingSuggestion(
   // skôr než návrh, aby stopa_id nikdy neukazovalo do prázdna.
   const stopaId = randomUUID();
   await database.query(
-    `INSERT INTO ucto_navrh_stopa (id,tenant_id,organization_id,document_id,as_of,agendy,zakladna,doklady,priklady)
-     VALUES ($1,$2,$3,$4,$5::date,$6::text[],$7,$8::jsonb,$9::text[])`,
+    `INSERT INTO ucto_navrh_stopa
+      (id,tenant_id,organization_id,document_id,as_of,agendy,zakladna,doklady,priklady,model,odpoved,zmeny,istota)
+     VALUES ($1,$2,$3,$4,$5::date,$6::text[],$7,$8::jsonb,$9::text[],$10,$11::jsonb,$12::jsonb,$13::jsonb)`,
     [stopaId, input.tenantId, input.organizationId, input.documentId, dokazy.asOf ?? null,
-      [...dokazy.agendy], dokazy.zakladna, JSON.stringify(dokazy.doklady), dokazy.priklady],
+      [...dokazy.agendy], dokazy.zakladna, JSON.stringify(dokazy.doklady), dokazy.priklady,
+      config.openai.accountingModel, JSON.stringify(dokazy.odpoved), JSON.stringify(dokazy.zmeny),
+      JSON.stringify(dokazy.istota)],
   );
 
   await database.query(
@@ -2499,7 +2515,9 @@ export async function maybeAiAccountingSuggestion(
        clenenie_kv_kod=excluded.clenenie_kv_kod,
        source='ai', confidence=excluded.confidence, reason=excluded.reason,
        based_on_document_id=NULL, rule_id=excluded.rule_id, riadky=excluded.riadky,
-       stopa_id=excluded.stopa_id, updated_at=now()`,
+       -- Vysvetlenie z „Prečo" patrilo predošlému návrhu: otvorený panel ho
+       -- mohol nakešovať medzi deterministickým návrhom a týmto zápisom.
+       stopa_id=excluded.stopa_id, vysvetlenia=NULL, updated_at=now()`,
     [input.documentId, input.tenantId, input.organizationId,
       navrh.predkontacia_id ?? null, navrh.clenenie_dph_id ?? null,
       navrh.ciselny_rad_id ?? null,
@@ -2993,6 +3011,17 @@ export async function navrhniZauctovanie(
     // Stredisko model nevyberá — ostáva z pravidla alebo z deterministického návrhu.
     stredisko_id: pravidlo.candidate.stredisko_id ?? (doterajsi?.stredisko_id as string | undefined),
   });
+  // Stopa rozhodnutia: každá zmena poľa po odpovedi modelu s kódom dôvodu, aby
+  // „Prečo" vedelo povedať, kto hodnotu určil, bez ďalšieho volania modelu.
+  // Zapisuje sa vedľa priradení nižšie — rozhodovanie samo sa tým nemení.
+  const zmeny: ZmenaNavrhu[] = [];
+  const zmen = (pole: ZmenaNavrhu['pole'], z: string | null | undefined, na: string | null | undefined, dovod: string) => {
+    if ((z ?? null) !== (na ?? null)) zmeny.push({ pole, z: z ?? null, na: na ?? null, dovod });
+  };
+  zmen('predkontaciaId', parsed.predkontaciaId, validated.predkontacia_id, pravidlo.candidate.predkontacia_id
+    ? 'pravidlo_uctovnika' : naDoklade.predkontaciaId ? 'kod_z_dokladu' : 'neplatny_kod');
+  zmen('clenenieDphId', parsed.clenenieDphId, validated.clenenie_dph_id, pravidlo.candidate.clenenie_dph_id
+    ? 'pravidlo_uctovnika' : naDoklade.clenenieDphId ? 'kod_z_dokladu' : 'neplatny_kod');
   // Číselný rad nie je úsudok AI, ale nastavenie firmy — model dostával celý
   // zoznam a pokladničnému dokladu vybral rad prijatých faktúr. Rad sa preto
   // určí rovnako ako inde (nastavenie účtovníka, inak rad z histórie firmy),
@@ -3009,6 +3038,7 @@ export async function navrhniZauctovanie(
     codeLists.rows.find((row) => row.id === validated.predkontacia_id)?.code);
   const radNavrhu = pravidlo.candidate.ciselny_rad_id
     ?? (radPreTyp !== undefined ? radPreTyp ?? undefined : validated.ciselny_rad_id);
+  zmen('ciselnyRadId', parsed.ciselnyRadId, radNavrhu, pravidlo.candidate.ciselny_rad_id ? 'pravidlo_uctovnika' : 'rad_firmy');
   // Zaúčtovanie musí prísť od modelu alebo z pravidla. Prenesené stredisko ani
   // číselný rad sa nepočítajú — rad určuje nastavenie firmy (radPreTyp nižšie),
   // takže model, ktorý nič nespoznal, by inak prázdnou odpoveďou prepísal dobrý
@@ -3027,6 +3057,7 @@ export async function navrhniZauctovanie(
       && validated.clenenie_dph_id !== dphProfil?.clenenieBezOdpoctuId) {
       console.warn(`[ai-navrh] ${input.documentId}: členenie ${kod} firma na ${documentContext.documentType}`
         + ` nikdy nepoužila (${stat.inde}× inde) — zahadzujem`);
+      zmen('clenenieDphId', validated.clenenie_dph_id, undefined, 'clenenie_mimo_agendy');
       delete validated.clenenie_dph_id;
     }
   }
@@ -3050,6 +3081,7 @@ export async function navrhniZauctovanie(
     if (zHistorie && zHistorie !== validated.clenenie_dph_id) {
       console.info(`[ai-navrh] ${input.documentId}: členenie ${kodClenenia} podľa účtu ${String(kodUctu).trim()}`
         + ' — firma iné na ňom nemala');
+      zmen('clenenieDphId', validated.clenenie_dph_id, zHistorie, 'clenenie_podla_uctu');
       validated.clenenie_dph_id = zHistorie;
     }
   }
@@ -3097,6 +3129,7 @@ export async function navrhniZauctovanie(
     if (nahrada) {
       console.info(`[ai-navrh] ${input.documentId}: na účte hlavičky firma daň neodpočítava`
         + ' — členenie prepísané na bez nároku');
+      zmen('clenenieDphId', validated.clenenie_dph_id, nahrada, 'ucet_bez_odpoctu');
       validated.clenenie_dph_id = nahrada;
     }
   }
@@ -3115,6 +3148,8 @@ export async function navrhniZauctovanie(
         asOf,
       ), druhDokladu)
     : undefined;
+  zmen('clenenieKvKod', parsed.clenenieKvKod, kvKod, pravidlo.kvKod ? 'pravidlo_uctovnika'
+    : naDoklade.clenenieKvKod ? 'kod_z_dokladu' : !validated.clenenie_dph_id ? 'kv_bez_clenenia' : 'kv_podla_praxe_a_druhu');
 
   // KN proti praxi firmy. Zo všetkých zlých sekcií, ktoré zdroj návrhu donesie,
   // prežije práve KN: B2 na vydanej faktúre zákonná kontrola (kvPreDruh)
@@ -3136,6 +3171,7 @@ export async function navrhniZauctovanie(
     ), druhDokladu);
     if (prax && prax !== 'KN') {
       console.info(`[ai-navrh] ${input.documentId}: sekcia KN proti praxi firmy — prepisujem na ${prax}`);
+      zmen('clenenieKvKod', kvKod, prax, 'kn_proti_praxi');
       kvKod = prax;
     }
   }
@@ -3179,6 +3215,7 @@ export async function navrhniZauctovanie(
     if (nahrada) {
       console.info(`[ai-navrh] ${input.documentId}: členenie ${zvoleneClenenie.kod} uplatňuje odpočet,`
         + ' ale sekcia KV je KN — prepisujem na členenie bez nároku');
+      zmen('clenenieDphId', validated.clenenie_dph_id, nahrada, 'kn_s_odpoctom');
       validated.clenenie_dph_id = nahrada;
     } else {
       console.warn(`[ai-navrh] ${input.documentId}: členenie ${zvoleneClenenie.kod} uplatňuje odpočet`
@@ -3508,6 +3545,21 @@ export async function navrhniZauctovanie(
         hash: createHash('sha256').update(JSON.stringify(priklad)).digest('hex'),
       })),
       priklady: priklady.flatMap((priklad) => (priklad.id ? [priklad.id] : [])),
+      odpoved: {
+        predkontaciaId: parsed.predkontaciaId ?? null,
+        clenenieDphId: parsed.clenenieDphId ?? null,
+        clenenieKvKod: parsed.clenenieKvKod ?? null,
+        ciselnyRadId: parsed.ciselnyRadId ?? null,
+      },
+      zmeny,
+      istota: {
+        modelu: parsed.confidence,
+        strop,
+        // Poradie zodpovedá výpočtu stropu vyššie.
+        dovod: nevidenaKombinacia ? 'nevidena_kombinacia' : silnePravidlo ? 'silne_pravidlo'
+          : rozdelenie ? 'rozdelenie' : overenaKategoria ? 'kategoria' : dennikZhoda ? 'dennik'
+          : prikladZhoda ? 'priklad' : 'bez_zhody',
+      },
     },
     usage,
     odpovedModelu: odpoved,

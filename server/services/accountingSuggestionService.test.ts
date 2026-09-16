@@ -2116,12 +2116,31 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
       })),
     };
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    // Vysvetlenie nakešované k predošlému (deterministickému) návrhu.
+    await database.query(
+      `INSERT INTO accounting_suggestions (document_id,tenant_id,organization_id,source,confidence,reason,vysvetlenia)
+       VALUES ($1,$2,$3,'organization_default',0.5,'Predvoľba.','{"dph":{"text":"staré","zdroje":[]}}'::jsonb)`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
 
     const navrh = await navrhDokladu(database, documentId);
     expect(navrh.predkontacia_id).toBe(repre);
     expect(navrh.clenenie_dph_id).toBe(dphPn);
     expect(navrh.clenenie_kv_kod).toBe('KN');
+
+    // Stopa hovorí, čo vybral model a kto to zmenil — „Prečo" to potom
+    // vysvetlí bez ďalšieho volania modelu. Staré vysvetlenie k novému návrhu nepatrí.
+    const stopa = (await database.query<Record<string, any>>(
+      `SELECT t.model, t.odpoved, t.zmeny, t.istota, s.vysvetlenia
+         FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
+      [documentId],
+    )).rows[0];
+    expect(stopa.vysvetlenia).toBeNull();
+    expect(stopa.model).toBe(testConfig().openai.accountingModel);
+    expect(stopa.odpoved).toMatchObject({ predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'KN' });
+    expect(stopa.zmeny).toContainEqual({ pole: 'clenenieDphId', z: dphPd, na: dphPn, dovod: 'ucet_bez_odpoctu' });
+    expect(stopa.istota).toMatchObject({ modelu: 0.9, strop: expect.any(Number), dovod: expect.any(String) });
   }, 90_000);
 
   it('prepíše členenie riadku, aj keď hlavička odpočet uplatňuje', async () => {

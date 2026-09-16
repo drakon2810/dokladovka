@@ -298,7 +298,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         await tx.query(
           `UPDATE accounting_suggestions
               SET ciselny_rad_id=$1, predkontacia_id=NULL, clenenie_dph_id=NULL, clenenie_kv_kod=NULL,
-                  stredisko_id=NULL, riadky=NULL, rule_id=NULL, vysvetlenia=NULL, confidence=0,
+                  stredisko_id=NULL, riadky=NULL, rule_id=NULL, vysvetlenia=NULL, stopa_id=NULL, confidence=0,
                   reason='Návrh sa prepočítava pre nový druh dokladu.', updated_at=now()
             WHERE document_id=$2 AND tenant_id=$3`,
           [radNovehoDruhu, id, auth.tenantId],
@@ -594,12 +594,24 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
 
+    // Stopa rozhodnutia: jej created_at je čas, keď model naozaj rozhodol —
+    // created_at návrhu sa pri prepise (ON CONFLICT) nemení.
     const suggestion = (await database.query<Record<string, any>>(
-      `SELECT source, confidence, reason, rule_id, predkontacia_id, clenenie_dph_id, clenenie_kv_kod, created_at
-         FROM accounting_suggestions
-        WHERE document_id=$1 AND tenant_id=$2 AND organization_id=$3`,
+      `SELECT s.source, s.confidence, s.reason, s.rule_id, s.predkontacia_id, s.clenenie_dph_id, s.clenenie_kv_kod,
+              s.created_at, t.created_at AS stopa_vytvorena, t.model AS stopa_model, t.odpoved AS stopa_odpoved,
+              t.zmeny AS stopa_zmeny, t.istota AS stopa_istota
+         FROM accounting_suggestions s
+         LEFT JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id AND t.tenant_id=s.tenant_id
+        WHERE s.document_id=$1 AND s.tenant_id=$2 AND s.organization_id=$3`,
       [id, auth.tenantId, document.organization_id],
     )).rows[0];
+    const stopa = suggestion?.stopa_vytvorena ? {
+      vytvorena: new Date(String(suggestion.stopa_vytvorena)).toISOString(),
+      model: suggestion.stopa_model ?? undefined,
+      odpoved: suggestion.stopa_odpoved ?? undefined,
+      zmeny: Array.isArray(suggestion.stopa_zmeny) ? suggestion.stopa_zmeny as Array<{ pole: string; z: string | null; na: string | null; dovod: string }> : [],
+      istota: suggestion.stopa_istota ?? undefined,
+    } : null;
 
     const navrh = {
       predkontaciaId: suggestion?.predkontacia_id ?? undefined,
@@ -613,7 +625,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     };
 
     // Názvy kódov pre všetky zúčastnené ID (návrh aj aktuálna hodnota).
-    const ids = [...new Set([navrh.predkontaciaId, navrh.clenenieDphId, aktualne.predkontaciaId, aktualne.clenenieDphId].filter(Boolean))] as string[];
+    const ids = [...new Set([
+      navrh.predkontaciaId, navrh.clenenieDphId, aktualne.predkontaciaId, aktualne.clenenieDphId,
+      ...(stopa?.zmeny ?? []).filter((zmena) => zmena.pole !== 'clenenieKvKod').flatMap((zmena) => [zmena.z, zmena.na]),
+    ].filter(Boolean))] as string[];
     const polozky: Record<string, { kod: string; nazov: string }> = {};
     if (ids.length > 0) {
       const rows = await database.query<{ id: string; code: string; name: string }>(
@@ -659,6 +674,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       aktualne,
       polozky,
       pravidlo,
+      stopa,
     };
   });
 

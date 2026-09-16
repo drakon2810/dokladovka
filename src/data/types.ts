@@ -984,6 +984,13 @@ export interface DocumentPreco {
   aktualne: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string };
   polozky: Record<string, { kod: string; nazov: string }>;
   pravidlo: DocumentPrecoPravidlo | null;
+  /** Stopa AI rozhodnutia — len pri návrhu z AI. */
+  stopa?: {
+    vytvorena: string;
+    model?: string;
+    zmeny: Array<{ pole: 'predkontaciaId' | 'clenenieDphId' | 'clenenieKvKod' | 'ciselnyRadId'; z: string | null; na: string | null; dovod: string }>;
+    istota?: { modelu: number; strop: number; dovod: string };
+  } | null;
 }
 
 // ===== Simulácia prijatého e-mailu (SPEC §11.20) =====
