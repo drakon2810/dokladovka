@@ -965,26 +965,34 @@ describe('buildServerDataPack — interné doklady samozdanenia', () => {
     datumDanovejPovinnosti: '2026-06-10', sadzba: 23, zaklad: 1000, dan: 230, odpocet: 230,
     interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' },
   };
-  const googleFaktura = (sz: Record<string, unknown> = {}) => {
+  const googleFaktura = (sz: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => {
     const doc = invoiceDocument({
       dodavatel: { nazov: 'Google Ireland Ltd', icDph: 'IE6388047V', krajina: 'IE' },
       cisloFaktury: '5301234567', datumVystavenia: '2026-06-12', datumDodania: '2026-06-10',
-      rozpisDph: [{ sadzba: 0, zaklad: 1000, dph: 0 }], sumaSpolu: 1000,
+      rozpisDph: [{ sadzba: 0, zaklad: 1000, dph: 0 }], sumaSpolu: 1000, ...extra,
     });
     return { ...doc, snapshot: { ...doc.snapshot, samozdanenie: { ...samozdanenie, ...sz } } };
   };
   const polozkyBaliku = (xml: string) => [...xml.matchAll(/<dat:dataPackItem id="([^"]+)"/g)].map((zhoda) => zhoda[1]);
+  /** Texty POHODY nesú diakritiku, escapeXml ju kóduje na číselné entity. */
+  const citatelne = (xml: string) => xml.replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
 
   it('platiteľ: faktúra, vymeranie a odpočet s predkontáciou, členením, KV a daňou', () => {
-    const xml = buildServerDataPack({ id: 'pack-sz', ico: '35761571', documents: [googleFaktura()], codeLists, radInternych: 'INT' });
+    const xml = buildServerDataPack({
+      id: 'pack-sz', ico: '35761571', documents: [{ ...googleFaktura(), radInternych: '26SAM' }], codeLists,
+    });
     expect(polozkyBaliku(xml)).toEqual(['doc-1', 'doc-1-sz-dd', 'doc-1-sz-p']);
     const [, , vymeranie, odpocet] = xml.split('<dat:dataPackItem ');
     for (const cast of [vymeranie, odpocet]) {
-      expect(cast).toContain('<int:number><typ:ids>INT</typ:ids></int:number>');
+      // Rad samozdanenia firmy, nie predvoľba interných dokladov: AGS dostala
+      // pri prvom ostrom importe 26DPH02 a 26DPH03 namiesto radu 26SAM.
+      expect(cast).toContain('<int:number><typ:ids>26SAM</typ:ids></int:number>');
       expect(cast).toContain('<int:originalDocumentNumber>5301234567</int:originalDocumentNumber>');
+      // VS je odkaz na doklad dodávateľa. Bez neho ho POHODA odvodila z čísla,
+      // ktoré si pridelila sama (26DPH02 → 2602).
+      expect(cast).toContain('<int:symVar>5301234567</int:symVar>');
       expect(cast).toContain('<int:dateTax>2026-06-10</int:dateTax>');
       expect(cast).toContain('<int:dateKVDPH>2026-06-10</int:dateKVDPH>');
-      expect(cast).toContain('<int:text>Samozdanenie k FP 5301234567</int:text>');
       expect(cast).toContain('<typ:icDph>IE6388047V</typ:icDph>');
       expect(cast).toContain('<int:classificationKVDPH><typ:ids>B1</typ:ids></int:classificationKVDPH>');
       expect(cast).toContain('<int:rateVAT>high</int:rateVAT>');
@@ -1000,10 +1008,58 @@ describe('buildServerDataPack — interné doklady samozdanenia', () => {
     expect(odpocet).toContain('<int:classificationVAT><typ:ids>PDsluz</typ:ids></int:classificationVAT>');
   });
 
-  it('neplatiteľ: len vymeranie; bez radu INT bez čísla', () => {
+  // Oba doklady mali doteraz ten istý text „Samozdanenie k FP <číslo>" a
+  // v POHODE sa nedalo rozoznať vymeranie od odpočtu. Vety sú tie, ktoré píše
+  // POHODA sama — podľa členenia DPH riadku (DDsl§69 = D05, PDsluz = P07).
+  it('vymeranie a odpočet nesú vlastný text hlavičky aj položky', () => {
+    const xml = citatelne(buildServerDataPack({
+      id: 'pack-sz-text', ico: '35761571', documents: [{ ...googleFaktura(), radInternych: '26SAM' }], codeLists,
+    }));
+    const [, , vymeranie, odpocet] = xml.split('<dat:dataPackItem ');
+    expect(vymeranie).toContain('<int:text>Priznanie DPH z nadobudnutia služby, FP č. 5301234567</int:text>');
+    expect(vymeranie).toContain('<int:text>Vymeranie DPH, FP č. 5301234567</int:text>');
+    expect(odpocet).toContain('<int:text>Odpočet DPH z nadobudnutia tovaru a služby, FP č. 5301234567</int:text>');
+    expect(odpocet).toContain('<int:text>Odpočítanie DPH, FP č. 5301234567</int:text>');
+
+    // Tovar z EÚ (DDnadEU = D01, PDnadEU = P04) má vlastnú rodinu plnenia,
+    // vlastné číslo účtovníka sa v texte cituje pred číslom od dodávateľa.
+    const tovar = citatelne(buildServerDataPack({
+      id: 'pack-sz-tovar', ico: '35761571', codeLists,
+      documents: [(() => {
+        const doc = googleFaktura({ interny: { ...samozdanenie.interny, ddKod: 'DDnadEU', pKod: 'PDnadEU' } });
+        return { ...doc, snapshot: { ...doc.snapshot, ucto: { ...doc.snapshot.ucto, cisloVPohode: 'FP2026507' } } };
+      })()],
+    }));
+    expect(tovar).toContain('<int:text>Priznanie DPH z nadobudnutia tovaru z iného štátu EU, FP č. FP2026507</int:text>');
+    expect(tovar).toContain('<int:text>Odpočet DPH z nadobudnutia tovaru z iného štátu EU, FP č. FP2026507</int:text>');
+
+    // Vlastný kód firmy, ktorý referenčný zoznam POHODY nepozná: plnenie sa
+    // nedopisuje, úloha riadku sa povedať dá aj tak.
+    const vlastny = citatelne(buildServerDataPack({
+      id: 'pack-sz-vlastny', ico: '35761571', codeLists,
+      documents: [googleFaktura({ interny: { ...samozdanenie.interny, ddKod: 'DDvlastne' } })],
+    }));
+    expect(vlastny).toContain('<int:text>Priznanie DPH, FP č. 5301234567</int:text>');
+  });
+
+  it('neplatiteľ: len vymeranie; bez známeho radu bez čísla', () => {
     const xml = buildServerDataPack({ id: 'pack-sz-2', ico: '35761571', documents: [googleFaktura({ odpocet: 0 })], codeLists });
     expect(polozkyBaliku(xml)).toEqual(['doc-1', 'doc-1-sz-dd']);
     expect(xml.split('<dat:dataPackItem ')[2]).not.toContain('<int:number>');
+  });
+
+  // Rad patrí ROKU daňovej povinnosti, a ten sa pri tovare z EÚ prehupne do
+  // ďalšieho roka — jeden balík preto môže niesť dva rôzne rady.
+  it('každý doklad balíka nesie svoj rad', () => {
+    const xml = buildServerDataPack({
+      id: 'pack-sz-rady', ico: '35761571', codeLists,
+      documents: [
+        { ...googleFaktura(), radInternych: '26SAM' },
+        { ...googleFaktura({ datumDanovejPovinnosti: '2027-01-15' }), id: 'doc-2', radInternych: '27SAM' },
+      ],
+    });
+    expect(xml.slice(xml.indexOf('id="doc-1-sz-dd"'))).toContain('<int:number><typ:ids>26SAM</typ:ids></int:number>');
+    expect(xml.slice(xml.indexOf('id="doc-2-sz-dd"'))).toContain('<int:number><typ:ids>27SAM</typ:ids></int:number>');
   });
 
   it('časti prijaté pri predošlom prenose sa znova neposielajú; bez voľby „vytvoriť" nič navyše', () => {

@@ -360,10 +360,73 @@ describe('samozdanenie — prepis kódov a základu na doklade', () => {
   }, 120_000);
 });
 
+/**
+ * Prax firmy s radom interných dokladov samozdanenia: rad 26SAM z troch
+ * dokladov histórie (agenda INT, členenie strany DD) proti predvoľbe interných
+ * dokladov, ktorá ukazuje na preúčtovanie DPH.
+ *
+ * Prvý ostrý import AGS pridelil 26DPH02 a 26DPH03: predvoľba MZDY nebola
+ * žiadna, <int:number> sa vynechal a POHODA doklady očíslovala zo svojho
+ * predvoleného radu agendy („26DPH — Preúčtovanie DPH"). Samozdanenie pritom
+ * AGS vedie v rade 26SAM (158 dokladov).
+ */
+async function seedRadSamozdanenia(database: Db, seeded: Seeded) {
+  const kde = [seeded.tenantId, seeded.organizationId];
+  const rad = async (kod: string, nazov: string, ext: string) => {
+    const id = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,external_id,accounting_year)
+       VALUES ($1,$2,$3,'ciselneRady',$4,$5,'pohoda','interni_doklady',$6,'2026')`,
+      [id, ...kde, kod, nazov, ext],
+    );
+    return id;
+  };
+  const radDph = await rad('26DPH', 'Preúčtovanie DPH', '656');
+  await rad('26SAM', 'Samozdanenie', '627');
+  await database.query(
+    `INSERT INTO organization_series_defaults (organization_id,tenant_id,document_type,ciselny_rad_id)
+     VALUES ($2,$1,'MZDY',$3)`,
+    [...kde, radDph],
+  );
+  for (const den of ['07', '08', '09']) {
+    await database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,line_text_normalized,clenenie_dph_kod,
+         riadok_index,source,riadok_hash,rad_external_id,rad_kod)
+       VALUES ($1,$2,$3,'INT',$4,$5::date,'vymeranie dph','DDsl§69',0,'mdb',$6,'627','26SAM')`,
+      [randomUUID(), ...kde, `26SAM${den}`, `2026-01-${den}`, randomUUID()],
+    );
+  }
+}
+
+describe('samozdanenie — číselný rad interných dokladov', () => {
+  it('rad ide z histórie samozdanenia, nie z predvoľby interných dokladov', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    await potvrdFakt(database, seeded, 'samozdanenie.sluzby_eu', KODY_SLUZIEB);
+    await seedRadSamozdanenia(database, seeded);
+
+    const id = await vlozFakturu(database, seeded, kody);
+    expect((await app.inject({ method: 'POST', url: `/api/documents/${id}/approve`, headers, payload: { expectedVersion: 1 } })).statusCode).toBe(200);
+    const odpoved = await app.inject({
+      method: 'POST', url: '/api/exports/pohoda/xml', headers,
+      payload: { organizationId: seeded.organizationId, documentIds: [id] },
+    });
+    expect(odpoved.statusCode, odpoved.body).toBe(201);
+    const xml = odpoved.json().xml as string;
+    const interny = (rola: string) => xml.slice(xml.indexOf(`id="${id}-sz-${rola}"`)).split('</dat:dataPackItem>')[0];
+    for (const rola of ['dd', 'p']) {
+      expect(interny(rola)).toContain('<int:number><typ:ids>26SAM</typ:ids></int:number>');
+      expect(interny(rola)).not.toContain('26DPH');
+    }
+    await app.close();
+  }, 120_000);
+});
+
 describe('samozdanenie — prenos cez Mostík', () => {
   it('faktúra a dva interné doklady; opakovaný prenos pošle len nepotvrdený doklad', async () => {
     const { database, seeded, app, headers, kody } = await pripravApp();
     await potvrdFakt(database, seeded, 'samozdanenie.sluzby_eu', KODY_SLUZIEB);
+    await seedRadSamozdanenia(database, seeded);
     const id = await vlozFakturu(database, seeded, kody);
     expect((await app.inject({ method: 'POST', url: `/api/documents/${id}/approve`, headers, payload: { expectedVersion: 1 } })).statusCode).toBe(200);
 
@@ -389,6 +452,7 @@ describe('samozdanenie — prenos cez Mostík', () => {
 
     const prvy = await prenos({ organizationId: seeded.organizationId, documentIds: [id] });
     expect(polozky(prvy.xml)).toEqual([id, `${id}-sz-dd`, `${id}-sz-p`]);
+    expect(prvy.xml.match(/<int:number><typ:ids>26SAM<\/typ:ids><\/int:number>/g)).toHaveLength(2);
     // Výsledok musí obsahovať presne položky dataPacku.
     expect((await vysledok(prvy.jobId, [{ documentId: id, state: 'ok' }])).statusCode).toBe(400);
     const prvyVysledok = await vysledok(prvy.jobId, [
@@ -417,6 +481,9 @@ describe('samozdanenie — prenos cez Mostík', () => {
 
     const druhy = await prenos({}, `/api/mostik/export-jobs/${prvy.jobId}/retry`);
     expect(polozky(druhy.xml)).toEqual([`${id}-sz-p`]);
+    // Odpočet ide do toho istého radu ako vymeranie, ktoré POHODA už prijala —
+    // inak by dva interné doklady jednej faktúry skončili v rôznych radoch.
+    expect(druhy.xml).toContain('<int:number><typ:ids>26SAM</typ:ids></int:number>');
     const druhyVysledok = await vysledok(druhy.jobId, [{ documentId: `${id}-sz-p`, state: 'ok', pohodaNumber: 'INT0002' }]);
     expect(druhyVysledok.json()).toMatchObject({ accepted: true, status: 'confirmed' });
     const poDruhom = (await database.query<Record<string, any>>('SELECT status, samozdanenie FROM documents WHERE id=$1', [id])).rows[0];

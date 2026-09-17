@@ -1,7 +1,7 @@
 import type { Queryable } from '../db/database.js';
-import { normalizeName } from './accountingSuggestionService.js';
+import { normalizeName, radRodinyVRoku } from './accountingSuggestionService.js';
 import { EU_DPH_PREFIXY, extrakt, jeCudziDodavatel, NAZVY_DRUHOV, sadzbyDphPre } from './dphAdvisor.js';
-import { popisKodu } from './pohodaDphKody.js';
+import { POHODA_DPH_KODY, popisKodu } from './pohodaDphKody.js';
 import { DD_REFY_SLUZBY, DD_REFY_TOVAR } from './profilKatalog.js';
 import { loadDphProfil, predvolenyDphProfil, type DphProfil, type SamozdanenieDruh } from './dphProfileService.js';
 
@@ -369,6 +369,60 @@ export async function praxSamozdaneniaDodavatela(
       GROUP BY 1`,
     [firma.tenantId, firma.organizationId, kluc.cisla, kluc.nazov, doDatumu ?? null],
   )).rows);
+}
+
+/**
+ * Členenia DPH strany DD — daňová povinnosť pri samozdanení. Nesie ich práve
+ * interný doklad vymerania, takže podľa nich sa v histórii nájdu jeho doklady
+ * (a nezmiešajú sa s mzdami, zápočtami ani preúčtovaním DPH v tej istej agende).
+ */
+const KODY_VYMERANIA = POHODA_DPH_KODY.filter((kod) => kod.strana === 'DD').map((kod) => kod.kod);
+
+/**
+ * KÓD číselného radu, do ktorého firma dáva interné doklady samozdanenia —
+ * spočítaný z jej vlastnej histórie (agenda INT, členenie DPH strany DD).
+ *
+ * Prvý ostrý import AGS dostal rady 26DPH02 a 26DPH03: predvoľba interných
+ * dokladov (MZDY) v predvoľbách firmy nebola žiadna, `<int:number>` sa vynechal
+ * a POHODA doklady očíslovala zo svojho predvoleného radu agendy, čo je
+ * u AGS „26DPH — Preúčtovanie DPH". Samozdanenie pritom AGS vedie v rade 26SAM
+ * (158 dokladov). Rad má každá firma na tieto doklady presne jeden a je iný:
+ * AGS, ALPINA, ROFA, SLO SERVICES a Shenzhen 26SAM, RCI 26IN, Recable 26SZ,
+ * BAJVET 26RCH — preto sa nedá zadrôtovať a musí vyjsť z histórie.
+ *
+ * `rok` je rok DAŇOVEJ POVINNOSTI interného dokladu, nie faktúry: pri tovare
+ * z EÚ vzniká 15. dňa nasledujúceho mesiaca, takže decembrová faktúra má
+ * interný doklad už v ďalšom roku. Kód radu nesie rok predponou (26SAM = 2026),
+ * takže rad zo staršieho roka sa doslova poslať nesmie — rodina sa prenesie na
+ * rad toho roka (radRodinyVRoku) a keď ho firma aktívny nemá, nevráti sa nič
+ * a číslo pridelí POHODA.
+ */
+export async function radSamozdanenia(
+  db: Queryable,
+  firma: { tenantId: string; organizationId: string },
+  rok: number,
+): Promise<string | undefined> {
+  // Rad bez aktívneho riadku v číselníku firmy sa ponúknuť nedá; doklady novšie
+  // ako hľadaný rok sa nerátajú, aby doklad roku 2026 nepreberal prax roku 2027.
+  const najdeny = (await db.query<{ id: string; code: string; accounting_year: string | null } & Record<string, unknown>>(
+    `SELECT c.id, c.code, c.accounting_year
+       FROM ucto_historia h
+       JOIN code_list_items c
+         ON c.tenant_id=h.tenant_id AND c.organization_id=h.organization_id AND c.kind='ciselneRady'
+        AND c.active=true AND c.external_id=h.rad_external_id
+      WHERE h.tenant_id=$1 AND h.organization_id=$2 AND h.agenda='INT'
+        AND h.clenenie_dph_kod = ANY($3::text[]) AND h.doklad_cislo IS NOT NULL
+        AND h.datum < make_date($4::int + 1, 1, 1)
+      GROUP BY c.id, c.code, c.accounting_year
+      ORDER BY (c.accounting_year IS NULL OR c.accounting_year=$4::text) DESC,
+               c.accounting_year DESC NULLS LAST,
+               count(DISTINCT h.doklad_cislo) DESC
+      LIMIT 1`,
+    [firma.tenantId, firma.organizationId, KODY_VYMERANIA, rok],
+  )).rows[0];
+  if (!najdeny) return undefined;
+  if (!najdeny.accounting_year || najdeny.accounting_year === String(rok)) return najdeny.code;
+  return (await radRodinyVRoku(db, firma, najdeny.id, rok))?.code;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { HttpError } from './http.js';
 import { jeCudziDodavatel, SK_SADZBY_DPH } from './services/dphAdvisor.js';
+import { popisKodu } from './services/pohodaDphKody.js';
 import type { RolaPrenosu, Samozdanenie } from './services/samozdanenieService.js';
 
 export function escapeXml(value: unknown): string {
@@ -88,6 +89,12 @@ export interface PohodaXmlDocument {
   snapshot: Snapshot;
   /** Časti faktúry so samozdanením, ktoré POHODA už prijala — opakovaný prenos ich vynechá. */
   prijate?: readonly RolaPrenosu[];
+  /**
+   * Kód číselného radu pre interné doklady samozdanenia tohto dokladu
+   * (radSamozdanenia z praxe firmy, inak predvoľba MZDY). Prázdne = rad sa
+   * nepošle a číslo pridelí POHODA zo svojho predvoleného radu agendy.
+   */
+  radInternych?: string;
 }
 
 export interface PohodaCodeLookup {
@@ -561,20 +568,67 @@ ${lines.join('\n')}
 }
 
 /**
+ * Plnenie v texte interného dokladu samozdanenia podľa členenia DPH TOHO
+ * riadku (RefTpDph) — presne tak, ako text píše POHODA, keď interné doklady
+ * vytvorí sama.
+ *
+ * Text sa neučí z korpusu, hoci tam je: zmeranie na ôsmich firmách a 2 700
+ * dokladoch histórie ukázalo, že vetu nedelí firma, ale práve členenie DPH
+ * riadku — všetkých osem firiem píše to isté. A korpus drží texty malými
+ * písmenami (line_text_normalized), takže by sa aj tak nedali poslať doslova.
+ * Skutočné doklady, podľa ktorých je táto tabuľka:
+ *   D05 DDsl§69 → „Priznanie DPH z nadobudnutia služby, FP č. 2026340" (AGS)
+ *   P07 PDsluz  → „Odpočet DPH z nadobudnutia tovaru a služby, FP č. 2026340"
+ *   D01 DDnadEU → „Priznanie DPH z nadobudnutia tovaru z iného štátu EU, FP č. FP2026507" (ROFA)
+ * Kód mimo tabuľky (vlastný kód firmy) ostane bez plnenia — „Priznanie DPH,
+ * FP č. …" je pravda pre každú rodinu, dopísať plnenie by bola domnienka.
+ */
+const PLNENIE_PODLA_REFU: Record<string, string> = {
+  D01: 'nadobudnutia tovaru z iného štátu EU',
+  P04: 'nadobudnutia tovaru z iného štátu EU',
+  D02: 'nadobudnutia tovaru a služby',
+  P07: 'nadobudnutia tovaru a služby',
+  D05: 'nadobudnutia služby',
+};
+
+/**
+ * Variabilný symbol dokladu od protistrany: jej VS, inak číslice z čísla jej
+ * faktúry. Faktúra aj interné doklady samozdanenia nesú ten istý — je to odkaz
+ * na doklad DODÁVATEĽA, nie číslo naše.
+ */
+function variabilnySymbol(extracted: Record<string, any>): string {
+  return clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20);
+}
+
+/**
  * Interné doklady samozdanenia k prijatej faktúre: vymeranie dane (DD…) a pri
  * nároku odpočet (P…), každý vo vlastnej položke dataPacku `<id>-sz-dd|p`.
  * Hodnoty sú zo snapshotu schválenia — profil klienta sa medzitým mohol zmeniť.
+ *
+ * ČÍSLO FAKTÚRY V TEXTE: prax firiem cituje číslo, ktoré faktúre pridelila
+ * POHODA („FP č. 2026340"), a to pri zostavovaní balíka ešte neexistuje —
+ * prideľuje ho POHODA až pri importe z číselného radu. Odhad „dostane číslo …"
+ * z detailu dokladu sa použiť nesmie: nextNumberInSeries je len najbližšie
+ * voľné číslo a doklad prenesený mimo poradia dostane to, čo web sľúbil inému
+ * (numbering.ts). Preto sa cituje číslo, ktoré naozaj vieme: vlastné číslo
+ * dokladu od účtovníka (numberRequested — to POHODA faktúre pridelí presne),
+ * inak číslo faktúry od dodávateľa.
  *
  * NEOVERENÉ v testovacej POHODE SK (import ešte neprebehol):
  * - originalDocumentNumber = číslo faktúry dodávateľa: či z neho POHODA berie
  *   číslo dokladu do B1 KV, alebo ho treba inde (XSD hovorí len „Pôvodné číslo
  *   dokladu, iba SK").
+ * - symVar = VS faktúry. Bez neho si ho POHODA odvodila z čísla, ktoré si
+ *   dokladu pridelila sama (26DPH02 → 2602), takže odkaz na doklad dodávateľa
+ *   sa stratil. Prax firiem drží v symVar aj v „Pôv. doklade" ten istý odkaz.
  * - dateKVDPH = dátum daňovej povinnosti (obdobie KV) a dateDelivery = dátum
  *   dodania z faktúry; pri tovare z EÚ sa môžu líšiť.
  * - Oba doklady nesú rovnaký základ a daň v tej istej sadzbe; smer (daň na
  *   výstupe / odpočet) určuje len členenie DPH.
- * - Bez číselného radu INT v predvoľbách sa <int:number> vynechá a číslo
- *   pridelí POHODA z predvoleného radu agendy.
+ * - Bez známeho číselného radu sa <int:number> vynechá a číslo pridelí POHODA
+ *   z predvoleného radu agendy. Prvý ostrý import AGS takto skončil v rade
+ *   „26DPH — Preúčtovanie DPH" namiesto 26SAM, preto rad teraz nesie prax
+ *   firmy z histórie (radSamozdanenia).
  */
 function interneDokladySamozdanenia(
   id: string,
@@ -583,6 +637,7 @@ function interneDokladySamozdanenia(
   partner: string,
   radInternych: string | undefined,
   prijate: readonly RolaPrenosu[],
+  cisloVPohode: string,
 ): string[] {
   const { interny, datumDanovejPovinnosti: datum, sadzba, zaklad, dan } = samozdanenie;
   const sadzbaPohody = datum ? vatRateName(sadzba, datum, false) : 'none';
@@ -598,11 +653,22 @@ function interneDokladySamozdanenia(
       ? [{ rola: 'p' as const, predkontacia: interny.pPredkontaciaKod, clenenie: interny.pKod, kv: interny.pKv ?? interny.kv }] : []),
   ].filter((doklad) => !prijate.includes(doklad.rola));
   const cisloFaktury = clamp(extracted.cisloFaktury, 32);
-  const text = escapeXml(clamp(`Samozdanenie k FP ${cisloFaktury}`, 90));
+  const vs = variabilnySymbol(extracted);
+  const odkaz = cisloVPohode || cisloFaktury ? `, FP č. ${cisloVPohode || cisloFaktury}` : '';
   const vKosi = (kategoria: SadzbaPohody, suma: number) => amount(kategoria === sadzbaPohody ? suma : 0);
   const dodanie = isoDate(extracted.datumDodania) ?? isoDate(extracted.datumVystavenia) ?? datum;
   return doklady.map((doklad) => {
     if (!doklad.predkontacia || !doklad.clenenie) throw new Error(`Doklad ${id} nemá kódy odpočtu samozdanenia — schváľte ho znova`);
+    // Oba doklady mali doteraz ten istý text „Samozdanenie k FP <číslo>" —
+    // v POHODE sa potom vymeranie od odpočtu nedalo rozoznať. Vymeranie
+    // priznáva daň, odpočet ju odpočítava; hlavička menuje plnenie, položka
+    // len úkon (v POHODE má 90 znakov).
+    const vymeranie = doklad.rola === 'dd';
+    const plnenie = PLNENIE_PODLA_REFU[popisKodu(doklad.clenenie)?.ref ?? ''];
+    const textHlavicky = escapeXml(clamp(
+      `${vymeranie ? 'Priznanie' : 'Odpočet'} DPH${plnenie ? ` z ${plnenie}` : ''}${odkaz}`, 240,
+    ));
+    const textPolozky = escapeXml(clamp(`${vymeranie ? 'Vymeranie' : 'Odpočítanie'} DPH${odkaz}`, 90));
     const kody = [
       `<int:accounting><typ:ids>${escapeXml(doklad.predkontacia)}</typ:ids></int:accounting>`,
       `<int:classificationVAT><typ:ids>${escapeXml(doklad.clenenie)}</typ:ids></int:classificationVAT>`,
@@ -612,6 +678,7 @@ function interneDokladySamozdanenia(
     <int:intDoc version="2.0">
       <int:intDocHeader>
         ${radInternych ? `<int:number><typ:ids>${escapeXml(radInternych)}</typ:ids></int:number>` : ''}
+        ${vs ? `<int:symVar>${escapeXml(vs)}</int:symVar>` : ''}
         ${cisloFaktury ? `<int:originalDocumentNumber>${escapeXml(cisloFaktury)}</int:originalDocumentNumber>` : ''}
         <int:date>${datum}</int:date>
         <int:dateTax>${datum}</int:dateTax>
@@ -619,12 +686,12 @@ function interneDokladySamozdanenia(
         <int:dateDelivery>${dodanie}</int:dateDelivery>
         <int:dateKVDPH>${datum}</int:dateKVDPH>
         ${kody.join('\n        ')}
-        <int:text>${text}</int:text>
+        <int:text>${textHlavicky}</int:text>
         <int:partnerIdentity>${partner}</int:partnerIdentity>
       </int:intDocHeader>
       <int:intDocDetail>
       <int:intDocItem>
-        <int:text>${text}</int:text>
+        <int:text>${textPolozky}</int:text>
         <int:quantity>1</int:quantity>
         <int:coefficient>1.0</int:coefficient>
         <int:payVAT>false</int:payVAT>
@@ -657,11 +724,9 @@ export function buildServerDataPack(input: {
   ico: string;
   documents: PohodaXmlDocument[];
   codeLists: PohodaCodeLookup;
-  /** Kód číselného radu interných dokladov z predvolieb firmy (MZDY). */
-  radInternych?: string;
 }): string {
   if (!/^\d{8}$/.test(input.ico)) throw new Error('IČO účtovnej jednotky je neplatné');
-  const items = input.documents.map(({ id, snapshot, prijate = [] }) => {
+  const items = input.documents.map(({ id, snapshot, prijate = [], radInternych }) => {
     // Bankový výpis nemá číselný rad ani členenie DPH — vetví sa pred spoločnou
     // kontrolou číselníkov nižšie.
     if (snapshot.typ === 'BV') return bankDataPackItems(id, snapshot, input.codeLists);
@@ -863,14 +928,14 @@ export function buildServerDataPack(input: {
     // Samozdanenie ide v tom istom dataPacku hneď za faktúrou. Časť, ktorú
     // POHODA pri predošlom prenose prijala, sa znova neposiela.
     const interne = snapshot.typ === 'FP' && snapshot.samozdanenie?.volba === 'vytvorit'
-      ? interneDokladySamozdanenia(id, extracted, snapshot.samozdanenie, partner, input.radInternych, prijate)
+      ? interneDokladySamozdanenia(id, extracted, snapshot.samozdanenie, partner, radInternych, prijate, cisloVPohode)
       : [];
     const faktura = prijate.includes('faktura') ? [] : [`  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
         <inv:invoiceType>${invoiceType(snapshot.typ, snapshot.podtyp)}</inv:invoiceType>
         <inv:number>${numberXml}</inv:number>
-        <inv:symVar>${escapeXml(clamp((extracted.variabilnySymbol ?? '').trim() || (extracted.cisloFaktury ?? '').replace(/\D/g, ''), 20))}</inv:symVar>
+        <inv:symVar>${escapeXml(variabilnySymbol(extracted))}</inv:symVar>
         ${snapshot.typ !== 'FV' && extracted.cisloFaktury ? `<inv:originalDocument>${escapeXml(clamp(extracted.cisloFaktury, 32))}</inv:originalDocument>` : ''}
         ${oprava && extracted.povodnyDoklad?.cislo ? `<inv:originalDocumentNumber>${escapeXml(clamp(extracted.povodnyDoklad.cislo, 32))}</inv:originalDocumentNumber>` : ''}
         <inv:date>${issueDate}</inv:date>
