@@ -42,6 +42,17 @@ const mocky = vi.hoisted(() => {
     navrhyDelenia: [
       { klucoveSlova: ['natural 95'], percento: 80, percentoDph: 50, predkontaciaId: 'p1', predkontaciaNedanovaId: 'p2', dokladov: 11, priklady: [] },
     ],
+    banka: [
+      {
+        id: 'b1', kluc: 'ico:11111111:vydaj', smer: 'vydaj', stav: 'navrhnute', partnerIco: '11111111', partnerMena: ['print-office s.r.o.'],
+        slova: [], protiucet: '321100', predkontaciaKod: 'Úhrada FP',
+        dokaz: { riadkov: 12, podiel: 1, od: '2025-02-01', do: '2026-08-20', protiucet: '321100', kandidati: ['Úhrada FP'] },
+      },
+      {
+        id: 'b2', kluc: 'text:poplatok vedenie:vydaj', smer: 'vydaj', stav: 'navrhnute', partnerMena: [], slova: ['poplatok', 'vedenie'],
+        protiucet: '568100', dokaz: { riadkov: 20, podiel: 0.95, od: '2025-01-31', do: '2026-08-31', protiucet: '568100', kandidati: ['Poplatky', 'Poplatky karta'] },
+      },
+    ],
     prepocitaneAt: '2026-09-16T10:00:00.000Z',
   };
   return {
@@ -49,6 +60,7 @@ const mocky = vi.hoisted(() => {
     getProfil: vi.fn(async () => profil),
     ulozFakt: vi.fn(async () => profil),
     odpovedzOtazke: vi.fn(async () => profil),
+    rozhodniPraxBanky: vi.fn(async () => profil),
   };
 });
 
@@ -56,6 +68,7 @@ vi.mock('../../data/api', () => ({
   getProfil: mocky.getProfil,
   ulozFakt: mocky.ulozFakt,
   odpovedzOtazke: mocky.odpovedzOtazke,
+  rozhodniPraxBanky: mocky.rozhodniPraxBanky,
   prepocitajProfil: vi.fn(async () => mocky.profil),
   UCTO_AGENDA_NAZOV: { FP: 'Faktúra prijatá' },
 }));
@@ -103,7 +116,8 @@ describe('ProfilKlientaPage', () => {
     // Platiteľ (aj navrhnutý) skryje členenie bez odpočtu: 17 relevantných faktov, 1 potvrdený.
     expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('1 z 17 potvrdených');
     const filtre = [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent);
-    expect(filtre).toEqual(['Treba odpovedať2', 'Navrhnuté z histórie2', 'Potvrdené1']);
+    // Navrhnuté: status, návrh delenia a dve praxe banky.
+    expect(filtre).toEqual(['Treba odpovedať2', 'Navrhnuté z histórie4', 'Potvrdené1']);
     expect(text).toContain('Od akej sumy firma účtuje majetok ako dlhodobý?');
     expect(text).toContain('Ako účtovať DPH pri protistrane ACME?');
     expect(text).toContain('518100 · PD · KV B2');
@@ -123,8 +137,8 @@ describe('ProfilKlientaPage', () => {
     await act(async () => { tlacidlo('Použiť')!.click(); });
     expect(mocky.odpovedzOtazke).toHaveBeenCalledWith('org-1', '22222222-2222-4222-8222-222222222222', { akcia: 'variant', index: 0 });
 
-    const potvrdit = [...document.querySelectorAll('button')].filter((button) => button.textContent === 'Potvrdiť');
-    // Prvé „Potvrdiť" je navrhnutý status, posledné je návrh delenia vo vozidlách.
+    const potvrdit = [...document.querySelectorAll('#pk-vozidla button')].filter((button) => button.textContent === 'Potvrdiť') as HTMLElement[];
+    // Vo vozidlách je jediné „Potvrdiť" — návrh delenia.
     await act(async () => { potvrdit.at(-1)!.click(); });
     expect(mocky.ulozFakt).toHaveBeenLastCalledWith('org-1', 'vozidla.pravidla', {
       stav: 'potvrdene',
@@ -133,6 +147,35 @@ describe('ProfilKlientaPage', () => {
         predkontaciaKod: '501100', predkontaciaNedanovaKod: '501900',
       }],
     });
+    zatvor();
+  });
+
+  it('Banka: jediný kandidát sa potvrdí hneď, z viacerých až po výbere; zamietnutie', async () => {
+    const { container, zatvor } = await vykresli();
+    const banka = container.querySelector('#pk-banka')!;
+    const riadky = [...banka.querySelectorAll('li')];
+    expect(riadky[0].textContent).toContain('print-office s.r.o. · IČO 11111111');
+    expect(riadky[0].textContent).toContain('Výdaj na 321100 · 12 riadkov denníka · 1. 2. 2025 – 20. 8. 2026');
+    expect(riadky[0].textContent).toContain('Úhrada FP');
+    expect(riadky[1].textContent).toContain('Text „poplatok vedenie"');
+    const tlacidlo = (riadok: Element, text: string) =>
+      [...riadok.querySelectorAll('button')].find((button) => button.textContent === text) as HTMLButtonElement;
+
+    await act(async () => { tlacidlo(riadky[0], 'Potvrdiť').click(); });
+    expect(mocky.rozhodniPraxBanky).toHaveBeenLastCalledWith('org-1', 'b1', { stav: 'potvrdene', predkontaciaKod: 'Úhrada FP' });
+
+    // Dva kandidáti: bez výberu sa potvrdiť nedá — nič sa nevyberá za účtovníka.
+    expect(tlacidlo(riadky[1], 'Potvrdiť').disabled).toBe(true);
+    const vyber = riadky[1].querySelector('select')!;
+    await act(async () => {
+      vyber.value = 'Poplatky karta';
+      vyber.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { tlacidlo(riadky[1], 'Potvrdiť').click(); });
+    expect(mocky.rozhodniPraxBanky).toHaveBeenLastCalledWith('org-1', 'b2', { stav: 'potvrdene', predkontaciaKod: 'Poplatky karta' });
+
+    await act(async () => { tlacidlo(riadky[1], 'Zamietnuť').click(); });
+    expect(mocky.rozhodniPraxBanky).toHaveBeenLastCalledWith('org-1', 'b2', { stav: 'zamietnute' });
     zatvor();
   });
 
@@ -145,6 +188,8 @@ describe('ProfilKlientaPage', () => {
     expect(text).not.toContain('Ako účtovať DPH pri protistrane ACME?');
     expect(text).toContain('Služby z EÚ');
     expect(text).not.toContain('Registrácia DPHPlatiteľ DPH');
+    // Navrhnutá prax banky medzi potvrdenými nie je.
+    expect(container.querySelector('#pk-banka')).toBeNull();
     zatvor();
   });
 });

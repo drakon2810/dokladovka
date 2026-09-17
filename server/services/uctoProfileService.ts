@@ -12,6 +12,7 @@ import { DOKLAD_KLUC_SQL, MIN_ZHODA, prepocitajPravidla, variantyRozpisu, type R
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { overPravnuStranku } from './uctoPravnaKontrola.js';
 import { aktualizujProfil } from './profilService.js';
+import { prepocitajPraxBanky } from './bankaPraxService.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -480,7 +481,9 @@ export async function prepocitajPrax(
   const { kategoriiSRozpisom } = await doplnRozpisKategorii(database, input);
   // Profil klienta až po pravidlách: spory protistrán sa berú z čerstvých ucto_pravidla.
   const profil = await aktualizujProfil(database, input);
-  return { ...pravidla, kategoriiZmenenych, kategoriiSRozpisom, profil };
+  // Prax banky z denníka — výpis z nej dostane predkontáciu pohybov bez modelu.
+  const banka = await prepocitajPraxBanky(database, input);
+  return { ...pravidla, kategoriiZmenenych, kategoriiSRozpisom, profil, banka };
 }
 
 export interface UctoKategoria {

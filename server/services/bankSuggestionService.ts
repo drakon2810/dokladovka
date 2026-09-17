@@ -1,5 +1,6 @@
-// Autozaúčtovanie pohybov bankového výpisu: AI batch na výpis doplní
-// predkontáciu pohybom, ktoré ju nemajú. Deterministické vstupy majú prednosť
+// Autozaúčtovanie pohybov bankového výpisu: najprv prax banky z denníka
+// (bankaPraxService), zvyšku pohybov bez predkontácie ju doplní AI batch na
+// výpis. Deterministické vstupy majú prednosť
 // pred úsudkom modelu: spárované úhrady (document_payments podľa VS) idú do
 // promptu ako fakt a pravidlá účtovníka (Pravidlá pre AI, typ BV) ako pokyn.
 // Model vyberá VÝHRADNE id z ponuky číselníka — cudzie id sa zahodí.
@@ -10,6 +11,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { BEZ_PREDKONTACIA_SQL, finalnyJsonOdpovede, normalizeName } from './accountingSuggestionService.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
+import { nacitajPraxBanky, predkontaciaZPraxe } from './bankaPraxService.js';
 import { sBehomAi } from './behAi.js';
 
 /** Koľko pohybov ide modelu v jednej dávke — výpis môže mať stovky riadkov. */
@@ -55,8 +57,6 @@ export async function suggestBankMovementAccounting(
   input: { tenantId: string; organizationId: string; documentId: string },
   injectedParser?: BankParser,
 ): Promise<number> {
-  if (!injectedParser && (config.extractionProvider !== 'openai' || !config.openai.apiKey)) return 0;
-
   const dokument = await database.query<{ extracted: any; accounting: any; version: number } & Record<string, unknown>>(
     `SELECT extracted, accounting, version FROM documents
       WHERE id=$1 AND tenant_id=$2 AND organization_id=$3 AND document_type='BV'`,
@@ -73,8 +73,8 @@ export async function suggestBankMovementAccounting(
 
   // POHODA má pre banku vlastné predkontácie (agenda bankReceived = príjem,
   // bankIssued = výdaj) — model nesmie dostať fakturové. Položky bez agendy
-  // (ručne založené) ostávajú; keby banková ponuka bola prázdna, ponúkne sa
-  // všetko — zhodná zhovievavosť ako bankovePredkontacie na klientovi.
+  // (ručne založené) ostávajú. Prázdna banková ponuka = pohyb ostane bez
+  // návrhu; celý číselník by modelu dovolil zaúčtovať pohyb fakturovou predkontáciou.
   const vsetky = await database.query<{ id: string; code: string; name: string; agenda: string | null } & Record<string, unknown>>(
     `SELECT id, code, name, agenda FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind='predkontacie'
@@ -82,10 +82,25 @@ export async function suggestBankMovementAccounting(
       ORDER BY code LIMIT 2000`,
     [input.tenantId, input.organizationId],
   );
-  const bankove = vsetky.rows.filter((row) => !row.agenda || row.agenda === 'bankReceived' || row.agenda === 'bankIssued');
-  const ciselnik = bankove.length > 0 ? bankove : vsetky.rows;
+  const ciselnik = vsetky.rows.filter((row) => !row.agenda || row.agenda === 'bankReceived' || row.agenda === 'bankIssued');
   if (ciselnik.length === 0) return 0;
   const povoleneIds = new Set(ciselnik.map((row) => row.id));
+
+  // Prax banky z denníka má prednosť pred modelom: pohyb, ktorý sa s ňou
+  // jednoznačne spáruje, dostane jej predkontáciu (id len z agendy smeru).
+  const praxe = (await nacitajPraxBanky(database, input)).filter((prax) => prax.stav !== 'zamietnute');
+  const idPodlaKodu = new Map(ciselnik.filter((row) => row.agenda).map((row) => [`${row.agenda}|${row.code.trim()}`, row.id]));
+  const zPraxe = new Map<number, string>();
+  for (const { pohyb, index } of chybajuce) {
+    const suma = Number(pohyb.sumaSpolu);
+    if (!Number.isFinite(suma)) continue;
+    const kod = predkontaciaZPraxe(praxe, { suma, protistrana: pohyb.protistrana, text: pohyb.popis });
+    const id = kod && idPodlaKodu.get(`${suma > 0 ? 'bankReceived' : 'bankIssued'}|${kod}`);
+    if (id) zPraxe.set(index, id);
+  }
+  // Model dostane len zvyšok — a len keď je AI nastavená.
+  const sAi = Boolean(injectedParser || (config.extractionProvider === 'openai' && config.openai.apiKey));
+  const preModel = sAi ? chybajuce.filter(({ index }) => !zPraxe.has(index)) : [];
 
   // Spárované úhrady z deterministického párovania (VS + suma). Kľúčom je VS
   // uhradeného dokladu — pohyb sa naň napojí cez vlastný VS alebo číslice textu.
@@ -120,15 +135,15 @@ export async function suggestBankMovementAccounting(
     return undefined;
   };
 
-  const parser = injectedParser ?? (new OpenAI({
+  const parser = injectedParser ?? (preModel.length === 0 ? undefined : new OpenAI({
     apiKey: config.openai.apiKey,
     timeout: config.openai.timeoutMs,
     maxRetries: 0,
   }).responses as unknown as BankParser);
 
   const navrhy = new Map<number, string>();
-  for (let start = 0; start < chybajuce.length; start += DAVKA) {
-    const davka = chybajuce.slice(start, start + DAVKA);
+  for (let start = 0; start < preModel.length; start += DAVKA) {
+    const davka = preModel.slice(start, start + DAVKA);
     // Pravidlá sa vyberajú podľa textov KAŽDEJ dávky, bez orezania — skrátené
     // okno by pravidlo pre pohyb na konci dávky vôbec nenačítalo (filter
     // kľúčových slov beží v pamäti, dĺžka textu tu nič nestojí).
@@ -147,7 +162,7 @@ export async function suggestBankMovementAccounting(
         tenantId: input.tenantId, organizationId: input.organizationId, documentId: input.documentId,
         model: config.openai.accountingModel, promptVersion: 'bankovy-navrh-v1',
         kodChyby: 'bankovy_navrh_zlyhal', spravaChyby: 'AI návrh zaúčtovania pohybov výpisu zlyhal',
-      }, () => parser.create({
+      }, () => parser!.create({
         model: config.openai.accountingModel,
         store: config.openai.storeResponses,
         instructions: INSTRUCTIONS,
@@ -193,17 +208,23 @@ export async function suggestBankMovementAccounting(
       console.warn(`[bank-suggestion] dávka pohybov ${start}–${start + davka.length - 1} výpisu ${input.documentId} zlyhala:`, cause instanceof Error ? cause.message : cause);
     }
   }
-  if (navrhy.size === 0) return 0;
+  if (navrhy.size === 0 && zPraxe.size === 0) return 0;
 
+  let zPraxeDoplnene = 0;
   let doplnene = 0;
   const nove = pohyby.map((pohyb, index) => {
-    const id = navrhy.get(index);
+    const prax = zPraxe.get(index);
+    const id = prax ?? navrhy.get(index);
     // Doplní sa len pohyb, ktorý predkontáciu stále nemá — ručná hodnota vyhráva.
     if (!id || pohyb?.ucto?.predkontaciaId) return pohyb;
     doplnene += 1;
-    return { ...pohyb, ucto: { ...pohyb.ucto, predkontaciaId: id } };
+    if (!prax) return { ...pohyb, ucto: { ...pohyb.ucto, predkontaciaId: id } };
+    // Zdroj ostáva pri pohybe — editor ukáže návrh z praxe, schvaľuje ho človek.
+    zPraxeDoplnene += 1;
+    return { ...pohyb, ucto: { ...pohyb.ucto, predkontaciaId: id, zdroj: 'banka_prax' } };
   });
   if (doplnene === 0) return 0;
+  const zaznam = (akcia: string) => ({ ts: new Date().toISOString(), user: 'Systém', akcia });
   // Zápis len nad verziou, ktorú sme čítali: keď medzitým účtovník doklad
   // uložil (PATCH bumpne verziu), návrhy sa zahodia — ľudská úprava vyhráva
   // a nič sa jej neprepíše stanoveným stavom spred AI behu.
@@ -211,11 +232,10 @@ export async function suggestBankMovementAccounting(
     `UPDATE documents SET extracted=jsonb_set(extracted, '{polozky}', $1::jsonb),
             history=history || $2::jsonb, updated_at=now()
       WHERE id=$3 AND tenant_id=$4 AND version=$5`,
-    [JSON.stringify(nove), JSON.stringify([{
-      ts: new Date().toISOString(),
-      user: 'Systém',
-      akcia: `AI doplnila predkontáciu ${doplnene} pohybom výpisu — skontrolujte pred schválením`,
-    }]), input.documentId, input.tenantId, povodnaVerzia],
+    [JSON.stringify(nove), JSON.stringify([
+      ...(zPraxeDoplnene > 0 ? [zaznam(`Prax banky z denníka navrhla predkontáciu ${zPraxeDoplnene} pohybom výpisu — skontrolujte pred schválením`)] : []),
+      ...(doplnene > zPraxeDoplnene ? [zaznam(`AI doplnila predkontáciu ${doplnene - zPraxeDoplnene} pohybom výpisu — skontrolujte pred schválením`)] : []),
+    ]), input.documentId, input.tenantId, povodnaVerzia],
   );
   return zapis.rowCount > 0 ? doplnene : 0;
 }

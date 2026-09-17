@@ -88,6 +88,7 @@ export const sk = {
   'vypis.suma': 'Suma',
   'vypis.zostatok': 'Konečný zostatok',
   'vypis.ziadne': 'Výpis neobsahuje transakcie.',
+  'vypis.navrhZPraxe': 'Návrh z praxe banky z denníka — skontrolujte pred schválením',
 
   // ===== Rozšírené polia dokladu a kontrolný výkaz =====
   'detail.bic': 'BIC/SWIFT',
@@ -1642,6 +1643,17 @@ export const sk = {
   'profilKlienta.sekcia.naklady.popis': 'Účty, na ktorých firma DPH neodpočítava, a náklady s pomerným odpočtom. Program ich takto zaúčtuje aj pri dodávateľovi, ktorého v histórii nemá.',
   'profilKlienta.sekcia.zasady': 'Účtovné zásady',
   'profilKlienta.sekcia.zasady.popis': 'Vnútorné pravidlá firmy, ktoré sa z dokladu nedajú vyčítať.',
+  'profilKlienta.sekcia.banka': 'Banka',
+  'profilKlienta.sekcia.banka.popis': 'Na aký protiúčet firma účtuje pohyby partnera a opakované pohyby bez partnera (poplatky, daň, úroky). Pohyb výpisu, ktorý sa s praxou jednoznačne spáruje, dostane jej predkontáciu ako návrh. Zamietnutá prax sa nepoužije.',
+  'profilKlienta.banka.prazdne': 'Z denníka banky zatiaľ nevyplýva ustálená prax — treba aspoň 5 pohybov a 90 % z nich na jeden protiúčet.',
+  'profilKlienta.banka.text': 'Text „{slova}"',
+  'profilKlienta.banka.smer.prijem': 'Príjem',
+  'profilKlienta.banka.smer.vydaj': 'Výdaj',
+  'profilKlienta.banka.dokaz': '{smer} na {protiucet} · {riadkov} riadkov denníka · {od} – {do}',
+  'profilKlienta.banka.bezDokazu': '{smer} na {protiucet} · história túto prax už neukazuje',
+  'profilKlienta.banka.vyberte': 'Vyberte predkontáciu',
+  'profilKlienta.banka.bezPredkontacie': 'Firma nemá bankovú predkontáciu na účet {protiucet}',
+  'profilKlienta.banka.zamietnute': 'Zamietnuté',
   'profilKlienta.skupina.prijate': 'Prijaté plnenia',
   'profilKlienta.skupina.vystavene': 'Vystavené faktúry',
   'profilKlienta.skupina.vratenie': 'Zahraničná DPH',
@@ -1658,6 +1670,7 @@ export const sk = {
   'profilKlienta.historiaUkazuje': 'História ukazuje: {veta} ({dokladov} dokl.)',
 
   'profilKlienta.akcia.potvrdit': 'Potvrdiť',
+  'profilKlienta.akcia.zamietnut': 'Zamietnuť',
   'profilKlienta.akcia.potvrditHodnotu': 'Potvrdiť: {veta}',
   'profilKlienta.akcia.zmenit': 'Zmeniť',
   'profilKlienta.akcia.zmenitDialog': 'Zmeniť…',

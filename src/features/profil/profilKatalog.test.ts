@@ -46,7 +46,7 @@ const fakt = (kluc: string, stav: ProfilFakt['stav'], hodnota: unknown): ProfilF
 const otazka = (id: string, cast: Partial<ProfilOtazka>): ProfilOtazka => ({
   id, kluc: `fakt:${id}`, druh: 'fakt', stav: 'otvorena', blokuje: false, dokladov: 0, data: { kluc: id }, createdAt: '2026-09-16T10:00:00.000Z', ...cast,
 });
-const profil = (cast: Partial<ProfilKlienta>): ProfilKlienta => ({ fakty: [], otazky: [], navrhyDelenia: [], ...cast });
+const profil = (cast: Partial<ProfilKlienta>): ProfilKlienta => ({ fakty: [], otazky: [], navrhyDelenia: [], banka: [], ...cast });
 
 describe('katalóg profilu klienta', () => {
   it('pozná presne tie kľúče, ktoré server, a každý má názov, popis a vetu hodnoty', () => {

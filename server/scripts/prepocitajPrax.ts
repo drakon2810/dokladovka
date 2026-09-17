@@ -40,7 +40,7 @@ try {
     const vKonflikte = v.pravidiel > 0 ? ((v.konfliktov / v.pravidiel) * 100).toFixed(1) : '0.0';
     console.log(`${firma.name}: pravidiel ${v.pravidiel} (s rozpisom ${v.sRozpisom}), v konflikte ${vKonflikte} %,`
       + ` zmien režimu ${v.zmienRezimu}, kategórií zmenených ${v.kategoriiZmenenych},`
-      + ` profil: navrhnutých faktov ${v.profil.navrhnutych}, otázok ${v.profil.otazok}`
+      + ` profil: navrhnutých faktov ${v.profil.navrhnutych}, otázok ${v.profil.otazok}, prax banky ${v.banka.praxi}`
       + `${naSkusku ? ' — na skúšku, nezapísané' : ''}`);
   }
 } finally {

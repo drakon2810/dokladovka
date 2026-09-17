@@ -194,6 +194,8 @@ export interface DocumentLineItem {
     clenenieKvKod?: string;
     cinnostId?: string;
     zakazkaId?: string;
+    /** Bankový pohyb: predkontáciu navrhla prax banky z denníka — návrh, nie schválenie. */
+    zdroj?: 'banka_prax';
   };
 }
 
@@ -255,11 +257,32 @@ export interface NavrhPravidlaDelenia {
   priklady: Array<{ cislo: string; datum: string }>;
 }
 
+/** Prax banky z denníka: partner alebo opakovaný text + smer → protiúčet a banková predkontácia (kódy, nie id). */
+export interface PraxBanky {
+  id: string;
+  kluc: string;
+  smer: 'prijem' | 'vydaj';
+  stav: 'navrhnute' | 'potvrdene' | 'zamietnute';
+  partnerIco?: string;
+  /** Normalizované mená partnera, najčastejšie prvé. */
+  partnerMena: string[];
+  /** Slová textu pri pohyboch bez partnera. */
+  slova: string[];
+  protiucet: string;
+  /** Chýba pri viacerých kandidátoch — vyberá účtovník. */
+  predkontaciaKod?: string;
+  /** Chýba, keď história prax už neukazuje. */
+  dokaz?: { riadkov: number; podiel: number; od?: string; do?: string; protiucet: string; kandidati: string[] };
+  potvrdil?: string;
+  potvrdeneAt?: string;
+}
+
 export interface ProfilKlienta {
   fakty: ProfilFakt[];
   /** Otvorené a odložené, blokujúce a s viac dokladmi prvé. */
   otazky: ProfilOtazka[];
   navrhyDelenia: NavrhPravidlaDelenia[];
+  banka: PraxBanky[];
   prepocitaneAt?: string;
 }
 
