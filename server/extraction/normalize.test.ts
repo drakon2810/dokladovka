@@ -634,6 +634,39 @@ describe('rozpis DPH sa dopočíta z položiek', () => {
 // Reálny prípad: „Client VAT No.: CH E101237456" z faktúry skončilo v DIČ aj s
 // medzerou — slovenský formát ho hlásil ako chybu a do POHODY neodišlo ako
 // IČ DPH partnera.
+// Zľava z celkovej sumy je na doklade jeden riadok pod súčtom, nie zľava
+// položiek. ROFA AF260391 (ROFA Laboratory, AT): štyri položky spolu 9 747,24
+// a „J. Discount 12,00 % from 9.747,24 EUR" = −1 169,67, na úhradu 8 577,57.
+// Bez zľavy ako samostatnej položky sa súčet položiek rozišiel s dokladom
+// o 1 169,67, pole „Zaokrúhlenie" to ukázalo ako zaokrúhlenie a doklad sa
+// nedal schváliť. Extrakcia ju preto vracia ako vlastnú zápornú položku.
+describe('zľava z celkovej sumy', () => {
+  const zlavovyDoklad = (polozky: Array<Record<string, string>>, total: string) => normalizeExtractionResult({
+    schemaVersion: '2', documentType: 'FP',
+    supplier: { nazov: 'ROFA - Laboratory & Process Analyzers, GmbH', icDph: 'ATU74777039', krajina: 'AT' },
+    buyer: { ico: '31340962' }, invoiceNumber: 'AF260391', issueDate: '2026-08-27',
+    taxDate: '2026-08-27', dueDate: '2026-09-26', currency: 'EUR',
+    lineItems: polozky, vatBreakdown: [], totalAmount: total,
+    fieldConfidence: {}, evidence: {}, warnings: [],
+  } as never, 'doc-rofa', '2026-08-27');
+  const tovar = [
+    { description: 'AL-17659 Vial (Empty), 1 ml', vatRate: '0', amountWithoutVat: '1542.80', vatAmount: '0', amountTotal: '1542.80' },
+    { description: 'AL-17622 Vial (Empty), 1/2 Dram', vatRate: '0', amountWithoutVat: '535.90', vatAmount: '0', amountTotal: '535.90' },
+    { description: '103846 Temperature Sensor', vatRate: '0', amountWithoutVat: '2187.54', vatAmount: '0', amountTotal: '2187.54' },
+    { description: 'M004242-10 Flask Set', vatRate: '0', amountWithoutVat: '5481.00', vatAmount: '0', amountTotal: '5481.00' },
+  ];
+
+  it('záporná položka zľavy zladí položky, rozpis aj sumu dokladu', () => {
+    const doklad = zlavovyDoklad([...tovar, { description: 'Zľava 12 % z 9 747,24', vatRate: '0', amountWithoutVat: '-1169.67', vatAmount: '0', amountTotal: '-1169.67' }], '8577.57');
+    expect((doklad.extracted as any).rozpisDph).toEqual([{ sadzba: 0, zaklad: 8577.57, dph: 0 }]);
+    expect(validateNormalizedExtraction(doklad, { ico: '31340962' })).toEqual([]);
+  });
+
+  it('bez zľavy v položkách doklad ostane zablokovaný — rozdiel nie je zaokrúhlenie', () => {
+    const kody = validateNormalizedExtraction(zlavovyDoklad(tovar, '8577.57'), { ico: '31340962' }).map((chyba: any) => chyba.code);
+    expect(kody).toContain('line_items_total_mismatch');
+  });
+});
 describe('identifikátory strán', () => {
   const doklad = (buyer: Record<string, string>) => normalizeExtractionResult({
     schemaVersion: '2', documentType: 'FV',

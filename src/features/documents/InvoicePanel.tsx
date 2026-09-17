@@ -11,7 +11,7 @@ import { getCachedSnapshot, getDocumentPreco, getPrecoVysvetlenie, saveRuleDovod
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { nextNumberInSeries } from '../../data/pohoda/numbering';
 import { druh, kvKodyPreTyp, predkontaciePreTyp, radyPreTyp } from '../../data/pohoda/agendas';
-import { lineItemEffective, round2 } from '../../lib/validate';
+import { jeZaokruhlenie, lineItemEffective, round2 } from '../../lib/validate';
 import { isForeignSupplier } from '../../data/validation/documentValidation';
 import { supplierAddressParts } from '../../data/xml/pohodaDataPack';
 import { showToast } from '../../components/toast';
@@ -1262,7 +1262,20 @@ export function InvoicePanel({
                 počet riadkov — prázdny riadok 0/0 je rovnako bezcenný. */}
             {rozpisSpolu !== 0 && (
               <>
-                <span className="dk-lbl" title="Rozdiel medzi rozpisom DPH a celkovou sumou dokladu">Zaokrúhlenie</span>
+                {/* Rozdiel väčší ako zaokrúhlenie sa tak nesmie volať: účtovník
+                    videl „Zaokrúhlenie −1 169,67 €" a myslel si, že to systém
+                    tak rozhodol — pritom to bola neprečítaná zľava z celkovej
+                    sumy a doklad sa pre ten rozdiel nedal schváliť. */}
+                {jeZaokruhlenie(zaokruhlenie, ex.mena) ? (
+                  <span className="dk-lbl" title="Rozdiel medzi rozpisom DPH a celkovou sumou dokladu">Zaokrúhlenie</span>
+                ) : (
+                  <span
+                    className="dk-lbl dk-rozdiel"
+                    title="Suma dokladu nesedí s rozpisom DPH. Na zaokrúhlenie je rozdiel príliš veľký — skontrolujte zľavu z celkovej sumy alebo chýbajúcu položku."
+                  >
+                    Rozdiel
+                  </span>
+                )}
                 <div className="dk-r">
                   <DcCell
                     align="right" inputMode="decimal" disabled={readOnly}

@@ -290,6 +290,8 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
   border-radius: 999px; padding: 2px 9px; font-weight: 600;
 }
 .dk-tag-warn { color: var(--dk-warn); background: rgba(180, 83, 9, .12); }
+/* Rozdiel proti rozpisu DPH, ktory uz nie je zaokruhlenie. */
+.dk-rozdiel { color: var(--dk-warn); font-weight: 600; }
 .dk-pay-total { display: grid; grid-template-columns: 1fr 118px; gap: 10px; align-items: center; font-weight: 600; color: var(--dk-accent-dark); }
 .dk-pay-total span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .dk-note { margin-top: 3px; font-size: 10.5px; color: var(--dk-faint); }

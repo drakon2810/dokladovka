@@ -117,6 +117,20 @@ export function isLineItemQuantityConsistent(
     <= VAT_ROW_TOLERANCE + Math.abs(mnozstvo) * 0.005 + 1e-9;
 }
 
+/**
+ * Je rozdiel medzi rozpisom DPH a sumou dokladu naozaj zaokrúhlenie?
+ *
+ * Zaokrúhľuje sa na desiatky centov (hotovosť na 5 centov), pri korunových
+ * menách na jednotku. Väčší rozdiel zaokrúhlenie nie je — na rakúskej faktúre
+ * ROFA AF260391 to bola 12 % zľava z celkovej sumy (−1 169,67 €), ktorú model
+ * nepreniesol do položiek. Riadok „Zaokrúhlenie −1 169,67" vyzeral, akoby to
+ * systém tak rozhodol, hoci doklad sa pre ten rozdiel nedal schváliť.
+ */
+export function jeZaokruhlenie(rozdiel: number, mena = 'EUR'): boolean {
+  const hranica = ['CZK', 'HUF', 'PLN', 'SEK', 'NOK', 'DKK', 'JPY'].includes(mena.toUpperCase()) ? 1 : 0.05;
+  return Math.abs(rozdiel) <= hranica + 1e-9;
+}
+
 export function vatBreakdownTotal(rows: VatBreakdownRow[]): number {
   return round2(rows.reduce((sum, r) => sum + r.zaklad + r.dph, 0));
 }
