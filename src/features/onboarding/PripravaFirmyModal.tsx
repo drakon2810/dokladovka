@@ -191,11 +191,15 @@ export function upozorneniePripravenosti(pripravenost: PripravenostFirmy | null 
   return problem && dovodPripravenosti(problem);
 }
 
-/** Riadok nad návrhom v detaile dokladu. „Nie je pripravená" len keď to tvrdí server, pri „overiť" miernejšie. */
+/**
+ * Riadok nad návrhom v detaile dokladu — len keď firma naozaj nie je pripravená.
+ * „Overiť" (starší profil po opätovnom stiahnutí histórie, otvorené otázky,
+ * meranie) patrí do prípravy firmy: nad každým dokladom bol len šum.
+ */
 export function upozornenieNavrhu(pripravenost: PripravenostFirmy | null | undefined): string | undefined {
   const dovod = upozorneniePripravenosti(pripravenost);
-  if (!pripravenost || !dovod) return undefined;
-  return `${t(pripravenost.stav === 'nepripravena' ? 'pripravenost.navrhUpozornenie' : 'pripravenost.navrhOverit')} ${dovod}`;
+  if (pripravenost?.stav !== 'nepripravena' || !dovod) return undefined;
+  return `${t('pripravenost.navrhUpozornenie')} ${dovod}`;
 }
 
 /** Päta tvrdí „pripravená" len podľa servera — päť hotových krokov na to nestačí. */

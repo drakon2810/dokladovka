@@ -130,12 +130,11 @@ describe('príprava firmy', () => {
     expect(krokDobehol(KROKY[2], 'hotovy', null, undefined)).toBe(true);
   });
 
-  it('upozornenie pri návrhu: „nepripravená" len keď to server tvrdí', () => {
+  it('upozornenie pri návrhu len pri nepripravenej firme', () => {
     expect(upozornenieNavrhu(pripravenost('pripravena', {}))).toBeUndefined();
     expect(upozornenieNavrhu(null)).toBeUndefined();
     const meranie: SignalPripravenosti = { stav: 'overit', dovod: 'meranie_chyba' };
-    expect(upozornenieNavrhu(pripravenost('overit', { meranie })))
-      .toBe(`${t('pripravenost.navrhOverit')} ${t('pripravenost.meranie_chyba')}`);
+    expect(upozornenieNavrhu(pripravenost('overit', { meranie }))).toBeUndefined();
     expect(upozornenieNavrhu(pripravenost('nepripravena', { historia: caka, meranie })))
       .toBe(`${t('pripravenost.navrhUpozornenie')} ${t('pripravenost.ciselniky_chybaju')}`);
   });

@@ -232,7 +232,6 @@ export const sk = {
   'priprava.otvorit': 'Otvoriť prípravu',
   'priprava.otvoritProfil': 'Otvoriť profil klienta',
   'pripravenost.navrhUpozornenie': 'Firma ešte nie je pripravená, návrh berte opatrne.',
-  'pripravenost.navrhOverit': 'Pripravenosť firmy treba overiť, návrh berte opatrne.',
   'pripravenost.nenacitana': 'stav sa nepodarilo načítať.',
   'pripravenost.mostik_vypnuty': 'Mostík je v Nastaveniach vypnutý.',
   'pripravenost.agent_nesparovany': 'Mostík ešte nie je spárovaný.',
