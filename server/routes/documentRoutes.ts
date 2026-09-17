@@ -669,7 +669,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       ...(zmrazeny && document.samozdanenie ? { hodnota: document.samozdanenie, chyby: [] } : {}),
       upravitelny: !zmrazeny && prijateCasti(document.samozdanenie).length === 0,
       dodavatel: String((document.extracted as { dodavatel?: { nazov?: string } })?.dodavatel?.nazov ?? ''),
-      robimeVPohode: profil.samozdanenieVPohode === true,
+      robimeVPohode: profil.samozdaneniePostup === 'v_pohode',
       pamatDodavatela: Boolean(pamat),
     };
   };
@@ -723,9 +723,14 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
           pamat: { dovod: hodnota.dovod, ...(hodnota.dovodText ? { dovodText: hodnota.dovodText } : {}) },
         });
       }
-      if (hodnota.volba === 'v_pohode' && vsetkyFaktury !== undefined && vsetkyFaktury !== (stav.profil.samozdanenieVPohode === true)) {
+      // Zaškrtnutie „takto to robíme pri všetkých faktúrach" mení postup firmy
+      // len medzi „zakladáme v POHODE" a „zakladá ich Dokladovka". Voľbu
+      // „samozdanenie neriešime" odtiaľto nastaviť nemožno — tá vypína celý blok
+      // a patrí do profilu klienta, nie do jedného dokladu.
+      if (hodnota.volba === 'v_pohode' && vsetkyFaktury !== undefined && vsetkyFaktury !== (stav.profil.samozdaneniePostup === 'v_pohode')) {
         await zamkniPrax(tx, firma);
-        await ulozFakt(tx, { ...firma, userId: auth.userId }, 'samozdanenie.postup', { stav: 'potvrdene', hodnota: { robimeVPohode: vsetkyFaktury } });
+        await ulozFakt(tx, { ...firma, userId: auth.userId }, 'samozdanenie.postup',
+          { stav: 'potvrdene', hodnota: { postup: vsetkyFaktury ? 'v_pohode' : 'dokladovka' } });
       }
       await writeAudit(tx, {
         tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,

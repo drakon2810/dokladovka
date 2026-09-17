@@ -1,6 +1,8 @@
 import type { Queryable } from '../db/database.js';
 import { normalizeName } from './accountingSuggestionService.js';
 import { EU_DPH_PREFIXY, extrakt, jeCudziDodavatel, NAZVY_DRUHOV, sadzbyDphPre } from './dphAdvisor.js';
+import { popisKodu } from './pohodaDphKody.js';
+import { DD_REFY_SLUZBY, DD_REFY_TOVAR } from './profilKatalog.js';
 import { loadDphProfil, predvolenyDphProfil, type DphProfil, type SamozdanenieDruh } from './dphProfileService.js';
 
 /**
@@ -21,6 +23,11 @@ export type ZdrojVolby = 'predvolene' | 'dodavatel' | 'firma' | 'uctovnik';
 export type RolaPrenosu = 'faktura' | 'dd' | 'p';
 
 export interface RucneParametre { druh?: DruhPrijateho; datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number }
+
+/** Čo firma s dodávateľom samozdaňovala doteraz — len os „tovar alebo služba". */
+export type PraxDodavatela = 'tovar' | 'sluzby';
+/** Koľko dokladov musí prax niesť, aby druh určila sama (pravidlo vlastníka: päť rovnakých). */
+const MIN_DOKLADOV_PRAXE = 5;
 
 /** Voľba účtovníka — to, čo posiela editor. */
 export interface RozhodnutieSamozdanenia {
@@ -96,10 +103,15 @@ export function zostavSamozdanenie(vstup: {
   extracted: Record<string, unknown> | null | undefined;
   profil: DphProfil;
   pamat?: PamatDodavatela;
+  /** Prax firmy s týmto dodávateľom z POHODY — určuje tovar proti službe. */
+  praxDodavatela?: PraxDodavatela;
   ulozene?: Partial<Samozdanenie> | null;
 }): StavSamozdanenia | undefined {
   const { profil } = vstup;
   if (vstup.documentType !== 'FP' || (vstup.podtyp ?? 'bezna') !== 'bezna') return undefined;
+  // Firma, ktorá samozdanenie na prijatých faktúrach nerieši (potvrdené v profile
+  // klienta), blok nedostane a faktúra ide do POHODY bez interných dokladov.
+  if (profil.samozdaneniePostup === 'neriesime') return undefined;
   const doklad = extrakt({ documentType: vstup.documentType, extracted: vstup.extracted });
   if (doklad.dphSpolu !== 0 || !(doklad.sumaSpolu > 0)) return undefined;
   const prefix = doklad.dodavatelIcDph.slice(0, 2);
@@ -111,17 +123,27 @@ export function zostavSamozdanenie(vstup: {
 
   const predvolene: StavSamozdanenia['predvolene'] = vstup.pamat
     ? { volba: 'nevznika', zdroj: 'dodavatel', dovod: vstup.pamat.dovod, ...(vstup.pamat.dovodText ? { dovodText: vstup.pamat.dovodText } : {}) }
-    : profil.samozdanenieVPohode ? { volba: 'v_pohode', zdroj: 'firma' } : { volba: 'vytvorit', zdroj: 'predvolene' };
+    : profil.samozdaneniePostup === 'v_pohode' ? { volba: 'v_pohode', zdroj: 'firma' } : { volba: 'vytvorit', zdroj: 'predvolene' };
   // Uložená hodnota je rozhodnutie, keď ju zvolil účtovník. Zápis schválenia
   // z predvolieb sa prepočíta (oprava dodávateľa, nové nastavenie firmy) — okrem
   // dokladu, ktorého časť už prijala POHODA: ten ostáva, ako odišiel.
   const prijate = prijateCasti(vstup.ulozene).length > 0;
   const ulozene = vstup.ulozene?.volba && ((vstup.ulozene.zdroj ?? 'uctovnik') === 'uctovnik' || prijate) ? vstup.ulozene : undefined;
   const volba = ulozene?.volba ?? predvolene.volba;
-  // Druh pripína len výslovná zmena účtovníka (rucne.druh); inak ho určuje územie dodávateľa.
-  const pripnuty = prijate ? ulozene?.druh : ulozene?.rucne?.druh;
+  // Druh pripína výslovná zmena účtovníka (rucne.druh) a doklad, ktorý už raz
+  // odišiel do POHODY: opakovaný prenos musí poslať ten istý interný doklad, aký
+  // POHODA prijala (aj s varovaním), nie doklad inej rodiny.
+  const odoslane = prijate || Boolean(vstup.ulozene?.export);
+  const pripnuty = odoslane ? vstup.ulozene?.druh : ulozene?.rucne?.druh;
+  // Územie rozhoduje o EÚ/tretej krajine/tuzemsku, prax dodávateľa o tom, či ide
+  // o tovar alebo službu — z dokladu sa to spoľahlivo prečítať nedá. ROFA tak
+  // dostávala „Služby z EÚ" na 113 zo 118 dokladov, hoci firma ich 108× zaúčtovala
+  // ako nadobudnutie tovaru (DDnadEU/PDnadEU). Prax mimo EÚ sa nepoužíva: tovar
+  // z tretej krajiny je dovoz (§21), ten sa samozdanením nevymeriava a v histórii
+  // preto nemá jediný doklad, z ktorého by sa dal odvodiť.
   const druh = pripnuty && (DRUHY_PRIJATEHO as readonly string[]).includes(pripnuty) ? pripnuty
-    : uzemie === 'eu' ? 'sluzby_eu' : uzemie === 'mimo_eu' ? 'sluzby_mimo_eu' : 'prenesenie_prijate';
+    : uzemie === 'eu' ? (vstup.praxDodavatela === 'tovar' ? 'tovar_eu' : 'sluzby_eu')
+      : uzemie === 'mimo_eu' ? 'sluzby_mimo_eu' : 'prenesenie_prijate';
   const rucne = ulozene?.rucne ?? {};
   const extracted = (vstup.extracted ?? {}) as Record<string, unknown>;
 
@@ -216,6 +238,52 @@ export async function nacitajPamatDodavatela(
   return riadok ? { dovod: riadok.dovod, ...(riadok.dovod_text ? { dovodText: riadok.dovod_text } : {}) } : undefined;
 }
 
+/**
+ * Tovar alebo služba podľa toho, čo firma s týmto dodávateľom samozdaňovala
+ * doteraz. Rodinu nesie interný doklad (DD kód), nie faktúra — na faktúre je
+ * „nezahrňovať do priznania".
+ *
+ * Prax platí len jednomyseľná a len od piatich dokladov (pravidlo vlastníka):
+ * najčastejšia rodina nestačí. parr instrument dodáva ROFE prístroje aj servis
+ * (3 doklady tovar, 1 služba) a väčšinové pravidlo by servisnej faktúre s istotou
+ * priradilo nadobudnutie tovaru.
+ *
+ * `doDatumu` drží poctivé meranie aj dodatočné priznanie: doklad vidí len prax,
+ * ktorá v jeho čase existovala.
+ */
+export async function praxSamozdaneniaDodavatela(
+  db: Queryable,
+  firma: { tenantId: string; organizationId: string },
+  extracted: unknown,
+  doDatumu?: string,
+): Promise<PraxDodavatela | undefined> {
+  const dodavatel = ((extracted as Record<string, any> | null)?.dodavatel ?? {}) as { ico?: string; nazov?: string };
+  const ico = String(dodavatel.ico ?? '').replace(/\D/g, '');
+  // Zahraničný dodávateľ má v histórii IČO prázdne alebo „-", takže meno je
+  // jediný kľúč práve pri dokladoch, o ktoré tu ide.
+  const nazov = normalizeName(dodavatel.nazov);
+  if (!ico && !nazov) return undefined;
+  const riadky = (await db.query<{ kod: string; dokladov: string } & Record<string, unknown>>(
+    `SELECT clenenie_dph_kod AS kod, count(DISTINCT (agenda, doklad_cislo)) AS dokladov
+       FROM ucto_historia
+      WHERE tenant_id=$1 AND organization_id=$2 AND clenenie_dph_kod IS NOT NULL
+        AND (($3::text <> '' AND supplier_ico=$3) OR ($4::text <> '' AND supplier_name_normalized=$4))
+        AND ($5::date IS NULL OR datum < $5::date)
+      GROUP BY 1`,
+    [firma.tenantId, firma.organizationId, ico, nazov, doDatumu ?? null],
+  )).rows;
+  let tovar = 0;
+  let sluzby = 0;
+  for (const riadok of riadky) {
+    const ref = popisKodu(riadok.kod)?.ref ?? '';
+    if (DD_REFY_TOVAR.includes(ref)) tovar += Number(riadok.dokladov);
+    else if (DD_REFY_SLUZBY.includes(ref)) sluzby += Number(riadok.dokladov);
+  }
+  if (tovar >= MIN_DOKLADOV_PRAXE && sluzby === 0) return 'tovar';
+  if (sluzby >= MIN_DOKLADOV_PRAXE && tovar === 0) return 'sluzby';
+  return undefined;
+}
+
 /** „Pamätať pre dodávateľa": zapne uloží dôvod, vypne ho zabudne. */
 export async function ulozPamatDodavatela(
   db: Queryable,
@@ -247,10 +315,16 @@ export async function stavSamozdaneniaDokladu(
 ): Promise<(StavSamozdanenia & { profil: DphProfil; pamat?: PamatDodavatela }) | undefined> {
   const firma = { tenantId, organizationId: document.organization_id };
   const profil = profilDokladu ?? await loadDphProfil(db, tenantId, firma.organizationId) ?? predvolenyDphProfil(tenantId, firma.organizationId);
-  const pamat = await nacitajPamatDodavatela(db, firma, document.extracted);
+  const extracted = (document.extracted ?? {}) as Record<string, unknown>;
+  const datumPraxe = typeof extracted.datumDodania === 'string' ? extracted.datumDodania
+    : typeof extracted.datumVystavenia === 'string' ? extracted.datumVystavenia : undefined;
+  const [pamat, praxDodavatela] = await Promise.all([
+    nacitajPamatDodavatela(db, firma, document.extracted),
+    praxSamozdaneniaDodavatela(db, firma, document.extracted, datumPraxe),
+  ]);
   const stav = zostavSamozdanenie({
-    documentType: document.document_type, podtyp: document.podtyp, extracted: document.extracted as Record<string, unknown>,
-    profil, pamat, ulozene: document.samozdanenie,
+    documentType: document.document_type, podtyp: document.podtyp, extracted,
+    profil, pamat, praxDodavatela, ulozene: document.samozdanenie,
   });
   return stav && { ...stav, profil, ...(pamat ? { pamat } : {}) };
 }

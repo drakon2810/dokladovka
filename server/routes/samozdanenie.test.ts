@@ -118,7 +118,7 @@ describe('samozdanenie — schválenie', () => {
     const fakt = (await database.query<Record<string, any>>(
       `SELECT stav, hodnota FROM profil_fakty WHERE organization_id=$1 AND kluc='samozdanenie.postup'`, [seeded.organizationId],
     )).rows[0];
-    expect(fakt).toEqual({ stav: 'potvrdene', hodnota: { robimeVPohode: true } });
+    expect(fakt).toEqual({ stav: 'potvrdene', hodnota: { postup: 'v_pohode' } });
     const piata = await vlozFakturu(database, seeded, kody, { nazov: 'Atlassian', icDph: '', krajina: 'AU' });
     const blok = await app.inject({ method: 'GET', url: `/api/documents/${piata}/samozdanenie`, headers: { cookie: headers.cookie } });
     expect(blok.json().blok.hodnota).toMatchObject({ volba: 'v_pohode', zdroj: 'firma' });
@@ -127,6 +127,58 @@ describe('samozdanenie — schválenie', () => {
     await uloz(prva, { volba: 'nevznika', dovod: 'miesto_dodania', pamatatDodavatela: false });
     const pamat = await database.query('SELECT 1 FROM samozdanenie_dodavatelia WHERE organization_id=$1', [seeded.organizationId]);
     expect(pamat.rowCount).toBe(0);
+    await app.close();
+  }, 120_000);
+});
+
+describe('samozdanenie — druh z praxe dodávateľa', () => {
+  /** Interné doklady dodávateľa v histórii POHODY — rodinu nesie DD kód. */
+  const vlozPrax = async (database: Db, seeded: Seeded, kody: string[], datum = '2026-05-01') => {
+    for (const [poradie, kod] of kody.entries()) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,line_text_normalized,clenenie_dph_kod,source,riadok_hash)
+         VALUES ($1,$2,$3,'INT',$4,$5::date,'vymeranie dane',$6,'mdb',$1)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, `INT-${datum}-${poradie}`, datum, kod],
+      );
+    }
+    await database.query(
+      `UPDATE ucto_historia SET supplier_name_normalized=$1 WHERE tenant_id=$2 AND organization_id=$3`,
+      ['google ireland ltd', seeded.tenantId, seeded.organizationId],
+    );
+  };
+
+  it('päť jednomyseľných dokladov určí tovar z EÚ; menej ani nejednotná prax nie', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    const id = await vlozFakturu(database, seeded, kody);
+    const druh = async () => (await app.inject({
+      method: 'GET', url: `/api/documents/${id}/samozdanenie`, headers: { cookie: headers.cookie },
+    })).json().blok.hodnota.druh;
+
+    // Bez histórie ostáva územie: dodávateľ z EÚ = služby.
+    expect(await druh()).toBe('sluzby_eu');
+
+    // Štyri doklady sú príklad, nie prax.
+    await vlozPrax(database, seeded, ['DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU']);
+    expect(await druh()).toBe('sluzby_eu');
+
+    // Piaty doklad prax dokončí.
+    await vlozPrax(database, seeded, ['DDnadEU'], '2026-05-02');
+    expect(await druh()).toBe('tovar_eu');
+
+    // Jediný servisný doklad toho istého dodávateľa prax zneistí — späť na územie.
+    await vlozPrax(database, seeded, ['DDsl§69'], '2026-05-03');
+    expect(await druh()).toBe('sluzby_eu');
+    await app.close();
+  }, 120_000);
+
+  it('prax po dátume dodania sa nepočíta', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    const id = await vlozFakturu(database, seeded, kody);
+    // Doklad je z 10. 6. 2026; prax vznikla až v júli, takže ju vidieť nemá.
+    await vlozPrax(database, seeded, ['DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU'], '2026-07-01');
+    const blok = await app.inject({ method: 'GET', url: `/api/documents/${id}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(blok.json().blok.hodnota.druh).toBe('sluzby_eu');
     await app.close();
   }, 120_000);
 });

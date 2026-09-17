@@ -899,9 +899,6 @@ export function InvoicePanel({
 
   return (
     <div className="dk-doc">
-      {/* Samozdanenie prijatej faktúry bez DPH — server rozhodne, či sa doklad týka. */}
-      {draft.typ === 'FP' && <SamozdanenieBlok documentId={draft.id} version={draft.version} readOnly={readOnly} />}
-
       {/* Zaúčtovanie dokladu (účtovný zápis pre POHODU) */}
       <div className="dk-head">
         <span className="dk-head-mark">P</span>
@@ -975,6 +972,10 @@ export function InvoicePanel({
           )}
         </div>
       )}
+
+      {/* Samozdanenie prijatej faktúry bez DPH — jeden riadok zaúčtovania,
+          server rozhodne, či sa doklad týka. */}
+      {draft.typ === 'FP' && <SamozdanenieBlok documentId={draft.id} version={draft.version} readOnly={readOnly} />}
 
       <div className="dk-two">
         {/* Základné informácie */}

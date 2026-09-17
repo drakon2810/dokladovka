@@ -10,7 +10,7 @@ import { formatDate, formatDateTime } from '../../lib/format';
 import { t, tv, type SkKey } from '../../i18n/sk';
 import { FaktModal } from './FaktModal';
 import {
-  DRUHY_PRIJATE, DRUHY_VYSTAVENE, SEKCIE, STATUSY, ZOZNAMOVE,
+  DRUHY_PRIJATE, DRUHY_VYSTAVENE, POSTUPY_SAMOZDANENIA, SEKCIE, STATUSY, ZOZNAMOVE,
   kodyHodnoty, nadpisOtazky, nazovFaktu, pocty, popisFaktu, popisOtazky, pravidloZNavrhu, relevantneKluce, rozhodnute,
   stavFaktu, stavSekcie, suhrnProfilu, triedOtazky, vetaHodnoty, vetaVariantu,
   type BodkaSekcie, type DataFaktovejOtazky, type DataSporu, type Sekcia, type StavFaktu,
@@ -341,6 +341,11 @@ function KartaOtazky({ otazka, profil, busy, onFakt, onOdpoved, onUprav }: {
   } else if (kluc === 'dph.status') {
     moznosti = STATUSY.map((status) => volba(t(`profilKlienta.status.${status}`), () => potvrdHodnotu({ status }),
       fakt?.napoveda === status ? 'hlavna' : undefined));
+  } else if (kluc === 'samozdanenie.postup') {
+    // Prepínač firmy priamo v profile: vypnuté samozdanenie znamená, že blok na
+    // prijatej faktúre nebude a doklad ide do POHODY bez interných dokladov.
+    moznosti = POSTUPY_SAMOZDANENIA.map((postup) => volba(t(`profilKlienta.postup.${postup}`),
+      () => potvrdHodnotu({ postup })));
   } else if (kluc === 'zasady.drobny_majetok') {
     moznosti = [
       ...[1700, 2400].map((hranica) => volba(`${hranica.toLocaleString('sk-SK')} €`, () => potvrdHodnotu({ hranica }))),

@@ -30,6 +30,8 @@ export const SEKCIE: ReadonlyArray<{ id: Sekcia; kluce: readonly string[] }> = [
 export const ZOZNAMOVE = new Set(['vozidla.pravidla', 'naklady.bez_naroku', 'naklady.pomerne']);
 
 export const STATUSY = ['platitel', 'registracia_7', 'registracia_7a', 'neplatitel'] as const;
+/** Hodnoty faktu samozdanenie.postup — vrátane „neriešime", ktoré blok vypne. */
+export const POSTUPY_SAMOZDANENIA = ['dokladovka', 'v_pohode', 'neriesime'] as const;
 
 type Obj = Record<string, unknown>;
 const obj = (hodnota: unknown): Obj => (hodnota && typeof hodnota === 'object' && !Array.isArray(hodnota) ? hodnota as Obj : {});
@@ -90,8 +92,9 @@ export function vetaHodnoty(kluc: string, hodnota: unknown): string {
     case 'zasady.drobny_majetok':
       return typeof h.hranica === 'number' ? tv('profilKlienta.veta.drobnyMajetok', { suma: `${cislo(h.hranica)} €` }) : '—';
     case 'samozdanenie.postup':
-      return h.robimeVPohode === true ? t('profilKlienta.veta.samozdanenieVPohode')
-        : h.robimeVPohode === false ? t('profilKlienta.veta.samozdanenieDokladovka') : '—';
+      return h.postup === 'v_pohode' ? t('profilKlienta.veta.samozdanenieVPohode')
+        : h.postup === 'dokladovka' ? t('profilKlienta.veta.samozdanenieDokladovka')
+          : h.postup === 'neriesime' ? t('profilKlienta.veta.samozdanenieNeriesime') : '—';
   }
   if (!kluc.startsWith('samozdanenie.')) return '—';
   const faktura = obj(h.faktura);
@@ -251,7 +254,7 @@ export function popisOtazky(otazka: ProfilOtazka, fakty: ProfilFakt[], nazovAgen
 
 // ===== Formulár faktu =====
 
-export type TypPola = 'status' | 'anoNie' | 'predkontacia' | 'clenenie' | 'kv' | 'text' | 'slova' | 'cislo';
+export type TypPola = 'status' | 'postup' | 'anoNie' | 'predkontacia' | 'clenenie' | 'kv' | 'text' | 'slova' | 'cislo';
 
 export interface PoleFormulara {
   /** Cesta v hodnote; s bodkou je v skupine (faktura.kv) — prázdna skupina sa vynechá celá. */
@@ -295,7 +298,7 @@ const POLIA: Record<string, PoleFormulara[]> = {
   ],
   'zasady.tovar_na_ceste': [{ cesta: 'pouziva', typ: 'anoNie', povinne: true }],
   'zasady.drobny_majetok': [{ cesta: 'hranica', typ: 'cislo', min: 1, povinne: true }],
-  'samozdanenie.postup': [{ cesta: 'robimeVPohode', typ: 'anoNie', povinne: true }],
+  'samozdanenie.postup': [{ cesta: 'postup', typ: 'postup', povinne: true }],
 };
 
 /** Polia formulára; pri zozname sú to polia jednej položky. */

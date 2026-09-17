@@ -4,7 +4,7 @@ import { showToast } from '../../components/toast';
 import { CLENENIE_KV_KODY, type CodeListItem } from '../../data/types';
 import { t, tv, type SkKey } from '../../i18n/sk';
 import {
-  STATUSY, formularZHodnoty, hodnotaZFormulara, nazovFaktu, poliaFaktu, popisFaktu, popisPola, type PoleFormulara,
+  POSTUPY_SAMOZDANENIA, STATUSY, formularZHodnoty, hodnotaZFormulara, nazovFaktu, poliaFaktu, popisFaktu, popisPola, type PoleFormulara,
 } from './profilKatalog';
 
 /**
@@ -36,7 +36,7 @@ export function FaktModal({ kluc, pociatok, predkontacie, clenenia, busy, onUloz
   }
 
   return (
-    <Modal title={nazovFaktu(kluc)} onClose={onClose} wide={polia.length > 3 || polia.some((pole) => pole.typ === 'status')}>
+    <Modal title={nazovFaktu(kluc)} onClose={onClose} wide={polia.length > 3 || polia.some((pole) => pole.typ === 'status' || pole.typ === 'postup')}>
       <p className="-mt-2 mb-4 max-w-2xl text-[13px] leading-relaxed text-ink-soft">{popisFaktu(kluc)}</p>
       <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void uloz(); }}>
         {polia.map((pole, index) => (
@@ -75,16 +75,20 @@ function Pole({ kluc, pole, hodnota, polozky, onChange }: {
   const popis = popisPola(kluc, pole.cesta) ?? pole.cesta;
   const napoveda = popisPola(kluc, pole.cesta, '.napoveda');
 
-  if (pole.typ === 'status' || pole.typ === 'anoNie') {
+  if (pole.typ === 'status' || pole.typ === 'postup' || pole.typ === 'anoNie') {
     const volby = pole.typ === 'status'
       ? STATUSY.map((status) => ({
         hodnota: status, text: t(`profilKlienta.status.${status}`), popis: t(`profilKlienta.statusPopis.${status}`),
       }))
-      : [{ hodnota: 'true', text: t('profilKlienta.ano'), popis: '' }, { hodnota: 'false', text: t('profilKlienta.nie'), popis: '' }];
+      : pole.typ === 'postup'
+        ? POSTUPY_SAMOZDANENIA.map((postup) => ({
+          hodnota: postup, text: t(`profilKlienta.postup.${postup}`), popis: t(`profilKlienta.postupPopis.${postup}`),
+        }))
+        : [{ hodnota: 'true', text: t('profilKlienta.ano'), popis: '' }, { hodnota: 'false', text: t('profilKlienta.nie'), popis: '' }];
     return (
       <fieldset className="md:col-span-2">
         <legend className="label">{popis}</legend>
-        <div className={`grid gap-2 ${pole.typ === 'status' ? 'sm:grid-cols-2' : 'grid-cols-2 sm:max-w-xs'}`}>
+        <div className={`grid gap-2 ${pole.typ === 'status' || pole.typ === 'postup' ? 'sm:grid-cols-2' : 'grid-cols-2 sm:max-w-xs'}`}>
           {volby.map((volba) => (
             <label
               key={volba.hodnota}

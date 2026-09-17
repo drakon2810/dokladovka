@@ -45,9 +45,38 @@ describe('samozdanenie — kedy sa blok ukáže', () => {
   });
 });
 
+describe('samozdanenie — druh plnenia', () => {
+  it('prax dodávateľa rozhodne tovar proti službe, mimo EÚ sa nepoužije', () => {
+    // ROFA: dodávateľ z AT, ktorého firma 108× zaúčtovala ako nadobudnutie tovaru.
+    expect(zostav({ praxDodavatela: 'tovar' })?.hodnota)
+      .toMatchObject({ druh: 'tovar_eu', interny: { ddKod: 'DDnadEU', pKod: 'PDnadEU' } });
+    // Tovar z EÚ má dátum povinnosti k 15. dňu nasledujúceho mesiaca a nižšie sadzby.
+    expect(zostav({ praxDodavatela: 'tovar' })?.sadzby).toEqual([23, 19, 5]);
+    expect(zostav({ praxDodavatela: 'sluzby' })?.hodnota.druh).toBe('sluzby_eu');
+    // Tovar z tretej krajiny je dovoz cez colnicu — prax ho nesmie prepnúť na nadobudnutie.
+    expect(zostav({ praxDodavatela: 'tovar', extracted: faktura({}, { nazov: 'Shenzhen Ltd', krajina: 'CN' }) })?.hodnota.druh)
+      .toBe('sluzby_mimo_eu');
+    // Ručná zmena účtovníka je nad praxou.
+    expect(zostav({ praxDodavatela: 'tovar', ulozene: { volba: 'vytvorit', zdroj: 'uctovnik', rucne: { druh: 'sluzby_eu' } } })?.hodnota.druh)
+      .toBe('sluzby_eu');
+  });
+
+  it('doklad, ktorého časť už išla do POHODY, druh nemení', () => {
+    // Interný doklad prijatý s varovaním sa pri opakovanom prenose posiela znova —
+    // musí to byť ten istý druh, inak by v POHODE vznikli dva rôzne doklady.
+    const odoslane = { volba: 'vytvorit' as const, zdroj: 'predvolene' as const, druh: 'sluzby_eu' as const,
+      export: { dd: { stav: 'warning' as const, at: '2026-06-20T10:00:00.000Z' } } };
+    expect(zostav({ praxDodavatela: 'tovar', ulozene: odoslane })?.hodnota.druh).toBe('sluzby_eu');
+  });
+
+  it('firma, ktorá samozdanenie nerieši, blok nedostane', () => {
+    expect(zostav({ profil: profil({ samozdaneniePostup: 'neriesime' }) })).toBeUndefined();
+  });
+});
+
 describe('samozdanenie — predvolená voľba', () => {
   it('pamäť dodávateľa > nastavenie firmy > vytvoriť doklady; uložená voľba má prednosť', () => {
-    const vPohode = profil({ samozdanenieVPohode: true });
+    const vPohode = profil({ samozdaneniePostup: 'v_pohode' });
     expect(zostav()?.predvolene).toEqual({ volba: 'vytvorit', zdroj: 'predvolene' });
     expect(zostav({ profil: vPohode })?.hodnota).toMatchObject({ volba: 'v_pohode', zdroj: 'firma' });
     expect(zostav({ profil: vPohode, pamat: { dovod: 'miesto_dodania' } })?.hodnota)
@@ -63,14 +92,14 @@ describe('samozdanenie — predvolená voľba', () => {
     const zUsa = faktura({}, { nazov: 'Slack', icDph: '', krajina: 'US' });
     // Opravený dodávateľ a nové nastavenie firmy sa prejavia.
     expect(zostav({ extracted: zUsa, ulozene: zoSchvalenia })?.hodnota).toMatchObject({ druh: 'sluzby_mimo_eu', zdroj: 'predvolene' });
-    expect(zostav({ profil: profil({ samozdanenieVPohode: true }), ulozene: zoSchvalenia })?.hodnota).toMatchObject({ volba: 'v_pohode', zdroj: 'firma' });
+    expect(zostav({ profil: profil({ samozdaneniePostup: 'v_pohode' }), ulozene: zoSchvalenia })?.hodnota).toMatchObject({ volba: 'v_pohode', zdroj: 'firma' });
     // Voľba účtovníka ostáva, druh bez ručnej zmeny ide za územím.
     expect(zostav({ extracted: zUsa, ulozene: { volba: 'v_pohode', druh: 'sluzby_eu', zdroj: 'uctovnik' } })?.hodnota)
       .toMatchObject({ volba: 'v_pohode', druh: 'sluzby_mimo_eu' });
     expect(zostav({ extracted: zUsa, ulozene: { volba: 'vytvorit', zdroj: 'uctovnik', rucne: { druh: 'sluzby_eu' } } })?.hodnota.druh).toBe('sluzby_eu');
     // Časť už v POHODE: voľba aj druh ostávajú, ako odišli.
     const prenesene = { ...zoSchvalenia, export: { faktura: { stav: 'ok' as const, at: '2026-09-17T10:00:00Z' } } };
-    expect(zostav({ extracted: zUsa, profil: profil({ samozdanenieVPohode: true }), ulozene: prenesene })?.hodnota)
+    expect(zostav({ extracted: zUsa, profil: profil({ samozdaneniePostup: 'v_pohode' }), ulozene: prenesene })?.hodnota)
       .toMatchObject({ volba: 'vytvorit', druh: 'sluzby_eu' });
   });
 });

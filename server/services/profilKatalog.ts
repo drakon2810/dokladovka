@@ -78,8 +78,13 @@ export const PROFIL_KATALOG: readonly PolozkaKatalogu[] = [
     kluc: `samozdanenie.${druh}`, sekcia: 'samozdanenie', blokuje: false,
     schema: ['sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate', 'dovoz'].includes(druh) ? prijaty : lenFaktura,
   })),
-  // Firma zakladá interné doklady samozdanenia sama v POHODE — blok na faktúre predvolí „Už zaúčtované".
-  { kluc: 'samozdanenie.postup', sekcia: 'samozdanenie', blokuje: false, schema: z.object({ robimeVPohode: z.boolean() }).strict() },
+  // Ako firma samozdanenie prijatých faktúr rieši: Dokladovka zakladá interné
+  // doklady, firma si ich zakladá sama v POHODE, alebo sa samozdanenie na
+  // prijatých faktúrach nerieši vôbec (blok sa neponúkne a faktúra ide bez neho).
+  {
+    kluc: 'samozdanenie.postup', sekcia: 'samozdanenie', blokuje: false,
+    schema: z.object({ postup: z.enum(['dokladovka', 'v_pohode', 'neriesime']) }).strict(),
+  },
   {
     kluc: 'zahranicie.vratenie_dph', sekcia: 'samozdanenie', blokuje: false,
     schema: z.object({ uplatnujeme: z.boolean(), predkontaciaKod: kod.optional() }).strict(),

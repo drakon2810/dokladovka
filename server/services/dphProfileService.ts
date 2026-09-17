@@ -8,6 +8,10 @@ import { kodyHodnoty, type DruhSamozdanenia } from './profilKatalog.js';
 
 export type { DruhSamozdanenia };
 
+/** Hodnota faktu samozdanenie.postup. */
+export const POSTUPY_SAMOZDANENIA = ['dokladovka', 'v_pohode', 'neriesime'] as const;
+export type PostupSamozdanenia = typeof POSTUPY_SAMOZDANENIA[number];
+
 export interface SamozdanenieDruh {
   faktura?: { clenenieKod: string; clenenieDphId?: string; kv?: string };
   interny?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
@@ -46,8 +50,12 @@ export interface DphProfil {
   oslobodenePlnenia?: boolean;
   koeficient?: number;
   samozdanenie: Partial<Record<DruhSamozdanenia, SamozdanenieDruh>>;
-  /** samozdanenie.postup: firma interné doklady samozdanenia zakladá sama v POHODE. */
-  samozdanenieVPohode?: boolean;
+  /**
+   * samozdanenie.postup — ako firma samozdanenie prijatých faktúr rieši:
+   * `dokladovka` interné doklady zakladá Dokladovka, `v_pohode` firma sama
+   * v POHODE, `neriesime` sa samozdanenie na prijatých faktúrach neponúka vôbec.
+   */
+  samozdaneniePostup?: PostupSamozdanenia;
   vratenieDph?: { uplatnujeme: boolean; predkontaciaId?: string; predkontaciaKod?: string };
   /** Z vozidla.pravidla: percento = daňový náklad, percentoDph = odpočet. */
   pravidlaAut: DphPravidloOdpoctu[];
@@ -174,7 +182,7 @@ export async function loadDphProfil(
         profil.drobnyMajetokHranica = hodnota.hranica;
         break;
       case 'samozdanenie.postup':
-        profil.samozdanenieVPohode = hodnota.robimeVPohode;
+        profil.samozdaneniePostup = hodnota.postup;
         break;
       default:
         if (kluc.startsWith('samozdanenie.')) {

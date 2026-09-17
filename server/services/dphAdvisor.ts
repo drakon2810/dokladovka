@@ -249,7 +249,10 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
   const prefix = doklad.dodavatelIcDph.slice(0, 2);
   const cudziDodavatel = jeCudziDodavatel({ icDph: doklad.dodavatelIcDph, krajina: doklad.dodavatelKrajina })
     || EU_DPH_PREFIXY.includes(prefix);
-  if (cudziDodavatel && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
+  // Firma, ktorá samozdanenie prijatých faktúr nerieši (potvrdené v profile),
+  // upozornenie nedostáva — inak by ho videla na každej zahraničnej faktúre.
+  const samozdanenieRiesime = profil.samozdaneniePostup !== 'neriesime';
+  if (samozdanenieRiesime && cudziDodavatel && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
     // Cudzia firma so slovenskou adresou je cudzia podľa IČ DPH.
     const uzemie = doklad.dodavatelKrajina && doklad.dodavatelKrajina !== 'SK' ? doklad.dodavatelKrajina : prefix;
     const sadzba = sadzbyDphPre(doklad.duzp)?.high;
@@ -292,7 +295,7 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
 
   // Tuzemské prenesenie daňovej povinnosti (§69 ods. 12): SK dodávateľ fakturuje
   // bez DPH — len vo firme, ktorá prenesenie podľa účtovníka prijíma.
-  if (profil.samozdanenie.prenesenie_prijate && prefix === 'SK' && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
+  if (samozdanenieRiesime && profil.samozdanenie.prenesenie_prijate && prefix === 'SK' && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
     const bezneClenenie = dokument.clenenieDph && clenenieVyzeraNaOdpocet(dokument.clenenieDph);
     varovania.push({
       kod: 'dph_prenesenie_kandidat',

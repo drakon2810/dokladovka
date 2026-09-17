@@ -392,11 +392,19 @@ export function ItemsSection({
       : item)));
   };
 
+  // Súčty z EFEKTÍVNYCH súm. Faktúra často tlačí len sumu bez DPH a daň pridáva
+  // až v súhrne (O2 1611553030: desať položiek so „Suma bez DPH", žiadna daň na
+  // riadku). Surové sumy potom dali „Celkom 0,00 €" pod položkami, ktoré spolu
+  // niesli 203,76 € — rozpis DPH pritom počítal správne, lebo efektívne sumy
+  // používa.
   const totals = polozky.reduce(
-    (sum, item) => ({
-      spolu: sum.spolu + (item.sumaSpolu ?? 0),
-      dph: sum.dph + (item.sumaDph ?? 0),
-    }),
+    (sum, item) => {
+      const efektivne = lineItemEffective(item);
+      return {
+        spolu: sum.spolu + (efektivne.spolu ?? 0),
+        dph: sum.dph + (efektivne.dph ?? 0),
+      };
+    },
     { spolu: 0, dph: 0 },
   );
 
@@ -477,20 +485,24 @@ export function ItemsSection({
             <span />
           </div>
 
-          {polozky.map((item, index) => (
+          {polozky.map((item, index) => {
+            // Doklad, ktorý daň na riadku netlačí, ju má dopočítanú zo sadzby —
+            // v stĺpcoch tak stojí suma, nie „—". Uloží sa až pri úprave bunky.
+            const efektivne = lineItemEffective(item);
+            return (
             <div key={item.id}>
               <div className="dk-row dk-row-item">
                 <span className="dk-row-no">{index + 1}</span>
                 <DcCell value={item.popis} placeholder="Text položky" disabled={readOnly} onCommit={(raw) => patch(item.id, { popis: raw })} />
-                <div className={`dk-r dk-strong${(item.sumaSpolu ?? 0) < 0 ? ' dk-neg' : ''}`}>
+                <div className={`dk-r dk-strong${(efektivne.spolu ?? 0) < 0 ? ' dk-neg' : ''}`}>
                   <DcCell
                     align="right" inputMode="decimal" disabled={readOnly}
-                    value={item.sumaSpolu === undefined ? '' : String(item.sumaSpolu)}
-                    display={item.sumaSpolu === undefined ? '' : fmtMoney(item.sumaSpolu, mena)}
+                    value={efektivne.spolu === undefined ? '' : String(efektivne.spolu)}
+                    display={efektivne.spolu === undefined ? '' : fmtMoney(efektivne.spolu, mena)}
                     onCommit={(raw) => patch(item.id, { sumaSpolu: parseOpt(raw) }, 'sumaSpolu')}
                   />
                 </div>
-                {money(item.sumaDph, (raw) => patch(item.id, { sumaDph: parseOpt(raw) }, 'sumaDph'), (item.sumaDph ?? 0) < 0)}
+                {money(efektivne.dph, (raw) => patch(item.id, { sumaDph: parseOpt(raw) }, 'sumaDph'), (efektivne.dph ?? 0) < 0)}
                 <DcPick
                   value={item.sadzbaDph != null ? String(item.sadzbaDph) : undefined}
                   options={rateOpts(item.sadzbaDph)} disabled={readOnly}
@@ -545,7 +557,8 @@ export function ItemsSection({
                 </>
               )}
             </div>
-          ))}
+            );
+          })}
 
           {/* Súčty musia stáť presne pod svojimi stĺpcami hlavičky (Celkom,
               Suma DPH) — o bunku posunutý riadok ukazoval pod „Suma DPH" základ

@@ -33,7 +33,10 @@ async function vykresli(nacitany: BlokSamozdanenia | null, readOnly = false) {
   await act(async () => {
     root.render(<MemoryRouter><SamozdanenieBlok documentId="d1" version={1} readOnly={readOnly} /></MemoryRouter>);
   });
-  return { container, zavri: () => { act(() => root.unmount()); container.remove(); } };
+  const otvor = async () => {
+    await act(async () => { container.querySelector<HTMLButtonElement>('.sz-hlava')?.click(); });
+  };
+  return { container, otvor, zavri: () => { act(() => root.unmount()); container.remove(); } };
 }
 
 describe('SamozdanenieBlok — pomocné funkcie', () => {
@@ -66,8 +69,24 @@ describe('SamozdanenieBlok — vykreslenie', () => {
     zavri();
   });
 
-  it('voľba „Vytvoriť": tabuľka, dátum, info a odkaz na profil pri chýbajúcich kódoch', async () => {
+  it('zvinutý riadok nesie druh, daň, voľbu a to, čo zablokuje schválenie', async () => {
     const { container, zavri } = await vykresli(blok({ chyby: ['kody'], statusNepotvrdeny: true }));
+    const suhrn = container.querySelector('.sz-suhrn')?.textContent ?? '';
+    expect(suhrn).toContain('Služby z EÚ');
+    expect(suhrn).toContain('230,00');
+    expect(container.querySelector('.sz-hlava-volba')?.textContent).toContain('Vytvoriť interné doklady');
+    // Tabuľka interných dokladov je až po otvorení — zvinutý riadok nezaberá výšku.
+    expect(container.querySelector('.sz-tabulka')).toBeNull();
+    expect(container.querySelector('.sz-hlava-chyby a[href="/profil-klienta"]')?.textContent)
+      .toBe('Doplňte samozdanenie Služby z EÚ v profile klienta');
+    expect(container.querySelector('.sz-hlava-chyby')?.textContent).toContain('Status DPH firmy nie je potvrdený v profile klienta');
+    expect(container.querySelector('.sz-blok')?.className).toContain('sz-blok-chyba');
+    zavri();
+  });
+
+  it('voľba „Vytvoriť": tabuľka, dátum, info a odkaz na profil pri chýbajúcich kódoch', async () => {
+    const { container, otvor, zavri } = await vykresli(blok({ chyby: ['kody'], statusNepotvrdeny: true }));
+    await otvor();
     const text = container.textContent ?? '';
     expect(text).toContain('Vytvoriť interné doklady');
     expect(text).toContain('Už zaúčtované v POHODE');
@@ -85,6 +104,7 @@ describe('SamozdanenieBlok — vykreslenie', () => {
 
     // Dátum mimo tabuľky sadzieb: bez sadzby a s chybou dátumu.
     const bezSadzby = await vykresli(blok({ sadzby: [], chyby: ['datum'] }, { sadzba: undefined, dan: undefined, odpocet: undefined }));
+    await bezSadzby.otvor();
     expect([...bezSadzby.container.querySelectorAll('th')].at(-1)?.textContent).toBe('DPH — %');
     expect(bezSadzby.container.textContent).toContain('Doplňte platný dátum daňovej povinnosti.');
     bezSadzby.zavri();
@@ -92,7 +112,8 @@ describe('SamozdanenieBlok — vykreslenie', () => {
 
   it('prepnutie na „Nevzniká povinnosť" uloží voľbu s pamäťou dodávateľa; schválený doklad je len na čítanie', async () => {
     api.ulozSamozdanenie.mockResolvedValue(blok({}, { volba: 'nevznika', zdroj: 'uctovnik' }));
-    const { container, zavri } = await vykresli(blok());
+    const { container, otvor, zavri } = await vykresli(blok());
+    await otvor();
     const radio = container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[2];
     await act(async () => { radio.click(); });
     expect(api.ulozSamozdanenie).toHaveBeenCalledWith('d1', expect.objectContaining({ volba: 'nevznika', pamatatDodavatela: true }));
@@ -101,9 +122,29 @@ describe('SamozdanenieBlok — vykreslenie', () => {
     zavri();
 
     const schvaleny = await vykresli(blok({ upravitelny: false }));
+    await schvaleny.otvor();
+    expect(schvaleny.container.textContent).toContain('samozdanenie sa už nedá zmeniť');
     expect([...schvaleny.container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].every((input) => input.disabled)).toBe(true);
     expect(schvaleny.container.querySelector('input[type="date"]')).toBeNull();
     expect(schvaleny.container.textContent).toContain('10.06.2026');
     schvaleny.zavri();
+  });
+
+  it('druh plnenia sa dá zmeniť aj pri „Už zaúčtované v POHODE"', async () => {
+    // Firma, ktorá si interné doklady zakladá sama, opravuje ten istý štítok —
+    // predtým bol výber schovaný vo voľbe „Vytvoriť interné doklady".
+    api.ulozSamozdanenie.mockResolvedValue(blok({}, { volba: 'v_pohode', zdroj: 'uctovnik', rucne: { druh: 'tovar_eu' } }));
+    const { container, otvor, zavri } = await vykresli(blok({ robimeVPohode: true }, { volba: 'v_pohode', zdroj: 'firma' }));
+    await otvor();
+    const prepnut = [...container.querySelectorAll<HTMLButtonElement>('.sz-odkaz')]
+      .find((tlacidlo) => tlacidlo.textContent === 'Zmeniť druh plnenia');
+    expect(prepnut).toBeDefined();
+    await act(async () => { prepnut!.click(); });
+    const vyber = container.querySelector<HTMLSelectElement>('select[aria-label="Zmeniť druh plnenia"]');
+    expect(vyber).not.toBeNull();
+    vyber!.value = 'tovar_eu';
+    await act(async () => { vyber!.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(api.ulozSamozdanenie).toHaveBeenCalledWith('d1', expect.objectContaining({ volba: 'v_pohode', rucne: { druh: 'tovar_eu' } }));
+    zavri();
   });
 });
