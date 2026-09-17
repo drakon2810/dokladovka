@@ -1,7 +1,7 @@
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { buildServerDataPack, type PohodaCodeLookup, type PohodaXmlDocument } from '../pohodaXml.js';
-import { prijateCasti, type Samozdanenie } from './samozdanenieService.js';
+import { prijateCasti, radSamozdanenia, type Samozdanenie } from './samozdanenieService.js';
 
 interface CodeListRow extends Record<string, unknown> {
   id: string;
@@ -63,8 +63,30 @@ export async function buildApprovedDocumentsXml(
     // Názov predkontácie ide do <inv:text> dokladu.
     if (row.kind === 'predkontacie') codeLists.predkontacieNazvy!.set(row.id, row.name);
   }
-  // Interné doklady samozdanenia čísluje rad interných dokladov z predvolieb firmy.
-  const radInternych = (await database.query<{ code: string } & Record<string, unknown>>(
+  // Rad interných dokladov samozdanenia: prax firmy z jej histórie, až za ňou
+  // predvoľba interných dokladov (MZDY) a nakoniec nič, nech číslo pridelí
+  // POHODA. Rad je per doklad, lebo patrí ROKU daňovej povinnosti interného
+  // dokladu: pri tovare z EÚ vzniká 15. dňa nasledujúceho mesiaca, takže jeden
+  // balík môže niesť decembrovú faktúru s interným dokladom už v ďalšom roku.
+  //
+  // Rad sa hľadá pri exporte, nie pri schválení: rok daňovej povinnosti je
+  // v snapshote hotový, už schválené doklady v rade na prenos sa opravia bez
+  // opätovného schválenia a to, s čím doklad naozaj odišiel, drží
+  // `samozdanenie.export.<rola>.cislo` — číslo, ktoré POHODA pridelila.
+  //
+  // ponytail: keby firma rad samozdanenia zmenila medzi prvým prenosom a
+  // zopakovaním, dva interné doklady jednej faktúry môžu skončiť v rôznych
+  // radoch. Vtedy rad zmraziť do `samozdanenie.interny` pri schválení.
+  const rokSamozdanenia = (row: DocumentRow) => {
+    if (row.approved_snapshot?.samozdanenie?.volba !== 'vytvorit') return undefined;
+    const rok = Number(row.approved_snapshot.samozdanenie.datumDanovejPovinnosti?.slice(0, 4));
+    return rok > 0 ? rok : undefined;
+  };
+  const radyZHistorie = new Map(await Promise.all(
+    [...new Set(documents.rows.map(rokSamozdanenia).filter((rok): rok is number => rok !== undefined))]
+      .map(async (rok) => [rok, await radSamozdanenia(database, input, rok)] as const),
+  ));
+  const radMzdy = (await database.query<{ code: string } & Record<string, unknown>>(
     `SELECT c.code FROM organization_series_defaults d
        JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true
       WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type='MZDY'`,
@@ -82,9 +104,9 @@ export async function buildApprovedDocumentsXml(
         id: row.id,
         snapshot: row.approved_snapshot!,
         prijate: prijateCasti(row.samozdanenie),
+        radInternych: radyZHistorie.get(rokSamozdanenia(row) ?? 0) ?? radMzdy,
       })),
     codeLists,
-    radInternych,
   };
   try {
     return buildServerDataPack(balik);

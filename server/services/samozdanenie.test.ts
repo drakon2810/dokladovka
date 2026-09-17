@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createTestDatabase, seedTestUser } from '../testHelpers.js';
 import { predvolenyDphProfil, type DphProfil } from './dphProfileService.js';
-import { danZoZakladu, polozkyPrenosu, zostavSamozdanenie } from './samozdanenieService.js';
+import { danZoZakladu, polozkyPrenosu, radSamozdanenia, zostavSamozdanenie } from './samozdanenieService.js';
 
 const KODY = { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' };
 
@@ -241,4 +243,91 @@ describe('samozdanenie — položky prenosu', () => {
 <dat:dataPackItem id="22222222-2222-2222-2222-222222222222-p1" version="2.0"></dat:dataPackItem>`;
     expect([...polozkyPrenosu([id, '22222222-2222-2222-2222-222222222222'], xml)]).toEqual([`${id}-sz-dd`, `${id}-sz-p`]);
   });
+});
+
+// Číselný rad interných dokladov samozdanenia. Prvý ostrý import AGS skončil
+// v rade „26DPH — Preúčtovanie DPH" (26DPH02, 26DPH03), hoci firma tieto
+// doklady vedie v rade 26SAM — a rad je v každej firme iný (26SAM, 26IN, 26SZ,
+// 26RCH), takže sa nedá zadrôtovať a musí vyjsť z jej histórie.
+describe('samozdanenie — číselný rad z histórie firmy', () => {
+  const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
+  afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
+
+  async function firma() {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = { tenantId: seeded.tenantId, organizationId: seeded.organizationId };
+    let externe = 100;
+
+    const rad = async (kod: string, nazov: string, rok: string) => {
+      externe += 1;
+      const ext = String(externe);
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,external_id,accounting_year)
+         VALUES ($1,$2,$3,'ciselneRady',$4,$5,'pohoda','interni_doklady',$6,$7)`,
+        [randomUUID(), kde.tenantId, kde.organizationId, kod, nazov, ext, rok],
+      );
+      return { ext, kod };
+    };
+    let poradie = 0;
+    const doklad = async (ciselnyRad: { ext: string; kod: string }, clenenie: string, datum: string) => {
+      poradie += 1;
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,line_text_normalized,clenenie_dph_kod,
+           riadok_index,source,riadok_hash,rad_external_id,rad_kod)
+         VALUES ($1,$2,$3,'INT',$4,$5::date,'vymeranie dph',$6,0,'mdb',$7,$8,$9)`,
+        [randomUUID(), kde.tenantId, kde.organizationId, `${ciselnyRad.kod}${poradie}`, datum, clenenie,
+          randomUUID(), ciselnyRad.ext, ciselnyRad.kod],
+      );
+    };
+    return { database, kde, rad, doklad };
+  }
+
+  it('rad nesú doklady s členením strany DD, nie zvyšok agendy', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const sam = await rad('26SAM', 'Samozdanenie', '2026');
+    const mzdy = await rad('26MZD', 'Interné doklady-Mzdy', '2026');
+    const dph = await rad('26DPH', 'Preúčtovanie DPH', '2026');
+    for (const den of ['07', '08', '09']) await doklad(sam, 'DDsl§69', `2026-01-${den}`);
+    await doklad(sam, 'DDnadEU', '2026-02-10');
+    // Interné doklady, ktoré samozdanením nie sú: mzdy a preúčtovanie DPH. Tých
+    // je v agende viac a rad podľa celej agendy by vybral ich.
+    for (let index = 0; index < 20; index += 1) await doklad(mzdy, 'PN', '2026-03-10');
+    for (let index = 0; index < 10; index += 1) await doklad(dph, 'PD', '2026-03-11');
+
+    expect(await radSamozdanenia(database, kde, 2026)).toBe('26SAM');
+    // Bez histórie sa rad nehádá a číslo pridelí POHODA.
+    expect(await radSamozdanenia(database, kde, 2025)).toBeUndefined();
+  }, 90_000);
+
+  it('doklad ďalšieho roka dostane rad toho roka, nie kód s minulým rokom', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const sam26 = await rad('26SAM', 'Samozdanenie', '2026');
+    for (const den of ['07', '08', '09']) await doklad(sam26, 'DDsl§69', `2026-01-${den}`);
+
+    // Rok 2027 ešte doklady nemá. Kód radu nesie rok predponou, takže 26SAM sa
+    // na doklade roku 2027 poslať nesmie: taký rad už v POHODE nebeží.
+    expect(await radSamozdanenia(database, kde, 2027)).toBeUndefined();
+    await rad('27SAM', 'Samozdanenie', '2027');
+    expect(await radSamozdanenia(database, kde, 2027)).toBe('27SAM');
+    expect(await radSamozdanenia(database, kde, 2026)).toBe('26SAM');
+
+    // Dva rady toho istého názvu (ALPINA má „Interné doklady" na 26ID aj 26SAM)
+    // sa rozsúdiť nedajú — radšej nič než cudzí rad.
+    await rad('27SA2', 'Samozdanenie', '2027');
+    expect(await radSamozdanenia(database, kde, 2027)).toBeUndefined();
+  }, 90_000);
+
+  it('rad minulého roka nevyhrá nad radom roka dokladu', async () => {
+    const { database, kde, rad, doklad } = await firma();
+    const sam25 = await rad('25SAM', 'Samozdanenie', '2025');
+    const sam26 = await rad('26SAM', 'Samozdanenie', '2026');
+    for (let index = 0; index < 30; index += 1) await doklad(sam25, 'DDsl§69', '2025-06-10');
+    await doklad(sam26, 'DDsl§69', '2026-01-08');
+
+    expect(await radSamozdanenia(database, kde, 2026)).toBe('26SAM');
+    expect(await radSamozdanenia(database, kde, 2025)).toBe('25SAM');
+  }, 90_000);
 });

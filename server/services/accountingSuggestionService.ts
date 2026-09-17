@@ -702,19 +702,40 @@ async function radZHistorie(
   if (minulehoRoka.length === 0) return undefined;
   const minulyRad = (await vyberRadZDokladov(tx, input, agenda, minulehoRoka, novy, rok - 1)).rad;
   if (!minulyRad) return undefined;
-  const novyRad = await tx.query<{ id: string } & Record<string, unknown>>(
-    `SELECT n.id
+  const novyRad = await radRodinyVRoku(tx, input, minulyRad, rok);
+  // Rad prenesený z minulého roka nie je rozhodný: doklady tohto druhu v roku
+  // dokladu ešte nie sú a nastavenie účtovníka sa nimi prebiť nesmie.
+  return novyRad ? { rad: novyRad.id, rozhodnyRad: null } : undefined;
+}
+
+/**
+ * Ten istý rad v inom účtovnom roku. POHODA rady zakladá každý rok nanovo a rok
+ * im dáva do KÓDU ako predponu (FP20 → FP202, 25DDP → 26DDP, 26SAM je rok
+ * 2026), kým názov ostáva — rodinu radu preto drží názov v tej istej agende.
+ * Bez tohto prenosu by rad naučený dnes odišiel na doklade ďalšieho roka
+ * doslova a POHODA by mu pridelila číslo z radu, ktorý už nebeží.
+ *
+ * Vracia rad LEN keď je taký v tom roku jediný: názov „Interné doklady" nesú
+ * u ALPINY dva rady (26ID aj 26SAM) a hádať medzi nimi sa nesmie — radšej nič
+ * a nech rad pridelí POHODA.
+ */
+export async function radRodinyVRoku(
+  tx: Queryable,
+  input: { tenantId: string; organizationId: string },
+  radId: string,
+  rok: number,
+): Promise<{ id: string; code: string } | undefined> {
+  const rady = await tx.query<{ id: string; code: string } & Record<string, unknown>>(
+    `SELECT n.id, n.code
        FROM code_list_items s
        JOIN code_list_items n
          ON n.tenant_id=s.tenant_id AND n.organization_id=s.organization_id AND n.kind='ciselneRady'
         AND n.active=true AND n.agenda=s.agenda AND n.accounting_year=$4
         AND lower(trim(n.name))=lower(trim(s.name))
       WHERE s.tenant_id=$1 AND s.organization_id=$2 AND s.id=$3`,
-    [input.tenantId, input.organizationId, minulyRad, String(rok)],
+    [input.tenantId, input.organizationId, radId, String(rok)],
   );
-  // Rad prenesený z minulého roka nie je rozhodný: doklady tohto druhu v roku
-  // dokladu ešte nie sú a nastavenie účtovníka sa nimi prebiť nesmie.
-  return novyRad.rows.length === 1 ? { rad: novyRad.rows[0].id, rozhodnyRad: null } : undefined;
+  return rady.rows.length === 1 ? { id: rady.rows[0].id, code: rady.rows[0].code } : undefined;
 }
 
 /**
