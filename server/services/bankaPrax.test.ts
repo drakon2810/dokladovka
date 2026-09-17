@@ -73,6 +73,23 @@ describe('odvodenie praxe banky', () => {
     ]);
   });
 
+  it('textová prax: dôkaz zo všetkých riadkov s jej slovami, užšia prax prebije širšiu', () => {
+    // 4× „Úhrada DPH" je pod prahom, no prax „uhrada" by sa na ňu použila — iný protiúčet ju zhodí.
+    expect(odvodPraxBanky([
+      ...krat(5, vydaj('321100', { text: 'Úhrada' })), ...krat(4, vydaj('343100', { text: 'Úhrada DPH 04/2026' })),
+    ], PREDKONTACIE)).toEqual([]);
+    const praxe = odvodPraxBanky([
+      ...krat(45, vydaj('321100', { text: 'Úhrada' })), ...krat(5, vydaj('343100', { text: 'Úhrada DPH 04/2026' })),
+    ], PREDKONTACIE);
+    expect(praxe.map((prax) => [prax.kluc, prax.protiucet, prax.predkontaciaKod, prax.dokaz.riadkov, prax.dokaz.podiel])).toEqual([
+      ['text:uhrada:vydaj', '321100', 'Úhrada FP', 50, 0.9],
+      ['text:dph uhrada:vydaj', '343100', undefined, 5, 1],
+    ]);
+    expect(predkontaciaZPraxe(praxe, { suma: -10, text: 'Úhrada faktúry 26001' })).toBe('Úhrada FP');
+    // Užšia prax „dph uhrada" (bez kódu) širšiu na svoj text nepustí.
+    expect(predkontaciaZPraxe(praxe, { suma: -10, text: 'ÚHRADA DPH 05/2026' })).toBeUndefined();
+  });
+
   it('pohyb výpisu: meno alebo slová textu, správny smer, zamietnutá nie, potvrdená má prednosť', () => {
     const praxe = [
       { smer: 'vydaj' as const, partnerIco: '11111111', partnerMena: ['print-office s.r.o.'], slova: [], predkontaciaKod: 'Úhrada FP' },
@@ -86,10 +103,14 @@ describe('odvodenie praxe banky', () => {
     expect(predkontaciaZPraxe(praxe, { suma: -1, protistrana: 'Zamietnutý' })).toBeUndefined();
     // Pohyb s protistranou sa textom nepáruje.
     expect(predkontaciaZPraxe(praxe, { suma: -3, protistrana: 'Neznámy', text: 'Poplatok' })).toBeUndefined();
-    // Dve praxe s rôznym kódom = žiadny návrh; potvrdená rozhodne.
-    expect(predkontaciaZPraxe(praxe, { suma: -3, text: 'POPLATOK za vedenie uctu 08/2026' })).toBeUndefined();
-    expect(predkontaciaZPraxe([{ ...praxe[1], stav: 'potvrdene' }, praxe[2]], { suma: -3, text: 'Poplatok za vedenie' })).toBe('Poplatky');
+    // Užšia prax prebije širšiu — aj zamietnutá.
+    expect(predkontaciaZPraxe(praxe, { suma: -3, text: 'POPLATOK za vedenie uctu 08/2026' })).toBe('Poplatky');
     expect(predkontaciaZPraxe(praxe, { suma: -3, text: 'Poplatok za výber' })).toBe('Poplatky karta');
+    expect(predkontaciaZPraxe([{ ...praxe[1], stav: 'zamietnute' }, praxe[2]], { suma: -3, text: 'Poplatok za vedenie' })).toBeUndefined();
+    // Dve rovnako úzke praxe s rôznym kódom = žiadny návrh; potvrdená rozhodne.
+    const karta = { smer: 'vydaj' as const, partnerMena: [], slova: ['karta', 'poplatok'], predkontaciaKod: 'Poplatky karta' };
+    expect(predkontaciaZPraxe([praxe[1], karta], { suma: -3, text: 'Poplatok za vedenie, karta' })).toBeUndefined();
+    expect(predkontaciaZPraxe([{ ...praxe[1], stav: 'potvrdene' }, karta], { suma: -3, text: 'Poplatok za vedenie, karta' })).toBe('Poplatky');
   });
 });
 

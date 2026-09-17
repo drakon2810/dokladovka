@@ -88,7 +88,8 @@ export async function suggestBankMovementAccounting(
 
   // Prax banky z denníka má prednosť pred modelom: pohyb, ktorý sa s ňou
   // jednoznačne spáruje, dostane jej predkontáciu (id len z agendy smeru).
-  const praxe = (await nacitajPraxBanky(database, input)).filter((prax) => prax.stav !== 'zamietnute');
+  // Aj zamietnutú: užšia zamietnutá prax nepustí širšiu na svoj text.
+  const praxe = await nacitajPraxBanky(database, input);
   const idPodlaKodu = new Map(ciselnik.filter((row) => row.agenda).map((row) => [`${row.agenda}|${row.code.trim()}`, row.id]));
   const zPraxe = new Map<number, string>();
   for (const { pohyb, index } of chybajuce) {

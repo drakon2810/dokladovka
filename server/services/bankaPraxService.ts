@@ -129,9 +129,29 @@ function pridajRiadok(skupiny: Skupiny, riadok: RiadokBanky) {
   if (riadok.datum && (!skupina.do || riadok.datum > skupina.do)) skupina.do = riadok.datum;
 }
 
+/**
+ * Textová prax sa použije na každý text, ktorý obsahuje jej slová — dôkaz preto
+ * ráta všetky riadky smeru bez partnera aj so slovami navyše. Iný protiúčet
+ * dlhšieho textu tak širšiu prax zhodí, aj keď sám prah nedosiahne.
+ */
+function sNadmnozinami(skupiny: Skupiny, skupina: Skupina): Skupina {
+  if (skupina.slova.length === 0) return skupina;
+  const spolu: Skupina = { ...skupina, protiucty: new Map(), riadkov: 0 };
+  // ponytail: O(k²) cez texty bez partnera (v produkcii do ~100 na firmu), index slov až keď to spomalí meranie.
+  for (const ina of skupiny.values()) {
+    if (ina.smer !== skupina.smer || ina.slova.length === 0 || !skupina.slova.every((slovo) => ina.slova.includes(slovo))) continue;
+    spolu.riadkov += ina.riadkov;
+    for (const [protiucet, pocet] of ina.protiucty) spolu.protiucty.set(protiucet, (spolu.protiucty.get(protiucet) ?? 0) + pocet);
+    if (ina.od && (!spolu.od || ina.od < spolu.od)) spolu.od = ina.od;
+    if (ina.do && (!spolu.do || ina.do > spolu.do)) spolu.do = ina.do;
+  }
+  return spolu;
+}
+
 function praxZoSkupin(skupiny: Skupiny, predkontacie: readonly BankovaPredkontacia[]): PraxBanky[] {
   const praxe: PraxBanky[] = [];
-  for (const [kluc, skupina] of skupiny) {
+  for (const [kluc, vlastna] of skupiny) {
+    const skupina = sNadmnozinami(skupiny, vlastna);
     if (skupina.riadkov < BANKA_MIN_RIADKOV) continue;
     const [protiucet, pocet] = podlaPoctu(skupina.protiucty)[0];
     const podiel = pocet / skupina.riadkov;
@@ -158,8 +178,9 @@ type PraxNaZhodu = Pick<UlozenaPraxBanky, 'smer' | 'partnerIco' | 'partnerMena' 
 
 /**
  * Kód predkontácie pohybu z praxe. Pohyb s protistranou sa páruje menom alebo
- * IČO, pohyb bez nej slovami textu (všetky slová praxe v texte). Zamietnutá
- * prax sa nepoužije, potvrdená má prednosť; rôzne kódy = žiadny návrh.
+ * IČO, pohyb bez nej slovami textu (všetky slová praxe v texte). Užšia textová
+ * prax prebije širšiu, aj zamietnutá či bez kódu. Zamietnutá prax sa nepoužije,
+ * potvrdená má prednosť; rôzne kódy = žiadny návrh.
  */
 export function predkontaciaZPraxe(
   praxe: readonly PraxNaZhodu[],
@@ -170,11 +191,13 @@ export function predkontaciaZPraxe(
   const ico = (pohyb.ico ?? '').replace(/\D/g, '');
   const meno = normalizeName(pohyb.protistrana);
   const slova = new Set(ico || meno ? [] : slovaTextu(pohyb.text));
-  const zhody = praxe.filter((prax) => prax.smer === smer && prax.stav !== 'zamietnute' && prax.predkontaciaKod && (ico || meno
+  const zhody = praxe.filter((prax) => prax.smer === smer && (ico || meno
     ? (ico !== '' && prax.partnerIco === ico) || (meno !== '' && prax.partnerMena.includes(meno))
     : prax.slova.length > 0 && prax.slova.every((slovo) => slova.has(slovo))));
-  const potvrdene = zhody.filter((prax) => prax.stav === 'potvrdene');
-  const kody = new Set((potvrdene.length > 0 ? potvrdene : zhody).map((prax) => prax.predkontaciaKod));
+  const platne = zhody.filter((prax) => prax.stav !== 'zamietnute' && prax.predkontaciaKod
+    && !zhody.some((uzsia) => uzsia.slova.length > prax.slova.length && prax.slova.every((slovo) => uzsia.slova.includes(slovo))));
+  const potvrdene = platne.filter((prax) => prax.stav === 'potvrdene');
+  const kody = new Set((potvrdene.length > 0 ? potvrdene : platne).map((prax) => prax.predkontaciaKod));
   return kody.size === 1 ? [...kody][0] : undefined;
 }
 

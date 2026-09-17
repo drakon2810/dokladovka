@@ -185,6 +185,8 @@ describe('autozaúčtovanie pohybov výpisu', () => {
     for (const [partner, text, ucetMd] of [
       ...Array.from({ length: 5 }, () => ['Print-Office s.r.o.', 'Úhrada FP', '321100']),
       ...Array.from({ length: 5 }, (_, n) => [null, `Poplatok za vedenie účtu 0${n + 1}/2026`, '568100']),
+      ...Array.from({ length: 5 }, () => [null, 'Poplatok', '568100']),
+      ...Array.from({ length: 5 }, () => [null, 'Poplatok za výpis', '568100']),
     ]) {
       await database.query(
         `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,datum,text,suma,ucet_md,ucet_dal,partner_nazov)
@@ -193,6 +195,8 @@ describe('autozaúčtovanie pohybov výpisu', () => {
       );
     }
     await database.transaction((tx) => prepocitajPraxBanky(tx, seeded));
+    // Zamietnutá užšia prax „poplatok vypis" nepustí na svoj text širšiu „poplatok".
+    await database.query(`UPDATE banka_prax SET stav='zamietnute' WHERE kluc='text:poplatok vypis:vydaj'`);
 
     const statementId = randomUUID();
     await database.query(
@@ -206,6 +210,7 @@ describe('autozaúčtovanie pohybov výpisu', () => {
             { id: 'm1', popis: 'POPLATOK ZA VEDENIE UCTU 08/2026', sumaSpolu: -3 },
             // Ten istý partner, opačný smer — prax výdaja príjmu nepatrí.
             { id: 'm2', popis: 'Vratka', protistrana: 'Print-Office s.r.o.', sumaSpolu: 120 },
+            { id: 'm3', popis: 'POPLATOK ZA VYPIS', sumaSpolu: -2 },
           ],
         })],
     );
@@ -218,12 +223,13 @@ describe('autozaúčtovanie pohybov výpisu', () => {
       { predkontaciaId: uhradaFp, zdroj: 'banka_prax' },
       { predkontaciaId: poplatky, zdroj: 'banka_prax' },
       undefined,
+      undefined,
     ]);
 
     const create = vi.fn().mockResolvedValue(aiOdpoved({ pohyby: [{ index: 2, predkontaciaId: uhradaFv }] }));
     expect(await suggestBankMovementAccounting(database, testConfig(), vstup, { create })).toBe(1);
     const payload = JSON.parse((create.mock.calls[0][0] as any).input[0].content[0].text);
-    expect(payload.pohyby.map((pohyb: any) => pohyb.index)).toEqual([2]);
+    expect(payload.pohyby.map((pohyb: any) => pohyb.index)).toEqual([2, 3]);
     // AI návrh zdroj praxe nenesie.
     expect((await polozky())[2].ucto).toEqual({ predkontaciaId: uhradaFv });
     const history = JSON.stringify((await database.query<Record<string, any>>('SELECT history FROM documents WHERE id=$1', [statementId])).rows[0].history);
