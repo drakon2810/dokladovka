@@ -10,7 +10,7 @@ export type { DruhSamozdanenia };
 
 export interface SamozdanenieDruh {
   faktura?: { clenenieKod: string; clenenieDphId?: string; kv?: string };
-  interny?: { ddKod: string; pKod?: string; kv?: string };
+  interny?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
 }
 
 export interface DphPravidloOdpoctu {

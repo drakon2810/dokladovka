@@ -6,7 +6,7 @@ import { clenenieVyzeraNaOdpocet, EU_DPH_PREFIXY } from './dphAdvisor.js';
 import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
 import { ulozPravidloProtistrany } from './pravidloProtistrany.js';
 import {
-  DD_REFY_SLUZBY, DD_REFY_TOVAR, kodyHodnoty, P_REFY_SAMOZDANENIA, polozkaKatalogu, REFY_VYDANYCH_DRUHOV,
+  DD_REFY_DOVOZ, DD_REFY_SLUZBY, DD_REFY_TOVAR, kodyHodnoty, P_REFY_SAMOZDANENIA, polozkaKatalogu, REFY_VYDANYCH_DRUHOV,
   type DruhSamozdanenia,
 } from './profilKatalog.js';
 import { DOKLAD_KLUC_SQL, navrhyPravidielDelenia, sporPraxe, type NavrhDelenia, type PraxVariant } from './uctoPravidlaService.js';
@@ -210,6 +210,7 @@ export async function odpovedzOtazke(
 
 interface RiadokKorpusu {
   idx: number;
+  pk?: string;
   dph?: string;
   kv?: string;
   sadzba?: number;
@@ -301,7 +302,7 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     `SELECT ${DOKLAD_KLUC_SQL} AS doklad_kluc, agenda, coalesce(doklad_cislo, '') AS cislo, coalesce(datum::text, '') AS datum,
             coalesce(riadok_index, 0) AS idx, coalesce(nullif(supplier_ico, ''), supplier_name_normalized) AS protistrana,
             nullif(upper(btrim(krajina)), '') AS krajina, nullif(btrim(clenenie_dph_kod), '') AS dph,
-            nullif(btrim(clenenie_kv_kod), '') AS kv, sadzba_dph
+            nullif(btrim(clenenie_kv_kod), '') AS kv, nullif(btrim(predkontacia_kod), '') AS pk, sadzba_dph
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND source <> 'decisions'`, kde,
   )).rows) {
@@ -311,7 +312,7 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     }
     doklad.protistrana ||= row.protistrana ?? undefined;
     const riadok: RiadokKorpusu = {
-      idx: Number(row.idx), dph: row.dph ?? undefined, kv: row.kv ?? undefined,
+      idx: Number(row.idx), pk: row.pk ?? undefined, dph: row.dph ?? undefined, kv: row.kv ?? undefined,
       sadzba: row.sadzba_dph === null ? undefined : Number(row.sadzba_dph),
     };
     doklad.riadky.push(riadok);
@@ -372,17 +373,18 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
   // Samozdanenie prijaté: druh podľa DD kódu (služby podľa krajiny dodávateľa),
   // k nemu odpočet na internom doklade a faktúra tých istých protistrán.
   const samozdanenieMale = new Map<string, Navrh>();
-  const ddVyskyty = new Map<DruhSamozdanenia, Array<{ hodnota: { ddKod: string; kv?: string }; doklad: Doklad }>>();
+  const ddVyskyty = new Map<DruhSamozdanenia, Array<{ hodnota: { ddKod: string; kv?: string }; doklad: Doklad; pk?: string }>>();
   for (const doklad of vsetky) {
     for (const riadok of doklad.riadky) {
       const popis = popisKodu(riadok.dph);
       if (popis?.strana !== 'DD') continue;
       const krajina = doklad.protistrana ? krajiny.get(doklad.protistrana) : undefined;
       // DD2odb a DRozdiel druh nemajú; služby bez známej krajiny sa nezaradia.
-      const druh: DruhSamozdanenia | undefined = DD_REFY_TOVAR.includes(popis.ref) ? 'tovar_eu'
+      const druh: DruhSamozdanenia | undefined = DD_REFY_DOVOZ.includes(popis.ref) ? 'dovoz'
+        : DD_REFY_TOVAR.includes(popis.ref) ? 'tovar_eu'
         : !DD_REFY_SLUZBY.includes(popis.ref) || !krajina ? undefined
           : krajina === 'SK' ? 'prenesenie_prijate' : EU_DPH_PREFIXY.includes(krajina) ? 'sluzby_eu' : 'sluzby_mimo_eu';
-      if (druh) ddVyskyty.set(druh, [...(ddVyskyty.get(druh) ?? []), { hodnota: { ddKod: popis.kod, ...(riadok.kv ? { kv: riadok.kv } : {}) }, doklad }]);
+      if (druh) ddVyskyty.set(druh, [...(ddVyskyty.get(druh) ?? []), { hodnota: { ddKod: popis.kod, ...(riadok.kv ? { kv: riadok.kv } : {}) }, doklad, pk: riadok.pk }]);
     }
   }
   for (const [druh, vyskyty] of ddVyskyty) {
@@ -392,9 +394,15 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     const ich = vsetky.filter((doklad) => doklad.protistrana && protistrany.has(doklad.protistrana));
     // Odpočet samozdanenia patrí na interný doklad, nie na faktúru — PD na
     // faktúre tej istej protistrany je bežný tuzemský nákup.
-    const p = podlaDokladov(ich.filter((doklad) => !naFakture(doklad.agenda)).flatMap((doklad) => doklad.riadky
+    const pVyskyty = ich.filter((doklad) => !naFakture(doklad.agenda)).flatMap((doklad) => doklad.riadky
       .filter((riadok) => P_REFY_SAMOZDANENIA.includes(popisKodu(riadok.dph)?.ref ?? ''))
-      .map((riadok) => ({ hodnota: { pKod: riadok.dph!, kv: riadok.kv }, doklad }))))[0]?.hodnota;
+      .map((riadok) => ({ hodnota: { pKod: riadok.dph!, kv: riadok.kv }, doklad, pk: riadok.pk })));
+    const p = podlaDokladov(pVyskyty)[0]?.hodnota;
+    // Predkontácia interného dokladu (aInt, bInt) — najčastejšia pri vybranom kóde.
+    const predkontacia = (zdroj: Array<{ doklad: Doklad; pk?: string }>) =>
+      podlaDokladov(zdroj.flatMap((vyskyt) => (vyskyt.pk ? [{ hodnota: vyskyt.pk, doklad: vyskyt.doklad }] : [])))[0]?.hodnota;
+    const ddPredkontacia = predkontacia(vyskyty.filter((vyskyt) => vyskyt.hodnota.ddKod === dd[0].hodnota.ddKod));
+    const pPredkontacia = p ? predkontacia(pVyskyty.filter((vyskyt) => vyskyt.hodnota.pKod === p.pKod)) : undefined;
     const faktura = podlaDokladov(ich.filter((doklad) => (naFakture(doklad.agenda) || doklad.agenda === 'VPD') && doklad.hlavicka?.dph)
       .flatMap((doklad) => {
         const strana = popisHlavicky(doklad)?.strana;
@@ -404,7 +412,13 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     const kv = dd[0].hodnota.kv ?? p?.kv;
     const hodnota = {
       ...(faktura ? { faktura } : {}),
-      interny: { ddKod: dd[0].hodnota.ddKod, ...(p ? { pKod: p.pKod } : {}), ...(kv ? { kv } : {}) },
+      interny: {
+        ddKod: dd[0].hodnota.ddKod,
+        ...(ddPredkontacia ? { ddPredkontaciaKod: ddPredkontacia } : {}),
+        ...(p ? { pKod: p.pKod } : {}),
+        ...(pPredkontacia ? { pPredkontaciaKod: pPredkontacia } : {}),
+        ...(kv ? { kv } : {}),
+      },
     };
     // Varianty dôkazu sú podľa DD kódu — ten druh určuje.
     const navrh = { hodnota, dokaz: dokaz(ddDoklady, hodnota, dd) };
@@ -426,6 +440,12 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
   }
   for (const [kluc, vyskyty] of fakturaVyskyty) {
     const varianty = podlaDokladov(vyskyty);
+    // Dovoz podľa § 84a už má návrh z interného dokladu — faktúru mu len doplní.
+    const zInterneho = navrhy.get(kluc) ?? samozdanenieMale.get(kluc);
+    if (zInterneho) {
+      (zInterneho.hodnota as { faktura?: unknown }).faktura ??= varianty[0].hodnota;
+      continue;
+    }
     const hodnota = { faktura: varianty[0].hodnota };
     const navrh = { hodnota, dokaz: dokaz(vyskyty.map((vyskyt) => vyskyt.doklad), hodnota, varianty) };
     if (navrh.dokaz.dokladov >= MIN_DOKLADOV_NAVRHU) navrhy.set(kluc, navrh);

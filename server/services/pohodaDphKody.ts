@@ -50,6 +50,9 @@ export const POHODA_DPH_KODY: readonly PohodaDphKod[] = [
   { kod: 'DDnadEU', ref: 'D01', strana: 'DD', riadky: ['05', '06', '07', '08'], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU' },
   { kod: 'DDsluz', ref: 'D02', strana: 'DD', riadky: ['09', '10'], sv: null, nazov: 'Tovary a služby, pri ktorých daň platí príjemca' },
   { kod: 'DDsl§69', ref: 'D05', strana: 'DD', riadky: ['09', '10'], sv: null, nazov: 'Služby, pri ktorých príjemca platí daň podľa § 69 ods.3 zákona' },
+  // Dovoz s daňou priznanou v priznaní (§ 84a ods. 3), číselník POHODY 2026. Posledný riadok
+  // DDtov§84a je z orezaného zobrazenia v POHODE — neoverené.
+  { kod: 'DDtov§84a', ref: 'D07', strana: 'DD', riadky: ['11c', '11d', '11e', '12c', '12d', '12e'], sv: null, nazov: 'Dovoz tovaru § 84a ods. 3' },
   { kod: 'DRozdiel', ref: 'D06', strana: 'DD', riadky: ['24', '25'], sv: null, nazov: 'Rozdiel v zákl. dane a v dani po oprave (§25 od.1 až 3) - tovary a služby (D01 - D05)' },
   { kod: 'PB', ref: 'P03', strana: 'P', riadky: [], sv: null, nazov: 'Tuzemské plnenia - bez nároku', ponukat: true },
   { kod: 'PBnadEU', ref: 'P06', strana: 'P', riadky: [], sv: null, nazov: 'Nadobudnutie tovaru z iného štátu EU - bez nároku', ponukat: false },
@@ -66,6 +69,7 @@ export const POHODA_DPH_KODY: readonly PohodaDphKod[] = [
   { kod: 'PDoprava', ref: 'P15', strana: 'P', riadky: ['28'], sv: null, nazov: 'Oprava odpočítanej dane', ponukat: true },
   { kod: 'PDopr§53b', ref: 'P27', strana: 'P', riadky: ['29'], sv: null, nazov: 'Oprava odpočítanej dane (§53b)', ponukat: false },
   { kod: 'PDsluz', ref: 'P07', strana: 'P', riadky: ['18', '18a', '19'], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca', ponukat: true },
+  { kod: 'PDtov§84a', ref: 'P29', strana: 'P', riadky: ['18', '18a', '19', '23a', '23b', '23c'], sv: null, nazov: 'Dovoz tovaru (daň uplatnená podľa § 84a ods. 3)' },
   { kod: 'PDtovar', ref: 'P10', strana: 'P', riadky: ['18', '18a', '19', '22', '22a', '23'], sv: null, nazov: 'Dovoz tovaru', ponukat: false },
   { kod: 'PK', ref: 'P02', strana: 'P', riadky: ['18', '18a', '19', '20', '20a', '21'], sv: null, nazov: 'Tuzemské plnenia - krátiť nárok', ponukat: true },
   { kod: 'PK-OsU', ref: 'P20', strana: 'P', riadky: ['18', '18a', '19', '20', '20a', '21'], sv: null, nazov: 'Tuzemské plnenia - osobitná úprava §68d - krátiť nárok', ponukat: false },
@@ -76,6 +80,7 @@ export const POHODA_DPH_KODY: readonly PohodaDphKod[] = [
   { kod: 'PKoprava', ref: 'P18', strana: 'P', riadky: ['28'], sv: null, nazov: 'Oprava odpočítanej dane (§ 53) - krátiť nárok', ponukat: true },
   { kod: 'PKopr§53b', ref: 'P28', strana: 'P', riadky: ['29'], sv: null, nazov: 'Oprava odpočítanej dane (§53b) – krátiť nárok', ponukat: false },
   { kod: 'PKsluz', ref: 'P08', strana: 'P', riadky: ['18', '18a', '19'], sv: null, nazov: 'Poskytnutie služieb a tovarov, pri ktorých daň platí príjemca - krátiť nárok', ponukat: false },
+  { kod: 'PKtov§84a', ref: 'P30', strana: 'P', riadky: ['18', '18a', '19', '23a', '23b', '23c'], sv: null, nazov: 'Dovoz tovaru (daň uplatnená podľa § 84a ods. 3) - krátiť nárok' },
   { kod: 'PKtovar', ref: 'P11', strana: 'P', riadky: ['18', '18a', '19', '22', '22a', '23'], sv: null, nazov: 'Dovoz tovaru - krátiť nárok', ponukat: false },
   { kod: 'PN', ref: 'P', strana: 'P', riadky: [], sv: null, nazov: 'Nezahrňovať do priznania DPH', ponukat: true },
   { kod: 'PNnevymer', ref: 'P', strana: 'P', riadky: [], sv: null, nazov: 'Nezahrňovať do priznania DPH - nevymeriavať DPH', ponukat: false },

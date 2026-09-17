@@ -24,10 +24,10 @@ const klucoveSlova = z.array(z.string().trim().min(1).max(60)).min(1).max(30);
 
 /** Druhy samozdanenia a zahraničných plnení — jeden fakt na druh. */
 export const DRUHY_SAMOZDANENIA = [
-  // Prijatá strana: faktúra dodávateľa + interný doklad (DD… a P…).
-  'sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate',
+  // Prijatá strana: faktúra dodávateľa + interný doklad (DD… a P…); dovoz podľa § 84a má tiež interný.
+  'sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate', 'dovoz',
   // Len faktúra.
-  'dovoz', 'prenesenie_vystavene', 'sluzby_zahranicie_vystavene', 'zahranicie_vystavene', 'tovar_do_eu',
+  'prenesenie_vystavene', 'sluzby_zahranicie_vystavene', 'zahranicie_vystavene', 'tovar_do_eu',
 ] as const;
 export type DruhSamozdanenia = typeof DRUHY_SAMOZDANENIA[number];
 
@@ -42,13 +42,18 @@ export const REFY_VYDANYCH_DRUHOV: Partial<Record<DruhSamozdanenia, readonly str
 export const DD_REFY_TOVAR = ['D01', 'D03'];
 /** DD strana: služby a tovary s daňou u príjemcu — druh určí krajina dodávateľa. */
 export const DD_REFY_SLUZBY = ['D02', 'D05'];
+/** DD strana: dovoz s daňou priznanou podľa § 84a ods. 3. */
+export const DD_REFY_DOVOZ = ['D07'];
 /** Odpočet samozdanenia na internom doklade (nadobudnutie, služby, dopravný prostriedok). */
-export const P_REFY_SAMOZDANENIA = ['P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P14'];
+export const P_REFY_SAMOZDANENIA = ['P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P14', 'P29', 'P30'];
 
 const faktura = z.object({ clenenieKod: kod, kv: kv.optional() }).strict();
 const prijaty = z.object({
   faktura: faktura.optional(),
-  interny: z.object({ ddKod: kod, pKod: kod.optional(), kv: kv.optional() }).strict().optional(),
+  // Interné doklady sú dva: vymeranie dane (DD…, napr. predkontácia aInt) a odpočet (P…, bInt).
+  interny: z.object({
+    ddKod: kod, ddPredkontaciaKod: kod.optional(), pKod: kod.optional(), pPredkontaciaKod: kod.optional(), kv: kv.optional(),
+  }).strict().optional(),
 }).strict();
 const lenFaktura = z.object({ faktura: faktura.optional() }).strict();
 
@@ -65,7 +70,7 @@ export const PROFIL_KATALOG: readonly PolozkaKatalogu[] = [
   },
   ...DRUHY_SAMOZDANENIA.map((druh): PolozkaKatalogu => ({
     kluc: `samozdanenie.${druh}`, sekcia: 'samozdanenie', blokuje: false,
-    schema: ['sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate'].includes(druh) ? prijaty : lenFaktura,
+    schema: ['sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate', 'dovoz'].includes(druh) ? prijaty : lenFaktura,
   })),
   {
     kluc: 'zahranicie.vratenie_dph', sekcia: 'samozdanenie', blokuje: false,
@@ -105,7 +110,9 @@ const DRUH_POLA: Record<string, 'predkontacie' | 'cleneniaDph' | 'kv'> = {
   clenenieKod: 'cleneniaDph',
   clenenieDphNedanoveKod: 'cleneniaDph',
   ddKod: 'cleneniaDph',
+  ddPredkontaciaKod: 'predkontacie',
   pKod: 'cleneniaDph',
+  pPredkontaciaKod: 'predkontacie',
   kv: 'kv',
 };
 

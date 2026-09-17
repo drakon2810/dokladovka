@@ -1737,7 +1737,7 @@ export const sk = {
   'profilKlienta.fakt.samozdanenie.prenesenie_prijate.nazov': 'Prenesenie daňovej povinnosti – prijaté',
   'profilKlienta.fakt.samozdanenie.prenesenie_prijate.popis': 'Tuzemský nákup, pri ktorom daň priznáva odberateľ (§69 ods. 12), napr. stavebné práce alebo kovový odpad.',
   'profilKlienta.fakt.samozdanenie.dovoz.nazov': 'Dovoz tovaru',
-  'profilKlienta.fakt.samozdanenie.dovoz.popis': 'Tovar spoza EÚ, pri ktorom DPH vyrubí colný úrad. Určuje členenie DPH na doklade.',
+  'profilKlienta.fakt.samozdanenie.dovoz.popis': 'Tovar spoza EÚ. DPH vyrubí colný úrad, alebo ju firma prizná sama podľa § 84a na dvoch interných dokladoch (DDtov§84a a PDtov§84a). Určuje členenie DPH a predkontácie dokladov.',
   'profilKlienta.fakt.samozdanenie.prenesenie_vystavene.nazov': 'Prenesenie daňovej povinnosti – vystavené',
   'profilKlienta.fakt.samozdanenie.prenesenie_vystavene.popis': 'Faktúra bez DPH, pri ktorej daň priznáva odberateľ (§69 ods. 12). Určuje členenie a sekciu KV vystavenej faktúry.',
   'profilKlienta.fakt.samozdanenie.sluzby_zahranicie_vystavene.nazov': 'Služby do zahraničia',
@@ -1809,7 +1809,9 @@ export const sk = {
   'profilKlienta.pole.faktura.clenenieKod': 'Členenie DPH',
   'profilKlienta.pole.faktura.kv': 'Sekcia KV',
   'profilKlienta.pole.interny.ddKod': 'Členenie dane na výstupe (DD…)',
+  'profilKlienta.pole.interny.ddPredkontaciaKod': 'Predkontácia dokladu s daňou (napr. aInt)',
   'profilKlienta.pole.interny.pKod': 'Členenie odpočtu (P…)',
+  'profilKlienta.pole.interny.pPredkontaciaKod': 'Predkontácia dokladu s odpočtom (napr. bInt)',
   'profilKlienta.pole.interny.kv': 'Sekcia KV',
 } as const;
 

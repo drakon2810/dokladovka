@@ -187,9 +187,14 @@ const NAZVY_DRUHOV: Record<DruhSamozdanenia, string> = {
 /** „Služby z EÚ (§69 ods. 3): faktúra PN, KV KN; interný doklad DDsl§69 a PDsluz, KV B1" — kódy, nie id. */
 function vetaDruhu(druh: DruhSamozdanenia, nastavenie: SamozdanenieDruh): string | undefined {
   const kv = (kod?: string) => (kod ? `, KV ${kod}` : '');
+  const sPredkontaciou = (kod?: string, predkontacia?: string) =>
+    kod && (predkontacia ? `${kod} (predkontácia ${predkontacia})` : kod);
   const casti = [
     nastavenie.faktura && `faktúra ${nastavenie.faktura.clenenieKod}${kv(nastavenie.faktura.kv)}`,
-    nastavenie.interny && `interný doklad ${[nastavenie.interny.ddKod, nastavenie.interny.pKod].filter(Boolean).join(' a ')}${kv(nastavenie.interny.kv)}`,
+    nastavenie.interny && `interný doklad ${[
+      sPredkontaciou(nastavenie.interny.ddKod, nastavenie.interny.ddPredkontaciaKod),
+      sPredkontaciou(nastavenie.interny.pKod, nastavenie.interny.pPredkontaciaKod),
+    ].filter(Boolean).join(' a ')}${kv(nastavenie.interny.kv)}`,
   ].filter(Boolean);
   return casti.length > 0 ? `${NAZVY_DRUHOV[druh]}: ${casti.join('; ')}` : undefined;
 }

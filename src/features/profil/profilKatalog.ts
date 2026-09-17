@@ -10,9 +10,9 @@ import { sk, t, tv, type SkKey } from '../../i18n/sk';
 export type Sekcia = 'dph' | 'samozdanenie' | 'vozidla' | 'naklady' | 'zasady';
 
 /** Druhy s faktúrou dodávateľa aj interným dokladom (DD… a P…). */
-export const DRUHY_S_INTERNYM = ['sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate'];
+export const DRUHY_S_INTERNYM = ['sluzby_eu', 'sluzby_mimo_eu', 'tovar_eu', 'prenesenie_prijate', 'dovoz'];
 /** Prijaté hore, vystavené dole — dovoz je nákup, len bez interného dokladu. */
-export const DRUHY_PRIJATE = [...DRUHY_S_INTERNYM, 'dovoz'];
+export const DRUHY_PRIJATE = [...DRUHY_S_INTERNYM];
 export const DRUHY_VYSTAVENE = ['prenesenie_vystavene', 'sluzby_zahranicie_vystavene', 'zahranicie_vystavene', 'tovar_do_eu'];
 
 export const SEKCIE: ReadonlyArray<{ id: Sekcia; kluce: readonly string[] }> = [
@@ -95,7 +95,12 @@ export function vetaHodnoty(kluc: string, hodnota: unknown): string {
   const interny = obj(h.interny);
   const casti = [
     text(faktura.clenenieKod) && tv('profilKlienta.veta.faktura', { kod: text(faktura.clenenieKod) }) + kv(faktura),
-    text(interny.ddKod) && tv('profilKlienta.veta.interny', { kody: [interny.ddKod, interny.pKod].filter(text).join(' a ') }) + kv(interny),
+    text(interny.ddKod) && tv('profilKlienta.veta.interny', {
+      kody: [[interny.ddKod, interny.ddPredkontaciaKod], [interny.pKod, interny.pPredkontaciaKod]]
+        .filter(([kod]) => text(kod))
+        .map(([kod, predkontacia]) => (text(predkontacia) ? `${text(kod)} (${text(predkontacia)})` : text(kod)))
+        .join(' a '),
+    }) + kv(interny),
   ].filter(Boolean);
   return casti.length ? casti.join(' · ') : t('profilKlienta.veta.bezKodov');
 }
@@ -257,7 +262,9 @@ export interface PoleFormulara {
 
 const FAKTURA: PoleFormulara[] = [{ cesta: 'faktura.clenenieKod', typ: 'clenenie', povinne: true }, { cesta: 'faktura.kv', typ: 'kv' }];
 const INTERNY: PoleFormulara[] = [
-  { cesta: 'interny.ddKod', typ: 'clenenie', povinne: true }, { cesta: 'interny.pKod', typ: 'clenenie' }, { cesta: 'interny.kv', typ: 'kv' },
+  { cesta: 'interny.ddKod', typ: 'clenenie', povinne: true }, { cesta: 'interny.ddPredkontaciaKod', typ: 'predkontacia' },
+  { cesta: 'interny.pKod', typ: 'clenenie' }, { cesta: 'interny.pPredkontaciaKod', typ: 'predkontacia' },
+  { cesta: 'interny.kv', typ: 'kv' },
 ];
 const NAZOV_A_SLOVA: PoleFormulara[] = [{ cesta: 'nazov', typ: 'text', povinne: true }, { cesta: 'klucoveSlova', typ: 'slova', povinne: true }];
 

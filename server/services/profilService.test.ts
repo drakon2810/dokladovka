@@ -81,8 +81,12 @@ describe('profil klienta z histórie', () => {
     for (const n of [1, 2, 3, 4, 5]) {
       // Krajinu nesie len faktúra — interný doklad adresu nemá.
       await riadok({ agenda: 'FP', cislo: `G${n}`, nazov: 'google ireland', krajina: 'IE', dph: 'PN', kv: 'KN' });
-      await riadok({ agenda: 'INT', cislo: `GI${n}`, nazov: 'google ireland', dph: 'DDsl§69', kv: 'B1' });
-      await riadok({ agenda: 'INT', cislo: `GI${n}`, nazov: 'google ireland', idx: 1, dph: 'PDsluz', kv: 'B1' });
+      // Dva interné doklady ako v POHODE: vymeranie (aInt) a odpočet (bInt).
+      await riadok({ agenda: 'INT', cislo: `GI${n}`, nazov: 'google ireland', pk: 'aInt', dph: 'DDsl§69', kv: 'B1' });
+      await riadok({ agenda: 'INT', cislo: `GO${n}`, nazov: 'google ireland', pk: 'bInt', dph: 'PDsluz', kv: 'B1' });
+      // Dovoz podľa § 84a: DD a P na internom doklade, bez faktúry.
+      await riadok({ agenda: 'INT', cislo: `D${n}`, nazov: 'shenzhen trade', krajina: 'CN', pk: 'aInt', dph: 'DDtov§84a', kv: 'B1' });
+      await riadok({ agenda: 'INT', cislo: `DO${n}`, nazov: 'shenzhen trade', pk: 'bInt', dph: 'PDtov§84a', kv: 'B1' });
       await riadok({ agenda: 'INT', cislo: `R${n}`, nazov: 'recable', ico: '44556677', krajina: 'SK', dph: 'DDsluz', kv: 'B1' });
       await riadok({ agenda: 'INT', cislo: `R${n}`, nazov: 'recable', ico: '44556677', krajina: 'SK', idx: 1, dph: 'PDsluz', kv: 'B1' });
     }
@@ -95,7 +99,11 @@ describe('profil klienta z histórie', () => {
     const f = await fakty();
     expect(f.get('samozdanenie.sluzby_eu')).toMatchObject({ stav: 'navrhnute', dokaz: { dokladov: 5 } });
     expect(f.get('samozdanenie.sluzby_eu')!.hodnota).toEqual({
-      faktura: { clenenieKod: 'PN', kv: 'KN' }, interny: { ddKod: 'DDsl§69', pKod: 'PDsluz', kv: 'B1' },
+      faktura: { clenenieKod: 'PN', kv: 'KN' },
+      interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' },
+    });
+    expect(f.get('samozdanenie.dovoz')!.hodnota).toEqual({
+      interny: { ddKod: 'DDtov§84a', ddPredkontaciaKod: 'aInt', pKod: 'PDtov§84a', pPredkontaciaKod: 'bInt', kv: 'B1' },
     });
     expect(f.get('samozdanenie.prenesenie_prijate')!.hodnota).toEqual({ interny: { ddKod: 'DDsluz', pKod: 'PDsluz', kv: 'B1' } });
     expect(f.has('samozdanenie.sluzby_mimo_eu')).toBe(false);
