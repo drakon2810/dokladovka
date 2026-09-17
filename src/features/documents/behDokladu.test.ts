@@ -50,7 +50,9 @@ describe('prebiehaSpracovanie', () => {
     expect(prebiehaSpracovanie(doklad({ processingStatus: 'received' }))).toBe('extrakcia');
     expect(prebiehaSpracovanie(doklad({ processingStatus: 'queued' }))).toBe('extrakcia');
     expect(prebiehaSpracovanie(doklad({ processingStatus: 'extracting' }))).toBe('extrakcia');
-    expect(prebiehaSpracovanie(doklad({ processingStatus: 'normalizing' }))).toBe('extrakcia');
+    // Chvost extrakčného jobu: údaje sú uložené, ale kontrola DPH a návrh
+    // zaúčtovania ešte bežia — job je už 'succeeded', pozná to len tento stav.
+    expect(prebiehaSpracovanie(doklad({ processingStatus: 'normalizing' }))).toBe('zauctovanie');
     // Dočasná chyba nie je koniec: job ostáva vo fronte a doklad sa ešte prepíše.
     expect(prebiehaSpracovanie(doklad({ processingStatus: 'failed_retryable' }))).toBe('extrakcia');
     // Hotová extrakcia s čakajúcim návrhom zaúčtovania (zmena druhu dokladu) —

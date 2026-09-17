@@ -82,6 +82,40 @@ export const PREPOCET_PRAXE_KIND = 'prepocet_praxe';
  */
 const ANALYZA_STALE_SECONDS = 4 * 3600;
 
+/**
+ * Zaseknutý beh preberáme až po tom, čo už nemôže bežať: extrakcia je zhora
+ * ohraničená timeoutom volania AI, takže dvojnásobok (minimálne 10 minút) je
+ * bezpečný odstup — nehrozí, že by dvaja workeri robili to isté naraz. Tú istú
+ * hranicu používa aj uvolniZaseknuteDoklady; dva rôzne knoby by sa rozišli.
+ */
+function staleRunningSeconds(config: ServerConfig): number {
+  return Math.max(600, Math.ceil(config.openai.timeoutMs / 1000) * 2);
+}
+
+/**
+ * Doklady, ktoré ostali v 'normalizing' po zabitom workeri.
+ *
+ * Extrakčný job je v tej chvíli už 'succeeded' (jeho výsledok je zaplatený a
+ * uložený, opakovať ho nechceme), takže doklad nemá čo ho odomknúť — zostal by
+ * neotvoriteľný navždy. Zmysel má len po štarte workera: vtedy žiadny chvost
+ * nebeží, a zabitie procesu je jediná cesta, ako sa doklad zasekne. Hranica je
+ * tá istá ako pri zaseknutom jobe, aby súbežný druhý worker neuvoľnil doklad,
+ * ktorého chvost práve beží.
+ */
+export async function uvolniZaseknuteDoklady(database: Database, config: ServerConfig): Promise<number> {
+  const uvolnene = await database.query(
+    `UPDATE documents SET processing_status='ready_for_review', updated_at=now()
+      WHERE processing_status='normalizing'
+        AND updated_at < now() - make_interval(secs => $1::double precision)
+        AND NOT EXISTS (
+          SELECT 1 FROM processing_jobs j
+           WHERE j.document_id=documents.id AND j.status IN ('queued','running'))`,
+    [staleRunningSeconds(config)],
+  );
+  if (uvolnene.rowCount) console.warn(`[worker] uvoľnených zaseknutých dokladov: ${uvolnene.rowCount}`);
+  return uvolnene.rowCount ?? 0;
+}
+
 interface AttachmentContext extends Record<string, unknown> {
   id: string;
   document_id?: string;
@@ -673,9 +707,15 @@ async function completeRun(
         requestId: outcome.requestId,
       }), prepared.runId, job.tenant_id, job.organization_id, prepared.documentId],
     );
+    // 'normalizing', nie 'ready_for_review': vyťažené údaje sú uložené, ale
+    // kontrola DPH a návrh zaúčtovania bežia AŽ ZA touto transakciou (v chvoste
+    // toho istého jobu, ktorý je tu už označený za hotový). Doklad, ktorý sa
+    // v tej chvíli hlásil ako pripravený, vlastník otvoril a návrh sa mu potom
+    // prepísal pod rukami. Na 'ready_for_review' ho preklopí až koniec chvosta
+    // v processNextJob; zaseknutý po padnutom workeri uvolniZaseknuteDoklady.
     if (prepared.isReprocess) {
       await tx.query(
-        `UPDATE documents SET processing_status='ready_for_review',
+        `UPDATE documents SET processing_status='normalizing',
                 history=history || $1::jsonb, updated_at=now()
           WHERE id=$2 AND tenant_id=$3 AND organization_id=$4`,
         [JSON.stringify([{ ts: new Date().toISOString(), user: 'Systém', akcia: 'Nová extrakcia dokončená — čaká na ručné použitie' }]),
@@ -683,7 +723,7 @@ async function completeRun(
       );
     } else {
       await tx.query(
-        `UPDATE documents SET document_type=$1,podtyp=$16,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
+        `UPDATE documents SET document_type=$1,podtyp=$16,status=$2,processing_status='normalizing',extracted=$3::jsonb,
                 accounting=$17::jsonb || accounting || $15::jsonb,
                 field_confidence=$4::jsonb,confidence=$5,total_amount=$6,currency=$7,
                 quarantine_reason=$8,duplicate_of_document_id=$9,applied_extraction_run_id=$10,
@@ -742,7 +782,7 @@ async function completeRun(
           `INSERT INTO documents
             (id,tenant_id,organization_id,queue_id,document_type,status,processing_status,source,extracted,
              accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id)
-           SELECT $1,tenant_id,organization_id,queue_id,$2,$3,'ready_for_review',source,$4::jsonb,
+           SELECT $1,tenant_id,organization_id,queue_id,$2,$3,'normalizing',source,$4::jsonb,
              $11::jsonb || accounting || $10::jsonb,field_confidence,confidence,$5,$6,$7::jsonb,$8
              FROM documents WHERE id=$8 AND tenant_id=$9`,
           [dalsi.id, dalsi.normalized.documentType, status,
@@ -1079,11 +1119,7 @@ export async function processNextJob(
   workerId = `worker-${process.pid}`,
   dependencies: WorkerDependencies = {},
 ): Promise<boolean> {
-  // Zaseknutý job preberáme až po tom, čo už nemôže bežať: extrakcia je zhora
-  // ohraničená timeoutom volania AI, takže dvojnásobok (minimálne 10 minút) je
-  // bezpečný odstup — nehrozí, že by dvaja workeri robili to isté naraz.
-  const staleRunningSeconds = Math.max(600, Math.ceil(config.openai.timeoutMs / 1000) * 2);
-  const job = await claimJob(database, workerId, staleRunningSeconds);
+  const job = await claimJob(database, workerId, staleRunningSeconds(config));
   if (!job) return false;
   if (job.kind === ANALYZA_KIND) {
     await spracujAnalyzu(database, config, job);
@@ -1331,5 +1367,22 @@ export async function processNextJob(
       tx, job, prepared, asProviderError(error, prepared?.documentId), Math.max(0, Math.round(performance.now() - startedAt)),
     ));
     return true;
+  } finally {
+    // Tu sa doklad otvára účtovníkovi — až teraz je kontrola DPH aj návrh
+    // zaúčtovania hotové. Vo `finally`, aby ho neuzamkol výpadok modelu ani
+    // nenakonfigurovaná AI; podmienka na 'normalizing' nechá doklad zamknutý
+    // len vtedy, keď mu failJob medzitým nastavil chybový stav (a ten sa buď
+    // opakuje, alebo je konečný). Časti rozdeleného súboru sa uvoľnia s ním —
+    // svoj návrh dostávajú v tom istom chvoste.
+    if (prepared) {
+      // Výnimka z `finally` by prekryla pôvodnú chybu a zahodila diagnostiku;
+      // doklad vtedy ostane v 'normalizing' a uvoľní ho uvolniZaseknuteDoklady.
+      await database.query(
+        `UPDATE documents SET processing_status='ready_for_review', updated_at=now()
+          WHERE tenant_id=$2 AND organization_id=$3 AND processing_status='normalizing'
+            AND (id=$1 OR split_from_document_id=$1)`,
+        [prepared.documentId, job.tenant_id, job.organization_id],
+      ).catch((chyba) => console.warn('[worker] uvoľnenie dokladu zlyhalo', chyba instanceof Error ? chyba.message : chyba));
+    }
   }
 }

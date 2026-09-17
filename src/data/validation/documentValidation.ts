@@ -313,7 +313,12 @@ export function validateDocument(
   if (doc.duplicateOfDocumentId && !doc.notDuplicate) {
     issues.push({ code: 'unresolved_duplicate' });
   }
-  if (doc.processingStatus !== 'ready_for_review') {
+  // Otvoriť sa dá aj doklad, na ktorom systém skončil neúspechom; schváliť sa
+  // smie len hotový — a len vtedy, keď na ňom už nič nebeží. Doklad s hotovou
+  // extrakciou a čakajúcim návrhom zaúčtovania (po zmene druhu) sa dal potvrdiť
+  // skôr, než AI dorobila predkontáciu; v hromadnom schválení o to ľahšie.
+  // Rovnakú podmienku drží aj server v POST /api/documents/:id/approve.
+  if (doc.processingStatus !== 'ready_for_review' || doc.prebiehajuciKrok) {
     issues.push({ code: 'processing_not_ready' });
   }
 

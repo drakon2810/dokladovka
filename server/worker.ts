@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db/database.js';
 import { migrateDatabase } from './db/migrate.js';
-import { processNextJob } from './workerService.js';
+import { processNextJob, uvolniZaseknuteDoklady } from './workerService.js';
 import { createObjectStorage } from './storage.js';
 
 const config = loadConfig();
@@ -12,6 +12,12 @@ if (config.extractionProvider === 'openai' && !config.openai.apiKey) {
 const database = await createDatabase(config);
 await migrateDatabase(database);
 const storage = createObjectStorage(config);
+
+// Doklad, ktorého chvost (kontrola DPH, návrh zaúčtovania) prerušilo zabitie
+// procesu, ostal neotvoriteľný v 'normalizing' — jeho job je už 'succeeded',
+// takže ho nič nevyzdvihne. Zabitie procesu je jediná cesta, ako sa to stane,
+// a po ňom nasleduje práve tento štart.
+await uvolniZaseknuteDoklady(database, config);
 
 let stopping = false;
 const stop = () => { stopping = true; };

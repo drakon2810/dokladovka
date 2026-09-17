@@ -48,19 +48,18 @@ const KONCOVE_STAVY: readonly ProcessingStatus[] = ['ready_for_review', 'failed_
  * návrhu, po zlyhanej extrakcii, v karanténe aj ručne vytvorený sú pripravené,
  * lebo inak by v zozname ostali zamknuté navždy.
  *
- * ponytail: kontrola DPH a AI návrh zaúčtovania bežia v CHVOSTE toho istého
- *   extrakčného jobu, ale až za transakciou, ktorá job označí za 'succeeded'
- *   (workerService.completeRun). Tých pár sekúnd až minútu teda doklad vyzerá
- *   pripravený a AI návrh ešte môže prepísať deterministický. Zavrieť sa to dá
- *   presunutím toho zápisu na koniec processNextJob — za cenu toho, že pád či
- *   reštart workera v chvoste zopakuje (a znova zaplatí) celú extrakciu.
- *   To je rozhodnutie vlastníka, nie vedľajší efekt tejto zmeny.
+ * Chvost extrakčného jobu (kontrola DPH a AI návrh zaúčtovania) beží už za
+ * transakciou, ktorá job označí za 'succeeded' — doklad v ňom teda nemá bežiaci
+ * job a pozná ho jedine stav 'normalizing', ktorý mu worker na ten čas nechá.
  */
 export function prebiehaSpracovanie(
   doklad: Pick<DocumentItem, 'processingStatus' | 'prebiehajuciKrok'>,
 ): DocumentItem['prebiehajuciKrok'] {
   if (doklad.prebiehajuciKrok) return doklad.prebiehajuciKrok;
-  return KONCOVE_STAVY.includes(doklad.processingStatus) ? undefined : 'extrakcia';
+  if (KONCOVE_STAVY.includes(doklad.processingStatus)) return undefined;
+  // 'normalizing' = vyťažené údaje sú uložené a beží nad nimi zaúčtovanie;
+  // pomenovať to „AI extrakcia prebieha" by bola druhá nepravda za sebou.
+  return doklad.processingStatus === 'normalizing' ? 'zauctovanie' : 'extrakcia';
 }
 
 /**
