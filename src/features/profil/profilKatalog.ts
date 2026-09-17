@@ -1,4 +1,4 @@
-import type { NavrhPravidlaDelenia, ProfilDokaz, ProfilFakt, ProfilKlienta, ProfilOtazka, VariantOtazky } from '../../data/types';
+import type { CastPraxe, DocumentType, NavrhPravidlaDelenia, ProfilDokaz, ProfilFakt, ProfilKlienta, ProfilOtazka, VariantOtazky } from '../../data/types';
 import { sk, t, tv, type SkKey } from '../../i18n/sk';
 
 /**
@@ -30,6 +30,11 @@ export const SEKCIE: ReadonlyArray<{ id: Sekcia; kluce: readonly string[] }> = [
 export const ZOZNAMOVE = new Set(['vozidla.pravidla', 'naklady.bez_naroku', 'naklady.pomerne']);
 
 export const STATUSY = ['platitel', 'registracia_7', 'registracia_7a', 'neplatitel'] as const;
+/** Typy dokladov pre vozidla.pravidla.typyDokladov — musí sedieť s enumom servera (profilKatalog.ts). */
+export const TYPY_DOKLADOV: readonly DocumentType[] = ['FP', 'FV', 'OZ', 'PD', 'BV', 'MZDY'];
+/** Názov typu dokladu ako v zozname dokladov — druhý slovník skratiek nezavádzame. Neznámy typ ostane skratkou. */
+export const nazovTypuDokladu = (typ: string) =>
+  ((TYPY_DOKLADOV as readonly string[]).includes(typ) ? t(`typ.${typ}.dlhy` as SkKey) : typ);
 /** Hodnoty faktu samozdanenie.postup — vrátane „neriešime", ktoré blok vypne. */
 export const POSTUPY_SAMOZDANENIA = ['dokladovka', 'v_pohode', 'neriesime'] as const;
 
@@ -111,15 +116,79 @@ export function vetaHodnoty(kluc: string, hodnota: unknown): string {
   return casti.length ? casti.join(' · ') : t('profilKlienta.veta.bezKodov');
 }
 
-/** Variant dôkazu nemá vždy tvar hodnoty faktu (napr. len DD kód) — stačia jeho kódy za sebou. */
-export function vetaVariantu(hodnota: unknown): string {
+/**
+ * Variant dôkazu nemá vždy tvar hodnoty faktu (napr. len DD kód), no kódy za
+ * sebou („bInt · PDnadEU · B1") účtovníčke nepovedia, ktorý z nich je
+ * predkontácia, ktorý členenie DPH a ktorý sekcia KV — pred každý preto ide
+ * názov poľa z katalógu. Pole, ktoré katalóg nepozná, ostane cestou.
+ */
+export function vetaVariantu(hodnota: unknown, kluc = ''): string {
   const casti: string[] = [];
-  const prejdi = (uzol: unknown) => {
-    if (uzol && typeof uzol === 'object') Object.values(uzol).forEach(prejdi);
-    else if (uzol !== undefined && uzol !== null && uzol !== '') casti.push(String(uzol));
+  const prejdi = (uzol: unknown, cesta: string): void => {
+    // Index v zozname názov poľa nemení — cesta sa ním nepredlžuje.
+    if (Array.isArray(uzol)) return uzol.forEach((prvok) => prejdi(prvok, cesta));
+    if (uzol && typeof uzol === 'object') {
+      return Object.entries(uzol).forEach(([pole, cast]) => prejdi(cast, cesta ? `${cesta}.${pole}` : pole));
+    }
+    if (uzol !== undefined && uzol !== null && uzol !== '') casti.push(`${popisPola(kluc, cesta) ?? cesta} ${String(uzol)}`);
   };
-  prejdi(hodnota);
+  prejdi(hodnota, '');
   return casti.join(' · ') || '—';
+}
+
+/** Pomenovaný kód na kartu otázky: názov poľa a jeho kód zvlášť, aby sa dali odlíšiť. */
+export interface PopisanyKod { nazov: string; kod: string }
+
+/** Podiel z praxe ako percento: 0,2 → „20". */
+const percento = (podiel: number) => cislo(Math.round(podiel * 1000) / 10);
+
+/**
+ * Polia podoby praxe protistrany. Sekcia KV sa uvádza kódom len vtedy, keď
+ * odpoveď platí na jeden druh dokladu (typDokladu z agendy praxe) — tá istá
+ * protistrana posiela aj faktúry a tam sekciu určí doklad, nie táto odpoveď.
+ */
+export function poliaVariantu(variant: VariantOtazky, typDokladu?: string): PopisanyKod[] {
+  return [
+    { nazov: t('profilKlienta.pole.predkontaciaKod'), kod: variant.kody.predkontacia },
+    { nazov: t('profilKlienta.pole.clenenieKod'), kod: variant.kody.clenenieDph },
+    ...(variant.kody.clenenieKv
+      ? [{ nazov: t('profilKlienta.pole.faktura.kv'), kod: typDokladu ? variant.kody.clenenieKv : t('profilKlienta.otazka.kvPodlaDokladu') }]
+      : []),
+  ];
+}
+
+/**
+ * Časti rozpisu podoby aj so zvyškom, ktorý ostáva na účte hlavičky. Bez zvyšku
+ * by z bločku PHM (20 % základu a 50 % dane inam) nebolo vidieť to hlavné —
+ * že do daňových nákladov ide 80 % a odpočíta sa polovica dane.
+ */
+export function castiVariantu(variant: VariantOtazky): CastPraxe[] {
+  const casti = variant.casti ?? [];
+  if (casti.length === 0) return [];
+  const spolu = (vyber: (cast: CastPraxe) => number | undefined) => (casti.some((cast) => vyber(cast) !== undefined)
+    ? Math.round((1 - casti.reduce((sucet, cast) => sucet + (vyber(cast) ?? 0), 0)) * 10_000) / 10_000
+    : undefined);
+  const podiel = spolu((cast) => cast.podiel);
+  const podielDph = spolu((cast) => cast.podielDph);
+  const zvysok: CastPraxe = {
+    ...(podiel !== undefined ? { podiel } : {}), ...(podielDph !== undefined ? { podielDph } : {}),
+    predkontaciaKod: variant.kody.predkontacia, clenenieDphKod: variant.kody.clenenieDph, clenenieKvKod: variant.kody.clenenieKv,
+  };
+  return [...casti, ...((podiel ?? 0) > 0 || (podielDph ?? 0) > 0 ? [zvysok] : [])];
+}
+
+/** Jedna časť rozpisu vetou: koľko zo základu a z dane a kam. Bez podielov ostanú len kódy. */
+export function vetaCasti(cast: CastPraxe): string {
+  const podiely = [
+    cast.podiel !== undefined ? tv('profilKlienta.otazka.rozpis.zaklad', { percento: percento(cast.podiel) }) : '',
+    cast.podielDph !== undefined ? tv('profilKlienta.otazka.rozpis.dph', { percento: percento(cast.podielDph) }) : '',
+  ].filter(Boolean).join(' a ');
+  const kody = [
+    cast.predkontaciaKod && `${t('profilKlienta.pole.predkontaciaKod')} ${cast.predkontaciaKod}`,
+    cast.clenenieDphKod && `${t('profilKlienta.pole.clenenieKod')} ${cast.clenenieDphKod}`,
+    cast.clenenieKvKod && `${t('profilKlienta.pole.faktura.kv')} ${cast.clenenieKvKod}`,
+  ].filter(Boolean).join(', ');
+  return podiely ? tv('profilKlienta.otazka.rozpis.cast', { podiely, kody }) : kody;
 }
 
 /** Status z potvrdeného alebo navrhnutého faktu — len podľa neho sa ukáže členenie bez odpočtu. */
@@ -219,7 +288,14 @@ export function pravidloZNavrhu(navrh: NavrhPravidlaDelenia, kodPodlaId: (id: st
 // ===== Otázky =====
 
 export interface DataFaktovejOtazky { kluc: string; navrh?: unknown; dokaz?: ProfilDokaz; rozpor?: boolean; napoveda?: string }
-export interface DataSporu { agenda: string; protistrana: string; protistranaIco?: string; varianty: VariantOtazky[] }
+export interface DataSporu {
+  agenda: string;
+  protistrana: string;
+  protistranaIco?: string;
+  /** Typ dokladu, na ktorom odpoveď bude platiť; prázdny = agenda ho nemá (OP). */
+  typDokladu?: string;
+  varianty: VariantOtazky[];
+}
 
 export function nadpisOtazky(otazka: ProfilOtazka): string {
   if (otazka.druh === 'spor_protistrany') return tv('profilKlienta.otazka.spor', { protistrana: (otazka.data as DataSporu).protistrana });
@@ -254,7 +330,7 @@ export function popisOtazky(otazka: ProfilOtazka, fakty: ProfilFakt[], nazovAgen
 
 // ===== Formulár faktu =====
 
-export type TypPola = 'status' | 'postup' | 'anoNie' | 'predkontacia' | 'clenenie' | 'kv' | 'text' | 'slova' | 'cislo';
+export type TypPola = 'status' | 'postup' | 'anoNie' | 'predkontacia' | 'clenenie' | 'kv' | 'text' | 'slova' | 'typy' | 'cislo';
 
 export interface PoleFormulara {
   /** Cesta v hodnote; s bodkou je v skupine (faktura.kv) — prázdna skupina sa vynechá celá. */
@@ -287,7 +363,8 @@ const POLIA: Record<string, PoleFormulara[]> = {
     { cesta: 'predkontaciaKod', typ: 'predkontacia', povinne: true },
     { cesta: 'predkontaciaNedanovaKod', typ: 'predkontacia', povinne: true },
     { cesta: 'clenenieDphNedanoveKod', typ: 'clenenie' },
-    { cesta: 'typyDokladov', typ: 'slova' },
+    // Typy sú uzavretý zoznam servera, nie slová: napísané „PHM, FP" pravidlo ticho zneplatnilo.
+    { cesta: 'typyDokladov', typ: 'typy' },
   ],
   'naklady.bez_naroku': [{ cesta: 'predkontaciaKod', typ: 'predkontacia', povinne: true }, { cesta: 'clenenieKod', typ: 'clenenie', povinne: true }],
   'naklady.pomerne': [
@@ -344,7 +421,8 @@ export function hodnotaZFormulara(kluc: string, formular: Record<string, string>
       if (!Number.isFinite(n) || (pole.min !== undefined && n < pole.min) || (pole.max !== undefined && n > pole.max)) return { chyba: pole.cesta };
     } else if (pole.typ === 'anoNie') {
       vysledok = vstup === 'true';
-    } else if (pole.typ === 'slova') {
+    } else if (pole.typ === 'slova' || pole.typ === 'typy') {
+      // Nevybraté typy sa sem nedostanú (prázdny vstup vypadol vyššie) — a to je „všetky doklady".
       vysledok = vstup.split(',').map((slovo) => slovo.trim()).filter(Boolean);
       if (!(vysledok as string[]).length) return { chyba: pole.cesta };
     }

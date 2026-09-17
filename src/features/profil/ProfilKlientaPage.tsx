@@ -11,9 +11,9 @@ import { t, tv, type SkKey } from '../../i18n/sk';
 import { FaktModal } from './FaktModal';
 import {
   DRUHY_PRIJATE, DRUHY_VYSTAVENE, POSTUPY_SAMOZDANENIA, SEKCIE, STATUSY, ZOZNAMOVE,
-  kodyHodnoty, nadpisOtazky, nazovFaktu, pocty, popisFaktu, popisOtazky, pravidloZNavrhu, relevantneKluce, rozhodnute,
-  stavFaktu, stavSekcie, suhrnProfilu, triedOtazky, vetaHodnoty, vetaVariantu,
-  type BodkaSekcie, type DataFaktovejOtazky, type DataSporu, type Sekcia, type StavFaktu,
+  castiVariantu, kodyHodnoty, nadpisOtazky, nazovFaktu, nazovTypuDokladu, pocty, popisFaktu, popisOtazky, pravidloZNavrhu,
+  relevantneKluce, rozhodnute, stavFaktu, stavSekcie, suhrnProfilu, triedOtazky, vetaCasti, vetaHodnoty, vetaVariantu,
+  poliaVariantu, type BodkaSekcie, type DataFaktovejOtazky, type DataSporu, type Sekcia, type StavFaktu,
 } from './profilKatalog';
 
 /**
@@ -108,7 +108,7 @@ function DokazRiadok({ dokaz }: { dokaz: ProfilDokaz }) {
 }
 
 /** „Prečo to navrhujeme": varianty s pásikmi podľa počtu dokladov a príklady. */
-function DokazPanel({ dokaz }: { dokaz: ProfilDokaz }) {
+function DokazPanel({ dokaz, kluc }: { dokaz: ProfilDokaz; kluc: string }) {
   const najviac = Math.max(1, ...(dokaz.varianty ?? []).map((variant) => variant.dokladov));
   return (
     <div className="mt-2 rounded-[10px] border border-line-soft bg-surface-2 p-3 text-[12.5px]">
@@ -118,8 +118,8 @@ function DokazPanel({ dokaz }: { dokaz: ProfilDokaz }) {
           <p className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-mute">{t('profilKlienta.dokaz.varianty')}</p>
           <ul className="mt-1.5 space-y-1.5">
             {dokaz.varianty.map((variant, index) => (
-              <li key={index} className="grid grid-cols-[minmax(0,180px)_1fr_auto] items-center gap-3">
-                <span className="truncate text-ink" title={vetaVariantu(variant.hodnota)}>{vetaVariantu(variant.hodnota)}</span>
+              <li key={index} className="grid grid-cols-[minmax(0,260px)_1fr_auto] items-center gap-3">
+                <span className="truncate text-ink" title={vetaVariantu(variant.hodnota, kluc)}>{vetaVariantu(variant.hodnota, kluc)}</span>
                 <span className="h-1.5 overflow-hidden rounded-full bg-line-soft">
                   <span
                     className={`block h-full rounded-full ${index === 0 ? 'bg-sky-500' : 'bg-sky-300'}`}
@@ -194,6 +194,56 @@ function MenuDalsie({ disabled, onNepouzivaSa }: { disabled: boolean; onNepouziv
   );
 }
 
+/** Postup samozdanenia, ktorý firma naozaj používa — engine číta len potvrdené fakty. */
+const POSTUP_FAKT = 'samozdanenie.postup';
+const potvrdenyPostup = (profil: ProfilKlienta) => {
+  const fakt = profil.fakty.find((item) => item.kluc === POSTUP_FAKT);
+  return fakt?.stav === 'potvrdene' ? retazec((fakt.hodnota as Obj | null | undefined)?.postup) : '';
+};
+
+/**
+ * Prepínač samozdanenia pre celú sekciu. Stojí nad druhmi plnení, pretože
+ * „neriešime" vypne blok samozdanenia na každej prijatej faktúre — medzi
+ * riadkami druhov ho nikto nenašiel. Voľba sa ukladá hneď a riadok faktu sa
+ * v zozname druhov už neopakuje: jedno nastavenie, jedno miesto.
+ */
+function PrepinacPostupu({ profil, busy, onFakt }: {
+  profil: ProfilKlienta; busy: boolean; onFakt: (kluc: string, telo: TeloFaktu) => void;
+}) {
+  const fakt = profil.fakty.find((item) => item.kluc === POSTUP_FAKT);
+  const zvolene = potvrdenyPostup(profil);
+  const navrhnute = fakt?.stav === 'navrhnute' ? retazec((fakt.hodnota as Obj | null | undefined)?.postup) : '';
+  return (
+    <div className="py-4 first:pt-1">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[13.5px] font-semibold text-ink">{t('profilKlienta.postup.titulok')}</p>
+          <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-ink-faint">{popisFaktu(POSTUP_FAKT)}</p>
+        </div>
+        <PilulkaStavu stav={stavFaktu(POSTUP_FAKT, profil)} fakt={fakt} />
+      </div>
+      <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+        {POSTUPY_SAMOZDANENIA.map((postup) => (
+          <button
+            key={postup}
+            type="button"
+            aria-pressed={zvolene === postup}
+            disabled={busy}
+            className={`rounded-[10px] border px-3 py-2.5 text-left text-[13px] transition disabled:opacity-50 ${
+              zvolene === postup ? 'border-accent bg-tint'
+                : navrhnute === postup ? 'border-dashed border-sky-300 bg-sky-50/50' : 'border-line hover:border-[#A7D9C9]'
+            }`}
+            onClick={() => onFakt(POSTUP_FAKT, { stav: 'potvrdene', hodnota: { postup } })}
+          >
+            <span className="block font-medium text-ink">{t(`profilKlienta.postup.${postup}`)}</span>
+            <span className="mt-0.5 block text-xs text-ink-soft">{t(`profilKlienta.postupPopis.${postup}`)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RiadokFaktu({ kluc, profil, busy, titulKodov, onFakt, onUprav, children }: {
   kluc: string;
   profil: ProfilKlienta;
@@ -260,7 +310,7 @@ function RiadokFaktu({ kluc, profil, busy, titulKodov, onFakt, onUprav, children
             <IkonaSipka otvorene={precoOtvorene} />
             {t('profilKlienta.akcia.precoNavrh')}
           </button>
-          <Rozbalenie otvorene={precoOtvorene}><DokazPanel dokaz={fakt.dokaz} /></Rozbalenie>
+          <Rozbalenie otvorene={precoOtvorene}><DokazPanel dokaz={fakt.dokaz} kluc={kluc} /></Rozbalenie>
         </>
       )}
     </div>
@@ -312,19 +362,47 @@ function KartaOtazky({ otazka, profil, busy, onFakt, onOdpoved, onUprav }: {
     moznosti = (
       <>
         <ul className="w-full space-y-1.5">
-          {spor.varianty.map((variant, index) => (
-            <li key={index} className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-[#D6E9F8] bg-[#F0F7FD] px-3 py-2 text-[13px]">
-              <span>
-                <strong className="tnum">
-                  {variant.kody.predkontacia} · {variant.kody.clenenieDph}{variant.kody.clenenieKv ? ` · KV ${variant.kody.clenenieKv}` : ''}
-                </strong>
-                <span className="text-ink-soft">
-                  {' — '}{tv('otazka.variant', { dokladov: String(variant.dokladov), od: formatDate(variant.od), do: formatDate(variant.do) })}
-                </span>
-              </span>
-              {volba(t('otazka.pouzit'), () => onOdpoved(otazka, { akcia: 'variant', index }))}
-            </li>
-          ))}
+          {spor.varianty.map((variant, index) => {
+            // Rozpis z praxe: bez neho by bloček PHM vyzeral ako jeden účet,
+            // hoci firma ho delí 80/20 s polovicou odpočtu (§49 ods. 5).
+            const casti = castiVariantu(variant);
+            return (
+              <li key={index} className="rounded-[10px] border border-[#D6E9F8] bg-[#F0F7FD] px-3 py-2 text-[13px]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    {poliaVariantu(variant, spor.typDokladu).map((pole, poradie) => (
+                      <span key={pole.nazov}>
+                        {poradie > 0 && <span className="text-ink-faint"> · </span>}
+                        <span className="text-ink-soft">{pole.nazov} </span>
+                        <strong className="tnum">{pole.kod}</strong>
+                      </span>
+                    ))}
+                    <span className="text-ink-soft">
+                      {' — '}{tv('otazka.variant', { dokladov: String(variant.dokladov), od: formatDate(variant.od), do: formatDate(variant.do) })}
+                    </span>
+                  </span>
+                  {volba(t('otazka.pouzit'), () => onOdpoved(otazka, { akcia: 'variant', index }))}
+                </div>
+                {casti.length > 0 && (
+                  <div className="mt-1.5 border-t border-[#D6E9F8] pt-1.5 text-[12.5px]">
+                    <p className="font-medium text-ink">{t('profilKlienta.otazka.rozpis')}</p>
+                    <ul className="mt-0.5 space-y-0.5 text-ink-soft">
+                      {casti.map((cast, poradie) => <li key={poradie}>{vetaCasti(cast)}</li>)}
+                    </ul>
+                    {/* Zlúčené podoby môžu deliť inak — koľkými dokladmi je tento rozpis doložený. */}
+                    {variant.dokladovCasti !== undefined && variant.dokladovCasti < variant.dokladov && (
+                      <p className="mt-0.5 text-ink-faint tnum">
+                        {tv('profilKlienta.otazka.rozpis.dokladov', {
+                          dokladovCasti: String(variant.dokladovCasti), dokladov: String(variant.dokladov),
+                        })}
+                      </p>
+                    )}
+                    <p className="mt-0.5 text-ink-faint">{t('profilKlienta.otazka.rozpis.pravidlo')}</p>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
         {ine === undefined && volba(t('profilKlienta.akcia.ine'), () => setIne(''))}
       </>
@@ -380,6 +458,14 @@ function KartaOtazky({ otazka, profil, busy, onFakt, onOdpoved, onUprav }: {
       <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-ink-soft">
         {popisOtazky(otazka, profil.fakty, (agenda) => UCTO_AGENDA_NAZOV[agenda] ?? agenda)}
       </p>
+      {/* Rozsah odpovede: sekciu KV určuje DRUH dokladu, nie protistrana. */}
+      {otazka.druh === 'spor_protistrany' && (
+        <p className="mt-1 max-w-3xl text-[12.5px] leading-relaxed text-ink-faint">
+          {(otazka.data as DataSporu).typDokladu
+            ? tv('profilKlienta.otazka.spor.rozsah', { typ: nazovTypuDokladu((otazka.data as DataSporu).typDokladu!) })
+            : t('profilKlienta.otazka.spor.bezRozsahu')}
+        </p>
+      )}
       {fakt?.dokaz && <DokazRiadok dokaz={fakt.dokaz} />}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {moznosti}
@@ -644,12 +730,24 @@ export function ProfilKlientaPage() {
 
   const obsahSekcie = (sekcia: Sekcia): ReactNode => {
     switch (sekcia) {
-      case 'samozdanenie':
+      case 'samozdanenie': {
+        const prijate = DRUHY_PRIJATE.map((druh) => `samozdanenie.${druh}`);
+        // Vypnuté samozdanenie sa týka LEN prijatých faktúr (zostavSamozdanenie),
+        // vystavené plnenia ani zahraničná DPH ním nehýbu — stmieva sa preto
+        // jediná skupina, ktorej sa to naozaj týka.
+        const vypnute = potvrdenyPostup(profil) === 'neriesime';
         return [
-          skupina('profilKlienta.skupina.prijate', DRUHY_PRIJATE.map((druh) => `samozdanenie.${druh}`).concat('samozdanenie.postup')),
+          vidno(POSTUP_FAKT) && <PrepinacPostupu key="postup" profil={profil} busy={busy} onFakt={onFakt} />,
+          prijate.some(vidno) && (
+            <div key="prijate" className={vypnute ? 'opacity-60' : undefined}>
+              {skupina('profilKlienta.skupina.prijate', prijate)}
+              {vypnute && <p className="pb-1 text-[12.5px] leading-relaxed text-ink-faint">{t('profilKlienta.postup.vypnute')}</p>}
+            </div>
+          ),
           skupina('profilKlienta.skupina.vystavene', DRUHY_VYSTAVENE.map((druh) => `samozdanenie.${druh}`)),
           skupina('profilKlienta.skupina.vratenie', ['zahranicie.vratenie_dph']),
         ];
+      }
       case 'vozidla':
         return riadok('vozidla.pravidla', (
           <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">

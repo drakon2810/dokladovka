@@ -189,11 +189,17 @@ export async function odpovedzOtazke(
     // Fakt má vlastný tvar hodnoty — ten ide cez zápis faktu, nie cez výber podoby.
     const variant = otazka.druh === 'spor_protistrany' && Array.isArray(data.varianty) ? data.varianty[odpoved.index] : undefined;
     if (!variant) throw new HttpError(400, 'profil_akcia_neplatna', 'Otázka takú možnosť nemá');
+    // Sekcia KV ide s DRUHOM dokladu: B3 patrí zjednodušenej faktúre z pokladne,
+    // B2 prijatej faktúre. Pravidlo bez typu dokladu platí na všetky doklady
+    // protistrany, a tam sekciu sľúbiť nemožno (kvPreDruh pustí B3 aj na FP) —
+    // preto sa z takej odpovede neuloží a určí ju až samotný doklad.
+    const typDokladu = typZAgendy(String(data.agenda ?? ''));
     const pravidlo = await ulozPravidloProtistrany(tx, {
       tenantId: firma.tenantId, organizationId: firma.organizationId, userId: firma.userId, correlationId: firma.correlationId,
       ico: String(data.protistranaIco ?? '').replace(/\D/g, ''), nazov: normalizeName(data.protistrana),
-      predkontaciaId: variant.predkontaciaId, clenenieDphId: variant.clenenieDphId, clenenieKvKod: variant.clenenieKvKod,
-      zdroj: 'otázka v profile klienta', typDokladu: typZAgendy(String(data.agenda ?? '')),
+      predkontaciaId: variant.predkontaciaId, clenenieDphId: variant.clenenieDphId,
+      ...(typDokladu ? { clenenieKvKod: variant.clenenieKvKod } : {}),
+      zdroj: 'otázka v profile klienta', typDokladu,
     });
     // Číselník sa medzičasom zmenil — podoby treba spočítať znova, nie hádať.
     if (!pravidlo) throw new HttpError(409, 'profil_otazka_zastarana', 'Predkontácia alebo členenie možnosti už nie je aktívne v číselníku firmy');
@@ -584,9 +590,17 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     if (pravidlaUctovnika.some((ine) => (ico && ine.ico === ico) || ine.nazov === row.protistrana)) continue;
     const otazka = otazkaPraxe(pravidlo, predkontacie, clenenia);
     if (!otazka) continue;
+    // Typ dokladu, na ktorom odpoveď bude platiť (ten istý ako pri uložení
+    // pravidla). Karta ho potrebuje pri sekcii KV: B3 je sekcia zjednodušenej
+    // faktúry z pokladne, B2 prijatej faktúry — bez druhu dokladu by odpoveď
+    // sľubovala sekciu aj tam, kam nepatrí. Agenda bez typu (OP) ho nemá.
+    const typDokladu = typZAgendy(String(row.agenda));
     pozadovane.set(`spor:${row.agenda}:${row.protistrana}`, {
       druh: 'spor_protistrany', blokuje: false, dokladov: Number(row.dokladov),
-      data: { agenda: row.agenda, protistrana: row.protistrana, ...(ico ? { protistranaIco: ico } : {}), varianty: otazka.varianty },
+      data: {
+        agenda: row.agenda, protistrana: row.protistrana, ...(ico ? { protistranaIco: ico } : {}),
+        ...(typDokladu ? { typDokladu } : {}), varianty: otazka.varianty,
+      },
     });
   }
 

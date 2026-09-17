@@ -16,7 +16,7 @@ import { najdiRozdelenie } from './uctoDennikService.js';
 import {
   DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, pravidloPodlaTextu, sekciaKvKluc, slovaPlnenia,
   sporPraxe, variantyRozpisu,
-  type PravidloText, type PraxVariant, type UctoPravidlo,
+  type PravidloText, type PraxVariant, type TvarCast, type UctoPravidlo,
 } from './uctoPravidlaService.js';
 import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
 
@@ -2798,6 +2798,14 @@ export interface VariantOtazky {
   od: string;
   do: string;
   kody: { predkontacia: string; clenenieDph: string; clenenieKv?: string };
+  /**
+   * Rozpis položiek podoby (PraxVariant.tvar). Bez neho karta otázky ukáže
+   * bloček m.bienský za PHM ako jeden účet, hoci firma ho delí 80/20 s polovicou
+   * dane (§49 ods. 5) — a práve to delenie je na ňom to podstatné.
+   */
+  casti?: TvarCast[];
+  /** Koľkými dokladmi je rozpis doložený; zlúčené podoby ho môžu mať iný. */
+  dokladovCasti?: number;
 }
 
 /** Otázka účtovníkovi (R09): protistrana má viac praxí s inou daňou. */
@@ -2811,6 +2819,10 @@ export interface OtazkaPraxe {
  * je spor (podobySporuDph), s kódmi, ktoré firma v číselníku ešte má. Podoby
  * s rovnakou hlavičkou (líšia sa len tvarom položiek) sa zlúčia — účtovník
  * vyberá hlavičku, nie tvar. Bez dvoch podôb s rôznou daňou otázka nie je.
+ *
+ * Tvar položiek zlúčenie zahodiť nesmie: prvá (najčastejšia) podoba ho nesie
+ * ďalej spolu s počtom svojich dokladov, aby karta otázky vedela povedať, že
+ * doklad sa delí, a na koľkých dokladoch to tak bolo.
  */
 export function otazkaPraxe(
   pravidlo: { konflikt: boolean; varianty: PraxVariant[] },
@@ -2834,6 +2846,7 @@ export function otazkaPraxe(
     zlucene.set(kluc, {
       predkontaciaId: predkontacia.id, clenenieDphId: clenenie.id, ...(kv ? { clenenieKvKod: kv } : {}),
       dokladov: variant.dokladov, od: variant.od, do: variant.do,
+      ...(variant.tvar?.length ? { casti: variant.tvar, dokladovCasti: variant.dokladov } : {}),
       kody: { predkontacia: predkontacia.kod.trim(), clenenieDph: clenenie.kod.trim(), ...(kv ? { clenenieKv: kv } : {}) },
       dan: danovyKluc(variant),
     });
