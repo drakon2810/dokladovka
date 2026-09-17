@@ -4,7 +4,7 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>Dokladovka.Agent</AssemblyName>
     <RootNamespace>Dokladovka.Agent</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.19.0</Version>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>

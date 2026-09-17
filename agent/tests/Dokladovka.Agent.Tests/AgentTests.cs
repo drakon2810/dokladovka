@@ -857,7 +857,12 @@ public sealed class AgentTests
         Assert.True(File.Exists(Path.Combine(schemaDirectory, "data.xsd")), "Najprv spustite agent/scripts/fetch-pohoda-xsd.ps1.");
         var xml = PohodaXml.BuildHistoryListRequest("12345678", "historia-request");
         Assert.Contains("invoiceType=\"receivable\"", xml, StringComparison.Ordinal);
+        // Likvidácie faktúr POHODA bez restrictionData neexportuje.
+        Assert.Equal(10, xml.Split("<lst:liquidations>true</lst:liquidations>").Length - 1);
         Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(xml));
+        var otvorene = PohodaXml.BuildOpenInvoicesRequest("12345678", "faktury-request");
+        Assert.Equal(10, otvorene.Split("<lst:listInvoiceRequest ").Length - 1);
+        Assert.Empty(new PohodaSchemaValidator(schemaDirectory).ValidateDataPack(otvorene));
     }
 
     // Pokladňa číselného radu. POHODA ju drží na rade pokladne (cashAccount),
@@ -1073,6 +1078,9 @@ public sealed class AgentTests
         Assert.Equal(3, importIds.Distinct().Count());
         var polozka = davky[1].Telo.GetProperty("rows")[1];
         Assert.Equal((10L, 11L), (polozka.GetProperty("dokladId").GetInt64(), polozka.GetProperty("polozkaId").GetInt64()));
+        // Hlavičky dokladov server s protokolom 2 nepozná (strict schéma).
+        Assert.False(davky[1].Telo.TryGetProperty("doklady", out _));
+        Assert.DoesNotContain(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/open-invoices", StringComparison.Ordinal));
 
         var publikacie = poziadavky.Where(poziadavka => poziadavka.Cesta.EndsWith("/publikuj", StringComparison.Ordinal)).ToArray();
         Assert.Equal(importIds.Select(id => $"/api/agent/organizations/org-1/importy/{id}/publikuj"), publikacie.Select(poziadavka => poziadavka.Cesta));
@@ -1083,6 +1091,23 @@ public sealed class AgentTests
         Assert.Equal("1|2|12", $"{historia.GetProperty("davok").GetInt32()}|{historia.GetProperty("pocet").GetInt32()}|{historia.GetProperty("manifest").GetProperty("agendy").GetArrayLength()}");
         Assert.Equal(2026, tela[2].GetProperty("manifest").GetProperty("rok").GetInt32());
         Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "treningAi"));
+    }
+
+    // Protokol 3: dávka histórie nesie aj hlavičky dokladov s väzbami. Otvorené
+    // faktúry idú na žiadosť servera celé v jednej požiadavke s databázou.
+    [Fact]
+    public async Task Protokol3PosielaHlavickyAOtvoreneFaktury()
+    {
+        var poziadavky = await SpustiCyklusAsync(Organizacie(3, otvoreneFaktury: true), poziadavka => OdpovedPohody(poziadavka));
+        var historia = JsonDocument.Parse(Assert.Single(poziadavky, poziadavka => poziadavka.Cesta.EndsWith("/ucto-history", StringComparison.Ordinal)).Telo).RootElement;
+        var doklad = Assert.Single(historia.GetProperty("doklady").EnumerateArray());
+        Assert.Equal("FP|10|DF260169|2026-07-16|0", $"{doklad.GetProperty("agenda").GetString()}|{doklad.GetProperty("dokladId").GetInt64()}|{doklad.GetProperty("dokladCislo").GetString()}|{doklad.GetProperty("datum").GetString()}|{doklad.GetProperty("vazby").GetArrayLength()}");
+
+        var otvorene = JsonDocument.Parse(Assert.Single(poziadavky, poziadavka => poziadavka.Cesta == "/api/agent/organizations/org-1/open-invoices").Telo).RootElement;
+        Assert.Equal("StwPh_12345678_2026", otvorene.GetProperty("databaza").GetString());
+        var faktura = Assert.Single(otvorene.GetProperty("faktury").EnumerateArray());
+        Assert.Equal("FP|20|123", $"{faktura.GetProperty("agenda").GetString()}|{faktura.GetProperty("dokladId").GetInt64()}|{faktura.GetProperty("zostatok").GetDecimal()}");
+        Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "otvoreneFaktury"));
     }
 
     // Výnimka histórie išla doteraz len do lokálneho logu a tréning sa ohlásil
@@ -1132,8 +1157,8 @@ public sealed class AgentTests
         Assert.Equal(25_000, dennik.GetProperty("itemCount").GetInt32());
     }
 
-    private static string Organizacie(int? protokol) =>
-        $$"""[{"organizationId":"org-1","ico":"12345678","nazov":"Firma","dbName":null,"uctovnyRok":null,"preferredYear":"latest","syncRequested":false,"trainingSyncRequested":true{{(protokol is null ? "" : $",\"historiaProtokol\":{protokol}")}}}]""";
+    private static string Organizacie(int? protokol, bool otvoreneFaktury = false) =>
+        $$"""[{"organizationId":"org-1","ico":"12345678","nazov":"Firma","dbName":null,"uctovnyRok":null,"preferredYear":"latest","syncRequested":false,"trainingSyncRequested":true{{(protokol is null ? "" : $",\"historiaProtokol\":{protokol}")}}{{(otvoreneFaktury ? ",\"openInvoicesSyncRequested\":true" : "")}}}]""";
 
     private static string VysledokTelemetrie(IEnumerable<(string Metoda, string Cesta, string Telo)> poziadavky, string kind)
     {
@@ -1169,6 +1194,14 @@ public sealed class AgentTests
                   <inv:invoiceDetail><inv:invoiceItem><inv:id>11</inv:id><inv:text>Toner HP</inv:text></inv:invoiceItem></inv:invoiceDetail>
                 </lst:invoice></lst:listInvoice></rsp:responsePackItem>
                 """ + string.Concat(Enumerable.Range(2, 11).Select(index => $"""<rsp:responsePackItem id="h{index:D2}" state="ok"/>""")) + "</rsp:responsePack>";
+        }
+        if (poziadavka.Contains("note=\"Export otvorenych faktur\"", StringComparison.Ordinal))
+        {
+            return hlavicka + """
+                <rsp:responsePackItem id="o01" state="ok"><lst:listInvoice version="2.0" state="ok"><lst:invoice version="2.0">
+                  <inv:invoiceHeader><inv:id>20</inv:id><inv:invoiceType>receivedInvoice</inv:invoiceType><inv:liquidation><typ:amountHome>123</typ:amountHome></inv:liquidation></inv:invoiceHeader>
+                </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+                """ + string.Concat(Enumerable.Range(2, 9).Select(index => $"""<rsp:responsePackItem id="o{index:D2}" state="ok"/>""")) + "</rsp:responsePack>";
         }
         if (poziadavka.Contains("note=\"Export uctovneho dennika\"", StringComparison.Ordinal))
         {
@@ -1785,6 +1818,113 @@ public sealed class DocumentFolderTests
         Assert.Equal("ok|1|Niektoré polia neboli exportované.", $"{agenda.Stav}|{agenda.Dokladov}|{agenda.Poznamka}");
         Assert.Empty(PohodaXml.ParseTrainingDecisions(response).Warnings);
     }
+
+    // Hlavička dokladu: riadok korpusu nesie len dátum vystavenia. Dátum dane,
+    // účtovania, dodania a KV, číslo dodávateľa, opravovaný doklad, symboly,
+    // mena s kurzom a súhrn podľa sadzieb idú zvlášť — aj pri doklade, ktorý
+    // korpusu nič nedá (dobropis nižšie nemá zaúčtovanie).
+    [Fact]
+    public void ParseHistoryRows_CitaHlavickuDokladuAVazby()
+    {
+        string Hlavicka(PohodaXml.HistoryDoklad d) => Riadok(
+            d.Agenda, d.DokladId, d.DokladCislo, d.Datum, d.DatumDane, d.DatumUctovania, d.DatumDodania, d.DatumKvDph, d.DatumUplatneniaDph,
+            d.ExterneCislo, d.OpravovanyDoklad, d.VarSymbol, d.ParSymbol, d.Mena, d.Kurz, d.KurzMnozstvo, d.SumaMena,
+            d.ZakladNulova, d.ZakladZnizena, d.DphZnizena, d.SadzbaZnizena, d.ZakladZakladna, d.DphZakladna, d.SadzbaZakladna,
+            d.Zaklad3, d.Dph3, d.Sadzba3, d.Zaokruhlenie);
+        string Vazba(PohodaXml.HistoryVazba v) => Riadok(v.Typ, v.DruhaAgenda, v.DruhyDokladId, v.DruhyDokladCislo, v.LikvidaciaId, v.Datum, v.Suma, v.SumaMena);
+
+        // Reálny export ALPINY: date z likvidácie (2026-07-27) nesmie prekryť dátumy hlavičky.
+        var printOffice = PohodaXml.ParseHistoryRows(ServerovaFixtura()).Doklady.First(doklad => doklad.DokladId == 54393);
+        Assert.Equal(
+            "FP|54393|DF260169|2026-07-16|2026-07-16|2026-07-16|2026-07-16|||262201902||262201902|262201902|||||181.64|0|0|19|49.7|11.43|23|0|0|5|0",
+            Hlavicka(printOffice));
+        Assert.Empty(printOffice.Vazby);
+
+        const string xml = """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:int="http://www.stormware.cz/schema/version_2/intDoc.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="h02" state="ok"><lst:listInvoice version="2.0" state="ok"><lst:invoice version="2.0">
+                <inv:invoiceHeader><inv:id>70</inv:id><inv:invoiceType>receivedCreditNotice</inv:invoiceType>
+                  <inv:number><typ:id>615</typ:id><typ:numberRequested>DF260200</typ:numberRequested></inv:number>
+                  <inv:originalDocument>CN-77</inv:originalDocument><inv:originalDocumentNumber>INV-2024-118</inv:originalDocumentNumber>
+                  <inv:date>2026-08-03</inv:date><inv:dateTax>2026-07-31</inv:dateTax><inv:dateApplicationVAT>2026-08-01</inv:dateApplicationVAT>
+                </inv:invoiceHeader>
+                <inv:invoiceSummary>
+                  <inv:homeCurrency><typ:priceHigh>-40</typ:priceHigh><typ:priceHighVAT rate="23">-9.2</typ:priceHighVAT><typ:round><typ:priceRound>0.01</typ:priceRound></typ:round></inv:homeCurrency>
+                  <inv:foreignCurrency><typ:currency><typ:id>3</typ:id><typ:ids>CZK</typ:ids></typ:currency><typ:rate>25.12</typ:rate><typ:amount>1</typ:amount><typ:priceSum>-1236</typ:priceSum></inv:foreignCurrency>
+                </inv:invoiceSummary>
+                <inv:linkedDocuments>
+                  <typ:link><typ:sourceAgenda>receivedInvoice</typ:sourceAgenda><typ:sourceDocument><typ:id>54393</typ:id><typ:number>DF260169</typ:number></typ:sourceDocument></typ:link>
+                  <typ:manualLink><typ:sourceAgenda>internalDocuments</typ:sourceAgenda><typ:sourceDocument><typ:number>INT0005</typ:number></typ:sourceDocument></typ:manualLink>
+                </inv:linkedDocuments>
+                <inv:liquidations><typ:liquidation><typ:id>901</typ:id><typ:date>2026-08-20</typ:date><typ:sourceAgenda>bank</typ:sourceAgenda>
+                  <typ:sourceDocument><typ:id>3301</typ:id><typ:number>BV26-015</typ:number></typ:sourceDocument>
+                  <typ:amount>-49.19</typ:amount><typ:foreignCurrencyAmount>-1236</typ:foreignCurrencyAmount><typ:foreignCurrencySource>0</typ:foreignCurrencySource></typ:liquidation></inv:liquidations>
+              </lst:invoice></lst:listInvoice></rsp:responsePackItem>
+              <rsp:responsePackItem id="h12" state="ok"><lst:listIntDoc version="2.0" state="ok"><lst:intDoc version="2.0">
+                <int:intDocHeader><int:id>70</int:id><int:number><typ:numberRequested>INT0005</typ:numberRequested></int:number>
+                  <int:symVar>2607</int:symVar><int:symPar>DF260200</int:symPar><int:originalDocumentNumber>DF260169</int:originalDocumentNumber>
+                  <int:date>2026-07-31</int:date><int:dateTax>2026-07-30</int:dateTax><int:dateAccounting>2026-08-02</int:dateAccounting>
+                  <int:dateDelivery>2026-07-15</int:dateDelivery><int:dateKVDPH>2026-08-01</int:dateKVDPH>
+                  <int:text>Samozdanenie</int:text><int:accounting><typ:ids>DD</typ:ids></int:accounting>
+                </int:intDocHeader>
+                <int:linkedDocuments><typ:manualLink><typ:sourceAgenda>receivedInvoice</typ:sourceAgenda><typ:sourceDocument><typ:id>54393</typ:id><typ:number>DF260169</typ:number></typ:sourceDocument></typ:manualLink></int:linkedDocuments>
+              </lst:intDoc></lst:listIntDoc></rsp:responsePackItem>
+            </rsp:responsePack>
+            """;
+        var parsed = PohodaXml.ParseHistoryRows(xml);
+        Assert.Equal(
+            [
+                "FP-D|70|DF260200|2026-08-03|2026-07-31||||2026-08-01|CN-77|INV-2024-118|||CZK|25.12|1|-1236|||||-40|-9.2|23||||0.01",
+                "INT|70|INT0005|2026-07-31|2026-07-30|2026-08-02|2026-07-15|2026-08-01|||DF260169|2607|DF260200|||||||||||||||",
+            ],
+            parsed.Doklady.Select(Hlavicka));
+        Assert.Equal(
+            ["link|receivedInvoice|54393|DF260169||||", "manualLink|internalDocuments||INT0005||||", "liquidation|bank|3301|BV26-015|901|2026-08-20|-49.19|-1236"],
+            parsed.Doklady[0].Vazby.Select(Vazba));
+        Assert.Equal(["manualLink|receivedInvoice|54393|DF260169||||"], parsed.Doklady[1].Vazby.Select(Vazba));
+        // Dobropis bez zaúčtovania korpusu nič nedal, hlavičku áno.
+        Assert.Equal(["INT"], parsed.Rows.Select(row => row.Agenda));
+    }
+
+    // Neuhradené faktúry: uhradená má v likvidácii len dátum, zostatok dobropisu
+    // je záporný a devízová nesie zostatok v mene. Suma je súhrn podľa sadzieb.
+    [Fact]
+    public void ParseOpenInvoices_BerieLenFakturySoZostatkom()
+    {
+        static string Odpoved(string o03) => """
+            <rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd" xmlns:inv="http://www.stormware.cz/schema/version_2/invoice.xsd" xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd" version="2.0" state="ok">
+              <rsp:responsePackItem id="o01" state="ok"><lst:listInvoice version="2.0" state="ok">
+                <lst:invoice version="2.0"><inv:invoiceHeader><inv:id>1</inv:id><inv:invoiceType>receivedInvoice</inv:invoiceType>
+                  <inv:number><typ:numberRequested>DF260001</typ:numberRequested></inv:number><inv:liquidation><typ:date>2026-02-01</typ:date></inv:liquidation></inv:invoiceHeader></lst:invoice>
+                <lst:invoice version="2.0"><inv:invoiceHeader><inv:id>2</inv:id><inv:invoiceType>receivedInvoice</inv:invoiceType>
+                  <inv:number><typ:id>615</typ:id><typ:numberRequested>DF260300</typ:numberRequested></inv:number><inv:symVar>260300</inv:symVar>
+                  <inv:partnerIdentity><typ:id>9</typ:id><typ:address><typ:company>Dodavatel s.r.o.</typ:company><typ:ico>12345678</typ:ico></typ:address></inv:partnerIdentity>
+                  <inv:liquidation><typ:amountHome>123</typ:amountHome></inv:liquidation></inv:invoiceHeader>
+                  <inv:invoiceSummary><inv:homeCurrency><typ:priceHigh>100</typ:priceHigh><typ:priceHighVAT rate="23">23</typ:priceHighVAT><typ:priceHighSum>123</typ:priceHighSum></inv:homeCurrency></inv:invoiceSummary></lst:invoice>
+                <lst:invoice version="2.0"><inv:invoiceHeader><inv:id>3</inv:id><inv:invoiceType>receivedInvoice</inv:invoiceType>
+                  <inv:number><typ:numberRequested>DF260301</typ:numberRequested></inv:number>
+                  <inv:liquidation><typ:date>2026-03-01</typ:date><typ:amountHome>99.52</typ:amountHome><typ:amountForeign>2500</typ:amountForeign></inv:liquidation></inv:invoiceHeader>
+                  <inv:invoiceSummary><inv:homeCurrency><typ:priceNone>199.04</typ:priceNone></inv:homeCurrency>
+                    <inv:foreignCurrency><typ:currency><typ:ids>CZK</typ:ids></typ:currency><typ:rate>25.12</typ:rate><typ:priceSum>5000</typ:priceSum></inv:foreignCurrency></inv:invoiceSummary></lst:invoice>
+              </lst:listInvoice></rsp:responsePackItem>
+            """ + o03 + string.Concat(Enumerable.Range(4, 7).Select(index => index == 6
+                ? """<rsp:responsePackItem id="o06" state="ok"><lst:listInvoice version="2.0" state="ok"><lst:invoice version="2.0"><inv:invoiceHeader><inv:id>2</inv:id><inv:invoiceType>issuedCreditNotice</inv:invoiceType><inv:liquidation><typ:amountHome>-50</typ:amountHome></inv:liquidation></inv:invoiceHeader></lst:invoice></lst:listInvoice></rsp:responsePackItem>"""
+                : $"""<rsp:responsePackItem id="o{index:D2}" state="ok"/>""")) + """<rsp:responsePackItem id="o02" state="ok"/></rsp:responsePack>""";
+
+        var faktury = PohodaXml.ParseOpenInvoices(Odpoved("""<rsp:responsePackItem id="o03" state="ok"/>"""));
+        Assert.Equal(
+            [
+                "FP|2|DF260300|12345678|Dodavatel s.r.o.|260300||123||123|",
+                "FP|3|DF260301||||CZK|199.04|5000|99.52|2500",
+                "FV-D|2||||||||-50|",
+            ],
+            faktury.Select(f => Riadok(f.Agenda, f.DokladId, f.DokladCislo, f.PartnerIco, f.PartnerNazov, f.VarSymbol, f.Mena, f.Suma, f.SumaMena, f.Zostatok, f.ZostatokMena)));
+        // Neúplná odpoveď by na serveri nahradila celý zoznam — radšej nič.
+        var chyba = Assert.Throws<InvalidOperationException>(() => PohodaXml.ParseOpenInvoices(Odpoved("""<rsp:responsePackItem id="o03" state="error" note="Chýba právo."/>""")));
+        Assert.Contains("FP-T: error", chyba.Message, StringComparison.Ordinal);
+    }
+
+    private static string Riadok(params object?[] polia) => string.Join("|", polia.Select(pole => Convert.ToString(pole, System.Globalization.CultureInfo.InvariantCulture)));
 
     private static string ServerovaFixtura()
     {

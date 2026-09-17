@@ -118,6 +118,9 @@ public static class PohodaXml
         ("receivable", "OP"),
     ];
 
+    // Celá agenda FA: typy s vlastnou agendou korpusu a ostatné záväzky (pozri nižšie).
+    private static readonly (string Type, string Agenda)[] FakturoveAgendy = [.. HistoryInvoiceTypes, ("commitment", "OZ")];
+
     /// <summary>
     /// Účtovný profil: export VŠETKÝCH dokladových agend (faktúry prijaté aj
     /// vydané vrátane dobropisov, ťarchopisov a zálohových, ostatné záväzky,
@@ -137,10 +140,12 @@ public static class PohodaXml
     // ponytail: jedna požiadavka bez stránkovania na databázu (stačí všetkým 8
     //   firmám). Keď firma narazí na parts alebo timeout, stránkovať agendy
     //   cez ftr:idFrom ako denník.
+    // Likvidácie faktúry POHODA bez restrictionData neexportuje (predvolene false);
+    // väzby (linkedDocuments, záložka „Doklady") áno.
     private static readonly (string Poziadavka, string? Agenda, string Xml)[] HistoryRequests =
     [
-        .. HistoryInvoiceTypes.Append((Type: "commitment", Agenda: "OZ")).Select(item => (item.Type, (string?)item.Agenda,
-            $"""<lst:listInvoiceRequest version="2.0" invoiceType="{item.Type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest>""")),
+        .. FakturoveAgendy.Select(item => (item.Type, (string?)item.Agenda,
+            $"""<lst:listInvoiceRequest version="2.0" invoiceType="{item.Type}" invoiceVersion="2.0"><lst:requestInvoice/><lst:restrictionData><lst:liquidations>true</lst:liquidations></lst:restrictionData></lst:listInvoiceRequest>""")),
         // Pokladňa nesie príjem aj výdaj (PPD/VPD) — agenda sa určí až z dokladu.
         ("voucher", null, """<lst:listVoucherRequest version="2.0" voucherVersion="2.0"><lst:requestVoucher/></lst:listVoucherRequest>"""),
         ("intDoc", "INT", """<lst:listIntDocRequest version="2.0" intDocVersion="2.0"><lst:requestIntDoc/></lst:listIntDocRequest>"""),
@@ -158,6 +163,65 @@ public static class PohodaXml
 {string.Join("\n", items)}
 </dat:dataPack>
 """;
+    }
+
+    /// <summary>
+    /// Neuhradené faktúry pre párovanie banky — celá agenda FA. Filter na
+    /// neuhradené XML export nemá; vyberá ich ParseOpenInvoices podľa zostatku.
+    /// </summary>
+    public static string BuildOpenInvoicesRequest(string ico, string requestId)
+    {
+        var items = FakturoveAgendy.Select((item, index) =>
+            $"""  <dat:dataPackItem id="o{index + 1:D2}" version="2.0"><lst:listInvoiceRequest version="2.0" invoiceType="{item.Type}" invoiceVersion="2.0"><lst:requestInvoice/></lst:listInvoiceRequest></dat:dataPackItem>""");
+        return $"""
+<?xml version="1.0" encoding="Windows-1250"?>
+<dat:dataPack version="2.0" id="{Escape(requestId)}" ico="{Escape(ico)}" application="Dokladovka" note="Export otvorenych faktur"
+  xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
+  xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd">
+{string.Join("\n", items)}
+</dat:dataPack>
+""";
+    }
+
+    /// <summary>Neuhradená faktúra. Mena null = domáca; zostatok je „K likvidácii" z POHODY.</summary>
+    public sealed record OpenInvoice(
+        string Agenda, long DokladId, string? DokladCislo, string? PartnerIco, string? PartnerNazov, string? VarSymbol,
+        string? Mena, decimal? Suma, decimal? SumaMena, decimal? Zostatok, decimal? ZostatokMena);
+
+    /// <summary>
+    /// Faktúry so zostatkom k likvidácii. Uhradená faktúra ho nemá — v jej
+    /// liquidation POHODA vypíše len dátum (reálny export ALPINY). Server zoznam
+    /// nahradí celý, preto neúplná odpoveď (chyba, chýbajúca požiadavka, parts)
+    /// nevráti nič a spadne: časť faktúr by z párovania ticho zmizla.
+    /// </summary>
+    public static IReadOnlyList<OpenInvoice> ParseOpenInvoices(string xml)
+    {
+        var document = XDocument.Parse(xml, LoadOptions.None);
+        var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
+        if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
+        for (var index = 1; index <= FakturoveAgendy.Length; index++)
+        {
+            var stav = StavPoziadavky(root.Elements().FirstOrDefault(item => IsStormware(item) && item.Name.LocalName == "responsePackItem" && item.Attribute("id")?.Value == $"o{index:D2}"));
+            if (stav != "ok") throw new InvalidOperationException($"POHODA nevrátila všetky faktúry ({FakturoveAgendy[index - 1].Agenda}: {stav}): {ErrorNote(root)}");
+        }
+        var faktury = new List<OpenInvoice>();
+        foreach (var (element, _, agenda) in HistoryDocuments(document))
+        {
+            var header = Dieta(element, "invoiceHeader");
+            var likvidacia = Dieta(header, "liquidation");
+            var zostatok = Ciastka(likvidacia, "amountHome");
+            var zostatokMena = Ciastka(likvidacia, "amountForeign");
+            // Nenulový, nie kladný: zostatok dobropisu je záporný.
+            if (header is null || NativeId(header) is not long dokladId || (zostatok ?? 0) == 0 && (zostatokMena ?? 0) == 0) continue;
+            var h = CitajHlavicku(element, header, agenda(header), dokladId, null, null);
+            decimal?[] casti = [h.ZakladNulova, h.ZakladZnizena, h.DphZnizena, h.ZakladZakladna, h.DphZakladna, h.Zaklad3, h.Dph3, h.Zaokruhlenie];
+            var partner = Dieta(header, "partnerIdentity");
+            faktury.Add(new OpenInvoice(
+                h.Agenda, dokladId, Trimmed(FindText(header, "numberRequested") ?? FindText(header, "number")),
+                Trimmed(partner is null ? null : FindText(partner, "ico")), Trimmed(partner is null ? null : FindText(partner, "company")),
+                h.VarSymbol, h.Mena, casti.Any(cast => cast is not null) ? casti.Sum() : null, h.SumaMena, zostatok, zostatokMena));
+        }
+        return faktury;
     }
 
     /// <summary>
@@ -274,11 +338,36 @@ public static class PohodaXml
     /// </summary>
     public sealed record SeriesRow(string ExternalId, string Kod, string Agenda, string? PosledneCislo);
 
+    /// <summary>
+    /// Hlavička dokladu — to, čo riadok korpusu nenesie: dátum dane, účtovania,
+    /// dodania a KV (každý zvlášť, nie jeden dátum za všetky), číslo dokladu
+    /// dodávateľa (originalDocument) oddelene od opravovaného dokladu
+    /// (originalDocumentNumber), symboly, mena s kurzom a súhrn podľa sadzieb
+    /// DPH. Znížená/základná/tretia sadzba sú polia POHODY (priceLow/High/3),
+    /// percento nesie atribút rate. Doklad bez natívneho id sa neposiela.
+    /// </summary>
+    public sealed record HistoryDoklad(
+        string Agenda, long DokladId, string? DokladCislo,
+        string? Datum, string? DatumDane, string? DatumUctovania, string? DatumDodania, string? DatumKvDph, string? DatumUplatneniaDph,
+        string? ExterneCislo, string? OpravovanyDoklad, string? VarSymbol, string? ParSymbol,
+        string? Mena, decimal? Kurz, int? KurzMnozstvo, decimal? SumaMena,
+        decimal? ZakladNulova, decimal? ZakladZnizena, decimal? DphZnizena, decimal? SadzbaZnizena,
+        decimal? ZakladZakladna, decimal? DphZakladna, decimal? SadzbaZakladna,
+        decimal? Zaklad3, decimal? Dph3, decimal? Sadzba3, decimal? Zaokruhlenie,
+        IReadOnlyList<HistoryVazba> Vazby);
+
+    /// <summary>Väzba dokladu (linkedDocuments: link = prenos, manualLink = ručná
+    /// väzba) alebo jeho likvidácia (liquidation) s druhým dokladom a sumou.
+    /// Iba export — importom sa väzba v POHODE nezaloží.</summary>
+    public sealed record HistoryVazba(
+        string Typ, string? DruhaAgenda, long? DruhyDokladId, string? DruhyDokladCislo,
+        long? LikvidaciaId = null, string? Datum = null, decimal? Suma = null, decimal? SumaMena = null);
+
     /// <summary>Agendy = manifest prenosu po požiadavkách (h01…): stav, počty
     /// a preskočené podľa dôvodu. ProgramVersion a Kluc sú z hlavičky odpovede.</summary>
     public sealed record ParsedHistory(
         IReadOnlyList<HistoryRow> Rows, IReadOnlyList<string> Warnings, IReadOnlyList<SeriesRow> Series,
-        IReadOnlyList<ImportAgenda> Agendy, string? ProgramVersion, string? Kluc);
+        IReadOnlyList<ImportAgenda> Agendy, string? ProgramVersion, string? Kluc, IReadOnlyList<HistoryDoklad> Doklady);
 
     /// <summary>
     /// Rozloží odpoveď na BuildHistoryListRequest na riadky korpusu. Hlavička bez
@@ -344,6 +433,7 @@ public static class PohodaXml
         var root = document.Root ?? throw new InvalidOperationException("POHODA vrátila prázdne XML.");
         if (root.Attribute("state")?.Value == "error") throw new InvalidOperationException($"POHODA vrátila chybu: {ErrorNote(root)}");
         var rows = new List<HistoryRow>();
+        var doklady = new List<HistoryDoklad>();
         var series = new Dictionary<string, SeriesRow>(StringComparer.Ordinal);
 
         // Počty po responsePackItem (h01…) — z nich je manifest prenosu.
@@ -378,6 +468,8 @@ public static class PohodaXml
             var strediskoHlavicky = RefIds(header, "centre");
             var krajina = KrajinaPartnera(partner);
             var dokladId = NativeId(header);
+            // Hlavička ide za každý doklad, aj ten, ktorý korpusu nič nedá.
+            if (dokladId is long id) doklady.Add(CitajHlavicku(element, header, agendaDokladu, id, dokladCislo, datum));
             // Hlavička bez textu alebo bez zaúčtovania doteraz zahodila celý doklad
             // aj s položkami (F11) — a práve v nich býva rozúčtovanie, napríklad
             // „Natural 95 (nedaňová časť 20 %)" s PHM-Nadspotreba / PN. Hlavičkový
@@ -508,7 +600,49 @@ public static class PohodaXml
                 pocet.Dokladov, pocet.Poloziek, pocet.Riadkov, pocet.Preskocene);
         }).ToArray();
         return new ParsedHistory(rows, warnings, series.Values.ToArray(), agendy,
-            Trimmed(root.Attribute("programVersion")?.Value), Trimmed(root.Attribute("key")?.Value));
+            Trimmed(root.Attribute("programVersion")?.Value), Trimmed(root.Attribute("key")?.Value), doklady);
+    }
+
+    private static XElement? Dieta(XElement? rodic, string localName) =>
+        rodic?.Elements().FirstOrDefault(node => IsStormware(node) && node.Name.LocalName == localName);
+
+    /// <summary>Hlavička dokladu. Polia sú priame deti hlavičky — FindText by
+    /// vzal aj date z likvidácie. Súhrn je súrodenec hlavičky (invoiceSummary…).</summary>
+    private static HistoryDoklad CitajHlavicku(XElement element, XElement header, string agenda, long dokladId, string? dokladCislo, string? datum)
+    {
+        string? Pole(string localName) => Trimmed(Dieta(header, localName)?.Value);
+        var suhrn = Dieta(element, $"{element.Name.LocalName}Summary");
+        var domaca = Dieta(suhrn, "homeCurrency");
+        var cudzia = Dieta(suhrn, "foreignCurrency");
+        var zaokruhlenie = Dieta(domaca, "round");
+        decimal? Sadzba(string localName) =>
+            decimal.TryParse(Dieta(domaca, localName)?.Attribute("rate")?.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var sadzba) ? sadzba : null;
+        return new HistoryDoklad(
+            agenda, dokladId, dokladCislo,
+            datum, IsoDate(Pole("dateTax")), IsoDate(Pole("dateAccounting")), IsoDate(Pole("dateDelivery")),
+            IsoDate(Pole("dateKVDPH")), IsoDate(Pole("dateApplicationVAT")),
+            Pole("originalDocument"), Pole("originalDocumentNumber"), Pole("symVar"), Pole("symPar"),
+            cudzia is null ? null : RefIds(cudzia, "currency"), Ciastka(cudzia, "rate"), (int?)Ciastka(cudzia, "amount"), Ciastka(cudzia, "priceSum"),
+            Ciastka(domaca, "priceNone"), Ciastka(domaca, "priceLow"), Ciastka(domaca, "priceLowVAT"), Sadzba("priceLowVAT"),
+            Ciastka(domaca, "priceHigh"), Ciastka(domaca, "priceHighVAT"), Sadzba("priceHighVAT"),
+            Ciastka(domaca, "price3"), Ciastka(domaca, "price3VAT"), Sadzba("price3VAT"),
+            Ciastka(zaokruhlenie, "priceRound") ?? Ciastka(zaokruhlenie, "priceRoundSum"),
+            [
+                .. (Dieta(element, "linkedDocuments")?.Elements().Where(IsStormware) ?? []).Select(vazba =>
+                {
+                    var zdroj = Dieta(vazba, "sourceDocument");
+                    return new HistoryVazba(vazba.Name.LocalName, Trimmed(Dieta(vazba, "sourceAgenda")?.Value),
+                        zdroj is null ? null : NativeId(zdroj), Trimmed(Dieta(zdroj, "number")?.Value));
+                }),
+                .. (Dieta(element, "liquidations")?.Elements().Where(IsStormware) ?? []).Select(likvidacia =>
+                {
+                    var zdroj = Dieta(likvidacia, "sourceDocument");
+                    return new HistoryVazba("liquidation", Trimmed(Dieta(likvidacia, "sourceAgenda")?.Value),
+                        zdroj is null ? null : NativeId(zdroj), Trimmed(Dieta(zdroj, "number")?.Value),
+                        NativeId(likvidacia), IsoDate(Dieta(likvidacia, "date")?.Value),
+                        Ciastka(likvidacia, "amount"), Ciastka(likvidacia, "foreignCurrencyAmount"));
+                }),
+            ]);
     }
 
     private sealed class PoctyPoziadavky

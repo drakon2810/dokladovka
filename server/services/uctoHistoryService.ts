@@ -69,6 +69,101 @@ export const historyRowSchema = z.object({
 
 export type HistoryRow = z.infer<typeof historyRowSchema>;
 
+const datum = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const suma = z.number().finite();
+const cislo = z.string().trim().max(100);
+
+/**
+ * Hlavička dokladu z Mostíka (protokol 3): to, čo riadok korpusu nenesie —
+ * dátum dane, účtovania, dodania a KV zvlášť, číslo dodávateľa oddelene od
+ * opravovaného dokladu, symboly, mena s kurzom a súhrn podľa sadzieb. Väzby
+ * a likvidácie POHODA dáva len exportom (linkedDocuments, liquidations).
+ */
+export const historyDokladSchema = z.object({
+  agenda: z.enum(AGENDY),
+  dokladId: z.number().int().positive(),
+  dokladCislo: cislo.optional(),
+  datum: datum.optional(),
+  datumDane: datum.optional(),
+  datumUctovania: datum.optional(),
+  datumDodania: datum.optional(),
+  datumKvDph: datum.optional(),
+  datumUplatneniaDph: datum.optional(),
+  externeCislo: cislo.optional(),
+  opravovanyDoklad: cislo.optional(),
+  varSymbol: cislo.optional(),
+  parSymbol: cislo.optional(),
+  mena: z.string().trim().max(10).optional(),
+  kurz: suma.optional(),
+  kurzMnozstvo: z.number().int().optional(),
+  sumaMena: suma.optional(),
+  zakladNulova: suma.optional(),
+  zakladZnizena: suma.optional(),
+  dphZnizena: suma.optional(),
+  sadzbaZnizena: suma.optional(),
+  zakladZakladna: suma.optional(),
+  dphZakladna: suma.optional(),
+  sadzbaZakladna: suma.optional(),
+  zaklad3: suma.optional(),
+  dph3: suma.optional(),
+  sadzba3: suma.optional(),
+  zaokruhlenie: suma.optional(),
+  vazby: z.array(z.object({
+    typ: z.enum(['link', 'manualLink', 'liquidation']),
+    druhaAgenda: z.string().trim().max(50).optional(),
+    druhyDokladId: z.number().int().positive().optional(),
+    druhyDokladCislo: cislo.optional(),
+    likvidaciaId: z.number().int().positive().optional(),
+    datum: datum.optional(),
+    suma: suma.optional(),
+    sumaMena: suma.optional(),
+  }).strict()).max(1_000),
+}).strict();
+
+export type HistoryDoklad = z.infer<typeof historyDokladSchema>;
+
+/** Tabuľka POHODY, v ktorej je natívne id jedinečné — FP aj FP-D sú faktúry. */
+function tabulkaAgendy(agenda: string): 'invoice' | 'voucher' | 'intDoc' {
+  return agenda === 'PPD' || agenda === 'VPD' ? 'voucher' : agenda === 'INT' ? 'intDoc' : 'invoice';
+}
+
+/** camelCase polia → stĺpce tabuľky (zaklad3 → zaklad_3); jsonb_populate_recordset iné kľúče ignoruje. */
+function naStlpce(objekt: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(objekt).map(([kluc, hodnota]) => [kluc.replace(/[A-Z]|\d+/g, (znak) => `_${znak.toLowerCase()}`), hodnota]));
+}
+
+/**
+ * Hlavičky a väzby dokladov jednej databázy POHODY. Vymenia sa celé ako korpus
+ * pri publikácii — opakovaný prenos nič nezdvojí a doklad zmazaný v POHODE
+ * zmizne. Transakciu drží volajúci.
+ */
+export async function ulozDokladyHistorie(
+  db: Queryable,
+  input: { tenantId: string; organizationId: string; databaza: string; rok: number; doklady: HistoryDoklad[] },
+): Promise<{ dokladov: number; vazieb: number }> {
+  // Väzby zmaže kaskáda. Meno databázy bez ohľadu na veľkosť písmen (mServer a CLI ho píšu rôzne).
+  await db.query(
+    'DELETE FROM ucto_historia_doklady WHERE tenant_id=$1 AND organization_id=$2 AND lower(zdroj_databaza)=lower($3)',
+    [input.tenantId, input.organizationId, input.databaza],
+  );
+  const kluc = { tenant_id: input.tenantId, organization_id: input.organizationId, zdroj_databaza: input.databaza, rok: input.rok };
+  // Doklad dvakrát v prenose (zopakovaná dávka) sa uloží raz — vyhráva posledný.
+  const doklady = [...new Map(input.doklady.map((doklad) => [`${tabulkaAgendy(doklad.agenda)}:${doklad.dokladId}`, doklad])).values()]
+    .map((doklad) => ({ ...doklad, ...kluc, tabulka: tabulkaAgendy(doklad.agenda), pohoda_doklad_id: doklad.dokladId }));
+  const vazby = doklady.flatMap((doklad) => doklad.vazby.map((vazba, poradie) => ({
+    ...naStlpce(vazba), ...kluc, tabulka: doklad.tabulka, pohoda_doklad_id: doklad.pohoda_doklad_id, poradie,
+  })));
+  await db.query(
+    'INSERT INTO ucto_historia_doklady SELECT * FROM jsonb_populate_recordset(null::ucto_historia_doklady, $1::jsonb)',
+    [JSON.stringify(doklady.map(naStlpce))],
+  );
+  await db.query(
+    'INSERT INTO ucto_historia_vazby SELECT * FROM jsonb_populate_recordset(null::ucto_historia_vazby, $1::jsonb)',
+    [JSON.stringify(vazby)],
+  );
+  return { dokladov: doklady.length, vazieb: vazby.length };
+}
+
 /** Dávka: 20 000 krátkych riadkov sa pod bodyLimit (30 MB) pohodlne zmestí. */
 export const historyImportSchema = z.object({
   rows: z.array(historyRowSchema).max(20_000),
@@ -132,9 +227,8 @@ function riadokHash(row: ResolvedRow, poradie: number, zdrojDatabaza: string | u
   // doklad môžu mať to isté id. Tabuľka sa berie z agendy — FP aj FP-D sú faktúry.
   // Meno databázy bez ohľadu na veľkosť písmen: mServer a POHODA CLI ho píšu rôzne.
   if (row.dokladId && (row.riadokIndex ? row.polozkaId : true)) {
-    const tabulka = row.agenda === 'PPD' || row.agenda === 'VPD' ? 'voucher' : row.agenda === 'INT' ? 'intDoc' : 'invoice';
     return createHash('sha256')
-      .update(['pohoda', (zdrojDatabaza ?? '').toLowerCase(), tabulka, row.dokladId, row.polozkaId ?? 0].join('|'))
+      .update(['pohoda', (zdrojDatabaza ?? '').toLowerCase(), tabulkaAgendy(row.agenda), row.dokladId, row.polozkaId ?? 0].join('|'))
       .digest('hex').slice(0, 32);
   }
   // Odtlačok PÔVODU riadka, nie obsahu: opakovaný import tej istej histórie nič

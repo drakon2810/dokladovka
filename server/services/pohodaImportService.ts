@@ -5,7 +5,7 @@ import type { Database, Queryable } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { ulozTreningoveRiadky, type trainingRowSchema } from '../routes/aiTrainingRoutes.js';
 import { ulozDennik, type DennikRiadok } from './uctoDennikService.js';
-import { importUctoHistory, ulozRadyZDokladov, type HistoryRow } from './uctoHistoryService.js';
+import { importUctoHistory, ulozDokladyHistorie, ulozRadyZDokladov, type HistoryRow } from './uctoHistoryService.js';
 import { PREPOCET_PRAXE_KIND } from '../workerService.js';
 
 /**
@@ -100,10 +100,12 @@ export async function ulozDavku(
   });
 }
 
-function chybaManifestu(body: Publikacia, davky: Array<{ davka: number; pocet: number }>): string | undefined {
+function chybaManifestu(body: Publikacia, davky: Array<{ davka: number; pocet: number; s_hlavickami: boolean }>): string | undefined {
   if (davky.length !== body.davok || davky.some((row, index) => row.davka !== index)) {
     return `prišlo ${davky.length} z ${body.davok} dávok`;
   }
+  // Hlavičky dokladov sa kľúčujú aj rokom databázy.
+  if (davky.some((row) => row.s_hlavickami) && body.manifest.rok === undefined) return 'hlavičky dokladov bez roka databázy';
   const spolu = davky.reduce((sucet, row) => sucet + row.pocet, 0);
   if (spolu !== body.pocet) return `prišlo ${spolu} z ${body.pocet} riadkov`;
   // Stav agendy je jediný dôkaz úplnosti, aký POHODA dáva — celkový počet
@@ -149,8 +151,8 @@ export async function publikujImport(
     }
     if (beh.stav === 'zamietnuty') return { zamietnute: beh.chyba ?? 'zamietnutý' };
 
-    const davky = (await tx.query<{ davka: number; pocet: number } & Record<string, unknown>>(
-      'SELECT davka, pocet FROM pohoda_import_davky WHERE import_id=$1 ORDER BY davka', [importId],
+    const davky = (await tx.query<{ davka: number; pocet: number; s_hlavickami: boolean } & Record<string, unknown>>(
+      `SELECT davka, pocet, obsah ? 'doklady' AS s_hlavickami FROM pohoda_import_davky WHERE import_id=$1 ORDER BY davka`, [importId],
     )).rows;
     const chyba = chybaManifestu(body, davky);
     if (chyba) {
@@ -188,7 +190,15 @@ export async function publikujImport(
       for (const agenda of body.manifest.agendy) {
         for (const [dovod, pocet] of Object.entries(agenda.preskocene)) preskocene[dovod] = (preskocene[dovod] ?? 0) + pocet;
       }
-      vysledok = { ...historia, preskocene, rady };
+      // Hlavičky nesie len Mostík s protokolom 3. Prenos staršieho agenta ich
+      // nemá — ostanú tie z posledného prenosu, ktorý ich niesol.
+      const doklady = davky.some((row) => row.s_hlavickami)
+        ? await ulozDokladyHistorie(tx, {
+            ...scope, databaza: body.manifest.databaza, rok: body.manifest.rok!,
+            doklady: obsahy.flatMap((obsah) => obsah.doklady ?? []),
+          })
+        : undefined;
+      vysledok = { ...historia, preskocene, rady, ...(doklady && { doklady }) };
     } else if (body.druh === 'pamat') {
       // „Neučiť sa z dodávateľa" žije len na riadkoch pamäte. Výmena importovaných
       // riadkov by rozhodnutie účtovníka potichu zrušila, preto sa zapamätá.
