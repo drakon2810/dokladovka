@@ -191,7 +191,8 @@ describe('záznam opráv účtovníka', () => {
       'SELECT id, active, origin, dovod_source, supplier_ico, predkontacia_id, clenenie_dph_id, clenenie_kv_kod, ciselny_rad_id FROM accounting_rules WHERE organization_id=$1',
       [seeded.organizationId],
     )).rows;
-    expect(pravidla.find((pravidlo) => pravidlo.id === stare)?.active).toBe(false);
+    // Všeobecné pravidlo ostáva pre iné typy dokladov; nové pre FP má prednosť a rad z neho prevezme.
+    expect(pravidla.find((pravidlo) => pravidlo.id === stare)?.active).toBe(true);
     expect(pravidla.find((pravidlo) => pravidlo.id === ok.json().ruleId)).toMatchObject({
       active: true, origin: 'manual', dovod_source: 'human', supplier_ico: '31386946',
       predkontacia_id: kody.ina, clenenie_dph_id: kody.clenenie, clenenie_kv_kod: 'B2', ciselny_rad_id: kody.rad,

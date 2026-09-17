@@ -829,7 +829,7 @@ describe('návrhy pravidiel delenia položiek', () => {
         stav: 'potvrdene',
         hodnota: [{
           nazov: 'Známka', percentoZakladu: 50, percentoDph: 50, klucoveSlova: ['znamka'],
-          predkontaciaKod: 'Znamka', predkontaciaNedanovaKod: 'Znamka-nedan',
+          predkontaciaKod: 'Znamka', predkontaciaNedanovaKod: 'Znamka-nedan', clenenieDphNedanoveKod: 'PN',
         }],
       },
     });

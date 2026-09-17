@@ -38,6 +38,26 @@ async function insertStatement(
 }
 
 describe('payment service', () => {
+  it('ten istý VS u dvoch dokladov nespáruje nič a celá suma po čiastočnej úhrade nie je doplatok', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await insertInvoice(database, seeded, { vs: '555', total: 100 });
+    await insertInvoice(database, seeded, { vs: '555', total: 100 });
+    const ciastocna = await insertInvoice(database, seeded, { vs: '777', total: 300 });
+    await database.query(
+      `INSERT INTO document_payments (id,tenant_id,organization_id,document_id,amount,currency,paid_on,source)
+       VALUES ($1,$2,$3,$4,100,'EUR','2026-07-01','manual')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, ciastocna],
+    );
+    const statementId = await insertStatement(database, seeded, [
+      { popis: 'dva doklady', sumaSpolu: -100, vs: '555' },
+      { popis: 'plná suma znova', sumaSpolu: -300, vs: '777' },
+    ]);
+    const result = await matchStatementPayments(database, { tenantId: seeded.tenantId, organizationId: seeded.organizationId, statementDocumentId: statementId });
+    expect(result.matched).toEqual([]);
+  }, 90_000);
+
   it('spáruje odchádzajúce transakcie na otvorené faktúry podľa VS a sumy', async () => {
     const database = await createTestDatabase();
     databases.push(database);

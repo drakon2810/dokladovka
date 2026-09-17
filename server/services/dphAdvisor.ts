@@ -254,7 +254,7 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
     const uzemie = doklad.dodavatelKrajina && doklad.dodavatelKrajina !== 'SK' ? doklad.dodavatelKrajina : prefix;
     const sadzba = sadzbyDphPre(doklad.duzp)?.high;
     const dan = sadzba
-      ? ` DPH ${sadzba} % = ${round2((doklad.zaklad * sadzba) / 100).toFixed(2)} na vstupe aj výstupe.` : '';
+      ? ` Pri sadzbe ${sadzba} % by vymeraná DPH bola ${round2((doklad.zaklad * sadzba) / 100).toFixed(2)} — overte druh plnenia, dátum a nárok na odpočet.` : '';
     // Druh plnenia (služba či tovar) z dokladu nevyčítame. Členenie faktúry sa
     // preto navrhne, len keď ho všetky potvrdené druhy pre územie majú rovnaké.
     const druhy = (EU_DPH_PREFIXY.includes(uzemie) ? ['sluzby_eu', 'tovar_eu'] as const : ['sluzby_mimo_eu'] as const)
@@ -377,7 +377,7 @@ export function dphPokynyPreAi(profil: DphProfil): string[] {
   }
   if (profil.vratenieDph) {
     pokyny.push(profil.vratenieDph.uplatnujeme
-      ? `Zahraničnú DPH si firma nechá vrátiť (§55a) — položka cudzej dane je pohľadávka${profil.vratenieDph.predkontaciaKod ? ` na ${profil.vratenieDph.predkontaciaKod}` : ''}, nie náklad.`
+      ? `Zahraničnú DPH si firma nechá vrátiť (§55f) — položka cudzej dane je pohľadávka${profil.vratenieDph.predkontaciaKod ? ` na ${profil.vratenieDph.predkontaciaKod}` : ''}, nie náklad.`
       : 'Zahraničnú DPH si firma vrátiť nenecháva — cudzia daň je súčasťou nákladu.');
   }
   if (profil.tovarNaCeste !== undefined) {

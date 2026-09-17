@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { popisKodu } from './pohodaDphKody.js';
 
 /**
  * Katalóg faktov profilu klienta — jeden pre všetky firmy. Server tu drží
@@ -44,8 +45,13 @@ export const DD_REFY_TOVAR = ['D01', 'D03'];
 export const DD_REFY_SLUZBY = ['D02', 'D05'];
 /** DD strana: dovoz s daňou priznanou podľa § 84a ods. 3. */
 export const DD_REFY_DOVOZ = ['D07'];
-/** Odpočet samozdanenia na internom doklade (nadobudnutie, služby, dopravný prostriedok). */
-export const P_REFY_SAMOZDANENIA = ['P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P14', 'P29', 'P30'];
+/**
+ * Odpočet patriaci k dani na výstupe (RefTpDph). Partner, ktorý dodáva tovar aj
+ * služby, inak spáruje DDnadEU s PDsluz — odpočet musí byť z rovnakej rodiny.
+ */
+export const P_REFY_PRE_DD: Readonly<Record<string, readonly string[]>> = {
+  D01: ['P04', 'P05', 'P06'], D03: ['P14'], D02: ['P07', 'P08', 'P09'], D05: ['P07', 'P08', 'P09'], D07: ['P29', 'P30'],
+};
 
 const faktura = z.object({ clenenieKod: kod, kv: kv.optional() }).strict();
 const prijaty = z.object({
@@ -83,7 +89,10 @@ export const PROFIL_KATALOG: readonly PolozkaKatalogu[] = [
       predkontaciaKod: kod, predkontaciaNedanovaKod: kod, clenenieDphNedanoveKod: kod.optional(),
       // Ten istý benzín sa na faktúre karty účtuje inak ako na bločku zaplatenom kartou (iný záväzok).
       typyDokladov: z.array(z.enum(['FP', 'FV', 'OZ', 'PD', 'BV', 'MZDY'])).min(1).max(6).optional(),
-    }).strict()).max(50),
+    }).strict().refine((pravidlo) => pravidlo.percentoDph === 100 || Boolean(pravidlo.clenenieDphNedanoveKod), {
+      // Bez vlastného členenia by neodpočítaná časť zdedila odpočtové členenie hlavičky.
+      message: 'Časť bez odpočtu potrebuje členenie DPH bez nároku', path: ['clenenieDphNedanoveKod'],
+    })).max(50),
   },
   {
     kluc: 'naklady.bez_naroku', sekcia: 'naklady', blokuje: false,
@@ -117,6 +126,26 @@ const DRUH_POLA: Record<string, 'predkontacie' | 'cleneniaDph' | 'kv'> = {
   pPredkontaciaKod: 'predkontacie',
   kv: 'kv',
 };
+
+/**
+ * Kód v nesprávnej úlohe: DD na faktúre, P ako daň na výstupe, U na prijatej
+ * faktúre, KV mimo samozdanenia. Kód, ktorý POHODA nepozná, sa neposudzuje.
+ */
+export function chybaRoliKodov(kluc: string, hodnota: unknown): string | undefined {
+  if (!kluc.startsWith('samozdanenie.')) return undefined;
+  const h = (hodnota ?? {}) as { faktura?: { clenenieKod?: string }; interny?: { ddKod?: string; pKod?: string; kv?: string } };
+  const strana = (kod?: string) => (kod ? popisKodu(kod)?.strana : undefined);
+  const vydany = kluc.slice('samozdanenie.'.length) in REFY_VYDANYCH_DRUHOV;
+  const dd = strana(h.interny?.ddKod);
+  if (dd && dd !== 'DD') return `${h.interny!.ddKod} nie je daň na výstupe (DD…)`;
+  const p = strana(h.interny?.pKod);
+  if (p && p !== 'P') return `${h.interny!.pKod} nie je odpočet (P…)`;
+  const faktura = strana(h.faktura?.clenenieKod);
+  if (faktura === 'DD') return `${h.faktura!.clenenieKod} patrí na interný doklad, nie na faktúru`;
+  if (faktura && (faktura === 'U') !== vydany) return `${h.faktura!.clenenieKod} nepatrí na ${vydany ? 'vydanú' : 'prijatú'} faktúru`;
+  if (h.interny?.kv && !['B1', 'KN'].includes(h.interny.kv)) return `Sekcia KV ${h.interny.kv} k samozdaneniu nepatrí`;
+  return undefined;
+}
 
 /** Všetky kódy v hodnote faktu podľa druhu číselníka — na overenie pri zápise. */
 export function kodyHodnoty(hodnota: unknown): Record<'predkontacie' | 'cleneniaDph' | 'kv', string[]> {

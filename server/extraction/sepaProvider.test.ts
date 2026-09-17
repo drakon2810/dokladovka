@@ -110,6 +110,29 @@ describe('SepaStatementExtractionProvider', () => {
     expect(issues.filter((issue) => ['invalid_total', 'line_items_total_mismatch'].includes(issue.code))).toHaveLength(0);
   });
 
+  it('súbor s dvoma výpismi odmietne, aby sa druhý účet ticho nestratil', async () => {
+    const dva = CAMT053.replace('</Stmt>', '</Stmt><Stmt><Id>DRUHY</Id></Stmt>');
+    await expect(new SepaStatementExtractionProvider().extract(input(Buffer.from(dva))))
+      .rejects.toMatchObject({ code: 'unsupported_xml' });
+  });
+
+  it('hromadný pohyb rozdelí podľa súm transakcií, bez súm nepripíše partnera prvej transakcii', async () => {
+    const hromadny = (sumy: [string, string] | null) => CAMT053.replace(
+      /<Ntry>\s*<Amt Ccy="EUR">615\.00<\/Amt>[\s\S]*?<\/Ntry>/,
+      `<Ntry><Amt Ccy="EUR">615.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><BookgDt><Dt>2026-06-20</Dt></BookgDt><NtryDtls>`
+      + `<TxDtls>${sumy ? `<Amt Ccy="EUR">${sumy[0]}</Amt>` : ''}<Refs><EndToEndId>/VS111</EndToEndId></Refs><RltdPties><Cdtr><Nm>Prvý s.r.o.</Nm></Cdtr></RltdPties></TxDtls>`
+      + `<TxDtls>${sumy ? `<Amt Ccy="EUR">${sumy[1]}</Amt>` : ''}<Refs><EndToEndId>/VS222</EndToEndId></Refs><RltdPties><Cdtr><Nm>Druhý s.r.o.</Nm></Cdtr></RltdPties></TxDtls>`
+      + '</NtryDtls></Ntry>',
+    );
+    const provider = new SepaStatementExtractionProvider();
+    const rozdeleny = (await provider.extract(input(Buffer.from(hromadny(['215.00', '400.00']))))).result;
+    expect(rozdeleny.lineItems.slice(1).map((item) => [item.amountTotal, item.counterpartyName, item.variableSymbol]))
+      .toEqual([['-215.00', 'Prvý s.r.o.', '111'], ['-400.00', 'Druhý s.r.o.', '222']]);
+    const bezSum = (await provider.extract(input(Buffer.from(hromadny(null))))).result;
+    expect(bezSum.lineItems).toHaveLength(2);
+    expect(bezSum.lineItems[1]).toMatchObject({ amountTotal: '-615.00', counterpartyName: undefined, variableSymbol: undefined });
+  });
+
   it('ne-camt XML odmietne', async () => {
     const provider = new SepaStatementExtractionProvider();
     await expect(provider.extract(input(Buffer.from('<Document><Iny/></Document>'))))

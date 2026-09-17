@@ -26,6 +26,8 @@ export async function ulozPravidloProtistrany(tx: Queryable, input: {
   clenenieKvKod?: string;
   /** Odkiaľ výber prišiel — ide do dôvodu pravidla, napr. „doklad F-1". */
   zdroj: string;
+  /** Typ dokladu (FP, OZ, PD…), na ktorom prax platí; bez neho pravidlo platí na všetkých. */
+  typDokladu?: string;
   /** Doklad, na ktorom účtovník vyberal: jeho koncept výber už nesie, nový návrh nedostane. */
   documentId?: string;
 }) {
@@ -40,7 +42,7 @@ export async function ulozPravidloProtistrany(tx: Queryable, input: {
   if (!predkontacia || !clenenie) return undefined;
   const kv = input.clenenieKvKod ? platnyKvKod(input.clenenieKvKod) : undefined;
   const dovod = `Účtovník vybral prax ${predkontacia.code.trim()} / ${clenenie.code.trim()}${kv ? ` / ${kv}` : ''}`
-    + ` pre tohto dodávateľa (${input.zdroj}).`;
+    + ` pre tohto dodávateľa${input.typDokladu ? ` na dokladoch ${input.typDokladu}` : ''} (${input.zdroj}).`;
   const ruleId = randomUUID();
   // Deaktivujú sa pravidlá, ktoré by pri návrhu zasiahli — tá istá zhoda ako
   // v zhodnePravidla (IČO ALEBO meno), inak by staršie pravidlo vyhralo.
@@ -49,13 +51,25 @@ export async function ulozPravidloProtistrany(tx: Queryable, input: {
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND coalesce(keywords, '[]'::jsonb) = '[]'::jsonb
         AND (($3::text <> '' AND regexp_replace(coalesce(supplier_ico, ''), '[^0-9]', '', 'g')=$3)
           OR ($4::text <> '' AND supplier_name_normalized=$4))
+        -- Len pravidlá s rovnakým rozsahom: pravidlo pre OZ nevypne pravidlo pre všetky doklady.
+        AND typy_dokladov IS NOT DISTINCT FROM $5::text[]
       RETURNING id, ciselny_rad_id, stredisko_id, created_at`,
-    [tenantId, organizationId, ico, nazov],
+    [tenantId, organizationId, ico, nazov, input.typDokladu ? [input.typDokladu] : null],
   )).rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   // Rad a stredisko zo starých pravidiel sa prenesú — o nich účtovník
-  // nerozhodoval a nesmú ticho zmiznúť. Len kódy, ktoré sú ešte aktívne.
+  // nerozhodoval a nesmú ticho zmiznúť. Zdrojom sú vypnuté pravidlá aj všeobecné
+  // pravidlá dodávateľa, ktoré ostali platiť pre iné typy. Len aktívne kódy.
+  const vseobecne = input.typDokladu ? (await tx.query<{ ciselny_rad_id: string | null; stredisko_id: string | null } & Record<string, unknown>>(
+    `SELECT ciselny_rad_id, stredisko_id, created_at FROM accounting_rules
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND typy_dokladov IS NULL
+        AND coalesce(keywords, '[]'::jsonb) = '[]'::jsonb
+        AND (($3::text <> '' AND regexp_replace(coalesce(supplier_ico, ''), '[^0-9]', '', 'g')=$3)
+          OR ($4::text <> '' AND supplier_name_normalized=$4))
+      ORDER BY created_at`,
+    [tenantId, organizationId, ico, nazov],
+  )).rows : [];
   const prenesene = async (pole: 'ciselny_rad_id' | 'stredisko_id') => {
-    for (const row of deaktivovane) {
+    for (const row of [...deaktivovane, ...vseobecne]) {
       const kodId = row[pole];
       if (!kodId) continue;
       const aktivny = await tx.query('SELECT 1 FROM code_list_items WHERE id=$1 AND tenant_id=$2 AND organization_id=$3 AND active=true',
@@ -69,10 +83,10 @@ export async function ulozPravidloProtistrany(tx: Queryable, input: {
   await tx.query(
     `INSERT INTO accounting_rules
       (id,tenant_id,organization_id,supplier_ico,supplier_name_normalized,keywords,predkontacia_id,clenenie_dph_id,
-       clenenie_kv_kod,ciselny_rad_id,stredisko_id,origin,dovod,dovod_source,dovod_updated_at,dovod_updated_by)
-     VALUES ($1,$2,$3,$4,$5,'[]'::jsonb,$6,$7,$8,$9,$10,'manual',$11,'human',now(),$12)`,
+       clenenie_kv_kod,ciselny_rad_id,stredisko_id,origin,dovod,dovod_source,dovod_updated_at,dovod_updated_by,typy_dokladov)
+     VALUES ($1,$2,$3,$4,$5,'[]'::jsonb,$6,$7,$8,$9,$10,'manual',$11,'human',now(),$12,$13::text[])`,
     [ruleId, tenantId, organizationId, ico || null, nazov || null,
-      predkontacia.id, clenenie.id, kv ?? null, rad, stredisko, dovod, input.userId],
+      predkontacia.id, clenenie.id, kv ?? null, rad, stredisko, dovod, input.userId, input.typDokladu ? [input.typDokladu] : null],
   );
   // Otázka zmizne zo všetkých otvorených dokladov tejto protistrany — pravidlo
   // o nej už rozhodlo a ďalší návrh ju nevytvorí.
@@ -82,6 +96,7 @@ export async function ulozPravidloProtistrany(tx: Queryable, input: {
       WHERE s.tenant_id=$1 AND s.organization_id=$2 AND s.otazka IS NOT NULL`,
     [tenantId, organizationId],
   )).rows.filter((row) => {
+    if (input.typDokladu && row.document_type !== input.typDokladu) return false;
     const ina = protistranaDokladu(row.document_type, row.extracted);
     const inaIco = String(ina.ico ?? '').replace(/\D/g, '');
     return ico ? inaIco === ico : !inaIco && normalizeName(ina.nazov) === nazov;

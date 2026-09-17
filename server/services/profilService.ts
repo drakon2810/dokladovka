@@ -6,7 +6,7 @@ import { clenenieVyzeraNaOdpocet, EU_DPH_PREFIXY } from './dphAdvisor.js';
 import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
 import { ulozPravidloProtistrany } from './pravidloProtistrany.js';
 import {
-  DD_REFY_DOVOZ, DD_REFY_SLUZBY, DD_REFY_TOVAR, kodyHodnoty, P_REFY_SAMOZDANENIA, polozkaKatalogu, REFY_VYDANYCH_DRUHOV,
+  chybaRoliKodov, DD_REFY_DOVOZ, DD_REFY_SLUZBY, DD_REFY_TOVAR, kodyHodnoty, P_REFY_PRE_DD, polozkaKatalogu, REFY_VYDANYCH_DRUHOV,
   type DruhSamozdanenia,
 } from './profilKatalog.js';
 import { DOKLAD_KLUC_SQL, navrhyPravidielDelenia, sporPraxe, type NavrhDelenia, type PraxVariant } from './uctoPravidlaService.js';
@@ -117,6 +117,8 @@ export async function ulozFakt(
       throw new HttpError(400, 'profil_hodnota_neplatna', 'Hodnota faktu nemá správny tvar', overena.error.issues);
     }
     hodnota = overena.data;
+    const zlaRola = chybaRoliKodov(kluc, hodnota);
+    if (zlaRola) throw new HttpError(400, 'profil_kod_zla_rola', zlaRola);
     const kody = kodyHodnoty(hodnota);
     const aktivne = new Set((await tx.query<{ kind: string; code: string } & Record<string, unknown>>(
       `SELECT kind, btrim(code) AS code FROM code_list_items
@@ -188,7 +190,7 @@ export async function odpovedzOtazke(
       tenantId: firma.tenantId, organizationId: firma.organizationId, userId: firma.userId, correlationId: firma.correlationId,
       ico: String(data.protistranaIco ?? '').replace(/\D/g, ''), nazov: normalizeName(data.protistrana),
       predkontaciaId: variant.predkontaciaId, clenenieDphId: variant.clenenieDphId, clenenieKvKod: variant.clenenieKvKod,
-      zdroj: 'otázka v profile klienta',
+      zdroj: 'otázka v profile klienta', typDokladu: typZAgendy(String(data.agenda ?? '')),
     });
     // Číselník sa medzičasom zmenil — podoby treba spočítať znova, nie hádať.
     if (!pravidlo) throw new HttpError(409, 'profil_otazka_zastarana', 'Predkontácia alebo členenie možnosti už nie je aktívne v číselníku firmy');
@@ -275,12 +277,17 @@ function zhodne(navrh: unknown, hodnota: unknown): boolean {
   return navrh === hodnota;
 }
 
+/** Agenda histórie → typ dokladu Dokladovky; neznáma agenda pravidlo neobmedzí. */
+const typZAgendy = (agenda: string): string | undefined =>
+  agenda.startsWith('FP') ? 'FP' : agenda === 'OZ' ? 'OZ' : agenda === 'VPD' || agenda === 'PPD' ? 'PD' : agenda === 'INT' ? 'MZDY' : undefined;
+
 /** Faktúra dodávateľa (aj jej podtypy) a ostatný záväzok. */
 const naFakture = (agenda: string) => agenda === 'OZ' || agenda === 'FP' || agenda.startsWith('FP-');
 /** Oslobodené plnenia na vydanej strane mimo prefixu UK. */
-const OSLOBODENE_U = ['UNodpBez', 'UNodpS', 'UNoslob', 'UNodpBez-OsU'];
+// Len oslobodené plnenia BEZ nároku na odpočet vedú ku kráteniu. UNodpS (s nárokom),
+// UK… (nezapočítať do koeficientu) ani opravy UKrozdiel samy koeficient nedokazujú.
+const OSLOBODENE_U = ['UNodpBez', 'UNodpBez-OsU', 'UKodpBez', 'UKodpBez-OsU'];
 /** Slovenské sadzby DPH naprieč rokmi — iná sadzba na položke je cudzia daň. */
-const SK_SADZBY = [0, 5, 10, 19, 20, 23];
 /** Od koľkých dokladov s cudzou daňou sa pýtame na jej vrátenie (§55a). */
 const VRATENIE_DPH_OD = 3;
 /** Koľko dokladov s odpočtom bez jediného krátenia stačí na návrh „nemá oslobodené plnenia". */
@@ -361,7 +368,7 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
 
   const oslobodene = vsetky.filter((doklad) => doklad.riadky.some((riadok) => {
     const popis = popisKodu(riadok.dph);
-    return (popis?.strana === 'U' && (popis.kod.startsWith('UK') || OSLOBODENE_U.includes(popis.kod)))
+    return (popis?.strana === 'U' && OSLOBODENE_U.includes(popis.kod))
       || (popis?.strana === 'P' && popis.kod.startsWith('PK'));
   }));
   if (oslobodene.length > 0) {
@@ -398,7 +405,7 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     // Odpočet samozdanenia patrí na interný doklad, nie na faktúru — PD na
     // faktúre tej istej protistrany je bežný tuzemský nákup.
     const pVyskyty = ich.filter((doklad) => !naFakture(doklad.agenda)).flatMap((doklad) => doklad.riadky
-      .filter((riadok) => P_REFY_SAMOZDANENIA.includes(popisKodu(riadok.dph)?.ref ?? ''))
+      .filter((riadok) => (P_REFY_PRE_DD[popisKodu(dd[0].hodnota.ddKod)?.ref ?? ''] ?? []).includes(popisKodu(riadok.dph)?.ref ?? ''))
       .map((riadok) => ({ hodnota: { pKod: riadok.dph!, kv: riadok.kv }, doklad, pk: riadok.pk })));
     const p = podlaDokladov(pVyskyty)[0]?.hodnota;
     // Predkontácia interného dokladu (aInt, bInt) — najčastejšia pri vybranom kóde.
@@ -460,7 +467,8 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
   const sCudzouDanou = vsetky.filter((doklad) => {
     const krajina = doklad.protistrana ? krajiny.get(doklad.protistrana) : undefined;
     return (naFakture(doklad.agenda) || doklad.agenda === 'VPD') && krajina && krajina !== 'SK'
-      && doklad.riadky.some((riadok) => riadok.idx > 0 && riadok.sadzba !== undefined && !SK_SADZBY.includes(riadok.sadzba));
+      // Kladná sadzba u zahraničného dodávateľa je jeho daň — AT 20 % či DE 19 % sa so slovenskou sadzbou len zhodujú.
+      && doklad.riadky.some((riadok) => riadok.idx > 0 && riadok.sadzba !== undefined && riadok.sadzba > 0);
   });
 
   // Účty bez nároku: ten istý výber ako pri návrhu zaúčtovania, s prahom návrhu.
@@ -474,7 +482,8 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     .filter((kod) => kod.kind === 'predkontacie' && String(kod.ucet_md ?? '').trim().startsWith('5'))
     .map((kod) => kod.code));
   const bezNaroku = [...await uctyBezOdpoctu(tx, firma, [...new Set(vsetky.map((doklad) => doklad.agenda))],
-    cleneniaBezOdpoctu, undefined, MIN_DOKLADOV_NAVRHU)]
+    // Návrh faktu platí bez výnimky — účet, na ktorom firma niekedy odpočítala, fakt nedostane.
+    cleneniaBezOdpoctu, undefined, MIN_DOKLADOV_NAVRHU, 1)]
     .filter(([ucet]) => predkontacieFirmy.has(ucet))
     .sort(([a], [b]) => porovnaj(a, b));
   if (bezNaroku.length > 0) {

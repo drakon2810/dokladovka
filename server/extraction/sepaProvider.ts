@@ -79,6 +79,11 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
     if (!statement) {
       throw new ExtractionProviderError('unsupported_xml', 'XML nie je bankový výpis camt.053', false);
     }
+    // Jeden doklad = jeden výpis. Druhý účet či obdobie by sa inak ticho stratili.
+    if (statements.length > 1) {
+      throw new ExtractionProviderError('unsupported_xml',
+        `Súbor obsahuje ${statements.length} výpisy (viac účtov alebo období) — nahrajte každý výpis zvlášť`, false);
+    }
 
     const account = asArray(statement.Acct)[0] ?? {};
     const iban = text(account.Id?.IBAN)?.replace(/\s/g, '');
@@ -101,12 +106,28 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
     const entries = asArray(statement.Ntry);
     let credits = 0;
     let debits = 0;
-    const lineItems = entries.map((entry: any) => {
+    let hromadnych = 0;
+    const lineItems = entries.flatMap((entry: any) => {
       const amount = signedAmount(entry.Amt, entry.CdtDbtInd);
       if (amount && amount.numeric >= 0) credits += 1;
       if (amount && amount.numeric < 0) debits += 1;
       const bookingDate = isoDate(asArray(entry.BookgDt)[0]?.Dt) ?? isoDate(asArray(entry.ValDt)[0]?.Dt);
-      const details = asArray(asArray(entry.NtryDtls)[0]?.TxDtls)[0] ?? {};
+      const transakcie = asArray(entry.NtryDtls).flatMap((item: any) => asArray(item?.TxDtls));
+      if (transakcie.length <= 1) return [pohyb(entry, transakcie[0] ?? {}, amount, bookingDate)];
+      // Hromadný pohyb: rozdelí sa len vtedy, keď každá transakcia nesie sumu a spolu
+      // dajú sumu pohybu. Inak ostane jeden pohyb bez protistrany a symbolov — prvá
+      // transakcia by celú sumu pripísala jednému partnerovi.
+      const casti = transakcie.map((tx: any) =>
+        signedAmount(tx.Amt ?? tx.AmtDtls?.TxAmt?.Amt ?? tx.AmtDtls?.InstdAmt?.Amt, tx.CdtDbtInd ?? entry.CdtDbtInd));
+      const sucet = casti.reduce((spolu: number, cast: SignedAmount | undefined) => spolu + (cast?.numeric ?? Number.NaN), 0);
+      hromadnych += 1;
+      if (amount && Math.abs(sucet - amount.numeric) < 0.005) {
+        return transakcie.map((tx: any, index: number) => pohyb(entry, tx, casti[index], bookingDate));
+      }
+      return [{ ...pohyb(entry, {}, amount, bookingDate), description: text(entry.AddtlNtryInf) ?? 'Hromadná transakcia' }];
+    });
+
+    function pohyb(entry: any, details: any, amount: SignedAmount | undefined, bookingDate: string | undefined) {
       const parties = asArray(details.RltdPties)[0] ?? {};
       // Kreditný pohyb prišiel OD dlžníka (Dbtr), debetný išiel veriteľovi (Cdtr).
       const debit = Boolean(amount && amount.numeric < 0);
@@ -138,7 +159,7 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
         constantSymbol: symbol('KS'),
         specificSymbol: symbol('SS'),
       };
-    });
+    }
 
     const result: ExtractionResult = {
       schemaVersion: EXTRACTION_SCHEMA_VERSION,
@@ -173,7 +194,11 @@ export class SepaStatementExtractionProvider implements ServerDocumentExtraction
           + `${entries.length} transakcií (${credits} kredit, ${debits} debet), `
           + `počiatočný zostatok ${opening.amount?.value ?? '—'}, konečný ${closing.amount?.value ?? '—'} ${currency}`,
         severity: 'info',
-      }],
+      }, ...(hromadnych > 0 ? [{
+        code: 'sepa_hromadne_transakcie',
+        message: `${hromadnych} hromadných pohybov — rozdelené na transakcie len tam, kde ich sumy sedia; ostatné sú bez protistrany`,
+        severity: 'warning' as const,
+      }] : [])],
     };
 
     return { result, model: 'camt.053' };

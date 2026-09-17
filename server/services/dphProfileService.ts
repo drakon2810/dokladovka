@@ -134,11 +134,16 @@ export async function loadDphProfil(
         break;
       case 'vozidla.pravidla':
         profil.pravidlaAut = polozky.map((pravidlo) => ({
-          kategoria: pravidlo.nazov, percento: pravidlo.percentoZakladu, percentoDph: pravidlo.percentoDph,
+          // Celý daňový náklad, odpočet len časť (100/50): delí sa len daň, obe časti na účte daňovej časti.
+          kategoria: pravidlo.nazov,
+          percento: pravidlo.percentoZakladu === 100 && pravidlo.percentoDph < 100 ? pravidlo.percentoDph : pravidlo.percentoZakladu,
+          percentoDph: pravidlo.percentoDph,
           klucoveSlova: pravidlo.klucoveSlova,
           ...(pravidlo.typyDokladov?.length ? { typyDokladov: pravidlo.typyDokladov } : {}),
           predkontaciaKod: pravidlo.predkontaciaKod, predkontaciaId: predkontacia(pravidlo.predkontaciaKod),
-          predkontaciaNedanovaKod: pravidlo.predkontaciaNedanovaKod, predkontaciaNedanovaId: predkontacia(pravidlo.predkontaciaNedanovaKod),
+          ...(pravidlo.percentoZakladu === 100 && pravidlo.percentoDph < 100
+            ? { predkontaciaNedanovaKod: pravidlo.predkontaciaKod, predkontaciaNedanovaId: predkontacia(pravidlo.predkontaciaKod) }
+            : { predkontaciaNedanovaKod: pravidlo.predkontaciaNedanovaKod, predkontaciaNedanovaId: predkontacia(pravidlo.predkontaciaNedanovaKod) }),
           ...(pravidlo.clenenieDphNedanoveKod
             ? { clenenieDphNedanoveKod: pravidlo.clenenieDphNedanoveKod, clenenieDphNedanoveId: clenenie(pravidlo.clenenieDphNedanoveKod) } : {}),
         }));

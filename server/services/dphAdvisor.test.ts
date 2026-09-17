@@ -108,7 +108,7 @@ describe('dphAdvisor — posudDph', () => {
 
   it('samozdanenie počíta sadzbou platnou v deň plnenia, nie dnešnou', () => {
     const vysledok = posudDph(dokument({ ...ALZA_BEZ_DPH, datumDodania: '2024-11-20' }), profil());
-    expect(kandidat(vysledok)?.sprava).toContain('DPH 20 % = 40.00');
+    expect(kandidat(vysledok)?.sprava).toContain('Pri sadzbe 20 % by vymeraná DPH bola 40.00');
   });
 
   it('slovenský dodávateľ s DPH nie je kandidát na samozdanenie', () => {
@@ -336,7 +336,7 @@ describe('dphAdvisor — dphPokynyPreAi', () => {
       'Organizácia nemá oslobodené plnenia — odpočet nekráti, členenia krátenia (PK) nepoužívaj.',
       'Ak sa v doklade vyskytuje „PHM“, „servis“, daňový náklad je 80 % a odpočet DPH 50 % (PHM osobné auto; daňová časť PHM-501200, nedaňová PHM-Nadspotreba s členením PN).',
       'Na účte 513100 firma neodpočítava — členenie PN.',
-      'Zahraničnú DPH si firma nechá vrátiť (§55a) — položka cudzej dane je pohľadávka na 378-DPH, nie náklad.',
+      'Zahraničnú DPH si firma nechá vrátiť (§55f) — položka cudzej dane je pohľadávka na 378-DPH, nie náklad.',
       'Firma tovar na ceste (účet 139) neúčtuje.',
       'Majetok so základom od 1700 € je dlhodobý; lacnejší je drobný majetok v nákladoch.',
     ]);

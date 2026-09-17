@@ -149,7 +149,7 @@ describe('profil klienta — API', () => {
     );
     await spor('rainside s.r.o.', '31386946', 4, 3);
     await spor('druha s.r.o.', null, 2, 5);
-    // Staré pravidlo len pre dodávateľa by nový výber prebilo — deaktivuje sa.
+    // Staré všeobecné pravidlo dodávateľa ostáva pre ostatné typy dokladov; nové pre FP má pred ním prednosť.
     const stare = randomUUID();
     await database.query(
       `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_ico,predkontacia_id,origin) VALUES ($1,$2,$3,'31386946',$4,'ai')`,
@@ -175,13 +175,13 @@ describe('profil klienta — API', () => {
     expect(vyber.statusCode, vyber.body).toBe(200);
     expect(vyber.json().otazky.map((item: any) => item.kluc)).not.toContain('spor:FP:rainside s.r.o.');
     const pravidla = (await database.query<Record<string, any>>(
-      'SELECT id, active, origin, dovod_source, supplier_ico, predkontacia_id, clenenie_dph_id, clenenie_kv_kod FROM accounting_rules WHERE organization_id=$1',
+      'SELECT id, active, origin, dovod_source, supplier_ico, predkontacia_id, clenenie_dph_id, clenenie_kv_kod, typy_dokladov FROM accounting_rules WHERE organization_id=$1',
       [seeded.organizationId],
     )).rows;
-    expect(pravidla.find((pravidlo) => pravidlo.id === stare)?.active).toBe(false);
+    expect(pravidla.find((pravidlo) => pravidlo.id === stare)?.active).toBe(true);
     expect(pravidla.find((pravidlo) => pravidlo.id !== stare)).toMatchObject({
       active: true, origin: 'manual', dovod_source: 'human', supplier_ico: '31386946',
-      predkontacia_id: ucet, clenenie_dph_id: pd, clenenie_kv_kod: 'B2',
+      predkontacia_id: ucet, clenenie_dph_id: pd, clenenie_kv_kod: 'B2', typy_dokladov: ['FP'],
     });
     expect((await database.query("SELECT 1 FROM audit_logs WHERE action='profil.otazka_zodpovedana'")).rowCount).toBe(1);
     // Pravidlo účtovníka o DPH protistrany rozhodlo — ďalší prepočet otázku nezaloží.

@@ -544,8 +544,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     }).strict().parse(request.body);
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
-    // Pravidlá nemajú druh dokladu: pravidlo zákazníka z vydanej faktúry by
-    // prebilo prijaté faktúry toho istého partnera.
+    // Pravidlo z vydanej faktúry by viazalo odberateľa — zatiaľ len prijaté doklady.
     if (document.document_type === 'FV') {
       throw new HttpError(422, 'pravidlo_len_prijate', 'Pravidlo protistrany sa vytvára len z prijatých dokladov');
     }
@@ -556,7 +555,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     return database.transaction(async (tx) => {
       const pravidlo = await ulozPravidloProtistrany(tx, {
         tenantId: auth.tenantId, organizationId: document.organization_id, userId: auth.userId, correlationId: request.id,
-        ico, nazov, ...body, documentId: id,
+        ico, nazov, ...body, documentId: id, typDokladu: document.document_type,
         zdroj: `doklad ${String((document.extracted as Record<string, unknown>)?.cisloFaktury ?? id).slice(0, 60)}`,
       });
       if (!pravidlo) throw new HttpError(422, 'neplatny_kod', 'Predkontácia alebo členenie DPH nie je aktívne v číselníku firmy');

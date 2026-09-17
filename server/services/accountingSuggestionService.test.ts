@@ -250,6 +250,37 @@ describe('accounting suggestions', () => {
     expect(suggestion).toMatchObject({ source: 'manual_rule', predkontacia_id: pred, clenenie_dph_id: dph });
   }, 90_000);
 
+  // Odpoveď na spor praxe ostatných záväzkov nesmie prebiť bežnú faktúru toho istého dodávateľa.
+  it('pravidlo protistrany pre typ dokladu neplatí na inom type', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const pn = randomUUID();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source) VALUES ($1,$2,$3,'cleneniaDph','PN','PN','manual')`,
+      [pn, seeded.tenantId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_ico,clenenie_dph_id,origin,typy_dokladov)
+       VALUES ($1,$2,$3,'35705671',$4,'manual',ARRAY['OZ'])`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, pn],
+    );
+    const navrh = async (typ: string) => {
+      const documentId = randomUUID();
+      await database.query(
+        `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+         VALUES ($1,$2,$3,$4,'na_kontrole','ready_for_review',$5::jsonb,'{}'::jsonb,100,'EUR')`,
+        [documentId, seeded.tenantId, seeded.organizationId, typ, JSON.stringify({ dodavatel: { nazov: 'Dodávateľ', ico: '35705671' }, polozky: [{ popis: 'služba' }] })],
+      );
+      await rebuildAccountingSuggestion(database, {
+        tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '35705671', supplierName: 'Dodávateľ',
+      });
+      return (await database.query<Record<string, any>>('SELECT clenenie_dph_id FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
+    };
+    expect((await navrh('OZ'))?.clenenie_dph_id).toBe(pn);
+    expect((await navrh('FP'))?.clenenie_dph_id ?? null).not.toBe(pn);
+  }, 90_000);
+
   it('VAT-only pravidlo doplní predkontáciu z pamäte (presná zhoda textu = istota, inak návrh)', async () => {
     const database = await createTestDatabase();
     databases.push(database);
@@ -2873,6 +2904,16 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
   };
 
   // Faktúra karty a bloček zaplatený kartou majú iný záväzok — pravidlo pre bloček faktúru nereže.
+  // Celý daňový náklad a polovičný odpočet: delí sa len daň, obe časti na účte daňovej časti.
+  it('pravidlo 100/50 rozdelí len daň a neodpočítaná časť dostane členenie bez nároku', async () => {
+    const { riadky, phm, dphPn } = await rezPhm([['vozidla.pravidla', [{ ...PHM_AUTO[0], percentoZakladu: 100, percentoDph: 50 }]]]);
+    const prvaPolozka = (riadky ?? []).filter((riadok) => riadok.index === 0);
+    expect(prvaPolozka.map((riadok) => [riadok.predkontaciaId, riadok.podiel, riadok.podielDph])).toEqual([
+      [phm, 0.5, 0.5], [phm, 0.5, 0.5],
+    ]);
+    expect(prvaPolozka[1].clenenieDphId).toBe(dphPn);
+  }, 90_000);
+
   it('pravidlo s typom dokladu nereže iný typ dokladu', async () => {
     const { riadky, zmeny } = await rezPhm([['vozidla.pravidla', [{ ...PHM_AUTO[0], typyDokladov: ['OZ'] }]]]);
     expect((riadky ?? []).some((riadok) => riadok.podiel !== undefined && riadok.podiel !== null)).toBe(false);

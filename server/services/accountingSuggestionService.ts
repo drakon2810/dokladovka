@@ -910,6 +910,8 @@ async function zhodnePravidla(
   /** Meranie: pravidlo napísané po dátume dokladu (možno práve kvôli chybe
    *  merania) nesmie prepisovať návrh pre skorší doklad. */
   doDatumu?: string,
+  /** Pravidlo s typmi dokladov platí len na nich; pravidlo pre typ má prednosť pred všeobecným. */
+  documentType?: string,
 ): Promise<ZhodaPravidiel> {
   const rules = await tx.query<SuggestionCandidate & {
     id: string; supplier_ico?: string; supplier_name_normalized?: string;
@@ -920,8 +922,9 @@ async function zhodnePravidla(
        FROM accounting_rules
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true
         AND ($3::date IS NULL OR created_at < $3::date)
-      ORDER BY priority, created_at`,
-    [input.tenantId, input.organizationId, doDatumu ?? null],
+        AND (typy_dokladov IS NULL OR $4::text IS NULL OR $4::text = ANY(typy_dokladov))
+      ORDER BY (typy_dokladov IS NULL), priority, created_at`,
+    [input.tenantId, input.organizationId, doDatumu ?? null, documentType ?? null],
   );
   const zhoda: ZhodaPravidiel = { candidate: {} };
   for (const row of rules.rows) {
@@ -996,7 +999,7 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
       )).rows
     : [];
 
-  const pravidlo = await zhodnePravidla(tx, input, { supplierIco, supplierName }, lineText);
+  const pravidlo = await zhodnePravidla(tx, input, { supplierIco, supplierName }, lineText, undefined, documentType);
   candidate = { ...pravidlo.candidate };
   kvKod = pravidlo.kvKod;
   if (pravidlo.ruleId) {
@@ -2050,6 +2053,7 @@ export async function uctyBezOdpoctu(
   cleneniaBezOdpoctu: Map<string, string>,
   doDatumu?: string,
   minDokladov = BEZ_ODPOCTU_DOKLADOV,
+  prevaha = BEZ_ODPOCTU_PREVAHA,
 ): Promise<Map<string, { id: string; dokladov: number }>> {
   if (agendy.length === 0 || cleneniaBezOdpoctu.size === 0) return new Map();
   const rows = (await database.query<Record<string, any>>(
@@ -2071,7 +2075,7 @@ export async function uctyBezOdpoctu(
     const dokladov = Number(row.dokladov);
     const spolu = Number(row.spolu);
     if (!id || dokladov < minDokladov) continue;
-    if (!(spolu > 0) || dokladov / spolu < BEZ_ODPOCTU_PREVAHA) continue;
+    if (!(spolu > 0) || dokladov / spolu < prevaha) continue;
     const ucet = String(row.ucet);
     if ((najcastejsie.get(ucet)?.dokladov ?? 0) < dokladov) najcastejsie.set(ucet, { id, dokladov });
   }
@@ -2696,7 +2700,7 @@ function pravidlaNavrhu(database: Database, input: SuggestionInput, documentCont
         supplierName: normalizeName(documentContext.supplierName) || undefined,
       };
   const lineText = normalizeName(documentContext.lineDescriptions.join(' | ')).slice(0, 1000);
-  return zhodnePravidla(database, input, protistrana, lineText, documentContext.historiaDoDatumu);
+  return zhodnePravidla(database, input, protistrana, lineText, documentContext.historiaDoDatumu, documentContext.documentType);
 }
 
 export async function maybeAiAccountingSuggestion(

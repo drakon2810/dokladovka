@@ -52,6 +52,8 @@ interface OpenInvoiceRow extends Record<string, unknown> {
 interface StatementTransaction {
   popis?: string;
   sumaSpolu?: number;
+  /** Dátum pohybu; bez neho dátum výpisu. */
+  datumPlatby?: string;
   /** Variabilný symbol pohybu (štruktúrovaný z camt/AI extrakcie). */
   vs?: string;
 }
@@ -99,14 +101,16 @@ export async function matchStatementPayments(
   );
 
   // Dve mapy podľa smeru — kredit nesmie „uhradiť" prijatú faktúru a naopak.
-  const zavazkyPodlaVs = new Map<string, OpenInvoiceRow>();
-  const pohladavkyPodlaVs = new Map<string, OpenInvoiceRow>();
+  // Ten istý VS na dvoch dokladoch (dvaja dodávatelia) je nejednoznačný: null, nepáruje sa.
+  const zavazkyPodlaVs = new Map<string, OpenInvoiceRow | null>();
+  const pohladavkyPodlaVs = new Map<string, OpenInvoiceRow | null>();
   for (const row of candidates.rows) {
     const vs = normalizovanyVs(row.extracted?.variabilnySymbol);
     if (!vs) continue;
     const mapa = row.document_type === 'FV' ? pohladavkyPodlaVs : zavazkyPodlaVs;
-    if (!mapa.has(vs)) mapa.set(vs, row);
+    mapa.set(vs, mapa.has(vs) ? null : row);
   }
+  const menaVypisu = String(extracted.mena ?? 'EUR').toUpperCase();
 
   const statementDate = typeof extracted.datumVystavenia === 'string'
     ? extracted.datumVystavenia
@@ -128,10 +132,13 @@ export async function matchStatementPayments(
     for (const token of tokens) {
       const document = byVs.get(token);
       if (!document || usedDocuments.has(document.id)) continue;
+      // Pohyb v inej mene faktúru bez kurzu neuhradí.
+      if (String(document.currency ?? 'EUR').toUpperCase() !== menaVypisu) continue;
       const total = round2(Number(document.total_amount ?? 0));
       const remaining = round2(total - round2(Number(document.paid ?? 0)));
       if (remaining <= 0) continue;
-      if (Math.abs(amount - remaining) > 0.02 && Math.abs(amount - total) > 0.02) continue;
+      // Len zvyšok: celá suma faktúry po čiastočnej úhrade by znamenala preplatok.
+      if (Math.abs(amount - remaining) > 0.02) continue;
 
       await database.transaction(async (tx) => {
         await insertPayment(tx, {
@@ -140,7 +147,7 @@ export async function matchStatementPayments(
           documentId: document.id,
           amount,
           currency: document.currency ?? 'EUR',
-          paidOn: statementDate,
+          paidOn: typeof transaction.datumPlatby === 'string' ? transaction.datumPlatby : statementDate,
           source: 'bank_statement',
           bankStatementDocumentId: input.statementDocumentId,
           note: description.slice(0, 300),

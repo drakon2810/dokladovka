@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/database.js';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
+import { chybaRoliKodov } from './profilKatalog.js';
 import { aktualizujProfil, ulozFakt } from './profilService.js';
 
 // Profil z histórie POHODY bez modelu: čo z dokladov vyplýva, sa navrhne, čo
@@ -48,6 +49,17 @@ const kodyFirmy = async (database: Database, firma: Firma, kody: Array<[string, 
   }
 };
 
+describe('úloha kódov v profile', () => {
+  it('samozdanenie odmietne DD na faktúre, prehodené DD/P a KV mimo samozdanenia', () => {
+    expect(chybaRoliKodov('samozdanenie.sluzby_eu', { faktura: { clenenieKod: 'PN' }, interny: { ddKod: 'DDsl§69', pKod: 'PDsluz', kv: 'B1' } })).toBeUndefined();
+    expect(chybaRoliKodov('samozdanenie.sluzby_eu', { interny: { ddKod: 'PDsluz', pKod: 'DDsl§69' } })).toContain('PDsluz');
+    expect(chybaRoliKodov('samozdanenie.sluzby_eu', { faktura: { clenenieKod: 'DDsl§69' } })).toContain('interný doklad');
+    expect(chybaRoliKodov('samozdanenie.sluzby_eu', { faktura: { clenenieKod: 'UD' } })).toContain('prijatú');
+    expect(chybaRoliKodov('samozdanenie.prenesenie_vystavene', { faktura: { clenenieKod: 'PN' } })).toContain('vydanú');
+    expect(chybaRoliKodov('samozdanenie.tovar_eu', { interny: { ddKod: 'DDnadEU', kv: 'C1' } })).toContain('C1');
+  });
+});
+
 describe('profil klienta z histórie', () => {
   it('platiteľ: štyri doklady sú otázka, piaty návrh; otázka zastará a návrh bez dôkazu zmizne', async () => {
     const { database, firma, riadok, prepocitaj, fakty, otazky } = await priprav();
@@ -84,6 +96,11 @@ describe('profil klienta z histórie', () => {
       // Dva interné doklady ako v POHODE: vymeranie (aInt) a odpočet (bInt).
       await riadok({ agenda: 'INT', cislo: `GI${n}`, nazov: 'google ireland', pk: 'aInt', dph: 'DDsl§69', kv: 'B1' });
       await riadok({ agenda: 'INT', cislo: `GO${n}`, nazov: 'google ireland', pk: 'bInt', dph: 'PDsluz', kv: 'B1' });
+      // Partner s tovarom aj službami: odpočet služieb sa k tovaru nepripletie.
+      await riadok({ agenda: 'INT', cislo: `T${n}`, nazov: 'mix gmbh', krajina: 'DE', pk: 'aInt', dph: 'DDnadEU', kv: 'B1' });
+      await riadok({ agenda: 'INT', cislo: `TO${n}`, nazov: 'mix gmbh', pk: 'bInt', dph: 'PDnadEU', kv: 'B1' });
+      await riadok({ agenda: 'INT', cislo: `TS${n}`, nazov: 'mix gmbh', pk: 'bInt', dph: 'PDsluz', kv: 'B1' });
+      await riadok({ agenda: 'INT', cislo: `TT${n}`, nazov: 'mix gmbh', pk: 'bInt', dph: 'PDsluz', kv: 'B1' });
       // Dovoz podľa § 84a: DD a P na internom doklade, bez faktúry.
       await riadok({ agenda: 'INT', cislo: `D${n}`, nazov: 'shenzhen trade', krajina: 'CN', pk: 'aInt', dph: 'DDtov§84a', kv: 'B1' });
       await riadok({ agenda: 'INT', cislo: `DO${n}`, nazov: 'shenzhen trade', pk: 'bInt', dph: 'PDtov§84a', kv: 'B1' });
@@ -106,6 +123,7 @@ describe('profil klienta z histórie', () => {
       faktura: { clenenieKod: 'PN', kv: 'KN' },
       interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' },
     });
+    expect(f.get('samozdanenie.tovar_eu')!.hodnota).toMatchObject({ interny: { ddKod: 'DDnadEU', pKod: 'PDnadEU' } });
     expect(f.get('samozdanenie.dovoz')!.hodnota).toEqual({
       interny: { ddKod: 'DDtov§84a', ddPredkontaciaKod: 'aInt', pKod: 'PDtov§84a', pPredkontaciaKod: 'bInt', kv: 'B1' },
     });
@@ -123,12 +141,16 @@ describe('profil klienta z histórie', () => {
     const { database, firma, riadok, prepocitaj, fakty } = await priprav();
     await kodyFirmy(database, firma, [
       ['predkontacie', 'repre', 'repre', '513100'], ['predkontacie', '518100', '518100', '518100'],
-      ['predkontacie', '325100-PHM', '325100-PHM', '325100'],
+      ['predkontacie', '325100-PHM', '325100-PHM', '325100'], ['predkontacie', 'dary', 'dary', '513200'],
       ['cleneniaDph', 'PN', 'Nezahrňovať do priznania DPH'], ['cleneniaDph', 'PD', 'Tuzemské plnenia'],
     ]);
     for (const n of [1, 2, 3, 4, 5]) {
       await riadok({ agenda: 'FP', cislo: `H${n}`, nazov: 'hotel', dph: 'PD', kv: 'B2' });
       await riadok({ agenda: 'FP', cislo: `H${n}`, nazov: 'hotel', idx: 1, pk: 'repre', dph: 'PN' });
+    }
+    // Účet s jediným odpočtom medzi desiatimi PN: fakt by ten odpočet zakázal.
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
+      await riadok({ agenda: 'FP', cislo: `D${n}`, nazov: 'kvety', idx: 1, pk: 'dary', dph: n === 11 ? 'PD' : 'PN' });
     }
     // PN na záväzku (325) nie je náklad bez nároku, hoci sa opakuje.
     for (const n of [1, 2, 3, 4, 5]) {
