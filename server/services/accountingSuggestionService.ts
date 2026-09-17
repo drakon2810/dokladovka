@@ -8,7 +8,7 @@ import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
 import {
   clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph, sadzbyDphPre,
 } from './dphAdvisor.js';
-import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
+import { embedderSBehom, kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
 import { zapisBehAi } from './behAi.js';
 import { najdiPartnera } from './partnerService.js';
@@ -766,12 +766,15 @@ export async function resolveSeriesDefault(
   // Bez doDatumu: či história rad dokladu nesie, je vlastnosť importu (od 0061),
   // nie znalosť o odpovedi. S dátumom by prvý doklad druhu v roku zapol staré
   // odhady, ktoré firma s takou históriou nikdy nedostane — zmerajRady by
-  // meral cestu, ktorou produkcia nejde.
+  // meral cestu, ktorou produkcia nejde. Jediná výnimka je dátum pred celým
+  // korpusom — meranie firmy bez histórie; tá ide cestou novej firmy.
   const maHistoriuRadov = agendy.length > 0 && (await tx.query(
     `SELECT 1 FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND agenda=ANY($3::text[]) AND rad_external_id IS NOT NULL
+        AND ($4::date IS NULL OR $4::date >= (SELECT min(datum) FROM ucto_historia
+              WHERE tenant_id=$1 AND organization_id=$2))
       LIMIT 1`,
-    [input.tenantId, input.organizationId, agendy],
+    [input.tenantId, input.organizationId, agendy, doDatumu ?? null],
   )).rows.length > 0;
   if (maHistoriuRadov) return undefined;
 
@@ -1206,8 +1209,10 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
 }
 
 /** Spätná väzba pre pravidlá: schválenie zhodné s návrhom pravidla počítadlo
- *  opráv nuluje; oprava ho zvýši a po 3 opravách po sebe sa pravidlo
- *  deaktivuje a označí na kontrolu (needs_review) — potichu už nenavrhuje. */
+ *  opráv nuluje; oprava ho zvýši a po 3 opravách po sebe sa pravidlo označí na
+ *  kontrolu (needs_review). AI pravidlo sa zároveň deaktivuje — potichu už
+ *  nenavrhuje. Pravidlo od človeka (ručné alebo s dôvodom potvrdeným človekom)
+ *  ostáva aktívne: rozhodnutie účtovníka sa ticho nevypne, len čaká na kontrolu. */
 export async function updateRuleFeedback(tx: Queryable, input: {
   tenantId: string;
   documentId: string;
@@ -1257,7 +1262,7 @@ export async function updateRuleFeedback(tx: Queryable, input: {
     `UPDATE accounting_rules SET
        corrections_count=corrections_count+1,
        needs_review = needs_review OR corrections_count+1 >= 3,
-       active = active AND corrections_count+1 < 3,
+       active = active AND (corrections_count+1 < 3 OR origin='manual' OR dovod_source IS NOT DISTINCT FROM 'human'),
        updated_at=now()
      WHERE id=$1 AND tenant_id=$2`,
     [row.rule_id, input.tenantId],
@@ -1479,6 +1484,8 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
   podtyp?: string;
   extracted: unknown;
   accounting: Record<string, string | undefined>;
+  /** Druh od extrakcie pred prvou zmenou účtovníkom (documents.navrh_druhu); bez neho sa druh nemenil. */
+  navrhDruhu?: { typ: string; podtyp: string };
 }): Promise<void> {
   const navrh = await tx.query<{
     predkontacia_id?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
@@ -1508,6 +1515,19 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
     Object.assign(navrhnute, { riadky: riadky.navrhnute });
     schvalene.riadky = riadky.schvalene;
     if (riadky.zmenene) zmenene.push('riadky');
+  }
+  // Zmena druhu je oprava kroku pred zaúčtovaním: dobropis zaúčtovaný ako bežná
+  // faktúra má iný rad aj sekciu KV. Doteraz sa nezapisovala nikde.
+  const druh = input.navrhDruhu;
+  if (druh && druh.typ !== input.documentType) {
+    navrhnute.typ = druh.typ;
+    schvalene.typ = input.documentType;
+    zmenene.push('typ');
+  }
+  if (druh && druh.podtyp !== input.podtyp) {
+    navrhnute.podtyp = druh.podtyp;
+    schvalene.podtyp = input.podtyp;
+    zmenene.push('podtyp');
   }
   const strana = protistranaDokladu(input.documentType, input.extracted);
   await tx.query(
@@ -2516,7 +2536,7 @@ interface AiSuggestionParser {
  * volanie SyntaxErrorom — a to práve pri sporných dokladoch, kvôli ktorým je
  * web search zapnutý. Preto `create()` a výber finálnej správy ručne.
  */
-function finalnyJsonOdpovede(output: unknown): unknown {
+export function finalnyJsonOdpovede(output: unknown): unknown {
   if (!Array.isArray(output)) return undefined;
   for (let index = output.length - 1; index >= 0; index -= 1) {
     const item = output[index] as { type?: string; content?: Array<{ type?: string; text?: string }> };
@@ -2664,6 +2684,21 @@ export type VysledokNavrhu = ({ navrh: NavrhZauctovania; dokazy: StopaNavrhu } |
   odpovedModelu?: unknown;
 };
 
+/** Pravidlá účtovníka zhodné s dokladom návrhu. Kľúčom je protistrana — pri FV odberateľ. */
+function pravidlaNavrhu(database: Database, input: SuggestionInput, documentContext: AiSuggestionDocumentContext) {
+  const protistrana = documentContext.documentType === 'FV'
+    ? {
+        supplierIco: String(documentContext.odberatel?.ico ?? '').replace(/\D/g, '') || undefined,
+        supplierName: normalizeName(documentContext.odberatel?.nazov) || undefined,
+      }
+    : {
+        supplierIco: documentContext.supplierIco?.replace(/\D/g, '') || undefined,
+        supplierName: normalizeName(documentContext.supplierName) || undefined,
+      };
+  const lineText = normalizeName(documentContext.lineDescriptions.join(' | ')).slice(0, 1000);
+  return zhodnePravidla(database, input, protistrana, lineText, documentContext.historiaDoDatumu);
+}
+
 export async function maybeAiAccountingSuggestion(
   database: Database,
   config: ServerConfig,
@@ -2713,7 +2748,7 @@ export async function maybeAiAccountingSuggestion(
       pohodaCislo: doklad?.pohoda_number,
       accounting: doklad?.accounting ?? {},
       extracted: doklad?.extracted ?? {},
-    }, { parser: injectedParser, embedder: injectedEmbedder });
+    }, { parser: injectedParser, embedder: embedderSBehom(database, config, input, injectedEmbedder) });
   } catch (cause) {
     // Neúspešný beh AI je len chyba samotného volania modelu. Chyba prípravy
     // (databáza pred volaním) model nevolala a nič nestála — do behov nepatrí.
@@ -2731,6 +2766,14 @@ export async function maybeAiAccountingSuggestion(
       usage: vysledok.usage, zdrzanie: 'zdrzanie' in vysledok ? vysledok.zdrzanie : undefined,
     }).catch((chyba) => console.warn(`[ai-navrh] ${input.documentId}: zápis behu zlyhal:`,
       chyba instanceof Error ? chyba.message : chyba));
+  }
+  // Kým návrh po prečítaní pravidiel dobiehal, účtovník mohol na inom doklade
+  // protistrany vybrať prax (pravidlo-protistrany) a otázky zrušiť — tento doklad
+  // otázku ešte nemal. Pravidlo s členením DPH spor rozhodlo; bez kontroly by
+  // sa otázka vrátila.
+  // ponytail: okno medzi kontrolou a zápisom ostáva (milisekundy, nie beh modelu).
+  if (vysledok.otazka && (await pravidlaNavrhu(database, input, documentContext)).candidate.clenenie_dph_id) {
+    vysledok.otazka = undefined;
   }
   if (!('navrh' in vysledok)) {
     // Zdržanie: deterministický návrh dokladu ostáva, no otázka k nemu patrí —
@@ -3262,18 +3305,8 @@ export async function navrhniZauctovanie(
     })).nullish(),
   }).parse(odpoved);
 
-  // Pravidlá účtovníka sú záväzné: polia zhodného pravidla prepíšu odpoveď
-  // modelu. Kľúčom je protistrana — pri FV odberateľ.
-  const protistrana = documentContext.documentType === 'FV'
-    ? {
-        supplierIco: String(documentContext.odberatel?.ico ?? '').replace(/\D/g, '') || undefined,
-        supplierName: normalizeName(documentContext.odberatel?.nazov) || undefined,
-      }
-    : {
-        supplierIco: documentContext.supplierIco?.replace(/\D/g, '') || undefined,
-        supplierName: normalizeName(documentContext.supplierName) || undefined,
-      };
-  const pravidlo = await zhodnePravidla(database, input, protistrana, lineText, asOf);
+  // Pravidlá účtovníka sú záväzné: polia zhodného pravidla prepíšu odpoveď modelu.
+  const pravidlo = await pravidlaNavrhu(database, input, documentContext);
   // Otázka účtovníkovi (R09): o DPH protistrany rozhoduje pravidlo účtovníka,
   // ak ho má — vtedy spor nie je a pýtať sa nemá čo. Inak sa z podôb praxe
   // s inou daňou stane výber, ktorý karta dokladu ukáže.
@@ -3802,7 +3835,12 @@ export async function navrhniZauctovanie(
     return typ !== 'FV' && Boolean(hlavicka) && clenenieVyzeraNaOdpocet(hlavicka!);
   })();
   const datumPlnenia = ulozeny.datumDodania ?? ulozeny.datumVystavenia ?? documentContext.datumVystavenia ?? undefined;
-  const sadzbyPlnenia = sadzbyDphPre(datumPlnenia);
+  // Dobropis a ťarchopis opravujú pôvodné plnenie a nesú jeho sadzbu: dobropis
+  // z roku 2026 k dodávke z 2024 má 20 % a je to slovenská daň, nie cudzia.
+  const povodnePlnenie = druhDokladu.podtyp === 'dobropis' || druhDokladu.podtyp === 'tarchopis'
+    ? (ulozeny.extracted as { povodnyDoklad?: { datumPlnenia?: string } } | undefined)?.povodnyDoklad?.datumPlnenia
+    : undefined;
+  const sadzbyPlnenia = sadzbyDphPre(povodnePlnenie || datumPlnenia);
   const cudziDodavatel = jeCudziDodavatel({ icDph: protistranaZDokladu.icDph, krajina: protistranaZDokladu.krajina });
   const kvBezOdpoctu = (sadzbaDph: number | undefined, nesieDan = true) => {
     const slovenskaDan = typeof sadzbaDph === 'number' && sadzbaDph > 0 && !cudziDodavatel && sadzbyPlnenia !== undefined

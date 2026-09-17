@@ -179,13 +179,16 @@ const ETAPA_BEHU: Record<EtapaBehu, SkKey> = {
   zauctovanie: 'detail.zdroj.etapa.zauctovanie',
   dph_kontrola: 'detail.zdroj.etapa.dph_kontrola',
   vysvetlenie: 'detail.zdroj.etapa.vysvetlenie',
+  vektory: 'detail.zdroj.etapa.vektory',
 };
 
-/** Prečo sa AI návrhu zdržala — kódy zapisuje zápis behu návrhu zaúčtovania. */
+/** Prečo sa AI návrhu zdržala — kódy zapisujú behy AI (sBehomAi, zapisBehAi). */
 const DOVOD_ZDRZANIA: Record<string, SkKey> = {
   bez_zauctovania: 'detail.zdroj.zdrzanie.bez_zauctovania',
   posudok_dph: 'detail.zdroj.zdrzanie.posudok_dph',
   prazdna_odpoved: 'detail.zdroj.zdrzanie.prazdna_odpoved',
+  neuplna_odpoved: 'detail.zdroj.zdrzanie.neuplna_odpoved',
+  mimo_schemy: 'detail.zdroj.zdrzanie.mimo_schemy',
 };
 
 function confidenceFor(document: DocumentItem, field: string): number | undefined {

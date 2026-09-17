@@ -186,8 +186,8 @@ describe('účtovný profil firmy', () => {
       });
     }
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: {
+      create: vi.fn().mockResolvedValue({
+        ...aiOdpoved({
           kategorie: [
             {
               nazov: 'Preprava a špedícia', popis: 'Doprava tovaru', slovnik: ['preprava', 'doprava'],
@@ -200,23 +200,34 @@ describe('účtovný profil firmy', () => {
               vynimky: [{ podmienka: 'nikdy', predkontaciaKod: '888/888' }], konflikt: null,
             },
           ],
-        },
+        }),
+        usage: { input_tokens: 3000, output_tokens: 400 },
       }),
     };
     // Vektory sa počítajú JEDNÝM volaním po poslednej dávke — uloz() prepisuje
     // celú mapu po každej dávke, takže embedovanie vnútri by tú istú kategóriu
     // zaplatilo raz za dávku.
-    const embedder = { create: vi.fn().mockResolvedValue({ data: [{ embedding: [1, 0] }, { embedding: [0, 1] }] }) };
+    const embedder = { create: vi.fn().mockResolvedValue({
+      data: [{ embedding: [1, 0] }, { embedding: [0, 1] }], usage: { prompt_tokens: 25, total_tokens: 25 },
+    }) };
     const vysledok = await analyzujUctovnyProfil(database, testConfig(), seeded, parser, embedder);
     expect(vysledok.kategorii).toBe(2);
     expect(embedder.create).toHaveBeenCalledTimes(1);
+    // Dávka aj vektory sú platené volania nad firmou — behy bez dokladu so spotrebou.
+    expect((await database.query<Record<string, any>>(
+      `SELECT document_id, prompt_version, status, usage->>'inputTokens' AS vstup FROM extraction_runs
+        WHERE organization_id=$1 ORDER BY prompt_version`, [seeded.organizationId],
+    )).rows).toEqual([
+      { document_id: null, prompt_version: 'analyza-profilu-v1', status: 'succeeded', vstup: '3000' },
+      { document_id: null, prompt_version: 'embeddings-v1', status: 'succeeded', vstup: '25' },
+    ]);
     const ulozene = (await database.query<Record<string, any>>(
       'SELECT nazov, vektor, vektor_model FROM ucto_kategorie WHERE organization_id=$1 ORDER BY nazov',
       [seeded.organizationId],
     )).rows;
     expect(ulozene.map((row) => row.vektor_model)).toEqual(['text-embedding-3-small', 'text-embedding-3-small']);
     expect(ulozene.every((row) => Array.isArray(row.vektor) && row.vektor.length === 2)).toBe(true);
-    expect((parser.parse.mock.calls[0][0] as any).model).toBe('gpt-5.6-sol');
+    expect((parser.create.mock.calls[0][0] as any).model).toBe('gpt-5.6-sol');
 
     const kategorie = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
     const preprava = kategorie.find((item) => item.nazov === 'Preprava a špedícia');
@@ -320,11 +331,19 @@ describe('účtovný profil firmy', () => {
       })),
     };
     // Vektor dokladu mieri tam, kam vektor kategórie — kosínus 1.
-    const embedder = { create: vi.fn().mockResolvedValue({ data: [{ embedding: [1, 0, 0] }] }) };
+    const embedder = { create: vi.fn().mockResolvedValue({ data: [{ embedding: [1, 0, 0] }], usage: { prompt_tokens: 9 } }) };
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'AUTOSERVICE ALPINA S.r.l.' };
     const context = { documentType: 'FP', supplierName: 'AUTOSERVICE ALPINA S.r.l.', totalAmount: 480, currency: 'EUR',
       lineDescriptions: ['Intervento del 13/03/2026', 'Bollo virtuale'] };
     expect(await maybeAiAccountingSuggestion(database, testConfig(), input, context, parser, embedder)).toBe(true);
+    // Vektor dokladu je platené volanie dokladu — beh vedľa návrhu zaúčtovania.
+    expect((await database.query<Record<string, any>>(
+      `SELECT prompt_version, usage->>'inputTokens' AS vstup FROM extraction_runs WHERE document_id=$1 ORDER BY prompt_version`,
+      [documentId],
+    )).rows).toEqual([
+      { prompt_version: 'embeddings-v1', vstup: '9' },
+      { prompt_version: 'navrh-zauctovania-v1', vstup: null },
+    ]);
 
     // 1. Kategória sa k modelu DOSTALA, hoci slovník netrafil ani jedno slovo.
     const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
@@ -364,16 +383,14 @@ describe('účtovný profil firmy', () => {
       });
     }
     const parser = {
-      parse: vi.fn()
-        .mockResolvedValueOnce({
-          output_parsed: {
-            kategorie: [{
-              nazov: 'Preprava a špedícia', popis: 'Doprava tovaru', slovnik: ['preprava'],
-              predkontaciaKod: '518/321', clenenieDphKod: 'PD', clenenieKvKod: 'B2',
-              vynimky: [], konflikt: null,
-            }],
-          },
-        })
+      create: vi.fn()
+        .mockResolvedValueOnce(aiOdpoved({
+          kategorie: [{
+            nazov: 'Preprava a špedícia', popis: 'Doprava tovaru', slovnik: ['preprava'],
+            predkontaciaKod: '518/321', clenenieDphKod: 'PD', clenenieKvKod: 'B2',
+            vynimky: [], konflikt: null,
+          }],
+        }))
         .mockRejectedValueOnce(new Error('Request timed out.')),
     };
 
@@ -384,6 +401,14 @@ describe('účtovný profil firmy', () => {
     // A hlavne: to, čo prvá dávka priniesla, je naozaj v databáze.
     const kategorie = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
     expect(kategorie.map((item) => item.nazov)).toEqual(['Preprava a špedícia']);
+    // Nestihnutá dávka je vidieť aj v behoch, nie len v konzole workera.
+    expect((await database.query<Record<string, any>>(
+      `SELECT status, error_code FROM extraction_runs
+        WHERE organization_id=$1 AND prompt_version='analyza-profilu-v1' ORDER BY status DESC`, [seeded.organizationId],
+    )).rows).toEqual([
+      { status: 'succeeded', error_code: null },
+      { status: 'failed', error_code: 'analyza_profilu_zlyhala' },
+    ]);
   }, 120_000);
 
   it('ručná úprava kategórie previaže známy kód na číselník, neznámy nechá ako text', async () => {
@@ -520,14 +545,12 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
     });
     // Oba kódy sa v histórii vyskytujú, ale spolu ani raz.
     const parser = {
-      parse: vi.fn().mockResolvedValue({
-        output_parsed: {
-          kategorie: [
-            kategoriaModelu('Preprava', ['preprava'], ['518/321', 'PN', 'B2']),
-            kategoriaModelu('Tovar', ['tovaru'], ['518/321', 'PN', 'B2']),
-          ],
-        },
-      }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        kategorie: [
+          kategoriaModelu('Preprava', ['preprava'], ['518/321', 'PN', 'B2']),
+          kategoriaModelu('Tovar', ['tovaru'], ['518/321', 'PN', 'B2']),
+        ],
+      })),
     };
     await analyzujUctovnyProfil(database, testConfig(), seeded, parser);
     const kategorie = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
@@ -556,9 +579,9 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
         ? [`D${n}`, `preprava ${n}`, '518/321', 'PD', 'B2'] : [`D${n}`, `preprava ${n}`, '501/321', 'PN', 'KN']))),
     });
     const dopredu = {
-      parse: vi.fn()
-        .mockResolvedValueOnce({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'], ['501/321', 'PN', 'KN'])] } })
-        .mockResolvedValueOnce({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'], ['518/321', 'PD', 'B2'])] } }),
+      create: vi.fn()
+        .mockResolvedValueOnce(aiOdpoved({ kategorie: [kategoriaModelu('Preprava', ['preprava'], ['501/321', 'PN', 'KN'])] }))
+        .mockResolvedValueOnce(aiOdpoved({ kategorie: [kategoriaModelu('Preprava', ['preprava'], ['518/321', 'PD', 'B2'])] })),
     };
     await analyzujUctovnyProfil(database, testConfig(), seeded, dopredu);
     const prvy = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
@@ -568,15 +591,13 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
 
     let pocasBehu: UctoKategoria[] = [];
     const naopak = {
-      parse: vi.fn()
-        .mockResolvedValueOnce({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'], ['518/321', 'PD', 'B2'])] } })
+      create: vi.fn()
+        .mockResolvedValueOnce(aiOdpoved({ kategorie: [kategoriaModelu('Preprava', ['preprava'], ['518/321', 'PD', 'B2'])] }))
         .mockImplementationOnce(async () => {
           pocasBehu = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
-          return {
-            output_parsed: {
-              kategorie: [kategoriaModelu('Preprava', ['preprava'], ['501/321', 'PN', 'KN']), kategoriaModelu('Nová', ['nic'])],
-            },
-          };
+          return aiOdpoved({
+            kategorie: [kategoriaModelu('Preprava', ['preprava'], ['501/321', 'PN', 'KN']), kategoriaModelu('Nová', ['nic'])],
+          });
         }),
     };
     await analyzujUctovnyProfil(database, testConfig(), seeded, naopak);
@@ -598,7 +619,7 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
         ['P3', 'preprava paliet', '518/321', 'PD'], ['C1', 'clo dovoz', '518/321', 'PD'], ['S1', 'poistenie zasielky', '518/321', 'PD'],
       ]),
     });
-    const model = (kategorie: unknown[]) => ({ parse: vi.fn().mockResolvedValue({ output_parsed: { kategorie } }) });
+    const model = (kategorie: unknown[]) => ({ create: vi.fn().mockResolvedValue(aiOdpoved({ kategorie })) });
     await analyzujUctovnyProfil(database, testConfig(), seeded, model([
       kategoriaModelu('Preprava', ['preprava']), kategoriaModelu('Clo', ['clo']), kategoriaModelu('Poistenie', ['poistenie']),
     ]));
@@ -627,9 +648,19 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
     expect((await riadky()).map((row) => row.id)).not.toContain(poistenie);
 
     // Heslo dlhšie než 40 znakov neprejde schémou: beh dobehne a nič nezmaže.
-    const vysledok = await analyzujUctovnyProfil(database, testConfig(), seeded, model([kategoriaModelu('Iné', ['x'.repeat(50)])]));
+    const vysledok = await analyzujUctovnyProfil(database, testConfig(), seeded, {
+      create: vi.fn().mockResolvedValue({
+        ...aiOdpoved({ kategorie: [kategoriaModelu('Iné', ['x'.repeat(50)])] }),
+        usage: { input_tokens: 25000, output_tokens: 900 },
+      }),
+    });
     expect(vysledok).toMatchObject({ davok: 1, zlyhanychDavok: 1, kategorii: 0 });
     expect(await listUctoKategorie(database, seeded.tenantId, seeded.organizationId)).toEqual(po);
+    // Zaplatená dávka mimo schémy nesie spotrebu — SDK parse() by ju zahodil výnimkou.
+    expect((await database.query<Record<string, any>>(
+      `SELECT status, error_code, usage->>'inputTokens' AS vstup FROM extraction_runs
+        WHERE organization_id=$1 AND error_code IS NOT NULL`, [seeded.organizationId],
+    )).rows).toEqual([{ status: 'succeeded', error_code: 'mimo_schemy', vstup: '25000' }]);
   }, 120_000);
 
   it('zapisovatelia praxe firmy sa radia zámkom: analýza ho berie pred kategóriami, prepočet ako prvý príkaz', async () => {
@@ -651,7 +682,7 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
       })),
     };
     await analyzujUctovnyProfil(sledovana, testConfig(), seeded, {
-      parse: vi.fn().mockResolvedValue({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'])] } }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({ kategorie: [kategoriaModelu('Preprava', ['preprava'])] })),
     });
     expect(prikazy[0]).toContain('pg_advisory_xact_lock');
     expect(prikazy.findIndex((sql) => sql.includes('INSERT INTO ucto_kategorie'))).toBeGreaterThan(0);
@@ -671,13 +702,13 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
       ...seeded, source: 'mdb', rows: hlavicky([1, 2, 3, 4, 5].map((n): [string, string, string, string, string] => [`T${n}`, `preprava ${n}`, '518/321', 'PD', 'B2'])),
     });
     const parser = {
-      parse: vi.fn().mockImplementationOnce(async () => {
+      create: vi.fn().mockImplementationOnce(async () => {
         // Kým model premýšľa, Mostík publikuje novú históriu.
         await importUctoHistory(database, {
           ...seeded, source: 'mdb', rows: hlavicky(Array.from({ length: 10 },
             (_, n): [string, string, string, string, string] => [`N${n}`, `preprava nova ${n}`, '501/321', 'PN', 'B2'])),
         });
-        return { output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'])] } };
+        return aiOdpoved({ kategorie: [kategoriaModelu('Preprava', ['preprava'])] });
       }),
     };
     await analyzujUctovnyProfil(database, testConfig(), seeded, parser);
@@ -695,7 +726,7 @@ describe('kategórie z celého korpusu bez straty ručných úprav', () => {
       ...seeded, source: 'mdb', rows: hlavicky([1, 2, 3, 4, 5].map((n): [string, string, string, string] => [`T${n}`, `preprava ${n}`, '518/321', 'PD'])),
     });
     await analyzujUctovnyProfil(database, testConfig(), seeded, {
-      parse: vi.fn().mockResolvedValue({ output_parsed: { kategorie: [kategoriaModelu('Preprava', ['preprava'])] } }),
+      create: vi.fn().mockResolvedValue(aiOdpoved({ kategorie: [kategoriaModelu('Preprava', ['preprava'])] })),
     });
     const [preprava] = await listUctoKategorie(database, seeded.tenantId, seeded.organizationId);
     expect(preprava.predkontaciaKod).toBe('518/321');

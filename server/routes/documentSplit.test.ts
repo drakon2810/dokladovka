@@ -158,6 +158,45 @@ describe('rozdelenie dokladu', () => {
     await app.close();
   }, 120_000);
 
+  // Časť dostala podtyp 'bezna': dobropis so zápornými sumami neprešiel schválením
+  // a ručná oprava na dobropis sa zapísala ako chyba klasifikácie.
+  it('časť faktúry zdedí podtyp aj druh od extrakcie', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const headers = sessionHeaders(await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password },
+    }));
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,podtyp,navrh_druhu,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','dobropis','{"typ":"FV","podtyp":"dobropis"}'::jsonb,'na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,3000,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId, JSON.stringify(EXTRACTED)],
+    );
+
+    const faktura = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/split`, headers,
+      payload: { polozkaIds: ['p2'], typ: 'FP', expectedVersion: 1 },
+    });
+    expect(faktura.statusCode, faktura.body).toBe(201);
+    // Pokladničný doklad dobropis nemá — podtyp sa zladí s typom časti.
+    const pokladna = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/split`, headers,
+      payload: { polozkaIds: ['p3'], typ: 'PD', expectedVersion: 2 },
+    });
+    expect(pokladna.statusCode, pokladna.body).toBe(201);
+
+    const casti = await database.query<Record<string, any>>(
+      'SELECT document_type, podtyp, navrh_druhu FROM documents WHERE split_from_document_id=$1 ORDER BY created_at', [documentId],
+    );
+    expect(casti.rows).toEqual([
+      { document_type: 'FP', podtyp: 'dobropis', navrh_druhu: { typ: 'FV', podtyp: 'dobropis' } },
+      { document_type: 'PD', podtyp: 'bezna', navrh_druhu: { typ: 'FV', podtyp: 'dobropis' } },
+    ]);
+    await app.close();
+  }, 120_000);
+
   it('odmietne zastaranú verziu, prázdny výber aj odobratie všetkých položiek', async () => {
     const database = await createTestDatabase();
     databases.push(database);

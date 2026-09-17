@@ -2968,6 +2968,9 @@ export async function ulozPravidloProtistrany(
       }),
     },
   );
+  // Server otázku zruší na všetkých otvorených dokladoch protistrany — bez
+  // obnovenia by ju ostatné doklady ukazovali až do ďalšieho pollu.
+  await refreshRestSnapshot();
   return odpoved.ruleId;
 }
 

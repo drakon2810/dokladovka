@@ -161,7 +161,7 @@ describe('backend foundation', () => {
       storage,
       provider: new MockServerDocumentExtractionProvider({
         invoiceNumber: 'NEW-2', supplierName: 'Dodávateľ s.r.o.', supplierIco: '11112222',
-        buyerIco: '12345678', totalAmount: 121,
+        buyerIco: '12345678', totalAmount: 121, documentType: 'OZ',
       }),
     });
     const afterReprocess = (await database.query<{ version: number; extracted: any } & Record<string, unknown>>(
@@ -174,13 +174,21 @@ describe('backend foundation', () => {
     );
     expect(runs.rowCount).toBe(2);
     expect(runs.rows[0].result.invoiceNumber).toBe('NEW-2');
+    // Účtovník medzitým zmenil druh: navrh_druhu drží druh od prvej extrakcie.
+    await database.query(
+      `UPDATE documents SET podtyp='dobropis', navrh_druhu='{"typ":"FP","podtyp":"bezna"}'::jsonb WHERE id=$1`, [initial.id],
+    );
 
     const applied = await app.inject({
       method: 'POST', url: `/api/documents/${initial.id}/extraction-runs/${runs.rows[0].id}/apply`,
       headers, payload: { expectedVersion: initial.version },
     });
     expect(applied.statusCode).toBe(200);
-    expect(applied.json()).toMatchObject({ version: initial.version + 1, status: 'na_kontrole' });
+    // Použitá extrakcia je nový návrh druhu a ostatný záväzok dobropis nemá —
+    // inak by schválenie zapísalo opravu, ktorú nikto neurobil.
+    expect(applied.json()).toMatchObject({
+      version: initial.version + 1, status: 'na_kontrole', document_type: 'OZ', podtyp: 'bezna', navrh_druhu: null,
+    });
     expect(applied.json().extracted.cisloFaktury).toBe('NEW-2');
     const file = await app.inject({ method: 'GET', url: `/api/documents/${initial.id}/file`, headers: { cookie: headers.cookie } });
     expect(file.statusCode).toBe(200);

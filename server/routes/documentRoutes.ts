@@ -37,6 +37,7 @@ interface DocumentScope extends Record<string, unknown> {
   accounting: Record<string, string | undefined>;
   history: Array<Record<string, unknown>>;
   split_from_document_id?: string | null;
+  navrh_druhu?: { typ: string; podtyp: string } | null;
 }
 
 async function scopedDocument(database: Database, tenantId: string, id: string): Promise<DocumentScope> {
@@ -44,7 +45,7 @@ async function scopedDocument(database: Database, tenantId: string, id: string):
   // (invoiceType) aj pamäť rozhodnutí — bez neho bol každý dobropis „bežná".
   const result = await database.query<DocumentScope>(
     `SELECT id, organization_id, status, processing_status, version, document_type, podtyp, extracted, accounting,
-            history, split_from_document_id
+            history, split_from_document_id, navrh_druhu
        FROM documents WHERE id=$1 AND tenant_id=$2`, [id, tenantId],
   );
   if (!result.rows[0]) throw new HttpError(404, 'document_not_found', 'Doklad neexistuje');
@@ -270,9 +271,13 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const druhZmeneny = documentType !== document.document_type || podtyp !== document.podtyp
       || (documentType === 'PD' && accounting.pokladnaTyp !== document.accounting.pokladnaTyp);
     const saved = await database.transaction(async (tx) => {
+      // Prvá zmena druhu si zapamätá druh od extrakcie — schválenie ho porovná
+      // so schváleným (ucto_opravy). SET vidí ešte starý riadok.
       const result = await tx.query<Record<string, unknown>>(
         `UPDATE documents SET document_type=$1, extracted=$2::jsonb, accounting=$3::jsonb,
-                version=version+1, status=$4, approved_version=NULL, approved_snapshot=NULL, updated_at=now(), podtyp=$8
+                version=version+1, status=$4, approved_version=NULL, approved_snapshot=NULL, updated_at=now(), podtyp=$8,
+                navrh_druhu=CASE WHEN document_type IS DISTINCT FROM $1 OR podtyp IS DISTINCT FROM $8
+                  THEN coalesce(navrh_druhu, jsonb_build_object('typ', document_type, 'podtyp', podtyp)) ELSE navrh_druhu END
           WHERE id=$5 AND tenant_id=$6 AND version=$7 RETURNING *`,
         [documentType, JSON.stringify(extracted), JSON.stringify(accounting), approvedChanged ? 'na_kontrole' : document.status,
           id, auth.tenantId, body.expectedVersion, podtyp],
@@ -516,7 +521,7 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       // Samokontrola pravidiel: zhoda so schváleným = potvrdenie, rozdiel = oprava.
       await updateRuleFeedback(tx, { tenantId: auth.tenantId, documentId: id, accounting: document.accounting });
       // Čo účtovník oproti návrhu zmenil — meranie kvality návrhov aj podklad na učenie.
-      await zaznamenajOpravu(tx, rozhodnutie);
+      await zaznamenajOpravu(tx, { ...rozhodnutie, navrhDruhu: document.navrh_druhu ?? undefined });
       // Otázka k schválenému dokladu už nie je otvorená.
       await tx.query('UPDATE accounting_suggestions SET otazka=NULL WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
       await writeAudit(tx, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
@@ -849,16 +854,18 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const povodnyExtracted = { ...extracted, polozky: zostavajuce, ...sumyZPoloziek(zostavajuce) };
 
     await database.transaction(async (tx) => {
+      // Časť dedí podtyp (dobropis ostáva dobropisom) aj druh od extrakcie —
+      // inak by schválenie časti zapísalo opravu podtypu, ktorú nikto neurobil.
       await tx.query(
         `INSERT INTO documents
           (id,tenant_id,organization_id,queue_id,document_type,status,processing_status,source,extracted,
-           accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id)
+           accounting,field_confidence,confidence,total_amount,currency,history,split_from_document_id,podtyp,navrh_druhu)
          SELECT $1,tenant_id,organization_id,queue_id,$2,'na_kontrole','ready_for_review',source,$3::jsonb,
-           accounting,field_confidence,confidence,$4,currency,$5::jsonb,$6
+           accounting,field_confidence,confidence,$4,currency,$5::jsonb,$6,$8,navrh_druhu
            FROM documents WHERE id=$6 AND tenant_id=$7`,
         [noveId, body.typ, JSON.stringify(novyExtracted), novyExtracted.sumaSpolu,
           JSON.stringify([{ ts: teraz, user: auth.name, akcia: `Doklad vznikol rozdelením dokladu ${extracted.cisloFaktury ?? id}` }]),
-          id, auth.tenantId],
+          id, auth.tenantId, podtypPreTyp(body.typ, document.podtyp)],
       );
       const povodny = await tx.query(
         `UPDATE documents SET extracted=$1::jsonb, total_amount=$2, version=version+1,
@@ -1188,16 +1195,19 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const status = buyerMismatch ? 'karantena' : duplicateId ? 'duplicita' : 'na_kontrole';
     const history = [...document.history, { ts: new Date().toISOString(), user: auth.name, akcia: `Použitá extrakcia ${runId}` }];
     const updated = await database.transaction(async (tx) => {
+      // Použitá extrakcia je nový návrh druhu: staré navrh_druhu by schválenie
+      // porovnalo so zastaraným druhom. Podtyp sa zladí s novým typom ako pri PATCH.
       const changed = await tx.query<Record<string, unknown>>(
         `UPDATE documents SET document_type=$1,status=$2,processing_status='ready_for_review',extracted=$3::jsonb,
                 field_confidence=$4::jsonb,confidence=$5,total_amount=$6,currency=$7,history=$8::jsonb,
                 quarantine_reason=$9,duplicate_of_document_id=$10,not_duplicate=false,
-                applied_extraction_run_id=$11,version=version+1,approved_version=NULL,approved_snapshot=NULL,updated_at=now()
+                applied_extraction_run_id=$11,version=version+1,approved_version=NULL,approved_snapshot=NULL,updated_at=now(),
+                podtyp=$16,navrh_druhu=NULL
           WHERE id=$12 AND tenant_id=$13 AND organization_id=$14 AND version=$15 RETURNING *`,
         [normalized.documentType, status, JSON.stringify(normalized.extracted), JSON.stringify(normalized.fieldConfidence),
           normalized.confidence, normalized.totalAmount, normalized.currency, JSON.stringify(history),
           buyerMismatch ? 'buyer_ico_mismatch' : null, duplicateId ?? null, runId,
-          id, auth.tenantId, document.organization_id, expectedVersion],
+          id, auth.tenantId, document.organization_id, expectedVersion, podtypPreTyp(normalized.documentType, document.podtyp)],
       );
       if (!changed.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
       // Aplikovanie extrakcie ruší prípadné schválenie — rozhodnutie von z pamäte.

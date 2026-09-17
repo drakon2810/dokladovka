@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { kosinus, textPreVektor, vektorZRiadku, vytvorVektory } from './embeddingService.js';
+import { embedderSBehom, kosinus, textPreVektor, vektorZRiadku, vytvorVektory } from './embeddingService.js';
 import { testConfig } from '../testHelpers.js';
 
 describe('embeddingService', () => {
@@ -29,6 +29,8 @@ describe('embeddingService', () => {
 
   it('bez kľúča sa nevolá sieť a vracia undefined', async () => {
     expect(await vytvorVektory(testConfig(), ['nieco'])).toBeUndefined();
+    // Obal so zápisom behu bez kľúča klienta nevyrobí — vytvorVektory tak ostane bez siete.
+    expect(embedderSBehom({} as never, testConfig(), { tenantId: 't', organizationId: 'o' })).toBeUndefined();
   });
 
   // Sémantika je vylepšenie, nie podmienka: zlyhanie embeddingu nesmie zhodiť

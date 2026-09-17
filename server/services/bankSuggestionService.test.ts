@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { insertPayment } from './paymentService.js';
 import { suggestBankMovementAccounting } from './bankSuggestionService.js';
 
@@ -65,23 +65,24 @@ describe('autozaúčtovanie pohybov výpisu', () => {
       bankStatementDocumentId: statementId,
     });
 
-    const parse = vi.fn().mockResolvedValue({
-      output_parsed: {
+    const create = vi.fn().mockResolvedValue({
+      ...aiOdpoved({
         pohyby: [
           { index: 0, predkontaciaId: dane },
           { index: 1, predkontaciaId: uhradaFv },
           // Vymyslené id — nesmie sa zapísať.
           { index: 2, predkontaciaId: randomUUID() },
         ],
-      },
+      }),
+      usage: { input_tokens: 900, output_tokens: 40 },
     });
     const doplnene = await suggestBankMovementAccounting(database, testConfig(), {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId,
-    }, { parse });
+    }, { create });
     expect(doplnene).toBe(2);
 
     // Model dostal len pohyby bez predkontácie a k pohybu 1 spárovanú FV.
-    const payload = JSON.parse((parse.mock.calls[0][0] as any).input[0].content[0].text);
+    const payload = JSON.parse((create.mock.calls[0][0] as any).input[0].content[0].text);
     expect(payload.pohyby.map((pohyb: any) => pohyb.index)).toEqual([0, 1]);
     expect(payload.pohyby[1].sparovanyDoklad).toMatchObject({ typ: 'FV', cislo: '260504300086' });
     expect(payload.ciselnik.some((item: any) => item.id === uhradaFv)).toBe(true);
@@ -98,6 +99,47 @@ describe('autozaúčtovanie pohybov výpisu', () => {
     // Ručne nastavená predkontácia ostáva nedotknutá.
     expect(polozky[2].ucto.predkontaciaId).toBe(rucne);
     expect(JSON.stringify(ulozene.rows[0].history)).toContain('AI doplnila predkontáciu 2 pohybom');
+    // Dávka je platené volanie: beh výpisu nesie spotrebu, výsledok extrakcie ostáva nedotknutý.
+    expect((await database.query<Record<string, any>>(
+      'SELECT prompt_version, status, error_code, result, usage FROM extraction_runs WHERE document_id=$1', [statementId],
+    )).rows).toEqual([{
+      prompt_version: 'bankovy-navrh-v1', status: 'succeeded', error_code: null, result: null,
+      usage: { inputTokens: 900, cachedTokens: null, outputTokens: 40, reasoningTokens: null, webSearchCalls: 0 },
+    }]);
+  }, 90_000);
+
+  // Výpadok dávky catch doteraz len vypísal do konzoly — v behoch výpisu nebol.
+  it('zlyhaná dávka sa zapíše ako zlyhaný beh a výpis ostane bez návrhu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await seedPredkontacia(database, seeded, '538200');
+    const statementId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'BV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,0,'EUR')`,
+      [statementId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({
+          dodavatel: { nazov: 'Banka' }, cisloFaktury: 'V-1', datumVystavenia: '2026-05-28', mena: 'EUR', sumaSpolu: 0,
+          polozky: [{ id: 'm0', popis: 'Poplatok', sumaSpolu: -1 }],
+        })],
+    );
+    const create = vi.fn().mockRejectedValue(Object.assign(new Error('výpadok'), { status: 429 }));
+    expect(await suggestBankMovementAccounting(database, testConfig(), {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId,
+    }, { create })).toBe(0);
+    expect((await database.query<Record<string, any>>(
+      'SELECT prompt_version, status, error_code, usage FROM extraction_runs WHERE document_id=$1', [statementId],
+    )).rows).toEqual([{ prompt_version: 'bankovy-navrh-v1', status: 'failed', error_code: 'openai_429', usage: null }]);
+
+    // Odpoveď mimo schémy je zaplatená: beh nesie spotrebu a kód zdržania, nie výnimku.
+    expect(await suggestBankMovementAccounting(database, testConfig(), {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId,
+    }, { create: vi.fn().mockResolvedValue({ ...aiOdpoved({ pohyby: [{ index: '0' }] }), usage: { input_tokens: 700 } }) })).toBe(0);
+    expect((await database.query<Record<string, any>>(
+      `SELECT status, error_code, usage->>'inputTokens' AS vstup FROM extraction_runs
+        WHERE document_id=$1 AND status='succeeded'`, [statementId],
+    )).rows).toEqual([{ status: 'succeeded', error_code: 'mimo_schemy', vstup: '700' }]);
   }, 90_000);
 
   it('súbežná úprava účtovníka (zmena verzie) zahodí návrhy — ručná práca vyhráva', async () => {
@@ -116,13 +158,13 @@ describe('autozaúčtovanie pohybov výpisu', () => {
         })],
     );
     // Účtovník uloží doklad POČAS behu AI — verzia sa zdvihne pod rukami.
-    const parse = vi.fn().mockImplementation(async () => {
+    const create = vi.fn().mockImplementation(async () => {
       await database.query('UPDATE documents SET version=version+1 WHERE id=$1', [statementId]);
-      return { output_parsed: { pohyby: [{ index: 0, predkontaciaId: dane }] } };
+      return aiOdpoved({ pohyby: [{ index: 0, predkontaciaId: dane }] });
     });
     expect(await suggestBankMovementAccounting(database, testConfig(), {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId,
-    }, { parse })).toBe(0);
+    }, { create })).toBe(0);
     const ulozene = await database.query<Record<string, any>>('SELECT extracted FROM documents WHERE id=$1', [statementId]);
     expect(ulozene.rows[0].extracted.polozky[0].ucto?.predkontaciaId).toBeUndefined();
   }, 90_000);
@@ -142,10 +184,11 @@ describe('autozaúčtovanie pohybov výpisu', () => {
           polozky: [{ id: 'm0', popis: 'Poplatok', sumaSpolu: -1, ucto: { predkontaciaId: predkontacia } }],
         })],
     );
-    const parse = vi.fn();
+    const create = vi.fn();
     expect(await suggestBankMovementAccounting(database, testConfig(), {
       tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId,
-    }, { parse })).toBe(0);
-    expect(parse).not.toHaveBeenCalled();
+    }, { create })).toBe(0);
+    expect(create).not.toHaveBeenCalled();
+    expect((await database.query('SELECT 1 FROM extraction_runs WHERE document_id=$1', [statementId])).rowCount).toBe(0);
   }, 90_000);
 });

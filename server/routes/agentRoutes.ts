@@ -12,7 +12,7 @@ import type { Database, Queryable } from '../db/database.js';
 import type { ObjectStorage } from '../storage.js';
 import { HttpError } from '../http.js';
 import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from '../security.js';
-import { seedTaxRatioDefaults } from '../services/taxRatios.js';
+import { doplnUcetMdZKodu } from '../services/ucetMdZKodu.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
 import { klucPolozky, konfliktPolozky, osvojRadBezIdentifikatora } from './codeListRoutes.js';
@@ -393,8 +393,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
         );
         insertedOrUpdated += 1;
       }
-      // Nové predkontácie dostanú účet z prefixu kódu a daňový pomer z názvu.
-      if (body.kind === 'predkontacie') await seedTaxRatioDefaults(tx, agent.tenant_id, id);
+      // Nové predkontácie bez účtu MD dostanú účet z prefixu kódu.
+      if (body.kind === 'predkontacie') await doplnUcetMdZKodu(tx, agent.tenant_id, id);
       // Prázdna dávka nikdy nič nezhasne. ParseCodeLists v agentovi vracia
       // VŽDY všetkých päť číselníkov — keď POHODA na jeden kontajner odpovie
       // chybou, príde prázdny zoznam, nie výnimka, a agent ho nahrá ako

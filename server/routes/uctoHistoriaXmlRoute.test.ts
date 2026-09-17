@@ -64,4 +64,38 @@ describe('nahratie dokladov s položkami', () => {
 
     await app.close();
   }, 120_000);
+
+  // Ručné nahratie mení korpus rovnako ako prenos agentom. Kým prepočet
+  // zaraďovala len publikácia prenosu, pravidlá ostávali zo starej histórie.
+  it('ručné nahratie histórie zaradí prepočet praxe, čakajúci najviac jeden', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = {
+      cookie: String(login.headers['set-cookie']).split(';')[0],
+      'x-csrf-token': login.json().csrfToken as string,
+    };
+    const url = `/api/organizations/${seeded.organizationId}`;
+    const joby = async () => (await database.query(
+      `SELECT status FROM processing_jobs WHERE organization_id=$1 AND kind='prepocet_praxe' ORDER BY status`, [seeded.organizationId],
+    )).rows;
+
+    const xml = await app.inject({ method: 'PUT', url: `${url}/ucto-historia-xml`, headers, payload: { xml: FIXTURA } });
+    expect(xml.statusCode, xml.body.slice(0, 200)).toBe(200);
+    expect(await joby()).toEqual([{ status: 'queued' }]);
+
+    const rows = [{ agenda: 'FP', dokladCislo: 'D1', datum: '2026-01-05', lineText: 'Preprava', predkontaciaKod: '518/321', riadokIndex: 0 }];
+    expect((await app.inject({ method: 'PUT', url: `${url}/ucto-history`, headers, payload: { rows } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: `${url}/ucto-history/backfill`, headers })).statusCode).toBe(200);
+    expect(await joby()).toEqual([{ status: 'queued' }]);
+
+    // Po dobehnutí prepočtu ďalšie nahratie zaradí nový.
+    await database.query(`UPDATE processing_jobs SET status='succeeded' WHERE organization_id=$1`, [seeded.organizationId]);
+    expect((await app.inject({ method: 'PUT', url: `${url}/ucto-history`, headers, payload: { rows } })).statusCode).toBe(200);
+    expect(await joby()).toEqual([{ status: 'queued' }, { status: 'succeeded' }]);
+
+    await app.close();
+  }, 120_000);
 });

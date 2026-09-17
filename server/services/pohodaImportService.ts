@@ -247,16 +247,26 @@ export async function publikujImport(
   if ('zamietnute' in vystup) throw new HttpError(422, 'import_neuplny', `Prenos je neúplný: ${vystup.zamietnute}`);
   // Prax firmy (pravidlá, kódy kategórií, rozpis) sa prepočíta z novej histórie
   // až po COMMIT-e — worker by inak čítal starý korpus. Aj pri zopakovanej
-  // publikácii: ak zápis jobu minule zlyhal, agent to skúsi znova. Čakajúci
-  // job stačí jeden, prepočíta to isté.
-  if (body.druh === 'historia') {
-    await database.query(
-      `INSERT INTO processing_jobs (id,tenant_id,organization_id,kind,status,max_attempts,correlation_id,payload)
-       SELECT $1::text, $2::text, $3::text, $4::text, 'queued', 1, $5::text, '{}'::jsonb
-        WHERE NOT EXISTS (SELECT 1 FROM processing_jobs
-                           WHERE tenant_id=$2 AND organization_id=$3 AND kind=$4 AND status='queued')`,
-      [randomUUID(), tenantId, organizationId, PREPOCET_PRAXE_KIND, input.correlationId],
-    );
-  }
+  // publikácii: ak zápis jobu minule zlyhal, agent to skúsi znova.
+  // Denník prax nemení — prepočet číta len históriu.
+  if (body.druh === 'historia') await zaradPrepocetPraxe(database, { tenantId, organizationId }, input.correlationId);
   return vystup.vysledok;
+}
+
+/**
+ * Prepočet praxe po zmene histórie (prenos agentom aj ručné nahratie). Volať
+ * po COMMIT-e zápisu. Čakajúci job stačí jeden, prepočíta to isté.
+ */
+export async function zaradPrepocetPraxe(
+  database: Queryable,
+  kde: { tenantId: string; organizationId: string },
+  correlationId: string,
+): Promise<void> {
+  await database.query(
+    `INSERT INTO processing_jobs (id,tenant_id,organization_id,kind,status,max_attempts,correlation_id,payload)
+     SELECT $1::text, $2::text, $3::text, $4::text, 'queued', 1, $5::text, '{}'::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM processing_jobs
+                         WHERE tenant_id=$2 AND organization_id=$3 AND kind=$4 AND status='queued')`,
+    [randomUUID(), kde.tenantId, kde.organizationId, PREPOCET_PRAXE_KIND, correlationId],
+  );
 }

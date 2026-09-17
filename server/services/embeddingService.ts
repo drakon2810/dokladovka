@@ -12,10 +12,12 @@
 // vektorovo takmer identické, hoci pre účtovníka sú to iné riadky.
 import OpenAI from 'openai';
 import type { ServerConfig } from '../config.js';
+import type { Queryable } from '../db/database.js';
+import { sBehomAi } from './behAi.js';
 
 /** Minimálne rozhranie klienta — testy ho podstrkávajú namiesto siete. */
 export interface Embedder {
-  create(body: { model: string; input: string[] }): Promise<{ data: Array<{ embedding: number[] }> }>;
+  create(body: { model: string; input: string[] }): Promise<{ data: Array<{ embedding: number[] }>; usage?: unknown }>;
 }
 
 /**
@@ -72,14 +74,8 @@ export async function vytvorVektory(
 ): Promise<number[][] | undefined> {
   const pouzitelne = texty.filter((text) => text.trim().length > 0);
   if (pouzitelne.length === 0) return undefined;
-  if (!injected && !config.openai.apiKey) return undefined;
-  const klient = injected ?? (new OpenAI({
-    apiKey: config.openai.apiKey,
-    timeout: config.openai.timeoutMs,
-    // Retry rieši durable job, nie SDK — inak by tri timeouty embeddingu
-    // pridali 6 minút k spracovaniu JEDNÉHO dokladu.
-    maxRetries: 0,
-  }).embeddings as unknown as Embedder);
+  const klient = injected ?? klientEmbeddingu(config);
+  if (!klient) return undefined;
   try {
     const odpoved = await klient.create({
       model: config.openai.embeddingModel,
@@ -92,4 +88,38 @@ export async function vytvorVektory(
       cause instanceof Error ? cause.message : cause);
     return undefined;
   }
+}
+
+function klientEmbeddingu(config: ServerConfig): Embedder | undefined {
+  if (!config.openai.apiKey) return undefined;
+  return new OpenAI({
+    apiKey: config.openai.apiKey,
+    timeout: config.openai.timeoutMs,
+    // Retry rieši durable job, nie SDK — inak by tri timeouty embeddingu
+    // pridali 6 minút k spracovaniu JEDNÉHO dokladu.
+    maxRetries: 0,
+  }).embeddings as unknown as Embedder;
+}
+
+/**
+ * Embedder, ktorý každé volanie zapíše do behov (embeddings-v1): aj vektor je
+ * platené volanie a jeho výpadok inak zmizne v lexikálnom náhradnom postupe.
+ * Dáva ho produkcia (návrh dokladu, analýza profilu); meranie presnosti ho
+ * nedostane, lebo nesmie nič zapísať. Bez klienta vráti undefined —
+ * vytvorVektory potom sieť nevolá, rovnako ako doteraz.
+ */
+export function embedderSBehom(
+  database: Queryable,
+  config: ServerConfig,
+  kde: { tenantId: string; organizationId: string; documentId?: string },
+  injected?: Embedder,
+): Embedder | undefined {
+  const klient = injected ?? klientEmbeddingu(config);
+  return klient && {
+    create: (body) => sBehomAi(database, {
+      tenantId: kde.tenantId, organizationId: kde.organizationId, documentId: kde.documentId ?? null,
+      model: body.model, promptVersion: 'embeddings-v1',
+      kodChyby: 'embeddings_zlyhali', spravaChyby: 'Vektory textov zlyhali',
+    }, () => klient.create(body), (odpoved) => (odpoved.data.length === body.input.length ? undefined : 'neuplna_odpoved')),
+  };
 }

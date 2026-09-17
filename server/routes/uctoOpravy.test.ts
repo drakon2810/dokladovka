@@ -218,6 +218,41 @@ describe('záznam opráv účtovníka', () => {
     await app.close();
   }, 60_000);
 
+  // R17: zmena druhu dokladu sa pri schválení nezapisovala nikde — podtyp od
+  // klasifikácie úprava prepísala a oprava „dobropis → bežná" sa stratila.
+  it('zmena typu a podtypu oproti extrakcii sa zapíše s prvým navrhnutým druhom', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const app = await buildApp({ database, storage: new MemoryObjectStorage(), config: testConfig(), logger: false });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: seeded.email, password: seeded.password } });
+    const headers = sessionHeaders(login);
+
+    const { documentId } = await pripravDoklad(database, seeded);
+    // Klasifikácia určila dobropis.
+    await database.query(`UPDATE documents SET podtyp='dobropis' WHERE id=$1`, [documentId]);
+    const uprav = async (payload: Record<string, unknown>) => {
+      const odpoved = await app.inject({ method: 'PATCH', url: `/api/documents/${documentId}`, headers, payload });
+      expect(odpoved.statusCode, odpoved.body).toBe(200);
+      return Number(odpoved.json().version);
+    };
+    // Dve úpravy druhu za sebou: návrhom ostáva druh od extrakcie, nie medzikrok.
+    const verzia = await uprav({ documentType: 'FP', podtyp: 'tarchopis', expectedVersion: 1 });
+    await uprav({ documentType: 'OZ', expectedVersion: verzia });
+    const approved = await app.inject({
+      method: 'POST', url: `/api/documents/${documentId}/approve`, headers, payload: { expectedVersion: verzia + 1 },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+
+    const oprava = (await database.query<Record<string, any>>(
+      'SELECT zmenene, navrhnute, schvalene FROM ucto_opravy WHERE document_id=$1', [documentId])).rows[0];
+    expect(oprava.zmenene).toEqual(expect.arrayContaining(['typ', 'podtyp']));
+    expect(oprava.navrhnute).toMatchObject({ typ: 'FP', podtyp: 'dobropis' });
+    expect(oprava.schvalene).toMatchObject({ typ: 'OZ', podtyp: 'bezna' });
+
+    await app.close();
+  }, 60_000);
+
   it('súhlas s návrhom sa zapíše ako prázdny zoznam zmien, nie ako chýbajúci záznam', async () => {
     const database = await createTestDatabase();
     databases.push(database);
