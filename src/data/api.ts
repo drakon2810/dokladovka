@@ -2752,6 +2752,18 @@ export async function odpovedzOtazke(organizationId: string, otazkaId: string, o
   });
 }
 
+/** Prax banky: potvrdenie jednou z kandidátnych predkontácií alebo zamietnutie. */
+export async function rozhodniPraxBanky(
+  organizationId: string,
+  praxId: string,
+  telo: { stav: 'potvrdene'; predkontaciaKod: string } | { stav: 'zamietnute' },
+): Promise<ProfilKlienta> {
+  return restRequest(`${profilUrl(organizationId)}/banka/${encodeURIComponent(praxId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(telo),
+  });
+}
+
 export async function prepocitajProfil(organizationId: string): Promise<ProfilKlienta> {
   return restRequest(`${profilUrl(organizationId)}/prepocitat`, { method: 'POST' });
 }

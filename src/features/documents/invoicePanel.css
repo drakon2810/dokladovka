@@ -129,6 +129,8 @@
 .dk-cell-off { cursor: default; color: var(--dk-soft); }
 .dk-cell-err { border-color: rgba(192, 57, 43, .55); }
 .dk-cell-warn { border-color: rgba(180, 83, 9, .55); }
+/* Návrh z praxe (nie schválenie) — prerušovaný okraj ako „navrhnuté" v profile klienta. */
+.dk-cell-navrh { border-style: dashed; border-color: #7DD3FC; }
 input.dk-cell-edit {
   background: #fff; border-color: #16A37B; cursor: text;
   box-shadow: 0 0 0 3px rgba(14, 122, 95, .15);

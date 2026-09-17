@@ -10,6 +10,7 @@ import type {
 import { requestMostikCodeListSync } from '../../data/mostik/mostikService';
 import { bankovePredkontacie } from '../../data/pohoda/agendas';
 import { showToast } from '../../components/toast';
+import { t } from '../../i18n/sk';
 import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { fmtMoney } from './ItemsSection';
 import { TYP_OPTIONS } from './InvoicePanel';
@@ -105,7 +106,8 @@ export function BankPanel({
     updateExtracted('polozky', pohyby.map((item, i) => (i === index ? { ...item, ...value } : item)));
   };
   const patchPredkontacia = (index: number, id: string) => {
-    const { predkontaciaId: _stara, ...rest } = pohyby[index].ucto ?? {};
+    // Ručný výber už nie je návrh praxe banky — zdroj odchádza so starou hodnotou.
+    const { predkontaciaId: _stara, zdroj: _zdroj, ...rest } = pohyby[index].ucto ?? {};
     patch(index, { ucto: id ? { ...rest, predkontaciaId: id } : rest });
   };
   const addPohyb = () => {
@@ -223,6 +225,7 @@ export function BankPanel({
             </div>
             {pohyby.map((pohyb, index) => {
               const chybaPredkontacia = !pohyb.ucto?.predkontaciaId && !ucto.predkontaciaId;
+              const zPraxe = Boolean(pohyb.ucto?.predkontaciaId) && pohyb.ucto?.zdroj === 'banka_prax';
               return (
                 <div key={pohyb.id}>
                   <div className="dk-bank-row dk-row-item">
@@ -245,8 +248,8 @@ export function BankPanel({
                       options={(pohyb.sumaSpolu ?? 0) < 0 ? vydajOpts : prijemOpts}
                       disabled={readOnly}
                       placeholder={predkKod(ucto.predkontaciaId) ?? '—'}
-                      title={chybaPredkontacia ? 'Pohyb nemá predkontáciu' : undefined}
-                      srcClass={chybaPredkontacia ? ' dk-cell-err' : ''}
+                      title={chybaPredkontacia ? 'Pohyb nemá predkontáciu' : zPraxe ? t('vypis.navrhZPraxe') : undefined}
+                      srcClass={chybaPredkontacia ? ' dk-cell-err' : zPraxe ? ' dk-cell-navrh' : ''}
                       onChange={(value) => patchPredkontacia(index, value)}
                     />
                     <button

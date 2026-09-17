@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { UCTO_AGENDA_NAZOV, getProfil, odpovedzOtazke, prepocitajProfil, ulozFakt } from '../../data/api';
+import { UCTO_AGENDA_NAZOV, getProfil, odpovedzOtazke, prepocitajProfil, rozhodniPraxBanky, ulozFakt } from '../../data/api';
 import { useDataQuery } from '../../data/query';
 import { useOrgSelection } from '../../data/orgSelection';
-import type { OdpovedOtazky, ProfilDokaz, ProfilFakt, ProfilKlienta, ProfilOtazka } from '../../data/types';
+import type { OdpovedOtazky, PraxBanky, ProfilDokaz, ProfilFakt, ProfilKlienta, ProfilOtazka } from '../../data/types';
 import { ConfirmDialog } from '../../components/ui';
 import { showToast } from '../../components/toast';
 import { formatDate, formatDateTime } from '../../lib/format';
@@ -405,6 +405,78 @@ function KartaOtazky({ otazka, profil, busy, onFakt, onOdpoved, onUprav }: {
   );
 }
 
+type RozhodnutieBanky = { stav: 'potvrdene'; predkontaciaKod: string } | { stav: 'zamietnute' };
+
+/** Jedna prax banky: partner alebo text, smer a dôkaz, predkontácia (pri viacerých kandidátoch výber) a rozhodnutie. */
+function RiadokPraxeBanky({ prax, busy, nazvyKodov, onRozhodni }: {
+  prax: PraxBanky;
+  busy: boolean;
+  nazvyKodov: Map<string, string>;
+  onRozhodni: (telo: RozhodnutieBanky) => void;
+}) {
+  const kandidati = prax.dokaz?.kandidati ?? [];
+  // Z viacerých kandidátov sa nevyberá za účtovníka — výber je prázdny, kým ho nezvolí.
+  const [volba, setVolba] = useState(kandidati.length === 1 ? kandidati[0] : '');
+  const kod = prax.stav === 'potvrdene' ? prax.predkontaciaKod : volba;
+  const smer = t(`profilKlienta.banka.smer.${prax.smer}` as SkKey);
+  const styl = PILULKY[prax.stav === 'zamietnute' ? 'nepouziva_sa' : prax.stav];
+  const nazovKodu = (kodPredkontacie: string) => (nazvyKodov.has(kodPredkontacie) ? `${kodPredkontacie} — ${nazvyKodov.get(kodPredkontacie)}` : kodPredkontacie);
+  return (
+    <li className="grid gap-x-4 gap-y-2 px-3.5 py-3 text-[13px] md:grid-cols-[minmax(0,1fr)_minmax(0,260px)_auto] md:items-center">
+      <div className="min-w-0">
+        <p className="truncate font-semibold text-ink" title={prax.partnerMena.join(', ') || undefined}>
+          {prax.slova.length > 0 ? tv('profilKlienta.banka.text', { slova: prax.slova.join(' ') }) : prax.partnerMena[0] ?? prax.partnerIco}
+          {prax.partnerIco && <span className="tnum font-normal text-ink-faint"> · IČO {prax.partnerIco}</span>}
+        </p>
+        <p className="mt-0.5 text-xs text-ink-faint tnum">
+          {prax.dokaz
+            ? tv('profilKlienta.banka.dokaz', {
+              smer, protiucet: prax.protiucet, riadkov: String(prax.dokaz.riadkov), od: formatDate(prax.dokaz.od), do: formatDate(prax.dokaz.do),
+            })
+            : tv('profilKlienta.banka.bezDokazu', { smer, protiucet: prax.protiucet })}
+        </p>
+      </div>
+      <div className="min-w-0">
+        {prax.stav !== 'potvrdene' && kandidati.length > 1 ? (
+          <select
+            className="input py-1 text-[13px]"
+            value={volba}
+            disabled={busy}
+            aria-label={t('profilKlienta.banka.vyberte')}
+            onChange={(event) => setVolba(event.target.value)}
+          >
+            <option value="">{t('profilKlienta.banka.vyberte')}</option>
+            {kandidati.map((kandidat) => <option key={kandidat} value={kandidat}>{nazovKodu(kandidat)}</option>)}
+          </select>
+        ) : kod ? (
+          <span className="block truncate" title={nazovKodu(kod)}>
+            <b className="tnum">{kod}</b> <span className="text-ink-soft">{nazvyKodov.get(kod) ?? ''}</span>
+          </span>
+        ) : (
+          <span className="text-ink-mute">{tv('profilKlienta.banka.bezPredkontacie', { protiucet: prax.dokaz?.protiucet ?? prax.protiucet })}</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
+        <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold ${styl.pill}`}>
+          <span className={`h-[7px] w-[7px] shrink-0 rounded-full ${styl.dot}`} aria-hidden />
+          {prax.stav === 'zamietnute' ? t('profilKlienta.banka.zamietnute') : t(`profilKlienta.stav.${prax.stav}` as SkKey)}
+        </span>
+        {prax.stav !== 'potvrdene' && kandidati.length > 0 && (
+          <button type="button" className="btn btn-primary px-2.5 py-1 text-xs" disabled={busy || !volba}
+            onClick={() => onRozhodni({ stav: 'potvrdene', predkontaciaKod: volba })}>
+            {t('profilKlienta.akcia.potvrdit')}
+          </button>
+        )}
+        {prax.stav !== 'zamietnute' && (
+          <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy} onClick={() => onRozhodni({ stav: 'zamietnute' })}>
+            {t('profilKlienta.akcia.zamietnut')}
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
 function Kostra() {
   return (
     <div className="mx-auto max-w-[1240px] space-y-4" aria-busy="true">
@@ -467,7 +539,11 @@ export function ProfilKlientaPage() {
   const cisla = pocty(profil);
   const { otvorene, odlozene } = triedOtazky(profil.otazky);
   const relevantne = relevantneKluce(profil.fakty);
-  const prazdny = profil.fakty.length === 0 && profil.otazky.length === 0 && profil.navrhyDelenia.length === 0;
+  const prazdny = profil.fakty.length === 0 && profil.otazky.length === 0 && profil.navrhyDelenia.length === 0 && profil.banka.length === 0;
+  // „Potvrdené" zahŕňa aj zamietnuté — aj to je rozhodnutie účtovníka.
+  const bankaVidno = profil.banka.filter((prax) => !filter || (filter === 'navrhnute' ? prax.stav === 'navrhnute' : filter === 'potvrdene' && prax.stav !== 'navrhnute'));
+  const navrhnutejBanky = profil.banka.filter((prax) => prax.stav === 'navrhnute').length;
+  const ukazBanku = bankaVidno.length > 0 || (!filter && !prazdny);
 
   const vidno = (kluc: string) => {
     if (!relevantne.includes(kluc)) return false;
@@ -517,6 +593,8 @@ export function ProfilKlientaPage() {
     (firma) => odpovedzOtazke(firma, otazka.id, odpoved),
     odpoved.akcia === 'neskor' ? 'profilKlienta.odlozene' : odpoved.akcia === 'ine' ? 'profilKlienta.pokynUlozeny' : 'profilKlienta.pravidloUlozene',
   );
+  const onRozhodniBanku = (prax: PraxBanky, telo: RozhodnutieBanky) =>
+    void vykonaj((firma) => rozhodniPraxBanky(firma, prax.id, telo), 'profilKlienta.ulozene');
   const prepocitaj = () => {
     setPrepocitava(true);
     void vykonaj(prepocitajProfil, 'profilKlienta.prepocitane').finally(() => setPrepocitava(false));
@@ -684,6 +762,10 @@ export function ProfilKlientaPage() {
       ? [{ id: 'otazky', nazov: t('profilKlienta.sekcia.otazky'), bodka: (cisla.blokuje ? 'blokuje' : 'odpovedat') as BodkaSekcie, pocet: profil.otazky.length }]
       : []),
     ...SEKCIE.map((sekcia) => ({ id: sekcia.id, nazov: t(`profilKlienta.sekcia.${sekcia.id}` as SkKey), ...stavSekcie(sekcia.id, profil) })),
+    {
+      id: 'banka', nazov: t('profilKlienta.sekcia.banka'), pocet: navrhnutejBanky,
+      bodka: navrhnutejBanky ? 'navrhnute' : profil.banka.length ? 'hotovo' : 'prazdne',
+    },
   ];
   const sekcie = SEKCIE.filter((sekcia) => sekcia.kluce.some(vidno));
   const ukazOtazky = (!filter || filter === 'odpovedat') && profil.otazky.length > 0;
@@ -824,7 +906,27 @@ export function ProfilKlientaPage() {
             </section>
           ))}
 
-          {filter && sekcie.length === 0 && !ukazOtazky && (
+          {ukazBanku && (
+            <section id="pk-banka" className="card scroll-mt-6 p-5">
+              <h2 className="text-[15px] font-semibold tracking-tight text-ink">{t('profilKlienta.sekcia.banka')}</h2>
+              <p className="mt-0.5 max-w-3xl text-[13px] text-ink-soft">{t('profilKlienta.sekcia.banka.popis')}</p>
+              {bankaVidno.length > 0 ? (
+                <ul className="mt-3 divide-y divide-line-soft overflow-hidden rounded-[12px] border border-line bg-surface-2">
+                  {bankaVidno.map((prax) => (
+                    <RiadokPraxeBanky
+                      key={`${prax.id}|${prax.stav}|${prax.dokaz?.kandidati.join(',') ?? ''}`}
+                      prax={prax} busy={busy} nazvyKodov={nazvyKodov}
+                      onRozhodni={(telo) => onRozhodniBanku(prax, telo)}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-[13px] text-ink-mute">{t('profilKlienta.banka.prazdne')}</p>
+              )}
+            </section>
+          )}
+
+          {filter && sekcie.length === 0 && !ukazOtazky && !ukazBanku && (
             <p className="card border-dashed p-8 text-center text-sm text-ink-soft">{t('profilKlienta.filter.ziadne')}</p>
           )}
         </div>

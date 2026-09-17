@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { normalizeName, otazkaPraxe, platnyKvKod, uctyBezOdpoctu } from './accountingSuggestionService.js';
+import { nacitajPraxBanky, type UlozenaPraxBanky } from './bankaPraxService.js';
 import { clenenieVyzeraNaOdpocet, EU_DPH_PREFIXY } from './dphAdvisor.js';
 import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
 import { ulozPravidloProtistrany } from './pravidloProtistrany.js';
@@ -58,6 +59,7 @@ export interface ProfilPayload {
   fakty: ProfilFakt[];
   otazky: ProfilOtazka[];
   navrhyDelenia: NavrhDelenia[];
+  banka: UlozenaPraxBanky[];
   prepocitaneAt?: string;
 }
 
@@ -95,7 +97,8 @@ export async function nacitajProfil(db: Queryable, firma: Firma): Promise<Profil
 
   // Delenie, ktoré už je potvrdeným pravidlom vozidiel, navrhyPravidielDelenia vynechá sama.
   const navrhyDelenia = await navrhyPravidielDelenia(db, firma);
-  return { fakty, otazky, navrhyDelenia, ...(prepocitane ? { prepocitaneAt: iso(prepocitane) } : {}) };
+  const banka = await nacitajPraxBanky(db, firma);
+  return { fakty, otazky, navrhyDelenia, banka, ...(prepocitane ? { prepocitaneAt: iso(prepocitane) } : {}) };
 }
 
 /**

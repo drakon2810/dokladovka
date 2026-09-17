@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
 import { insertPayment } from './paymentService.js';
+import { prepocitajPraxBanky } from './bankaPraxService.js';
 import { suggestBankMovementAccounting } from './bankSuggestionService.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
@@ -167,6 +168,95 @@ describe('autozaúčtovanie pohybov výpisu', () => {
     }, { create })).toBe(0);
     const ulozene = await database.query<Record<string, any>>('SELECT extracted FROM documents WHERE id=$1', [statementId]);
     expect(ulozene.rows[0].extracted.polozky[0].ucto?.predkontaciaId).toBeUndefined();
+  }, 90_000);
+
+  it('prax banky z denníka navrhne predkontáciu pred AI aj bez AI; model dostane len zvyšok', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const bankova = async (code: string, agenda: string, ucetMd: string, ucetDal: string) => {
+      const id = await seedPredkontacia(database, seeded, code, agenda);
+      await database.query('UPDATE code_list_items SET ucet_md=$2, ucet_dal=$3 WHERE id=$1', [id, ucetMd, ucetDal]);
+      return id;
+    };
+    const uhradaFp = await bankova('Úhrada FP', 'bankIssued', '321100', '221000');
+    const poplatky = await bankova('Poplatky', 'bankIssued', '568100', '221000');
+    const uhradaFv = await bankova('Úhrada FV', 'bankReceived', '221000', '311100');
+    for (const [partner, text, ucetMd] of [
+      ...Array.from({ length: 5 }, () => ['Print-Office s.r.o.', 'Úhrada FP', '321100']),
+      ...Array.from({ length: 5 }, (_, n) => [null, `Poplatok za vedenie účtu 0${n + 1}/2026`, '568100']),
+      ...Array.from({ length: 5 }, () => [null, 'Poplatok', '568100']),
+      ...Array.from({ length: 5 }, () => [null, 'Poplatok za výpis', '568100']),
+    ]) {
+      await database.query(
+        `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,datum,text,suma,ucet_md,ucet_dal,partner_nazov)
+         VALUES ($1,$2,$3,$4,'Banka','2026-04-01',$5,10,$6,'221100',$7)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, randomUUID(), text, ucetMd, partner],
+      );
+    }
+    await database.transaction((tx) => prepocitajPraxBanky(tx, seeded));
+    // Zamietnutá užšia prax „poplatok vypis" nepustí na svoj text širšiu „poplatok".
+    await database.query(`UPDATE banka_prax SET stav='zamietnute' WHERE kluc='text:poplatok vypis:vydaj'`);
+
+    const statementId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'BV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,0,'EUR')`,
+      [statementId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({
+          dodavatel: { nazov: 'Banka' }, cisloFaktury: 'V-8', datumVystavenia: '2026-08-31', mena: 'EUR', sumaSpolu: 0,
+          polozky: [
+            { id: 'm0', popis: 'Platba faktury', protistrana: 'PRINT-OFFICE s.r.o.', sumaSpolu: -120 },
+            { id: 'm1', popis: 'POPLATOK ZA VEDENIE UCTU 08/2026', sumaSpolu: -3 },
+            // Ten istý partner, opačný smer — prax výdaja príjmu nepatrí.
+            { id: 'm2', popis: 'Vratka', protistrana: 'Print-Office s.r.o.', sumaSpolu: 120 },
+            { id: 'm3', popis: 'POPLATOK ZA VYPIS', sumaSpolu: -2 },
+          ],
+        })],
+    );
+    const vstup = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId };
+    const polozky = async () => (await database.query<Record<string, any>>('SELECT extracted FROM documents WHERE id=$1', [statementId])).rows[0].extracted.polozky;
+
+    // Bez nastavenej AI: prax aj tak doplní, čo jednoznačne pozná.
+    expect(await suggestBankMovementAccounting(database, testConfig(), vstup)).toBe(2);
+    expect((await polozky()).map((pohyb: any) => pohyb.ucto)).toEqual([
+      { predkontaciaId: uhradaFp, zdroj: 'banka_prax' },
+      { predkontaciaId: poplatky, zdroj: 'banka_prax' },
+      undefined,
+      undefined,
+    ]);
+
+    const create = vi.fn().mockResolvedValue(aiOdpoved({ pohyby: [{ index: 2, predkontaciaId: uhradaFv }] }));
+    expect(await suggestBankMovementAccounting(database, testConfig(), vstup, { create })).toBe(1);
+    const payload = JSON.parse((create.mock.calls[0][0] as any).input[0].content[0].text);
+    expect(payload.pohyby.map((pohyb: any) => pohyb.index)).toEqual([2, 3]);
+    // AI návrh zdroj praxe nenesie.
+    expect((await polozky())[2].ucto).toEqual({ predkontaciaId: uhradaFv });
+    const history = JSON.stringify((await database.query<Record<string, any>>('SELECT history FROM documents WHERE id=$1', [statementId])).rows[0].history);
+    expect(history).toContain('Prax banky z denníka navrhla predkontáciu 2 pohybom');
+    expect(history).toContain('AI doplnila predkontáciu 1 pohybom');
+  }, 90_000);
+
+  it('bez bankovej predkontácie v ponuke AI nedostane celý číselník — pohyb ostane bez návrhu', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    await seedPredkontacia(database, seeded, '518/321', 'receivedInvoice');
+    const statementId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'BV','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,0,'EUR')`,
+      [statementId, seeded.tenantId, seeded.organizationId,
+        JSON.stringify({
+          dodavatel: { nazov: 'Banka' }, cisloFaktury: 'V-1', datumVystavenia: '2026-05-28', mena: 'EUR', sumaSpolu: 0,
+          polozky: [{ id: 'm0', popis: 'Poplatok', sumaSpolu: -1 }],
+        })],
+    );
+    const create = vi.fn();
+    expect(await suggestBankMovementAccounting(database, testConfig(), {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId: statementId,
+    }, { create })).toBe(0);
+    expect(create).not.toHaveBeenCalled();
   }, 90_000);
 
   it('bez chýbajúcich pohybov sa AI vôbec nevolá', async () => {

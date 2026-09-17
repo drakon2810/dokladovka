@@ -53,7 +53,7 @@ describe('profil klienta — API', () => {
 
     const prazdny = await app.inject({ method: 'GET', url, headers: admin });
     expect(prazdny.statusCode, prazdny.body).toBe(200);
-    expect(prazdny.json()).toEqual({ fakty: [], otazky: [], navrhyDelenia: [] });
+    expect(prazdny.json()).toEqual({ fakty: [], otazky: [], navrhyDelenia: [], banka: [] });
 
     const uctovnik = await pouzivatel('uctovnik', 'Účtovník');
     const ulozene = await app.inject({
@@ -195,6 +195,42 @@ describe('profil klienta — API', () => {
     });
     expect(zastarana.statusCode, zastarana.body).toBe(409);
     expect(zastarana.json().code).toBe('profil_otazka_zastarana');
+    await app.close();
+  }, 120_000);
+
+  it('prax banky: prepočet ju naplní z denníka, kód mimo kandidátov 400, potvrdenie s auditom', async () => {
+    const { database, seeded, app, admin, url } = await priprav();
+    await database.query(
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,agenda,ucet_md,ucet_dal)
+       VALUES ($1,$2,$3,'predkontacie','Úhrada FP','Úhrada FP','pohoda','bankIssued','321100','221000'),
+              ($4,$2,$3,'predkontacie','Dobropis FP','Dobropis FP','pohoda','bankReceived','221000','321100')`,
+      [randomUUID(), seeded.tenantId, seeded.organizationId, randomUUID()],
+    );
+    for (let n = 0; n < 5; n += 1) {
+      await database.query(
+        `INSERT INTO ucto_dennik (id,tenant_id,organization_id,externalny_id,agenda,datum,text,suma,ucet_md,ucet_dal,partner_nazov)
+         VALUES ($1,$2,$3,$4,'Banka','2026-04-01','Úhrada',10,'321100','221100','Print-Office s.r.o.')`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, randomUUID()],
+      );
+    }
+    const prepocet = await app.inject({ method: 'POST', url: `${url}/prepocitat`, headers: admin });
+    expect(prepocet.statusCode, prepocet.body).toBe(200);
+    expect(prepocet.json().banka).toEqual([expect.objectContaining({
+      kluc: 'meno:print-office s.r.o.:vydaj', stav: 'navrhnute', predkontaciaKod: 'Úhrada FP',
+    })]);
+    const praxId = prepocet.json().banka[0].id as string;
+    const rozhodni = (payload: unknown) => app.inject({ method: 'PUT', url: `${url}/banka/${praxId}`, headers: admin, payload });
+
+    // Predkontácia opačného smeru nie je kandidátom — nikdy.
+    const zlySmer = await rozhodni({ stav: 'potvrdene', predkontaciaKod: 'Dobropis FP' });
+    expect(zlySmer.statusCode).toBe(400);
+    expect(zlySmer.json().code).toBe('banka_prax_kod_neplatny');
+    const potvrdenie = await rozhodni({ stav: 'potvrdene', predkontaciaKod: 'Úhrada FP' });
+    expect(potvrdenie.statusCode, potvrdenie.body).toBe(200);
+    expect(potvrdenie.json().banka[0]).toMatchObject({ stav: 'potvrdene', potvrdil: 'Test Admin' });
+    expect((await database.query("SELECT metadata FROM audit_logs WHERE action='profil.prax_banky'")).rows).toEqual([{
+      metadata: { id: praxId, kluc: 'meno:print-office s.r.o.:vydaj', stav: 'potvrdene', predkontaciaKod: 'Úhrada FP' },
+    }]);
     await app.close();
   }, 120_000);
 

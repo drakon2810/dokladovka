@@ -140,7 +140,8 @@ export function pocty(profil: ProfilKlienta) {
   return {
     relevantnych: stavy.length,
     potvrdenych: stavy.filter(rozhodnute).length,
-    navrhnutych: stavy.filter((stav) => stav === 'navrhnute').length + profil.navrhyDelenia.length,
+    navrhnutych: stavy.filter((stav) => stav === 'navrhnute').length + profil.navrhyDelenia.length
+      + profil.banka.filter((prax) => prax.stav === 'navrhnute').length,
     otazok: profil.otazky.length,
     blokuje: profil.otazky.some((otazka) => otazka.blokuje),
   };
