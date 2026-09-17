@@ -27,10 +27,23 @@ process.on('SIGTERM', stop);
 // Súbežné slučky nad tou istou frontou: claimJob berie job cez FOR UPDATE
 // SKIP LOCKED, takže dva bežce nikdy nedostanú ten istý doklad. Prázdna fronta
 // každú slučku uspí, takže nečinný worker nezaťažuje databázu viac než predtým.
+// Uvoľnenie zaseknutých dokladov nestačí raz po štarte: worker sa reštartuje
+// pri každom nasadení, takže doklad zaseknutý pol minúty pred reštartom je pre
+// štartovací zmet ešte „čerstvý" a ďalší štart môže byť o týždeň. Prázdna
+// fronta je na to správny okamih — vtedy žiadny chvost nebeží.
+const UVOLNENIE_KAZDYCH_MS = 5 * 60_000;
+let posledneUvolnenie = Date.now();
+
 async function slucka(): Promise<void> {
   while (!stopping) {
     const processed = await processNextJob(database, config, undefined, { storage });
-    if (!processed) await delay(config.workerPollIntervalMs);
+    if (processed) continue;
+    if (Date.now() - posledneUvolnenie >= UVOLNENIE_KAZDYCH_MS) {
+      posledneUvolnenie = Date.now();
+      await uvolniZaseknuteDoklady(database, config)
+        .catch((chyba) => console.warn('[worker] uvoľnenie zaseknutých dokladov zlyhalo', chyba instanceof Error ? chyba.message : chyba));
+    }
+    await delay(config.workerPollIntervalMs);
   }
 }
 
