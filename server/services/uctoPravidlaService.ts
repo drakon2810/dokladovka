@@ -29,6 +29,12 @@ export interface PravidloRiadok {
   clenenieKvKod?: string;
   /** Podiel na sume dokladu, keď je ustálený — napr. 0,8 a 0,2 pri PHM. */
   podiel?: number;
+  /**
+   * Koľko dokladov túto pozíciu takto zaúčtovalo. Prevahu si žiada už samotné
+   * odvodenie, ale predvyplnenie položiek potrebuje aj ABSOLÚTNY počet: pozícia
+   * doložená dvomi dokladmi prevahu splní a prax to ešte nie je.
+   */
+  dokladov?: number;
 }
 
 /** Časť položiek dokladu, ktorá sa od hlavičky líši, s podielom na doklade. */
@@ -141,6 +147,12 @@ export interface UctoPravidlo {
   clenenieDphKod?: string;
   clenenieKvKod?: string;
   rozpis: PravidloRiadok[];
+  /**
+   * Prax podľa textu položky (odvodPraxTextov). Nezávisí od hlavičky ani od
+   * počtu položiek, takže ju má aj protistrana v spore — práve tá ju
+   * potrebuje najviac.
+   */
+  texty: PravidloText[];
   /** Žiadna podoba neprevažuje — kódy hlavičky vtedy chýbajú a rozhodujú varianty. */
   konflikt: boolean;
   varianty: PraxVariant[];
@@ -179,6 +191,8 @@ export interface Prax {
   zmenaRezimu?: { od: string };
   /** Ustálený tvar položiek — len z dokladov víťaznej podoby. */
   rozpis: PravidloRiadok[];
+  /** Prax podľa textu položky — zo VŠETKÝCH dokladov, aj pri spore hlavičky. */
+  texty: PravidloText[];
   druhy: DruhPraxe[];
 }
 
@@ -260,6 +274,7 @@ export function odvodRozpis(doklady: RozpisRiadok[][]): PravidloRiadok[] {
       clenenieDphKod: vzor.clenenieDphKod,
       clenenieKvKod: vzor.clenenieKvKod,
       ...(stabilny ? { podiel: Number(priemer!.toFixed(3)) } : {}),
+      dokladov: zhodne.length,
     });
   }
   // Rozpis, kde všetky riadky idú rovnako, nie je rozpis — doklad sa nedelí.
@@ -440,6 +455,9 @@ export function odvodPrax(doklady: DokladPraxe[], asOf?: string, protistrana = '
     konflikt: platne.length > 0 && !vitaz,
     zmenaRezimu: prechod ? { od: prechod.variant.od } : undefined,
     rozpis: polozky.length >= MIN_DOKLADOV ? odvodRozpis(polozky) : [],
+    // Prax textov sa počíta zo všetkých platných dokladov, nie z víťazných:
+    // pri spore hlavičky víťaz nie je a práve vtedy je text jediný dôkaz.
+    texty: odvodPraxTextov(platne, protistrana),
     druhy: odvodDruhy(podstatne.flatMap((skupina) => skupina.doklady), protistrana),
   };
 }
@@ -508,6 +526,7 @@ export function pravidloPodlaTextu(pravidlo: UctoPravidlo | undefined, text: str
     clenenieDphKod: druh.clenenieDphKod,
     clenenieKvKod: druh.clenenieKvKod,
     rozpis: druh.rozpis,
+    texty: druh.texty ?? [],
     konflikt: druh.konflikt,
     varianty: druh.varianty,
     zmenaRezimu: druh.zmenaRezimu,
@@ -541,6 +560,7 @@ function odvodPravidlo(
     clenenieDphKod: vitaz?.clenenieDphKod,
     clenenieKvKod: vitaz?.clenenieKvKod,
     rozpis: prax.rozpis,
+    texty: prax.texty,
     konflikt: prax.konflikt,
     varianty: ulozene.map((variant) => (variant === vitaz
       ? { ...variant, vitaz: true, ...(prax.zmenaRezimu ? { zmenaRezimu: true } : {}) }
@@ -628,13 +648,13 @@ export async function prepocitajPravidla(
     await database.query(
       `INSERT INTO ucto_pravidla
         (id,tenant_id,organization_id,agenda,protistrana,protistrana_ico,dokladov,zhoda,
-         predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,rozpis,varianty,konflikt,druhy)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15::jsonb)`,
+         predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,rozpis,varianty,konflikt,druhy,texty)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16::jsonb)`,
       [pravidlo.id, input.tenantId, input.organizationId, pravidlo.agenda, pravidlo.protistrana,
         pravidlo.protistranaIco ?? null, pravidlo.dokladov, pravidlo.zhoda,
         pravidlo.predkontaciaKod ?? null, pravidlo.clenenieDphKod ?? null,
         pravidlo.clenenieKvKod ?? null, JSON.stringify(pravidlo.rozpis), JSON.stringify(pravidlo.varianty),
-        pravidlo.konflikt, JSON.stringify(pravidlo.druhy)],
+        pravidlo.konflikt, JSON.stringify(pravidlo.druhy), JSON.stringify(pravidlo.texty)],
     );
   }
   return {
@@ -707,6 +727,7 @@ export async function najdiPravidlo(
     clenenieDphKod: row.clenenie_dph_kod ?? undefined,
     clenenieKvKod: row.clenenie_kv_kod ?? undefined,
     rozpis: (row.rozpis ?? []) as PravidloRiadok[],
+    texty: (row.texty ?? []) as PravidloText[],
     konflikt: row.konflikt === true,
     varianty,
     zmenaRezimu: varianty.find((variant) => variant.vitaz && variant.zmenaRezimu)?.od,
@@ -747,6 +768,128 @@ export interface NavrhDelenia {
 
 const bezDiakritiky = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('sk');
 const slovaTextu = (text: string) => bezDiakritiky(text).match(/\p{L}{3,}/gu) ?? [];
+
+/**
+ * Slová, ktoré o druhu plnenia nepovedia nič vlastné. Stoja na položkách
+ * každého dodávateľa, takže by účet jednej položky pritiahli na celkom inú.
+ * „tovar" a „služby" sú medzi nimi zámerne: prax „tovar 12" tak nemá ako
+ * trafiť fľašu ani paletu a položky tovaru zdedia hlavičku — a to je správne,
+ * hlavička JE účet tovaru.
+ */
+const SLOVA_BEZ_PLNENIA = new Set([
+  'tovar', 'tovary', 'sluzba', 'sluzby', 'polozka', 'polozky', 'dodavka', 'dodanie', 'dodavatel',
+  'faktura', 'fakturujeme', 'vyfakturujeme', 'cislo', 'spolu', 'celkom', 'suma', 'cena', 'sadzba',
+  'podla', 'zmluva', 'zmluvy', 'objednavka', 'objednavky', 'mesiac', 'obdobie', 'pre', 'pri', 'bez',
+]);
+
+/**
+ * Významové slová textu položky — kľúč praxe textu aj podmienka zhody s novým
+ * dokladom. Meno protistrany medzi ne nepatrí (je na každej jej položke, takže
+ * by rozhodlo o všetkých) a čísla tiež nie: „mobil 1-2026" a „mobil 6-2026" je
+ * to isté plnenie v inom mesiaci a prax O2 by sa inak rozsypala na jednorazové
+ * texty.
+ */
+export function slovaPlnenia(text: string, protistrana: string): string[] {
+  const meno = new Set(slovaTextu(protistrana));
+  return [...new Set(slovaTextu(text))]
+    .filter((slovo) => !meno.has(slovo) && !SLOVA_BEZ_PLNENIA.has(slovo))
+    .sort();
+}
+
+/**
+ * Prax JEDNÉHO textu položky: na čo firma riadok s takým textom účtuje a
+ * z koľkých dokladov to je.
+ */
+export interface PravidloText {
+  /** Významové slová textu (slovaPlnenia) — kľúč aj podmienka zhody. */
+  slova: string[];
+  /** Text tak, ako v doklade stojí — pre obrazovku a „Prečo". */
+  text: string;
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  clenenieKvKod?: string;
+  dokladov: number;
+  /**
+   * Podľa textu rozhodnúť nemožno: buď má viac doložených zaúčtovaní, alebo
+   * ho účtovník väčšinou nechal na hlavičke a vlastný účet dostal len občas.
+   * Taký text nepredvyplní ani rozpis z pozícií.
+   */
+  sporny?: boolean;
+}
+
+/**
+ * Koľko textov si pravidlo pamätá. Strop, nie pravda o svete: každý text má za
+ * sebou aspoň MIN_DOKLADOV dokladov, no reťazec s pestrým sortimentom by riadok
+ * nafúkol. Berú sa najdoloženejšie.
+ */
+const TEXTOV_V_PRAVIDLE = 50;
+
+/**
+ * Prax protistrany podľa TEXTU položky, nezávisle od hlavičky.
+ *
+ * Prečo to positional rozpis nestačí: O2 posiela ROFE faktúry o desiatich
+ * položkách, ktorých počet ani poradie nie sú ustálené, a hlavička je v spore
+ * (9 dokladov, zhoda 2) — odvodRozpis aj hlavička teda správne mlčia a
+ * protistrane nezostalo NIČ, hoci po riadkoch je prax jasná: „mobil <mesiac>"
+ * na 518002, „poistka" na CV s PN/KN, „platba mobilom" na 518999.
+ *
+ * Text je prax, len keď má JEDNU doloženú podobu zaúčtovania: aspoň
+ * MIN_DOKLADOV dokladov, prevahu MIN_ZHODA a žiadnu druhú podobu s vlastnými
+ * MIN_DOKLADOV dokladmi. „splátka" u O2 stojí na štyroch účtoch podľa zariadenia
+ * (325003 iPhone, 325004 router, 325007 aj 325008 Xiaomi) — najčastejší z nich
+ * má prevahu 7 z 8 dokladov textu a vyhrať NESMIE: text o zariadení nič nevie.
+ * Taký text ostáva v pravidle ako sporný, aby ho nepredvyplnil ani rozpis
+ * z pozícií.
+ *
+ * Riadok bez vlastného účtu (zdedil hlavičku) účet neurčuje, do menovateľa ale
+ * patrí — inak by jeden odchýlený riadok spravil prax z toho, čo účtovník
+ * spravidla nechal na hlavičke.
+ */
+export function odvodPraxTextov(doklady: DokladPraxe[], protistrana = ''): PravidloText[] {
+  const skupiny = new Map<string, {
+    text: string; doklady: Set<string>;
+    podoby: Map<string, { vzor: RozpisRiadok; doklady: Set<string> }>;
+  }>();
+  for (const doklad of [...doklady].sort((a, b) => porovnaj(a.kluc, b.kluc))) {
+    for (const polozka of doklad.polozky) {
+      const slova = slovaPlnenia(polozka.text, protistrana);
+      if (slova.length === 0) continue;
+      const kluc = slova.join(' ');
+      let skupina = skupiny.get(kluc);
+      if (!skupina) skupiny.set(kluc, skupina = { text: polozka.text, doklady: new Set(), podoby: new Map() });
+      skupina.doklady.add(doklad.kluc);
+      if (!kod(polozka.predkontaciaKod)) continue;
+      const podoba = skupina.podoby.get(trojica(polozka))
+        ?? { vzor: polozka, doklady: new Set<string>() };
+      podoba.doklady.add(doklad.kluc);
+      skupina.podoby.set(trojica(polozka), podoba);
+    }
+  }
+
+  const texty: PravidloText[] = [];
+  for (const [kluc, skupina] of skupiny) {
+    const dolozene = [...skupina.podoby.values()]
+      .filter((podoba) => podoba.doklady.size >= MIN_DOKLADOV)
+      .sort((a, b) => b.doklady.size - a.doklady.size);
+    if (dolozene.length === 0) continue;
+    const slova = kluc.split(' ');
+    const vitaz = dolozene[0];
+    if (dolozene.length > 1 || vitaz.doklady.size < skupina.doklady.size * MIN_ZHODA) {
+      texty.push({ slova, text: skupina.text, dokladov: skupina.doklady.size, sporny: true });
+      continue;
+    }
+    texty.push({
+      slova, text: skupina.text,
+      predkontaciaKod: kod(vitaz.vzor.predkontaciaKod),
+      clenenieDphKod: kod(vitaz.vzor.clenenieDphKod),
+      clenenieKvKod: kod(vitaz.vzor.clenenieKvKod),
+      dokladov: vitaz.doklady.size,
+    });
+  }
+  return texty
+    .sort((a, b) => b.dokladov - a.dokladov || porovnaj(a.slova.join(' '), b.slova.join(' ')))
+    .slice(0, TEXTOV_V_PRAVIDLE);
+}
 
 /**
  * Ustálené delenie jednej položky na daňovú a nedaňovú časť — napr. PHM 80 %

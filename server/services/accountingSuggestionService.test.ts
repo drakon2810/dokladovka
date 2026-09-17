@@ -4117,3 +4117,174 @@ describe('fakty profilu klienta v návrhu zaúčtovania', () => {
     expect(navrh.zmeny).toContainEqual({ pole: 'riadok', index: 1, z: null, na: id('378-DPH'), dovod: 'fakt_vratenie_dph' });
   }, 90_000);
 });
+
+// Deterministický rozpis po položkách z praxe protistrany. Dva prípady ROFY:
+//
+//  - BRICOL posiela „tovar + paleta" a vratný obal účtovník účtuje VŽDY na
+//    501009 (4 zo 4 dokladov). Prax bola odvodená, a napriek tomu dostali
+//    všetky tri položky novej faktúry účet tovaru: rozpis do návrhu dával jedine
+//    model a toho sa doklad rozhodnutý z pamäte nepýtal.
+//  - O2 posiela desať položiek a jej hlavička je v spore, takže návrh nemal ani
+//    účet a tlačidlo „Automatické účtovanie" ostávalo vypnuté. Po riadkoch je
+//    prax jasná; sporná je len „splátka" — účty podľa zariadenia.
+describe('deterministický rozpis po položkách z praxe protistrany', () => {
+  async function firma() {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    const kodyId = new Map<string, string>();
+    const kod = async (kind: string, code: string) => {
+      const id = randomUUID();
+      kodyId.set(code, id);
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
+         VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [id, ...kde, kind, code],
+      );
+      return id;
+    };
+    const historia = (
+      dodavatel: string, cislo: string, datum: string, index: number,
+      text: string, predkontacia: string | null, dph: string, kv: string,
+    ) => database.query(
+      `INSERT INTO ucto_historia
+        (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+         line_text_normalized,suma,predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,riadok_index,source,riadok_hash)
+       VALUES ($1,$2,$3,'FP',$4,$5,$6,$7,10,$8,$9,$10,$11,'mdb',$12)`,
+      [randomUUID(), ...kde, cislo, datum, dodavatel, text, predkontacia, dph, kv, index, randomUUID()],
+    );
+    /** Pamäť rozhodnutí protistrany — ten istý zdroj, aký dal návrh v produkcii. */
+    const pamat = (dodavatel: string, ucto: { predkontacia?: string; dph?: string; kv?: string }) => database.query(
+      `INSERT INTO ucto_decisions
+        (id,tenant_id,organization_id,supplier_name_normalized,line_text_normalized,
+         predkontacia_id,clenenie_dph_id,clenenie_kv_kod,source,document_type)
+       VALUES ($1,$2,$3,$4,'x',$5,$6,$7,'import','FP')`,
+      [randomUUID(), ...kde, dodavatel, ucto.predkontacia ? kodyId.get(ucto.predkontacia) : null,
+        ucto.dph ? kodyId.get(ucto.dph) : null, ucto.kv ?? null],
+    );
+    const navrhni = async (dodavatel: { nazov: string; ico?: string }, popisy: string[]) => {
+      const documentId = randomUUID();
+      await database.query(
+        `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+         VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+        [documentId, ...kde, JSON.stringify({
+          dodavatel, polozky: popisy.map((popis) => ({ popis })),
+          cisloFaktury: '1', datumVystavenia: '2026-09-01', mena: 'EUR', rozpisDph: [], sumaSpolu: 100,
+        })],
+      );
+      await prepocitajPravidla(database, { tenantId: seeded.tenantId, organizationId: seeded.organizationId });
+      await rebuildAccountingSuggestion(database, {
+        tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId,
+        supplierName: dodavatel.nazov, supplierIco: dodavatel.ico,
+      });
+      return {
+        documentId,
+        navrh: (await database.query<Record<string, any>>(
+          `SELECT source, confidence, predkontacia_id, clenenie_dph_id, clenenie_kv_kod, riadky
+             FROM accounting_suggestions WHERE document_id=$1`, [documentId],
+        )).rows[0],
+      };
+    };
+    return { database, seeded, kodyId, kod, historia, pamat, navrhni };
+  }
+
+  it('BRICOL: paleta ide na účet obalov, tovar zdedí hlavičku a starý rozpis od AI neprežije', async () => {
+    const { database, seeded, kodyId, kod, historia, pamat, navrhni } = await firma();
+    await kod('predkontacie', '131100 - Nákup tova');
+    await kod('predkontacie', '501009 - ost. mat');
+    await kod('cleneniaDph', 'PD');
+    // Štyri doklady ako v produkcii: tovar (text sa mení) a paleta na obaloch.
+    const texty = ['tovar 12', 'tovar 12', 'tovar 178', 'tovar a vratné preložky'];
+    for (const [poradie, text] of texty.entries()) {
+      const cislo = `FP20260${poradie}`;
+      const datum = `2026-0${poradie + 1}-15`;
+      await historia('bricol s. r. o.', cislo, datum, 0, 'tovar', '131100 - Nákup tova', 'PD', 'B2');
+      await historia('bricol s. r. o.', cislo, datum, 1, text, '131100 - Nákup tova', 'PD', 'B2');
+      await historia('bricol s. r. o.', cislo, datum, 2, 'paleta', '501009 - ost. mat', 'PD', 'B2');
+    }
+    await pamat('bricol s. r. o.', { predkontacia: '131100 - Nákup tova', dph: 'PD', kv: 'B2' });
+
+    const paleta = {
+      index: 2,
+      popis: '9999P Paleta drevená - 1200x1000,1200x800 vratná',
+      predkontaciaId: kodyId.get('501009 - ost. mat'),
+    };
+    const { documentId, navrh } = await navrhni({ nazov: 'BRICOL s. r. o.' }, [
+      '9393T Fľaša Mineralwasser', '9981P Preložka plastová', paleta.popis,
+    ]);
+    expect(navrh).toMatchObject({
+      source: 'decision_memory', predkontacia_id: kodyId.get('131100 - Nákup tova'), clenenie_kv_kod: 'B2',
+    });
+    // Rozpis istotu nedvíha: hlavička ostáva pod prahom predvyplnenia.
+    expect(Number(navrh.confidence)).toBeCloseTo(0.88);
+    // Paleta na vlastnom účte; členenie ani sekcia sa nepíšu — sú ako hlavička.
+    // Fľaša ani preložka prax netrafia a hlavičku zdedia (a tá JE účet tovaru).
+    expect(navrh.riadky).toEqual([paleta]);
+
+    // Rozpis od AI patril predošlej podobe dokladu; prepočet ho nesmie nechať žiť.
+    await database.query(
+      `UPDATE accounting_suggestions SET riadky='[{"index":0,"popis":"x","predkontaciaId":"staré"}]'::jsonb
+        WHERE document_id=$1`, [documentId],
+    );
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'BRICOL s. r. o.',
+    });
+    expect((await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky).toEqual([paleta]);
+
+    // Účet, ktorý firma v číselníku už nemá aktívny, sa nenavrhne vôbec —
+    // radšej prázdna položka než účet, na ktorý sa nedá zaúčtovať.
+    await database.query('UPDATE code_list_items SET active=false WHERE id=$1', [kodyId.get('501009 - ost. mat')]);
+    await rebuildAccountingSuggestion(database, {
+      tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'BRICOL s. r. o.',
+    });
+    expect((await database.query<Record<string, any>>(
+      'SELECT riadky FROM accounting_suggestions WHERE document_id=$1', [documentId],
+    )).rows[0].riadky).toBeNull();
+  }, 90_000);
+
+  it('O2: spor hlavičky rozpis po riadkoch nezruší a sporná „splátka" nedostane nič', async () => {
+    const { kodyId, kod, historia, pamat, navrhni } = await firma();
+    for (const code of ['518002 - mobil, int', 'CV', '518999-nedaňové', '325004-router', '325007-MT Xiaomi']) {
+      await kod('predkontacie', code);
+    }
+    await kod('cleneniaDph', 'PD');
+    await kod('cleneniaDph', 'PN');
+    for (let i = 0; i < 9; i += 1) {
+      const cislo = `26FP${i}`;
+      const datum = `2026-0${i + 1}-15`;
+      // Hlavička sa medzi dokladmi mení — päť z deviatich prevahu nedá.
+      await historia('o2 slovakia', cislo, datum, 0, 'o2 slovakia',
+        i < 5 ? '518002 - mobil, int' : 'CV', i < 5 ? 'PD' : 'PN', 'B2');
+      let index = 0;
+      const riadok = (text: string, predkontacia: string | null, dph: string, kv: string) =>
+        historia('o2 slovakia', cislo, datum, (index += 1), text, predkontacia, dph, kv);
+      // Mesiac v texte robí z každého dokladu iný text; prax nesie slovo „mobil".
+      if (i < 7) await riadok(`mobil ${i + 1}-2026`, i < 6 ? '518002 - mobil, int' : null, 'PD', 'B2');
+      if (i < 5) await riadok('poistka', 'CV', 'PN', 'KN');
+      if (i < 3) await riadok('platba mobilom', '518999-nedaňové', 'PD', 'B2');
+      // Tá istá „splátka" na dvoch účtoch podľa zariadenia, aj v jednom doklade.
+      if (i < 7) await riadok('splátka', '325004-router', 'PN', 'KN');
+      if (i < 7) await riadok('splátka', '325007-MT Xiaomi', 'PN', 'KN');
+    }
+    // Pamäť nesie členenie a sekciu, účet nie — presne ako v produkcii.
+    await pamat('o2 slovakia', { dph: 'PD', kv: 'B2' });
+
+    const { navrh } = await navrhni({ nazov: 'O2 Slovakia' }, [
+      'Mobil 7-2026', 'Poistka', 'Platba mobilom 7/2026', 'Splátka', 'Xiaomi 17T 256GB',
+    ]);
+    // Hlavička účet nemá a mať ho nemôže; rozpis po riadkoch je jediné, čo návrh vie.
+    expect(navrh.predkontacia_id).toBeNull();
+    expect(navrh).toMatchObject({ source: 'decision_memory', clenenie_dph_id: kodyId.get('PD'), clenenie_kv_kod: 'B2' });
+    // Splátka je otázka (dva doložené účty) a Xiaomi jediný výskyt — ani jedna
+    // položka návrh nedostane.
+    expect(navrh.riadky).toEqual([
+      { index: 0, popis: 'Mobil 7-2026', predkontaciaId: kodyId.get('518002 - mobil, int') },
+      // Poistka je mimo odpočtu — členenie aj sekcia idú s účtom.
+      { index: 1, popis: 'Poistka', predkontaciaId: kodyId.get('CV'), clenenieDphId: kodyId.get('PN'), clenenieKvKod: 'KN' },
+      { index: 2, popis: 'Platba mobilom 7/2026', predkontaciaId: kodyId.get('518999-nedaňové') },
+    ]);
+  }, 90_000);
+});

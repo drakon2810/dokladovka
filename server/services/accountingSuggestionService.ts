@@ -14,8 +14,9 @@ import { zapisBehAi } from './behAi.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
 import {
-  DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, pravidloPodlaTextu, sekciaKvKluc, sporPraxe, variantyRozpisu,
-  type PraxVariant,
+  DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, pravidloPodlaTextu, sekciaKvKluc, slovaPlnenia,
+  sporPraxe, variantyRozpisu,
+  type PravidloText, type PraxVariant, type UctoPravidlo,
 } from './uctoPravidlaService.js';
 import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
 
@@ -952,6 +953,123 @@ async function zhodnePravidla(
   return zhoda;
 }
 
+/**
+ * Prax protistrany po riadkoch v jednom zozname: prax podľa TEXTU položky
+ * (pravidlo.texty) aj ustálený tvar podľa POZÍCIÍ (pravidlo.rozpis).
+ *
+ * Text je všeobecnejší — pozícia potrebuje ustálený počet položiek, ktorý O2
+ * nemá —, ale pozícia je dôkaz, ktorý účtovník v pravidle protistrany vidí na
+ * obrazovke, a model ho dostáva v prompte. Berú sa preto oba a musia sa zhodnúť.
+ *
+ * Pozícia musí byť doložená aspoň MIN_DOKLADOV dokladmi: prevahu si žiada už
+ * odvodenie, ale dve doklady prevahu splnia a prax to ešte nie je.
+ *
+ * Keď o tom istom texte hovoria oba zdroje rôzne, alebo je text v praxi označený
+ * ako sporný („splátka" u O2 na štyroch účtoch podľa zariadenia), ostáva
+ * v zozname ako VETO: položka, ktorá naň sedí, nedostane nič.
+ */
+function praxRiadkov(pravidlo: Pick<UctoPravidlo, 'protistrana' | 'rozpis' | 'texty'>) {
+  // Záznam bez `riadok` je VETO: text sa pozná, ale rozhodnúť sa nedá.
+  const prax = new Map<string, { slova: string[]; riadok?: PravidloText; dokladov: number }>();
+  const pridaj = (riadok: PravidloText) => {
+    const kluc = riadok.slova.join(' ');
+    if (!kluc) return;
+    const zaznam = { slova: riadok.slova, dokladov: riadok.dokladov };
+    const doterajsi = prax.get(kluc);
+    if (!doterajsi) {
+      prax.set(kluc, riadok.sporny ? zaznam : { ...zaznam, riadok });
+      return;
+    }
+    const zhodne = doterajsi.riadok && !riadok.sporny
+      && doterajsi.riadok.predkontaciaKod === riadok.predkontaciaKod
+      && doterajsi.riadok.clenenieDphKod === riadok.clenenieDphKod
+      && doterajsi.riadok.clenenieKvKod === riadok.clenenieKvKod;
+    if (!zhodne) prax.set(kluc, { slova: riadok.slova, dokladov: Math.max(doterajsi.dokladov, riadok.dokladov) });
+    else if (riadok.dokladov > doterajsi.dokladov) prax.set(kluc, { ...zaznam, riadok });
+  };
+  for (const riadok of pravidlo.texty) pridaj(riadok);
+  for (const riadok of pravidlo.rozpis) {
+    if (!riadok.predkontaciaKod || (riadok.dokladov ?? 0) < MIN_DOKLADOV) continue;
+    pridaj({ ...riadok, slova: slovaPlnenia(riadok.text, pravidlo.protistrana), dokladov: riadok.dokladov! });
+  }
+  return [...prax.values()];
+}
+
+/**
+ * Rozpis po položkách z ustálenej praxe protistrany — deterministicky, bez
+ * modelu.
+ *
+ * Prípad, pre ktorý to vzniklo: ROFA dostáva od BRICOLu faktúry „tovar +
+ * paleta" a vratný obal účtovník účtuje VŽDY na 501009, kým tovar ide na
+ * 131100 (ucto_pravidla: 4 zo 4 dokladov). Prax bola teda odvodená, ale
+ * deterministický návrh písal iba hlavičku a všetky položky novej faktúry
+ * dostali účet tovaru — paletu účtovník prepisoval na každom doklade. Rozpis
+ * do návrhu dával jedine model a toho sa doklad rozhodnutý z pamäte nepýtal.
+ *
+ * Beží aj pod PRÁZDNOU hlavičkou. U protistrany, ktorej doklady sa rozpadajú na
+ * veľa účtov (O2), hlavička jeden účet právom nemá — a práve tam je rozpis po
+ * riadkoch jediné, čo návrh vie povedať.
+ *
+ * Zhoda textu: aspoň jedno významové slovo (slovaPlnenia) musí stáť v položke
+ * aj v texte praxe. Meno protistrany ani číslo zhodu niesť nesmie — „bricol" je
+ * na každej položke a rozhodol by o všetkých.
+ *
+ * Radšej nič než hádanie, takže sa nepredvypĺňa položka, na ktorú sedí viac
+ * praxí alebo prax so sporným textom, ani kód, ktorý firma v číselníku už nemá
+ * aktívny.
+ *
+ * Podiel riadku praxe sa NEPREBERÁ. V rozpise je to podiel na celom doklade
+ * (0,969 tovar / 0,031 paleta — pomer súm, nie rozhodnutie deliť), kým „podiel"
+ * v návrhu reže jednu položku na dve (PHM 80/20). Rez ostáva na profile klienta
+ * a na modeli; z účtu podľa textu sa proporčný rez spraviť nesmie.
+ *
+ * ponytail: zhoda je na celé slová, takže iný tvar toho istého slova
+ * („palety" v praxi proti „paleta" na doklade) sa netrafí; ďalší krok je
+ * skloňovanie alebo embedding položky, nie zoznam výnimiek.
+ */
+function riadkyZPraxe(
+  pravidlo: Pick<UctoPravidlo, 'protistrana' | 'rozpis' | 'texty'>,
+  polozky: ReadonlyArray<{ popis?: unknown }>,
+  kody: { predkontacie: Map<string, string>; clenenia: Map<string, string> },
+  hlavicka: { predkontaciaId?: string; clenenieDphId?: string; clenenieKvKod?: string },
+  druhDokladu: { typ: string; podtyp?: string; sumaSpolu?: number },
+): RiadokNavrhu[] {
+  const prax = praxRiadkov(pravidlo);
+  if (prax.length === 0) return [];
+
+  const riadky: RiadokNavrhu[] = [];
+  polozky.forEach((polozka, index) => {
+    const popis = typeof polozka?.popis === 'string' ? polozka.popis : '';
+    const slova = new Set(slovaPlnenia(popis, pravidlo.protistrana));
+    if (slova.size === 0) return;
+    const trafene = prax.filter((item) => item.slova.some((slovo) => slova.has(slovo)));
+    if (trafene.length !== 1) return;
+    const riadok = trafene[0].riadok;
+    if (!riadok?.predkontaciaKod) return;
+    const predkontaciaId = kody.predkontacie.get(riadok.predkontaciaKod.trim());
+    if (!predkontaciaId) return;
+    // Chýbajúce členenie ruší celý riadok: účet z praxe s členením hlavičky by
+    // bol zmes, akú účtovník na doklade nikdy nemal.
+    const clenenieDphId = riadok.clenenieDphKod ? kody.clenenia.get(riadok.clenenieDphKod.trim()) : undefined;
+    if (riadok.clenenieDphKod && !clenenieDphId) return;
+    const clenenieKvKod = kvNavrhuPreDruh(riadok.clenenieKvKod, druhDokladu);
+    // Zapisuje sa len to, čím sa riadok od hlavičky LÍŠI — prázdne pole položky
+    // znamená v editore aj v exporte „ako doklad", takže zhodný kód nemá čo
+    // pridať. Riadok zhodný v celej trojici nevzniká vôbec.
+    const ineClenenie = clenenieDphId !== undefined && clenenieDphId !== hlavicka.clenenieDphId;
+    const inaSekcia = clenenieKvKod !== undefined && clenenieKvKod !== hlavicka.clenenieKvKod;
+    if (predkontaciaId === hlavicka.predkontaciaId && !ineClenenie && !inaSekcia) return;
+    riadky.push({
+      index,
+      popis,
+      predkontaciaId,
+      ...(ineClenenie ? { clenenieDphId } : {}),
+      ...(inaSekcia ? { clenenieKvKod } : {}),
+    });
+  });
+  return riadky;
+}
+
 export async function rebuildAccountingSuggestion(tx: Queryable, input: SuggestionInput): Promise<void> {
   let source: 'manual_rule' | 'partner_default' | 'decision_memory' | 'supplier_history' | 'organization_default' | 'none' = 'none';
   let confidence = 0;
@@ -1182,24 +1300,58 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
     typ: documentType ?? '', podtyp: current.rows[0]?.podtyp,
     sumaSpolu: Number((current.rows[0]?.extracted as { sumaSpolu?: unknown } | undefined)?.sumaSpolu),
   };
+  const agendy = (await agendyKorpusu(tx, input, documentType ?? '', podtyp, current.rows[0]?.pokladna_typ)).agendy;
   kvKod = kvNavrhuPreDruh(
-    await kvPreClenenie(tx, input, candidate.clenenie_dph_id,
-      (await agendyKorpusu(tx, input, documentType ?? '', podtyp, current.rows[0]?.pokladna_typ)).agendy,
-      kvNavrhuPreDruh(kvKod, druhDokladu)),
+    await kvPreClenenie(tx, input, candidate.clenenie_dph_id, agendy, kvNavrhuPreDruh(kvKod, druhDokladu)),
     druhDokladu,
   );
+
+  // Rozpis po položkách z praxe protistrany (riadkyZPraxe). Hlavičku už nemá
+  // čo zmeniť, preto beží ako posledný. Prázdna hlavička ho nezastaví: práve
+  // protistrana, ktorej doklady sa rozpadajú na veľa účtov, jeden účet
+  // v hlavičke nemá — a účtovníkovi vtedy nezostane nič iné.
+  const polozkyDokladu = (current.rows[0]?.extracted as { polozky?: unknown } | undefined)?.polozky;
+  const pravidloProtistrany = Array.isArray(polozkyDokladu) && polozkyDokladu.length > 0
+    ? pravidloPodlaTextu(
+      await najdiPravidlo(tx, input, agendy, { nazov: strana.nazov, ico: strana.ico }), lineText)
+    : undefined;
+  let riadky: RiadokNavrhu[] = [];
+  if (pravidloProtistrany && (pravidloProtistrany.rozpis.length > 0 || pravidloProtistrany.texty.length > 0)) {
+    const ciselnik = (await tx.query<{ kind: string; id: string; code: string } & Record<string, unknown>>(
+      `SELECT kind, id, code FROM code_list_items
+        WHERE tenant_id=$1 AND organization_id=$2 AND active=true
+          AND kind IN ('predkontacie','cleneniaDph') AND ${BEZ_PREDKONTACIA_SQL}`,
+      [input.tenantId, input.organizationId],
+    )).rows;
+    const kodyKindu = (kind: string) => new Map(ciselnik
+      .filter((row) => row.kind === kind).map((row) => [row.code.trim(), row.id]));
+    riadky = riadkyZPraxe(
+      pravidloProtistrany, polozkyDokladu as Array<{ popis?: unknown }>,
+      { predkontacie: kodyKindu('predkontacie'), clenenia: kodyKindu('cleneniaDph') },
+      {
+        predkontaciaId: candidate.predkontacia_id,
+        clenenieDphId: candidate.clenenie_dph_id,
+        clenenieKvKod: kvKod,
+      },
+      druhDokladu,
+    );
+  }
 
   await tx.query(
     `INSERT INTO accounting_suggestions
       (document_id,tenant_id,organization_id,predkontacia_id,clenenie_dph_id,ciselny_rad_id,stredisko_id,
-       clenenie_kv_kod,source,confidence,reason,based_on_document_id,rule_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       clenenie_kv_kod,source,confidence,reason,based_on_document_id,rule_id,riadky)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
      ON CONFLICT (document_id) DO UPDATE SET
        predkontacia_id=excluded.predkontacia_id, clenenie_dph_id=excluded.clenenie_dph_id,
        ciselny_rad_id=excluded.ciselny_rad_id, stredisko_id=excluded.stredisko_id,
        clenenie_kv_kod=excluded.clenenie_kv_kod,
        source=excluded.source, confidence=excluded.confidence, reason=excluded.reason,
        based_on_document_id=excluded.based_on_document_id, rule_id=excluded.rule_id,
+       -- Rozpis prepisuje aj prázdnym: riadky od AI patrili predošlej podobe
+       -- dokladu (iný druh, iná extrakcia) a prežili by prepočet, ktorý o nich
+       -- nič nevie — položky by nesli účty z návrhu, ktorý už neexistuje.
+       riadky=excluded.riadky,
        -- Deterministický návrh z dôkazov AI nečerpal — stará stopa by klamala.
        -- Otázku počíta AI návrh, ktorý po ňom nasleduje; stará by mohla neplatiť.
        vysvetlenia=NULL, stopa_id=NULL, otazka=NULL, updated_at=now()`,
@@ -1207,7 +1359,8 @@ export async function rebuildAccountingSuggestion(tx: Queryable, input: Suggesti
       candidate.predkontacia_id ?? null, candidate.clenenie_dph_id ?? null,
       candidate.ciselny_rad_id ?? null, candidate.stredisko_id ?? null, kvKod ?? null,
       source, confidence, reason, basedOnDocumentId ?? null,
-      source === 'manual_rule' ? ruleId ?? null : null],
+      source === 'manual_rule' ? ruleId ?? null : null,
+      riadky.length > 0 ? JSON.stringify(riadky) : null],
   );
 }
 
@@ -2218,8 +2371,14 @@ function celyDoklad(doklad: DokladHistorie): { zaklad?: number; dph?: number } |
  * odpisoval podiel dokladu do výstupu — úrok leasingu 0,2022, taliansku DPH
  * 0,1803 —, overenie osamotenú „časť" zahodilo a rozpis z návrhu zmizol
  * (meranie ALPINY: 4 z 50 dokladov, všetky v POHODE naozaj rozpísané).
+ *
+ * Počet dokladov za riadkom rozpisu sa tu zahadzuje: je to dôkaz pre
+ * deterministické predvyplnenie položiek, model počty dostáva na úrovni podôb
+ * a nepopísaný kľúč v prompte by ho len mátol.
  */
-function sPodielomDokladu<T extends { podiel?: number; podielDph?: number }>({ podiel, podielDph, ...zvysok }: T) {
+function sPodielomDokladu<T extends { podiel?: number; podielDph?: number; dokladov?: number }>(
+  { podiel, podielDph, dokladov: _dokladov, ...zvysok }: T,
+) {
   return { ...zvysok, podielDokladu: podiel, podielDphDokladu: podielDph };
 }
 
