@@ -658,6 +658,15 @@ public sealed class AgentTests
     }
 
     [Fact]
+    public void InterneDokladySamozdaneniaNemajuVlastnySken()
+    {
+        var faktura = "11111111-1111-1111-1111-111111111111";
+        Assert.True(AgentCycleRunner.MaVlastnySken(faktura));
+        Assert.False(AgentCycleRunner.MaVlastnySken($"{faktura}-sz-dd"));
+        Assert.False(AgentCycleRunner.MaVlastnySken($"{faktura}-sz-p"));
+    }
+
+    [Fact]
     public void DiscoveryReturnsEmptyForMissingDirectory() =>
         Assert.Empty(PohodaDataDiscovery.Scan(Path.Combine(Path.GetTempPath(), $"neexistuje-{Guid.NewGuid():N}")));
 

@@ -766,7 +766,8 @@ public sealed class AgentCycleRunner
         CancellationToken cancellationToken)
     {
         // Len doklady, ktoré POHODA naozaj založila (varovanie = nezaložený doklad).
-        var prenesene = results.Where(result => result.State == "ok" && !string.IsNullOrWhiteSpace(result.PohodaNumber)).ToArray();
+        var prenesene = results.Where(result => result.State == "ok" && !string.IsNullOrWhiteSpace(result.PohodaNumber)
+            && MaVlastnySken(result.DocumentId)).ToArray();
         if (prenesene.Length == 0) return;
         var typy = PohodaXml.ReadDataPackItemTypes(pending.Job.DataPackXml);
         foreach (var skupina in prenesene.GroupBy(result => typy.GetValueOrDefault(result.DocumentId)))
@@ -817,6 +818,13 @@ public sealed class AgentCycleRunner
             }
         }
     }
+
+    /// <summary>Interný doklad samozdanenia (`…-sz-dd`, `…-sz-p`) nemá vlastný sken —
+    /// patrí faktúre. Bez tejto výnimky by sťahovanie skončilo chybou na každý
+    /// prenos so samozdanením a do protokolu by písalo scan_save_failed.</summary>
+    public static bool MaVlastnySken(string documentId) =>
+        !documentId.EndsWith("-sz-dd", StringComparison.OrdinalIgnoreCase)
+        && !documentId.EndsWith("-sz-p", StringComparison.OrdinalIgnoreCase);
 
     private async Task SaveScanAsync(ExportDocumentResult result, PohodaXml.DocumentFolder folder, CancellationToken cancellationToken)
     {
