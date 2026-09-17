@@ -6,6 +6,7 @@
 import { storeApi, useAppStore, type AppDataState } from './store';
 import type {
   AccountingSuggestion,
+  BlokSamozdanenia,
   CodeListItem,
   CodeListKind,
   DocumentItem,
@@ -26,6 +27,7 @@ import type {
   PaymentStatus,
   PripravenostFirmy,
   Role,
+  RozhodnutieSamozdanenia,
   SimulateInboundEmailInput,
   SimulateInboundEmailResult,
   UserLanguage,
@@ -2848,6 +2850,24 @@ export async function getDphAdvice(documentId: string): Promise<DphPosudok> {
   if (!REST_DATA_MODE) return { navrhy: [], varovania: [], blokacie: [] };
   return await restRequest<DphPosudok>(`/api/documents/${encodeURIComponent(documentId)}/dph-advisor`)
     ?? { navrhy: [], varovania: [], blokacie: [] };
+}
+
+/** Blok samozdanenia prijatej faktúry; null = doklad sa samozdanenia netýka. */
+export async function getSamozdanenie(documentId: string): Promise<BlokSamozdanenia | null> {
+  if (!REST_DATA_MODE) return null;
+  return (await restRequest<{ blok: BlokSamozdanenia | null }>(`/api/documents/${encodeURIComponent(documentId)}/samozdanenie`))?.blok ?? null;
+}
+
+/** Uloží voľbu samozdanenia; s ňou pamäť dodávateľa a nastavenie firmy. Vráti prepočítaný blok. */
+export async function ulozSamozdanenie(
+  documentId: string,
+  rozhodnutie: RozhodnutieSamozdanenia & { pamatatDodavatela?: boolean; vsetkyFaktury?: boolean },
+): Promise<BlokSamozdanenia | null> {
+  if (!REST_DATA_MODE) throw new Error('Samozdanenie vyžaduje spustený backend');
+  return (await restRequest<{ blok: BlokSamozdanenia | null }>(`/api/documents/${encodeURIComponent(documentId)}/samozdanenie`, {
+    method: 'PUT',
+    body: JSON.stringify(rozhodnutie),
+  })).blok;
 }
 
 /** „Prečo?" — pôvod zaúčtovania dokladu: zdroj návrhu, istota, pravidlo, dôvod. */

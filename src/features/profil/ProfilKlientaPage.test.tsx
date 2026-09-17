@@ -113,8 +113,8 @@ describe('ProfilKlientaPage', () => {
     // Súhrn je len z potvrdených — navrhnutý platiteľ doň nepatrí.
     expect(text).toContain('Samozdanenie: služby z EÚ');
     expect(text).not.toContain('Platiteľ DPH · samozdanenie');
-    // Platiteľ (aj navrhnutý) skryje členenie bez odpočtu: 17 relevantných faktov, 1 potvrdený.
-    expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('1 z 17 potvrdených');
+    // Platiteľ (aj navrhnutý) skryje členenie bez odpočtu: 18 relevantných faktov, 1 potvrdený.
+    expect(container.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('1 z 18 potvrdených');
     const filtre = [...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent);
     // Navrhnuté: status, návrh delenia a dve praxe banky.
     expect(filtre).toEqual(['Treba odpovedať2', 'Navrhnuté z histórie4', 'Potvrdené1']);

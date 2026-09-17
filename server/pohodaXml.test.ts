@@ -956,3 +956,62 @@ describe('buildServerDataPack — slovenská sadzba DPH podľa dátumu plnenia (
     expect(xml).toContain('<typ:priceHigh>0.00</typ:priceHigh>');
   });
 });
+
+// Samozdanenie k prijatej faktúre: v tom istom dataPacku faktúra a interné
+// doklady vymerania (DD) a odpočtu (P). Hodnoty sú zo snapshotu schválenia.
+describe('buildServerDataPack — interné doklady samozdanenia', () => {
+  const samozdanenie = {
+    volba: 'vytvorit' as const, druh: 'sluzby_eu' as const, zdroj: 'predvolene' as const,
+    datumDanovejPovinnosti: '2026-06-10', sadzba: 23, zaklad: 1000, dan: 230, odpocet: 230,
+    interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' },
+  };
+  const googleFaktura = (sz: Record<string, unknown> = {}) => {
+    const doc = invoiceDocument({
+      dodavatel: { nazov: 'Google Ireland Ltd', icDph: 'IE6388047V', krajina: 'IE' },
+      cisloFaktury: '5301234567', datumVystavenia: '2026-06-12', datumDodania: '2026-06-10',
+      rozpisDph: [{ sadzba: 0, zaklad: 1000, dph: 0 }], sumaSpolu: 1000,
+    });
+    return { ...doc, snapshot: { ...doc.snapshot, samozdanenie: { ...samozdanenie, ...sz } } };
+  };
+  const polozkyBaliku = (xml: string) => [...xml.matchAll(/<dat:dataPackItem id="([^"]+)"/g)].map((zhoda) => zhoda[1]);
+
+  it('platiteľ: faktúra, vymeranie a odpočet s predkontáciou, členením, KV a daňou', () => {
+    const xml = buildServerDataPack({ id: 'pack-sz', ico: '35761571', documents: [googleFaktura()], codeLists, radInternych: 'INT' });
+    expect(polozkyBaliku(xml)).toEqual(['doc-1', 'doc-1-sz-dd', 'doc-1-sz-p']);
+    const [, , vymeranie, odpocet] = xml.split('<dat:dataPackItem ');
+    for (const cast of [vymeranie, odpocet]) {
+      expect(cast).toContain('<int:number><typ:ids>INT</typ:ids></int:number>');
+      expect(cast).toContain('<int:originalDocumentNumber>5301234567</int:originalDocumentNumber>');
+      expect(cast).toContain('<int:dateTax>2026-06-10</int:dateTax>');
+      expect(cast).toContain('<int:dateKVDPH>2026-06-10</int:dateKVDPH>');
+      expect(cast).toContain('<int:text>Samozdanenie k FP 5301234567</int:text>');
+      expect(cast).toContain('<typ:icDph>IE6388047V</typ:icDph>');
+      expect(cast).toContain('<int:classificationKVDPH><typ:ids>B1</typ:ids></int:classificationKVDPH>');
+      expect(cast).toContain('<int:rateVAT>high</int:rateVAT>');
+      expect(cast).toContain('<typ:price>1000.00</typ:price>');
+      expect(cast).toContain('<typ:priceVAT>230.00</typ:priceVAT>');
+      expect(cast).toContain('<typ:priceHighVAT>230.00</typ:priceHighVAT>');
+      assertOrder(emittedChildren(cast, 'int', 'intDocHeader'), xsdSequence('intDoc.xsd', 'intDocHeaderType'));
+      assertOrder(emittedChildren(cast, 'int', 'intDocItem'), xsdSequence('intDoc.xsd', 'intDocItemType'));
+    }
+    expect(vymeranie).toContain('<int:accounting><typ:ids>aInt</typ:ids></int:accounting>');
+    expect(vymeranie).toContain('<int:classificationVAT><typ:ids>DDsl&#167;69</typ:ids></int:classificationVAT>');
+    expect(odpocet).toContain('<int:accounting><typ:ids>bInt</typ:ids></int:accounting>');
+    expect(odpocet).toContain('<int:classificationVAT><typ:ids>PDsluz</typ:ids></int:classificationVAT>');
+  });
+
+  it('neplatiteľ: len vymeranie; bez radu INT bez čísla', () => {
+    const xml = buildServerDataPack({ id: 'pack-sz-2', ico: '35761571', documents: [googleFaktura({ odpocet: 0 })], codeLists });
+    expect(polozkyBaliku(xml)).toEqual(['doc-1', 'doc-1-sz-dd']);
+    expect(xml.split('<dat:dataPackItem ')[2]).not.toContain('<int:number>');
+  });
+
+  it('časti prijaté pri predošlom prenose sa znova neposielajú; bez voľby „vytvoriť" nič navyše', () => {
+    const opakovanie = buildServerDataPack({
+      id: 'pack-sz-3', ico: '35761571', documents: [{ ...googleFaktura(), prijate: ['faktura', 'dd'] }], codeLists,
+    });
+    expect(polozkyBaliku(opakovanie)).toEqual(['doc-1-sz-p']);
+    const vPohode = buildServerDataPack({ id: 'pack-sz-4', ico: '35761571', documents: [googleFaktura({ volba: 'v_pohode' })], codeLists });
+    expect(polozkyBaliku(vPohode)).toEqual(['doc-1']);
+  });
+});

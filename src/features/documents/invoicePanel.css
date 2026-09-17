@@ -511,6 +511,49 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
 .dv-otazka .dk-card-title { color: #7A4B00; }
 .dv-otazka-vzdy { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: #5B4A2E; }
 
+/* ---- Samozdanenie (blok nad zaúčtovaním) ---- */
+.sz-blok { border-color: #CFE0F5; }
+.sz-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 4px; }
+.sz-head .dk-card-title { margin: 0; color: var(--dk-pohoda); }
+.sz-druh {
+  padding: 1px 8px; border-radius: 999px; background: #EAF1FB;
+  color: var(--dk-pohoda); font-size: 11px; font-weight: 600;
+}
+.sz-popis { color: var(--dk-soft); font-size: 11.5px; }
+.sz-volby { display: flex; flex-direction: column; gap: 4px; }
+.sz-volba { border: 1px solid var(--dk-line); border-radius: 10px; padding: 4px 8px; }
+.sz-volba-on { border-color: #A7D9C9; background: var(--dk-panel); }
+.sz-volba-label { display: flex; align-items: center; gap: 7px; font-weight: 500; cursor: pointer; }
+.sz-volba-label input { accent-color: var(--dk-accent); }
+.sz-obsah { display: flex; flex-direction: column; gap: 5px; margin: 5px 0 2px 21px; }
+.sz-tabulka { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.sz-tabulka th {
+  padding: 3px 6px; border-bottom: 1px solid var(--dk-border);
+  color: var(--dk-muted); font-size: 11px; font-weight: 500; text-align: left; white-space: nowrap;
+}
+.sz-tabulka td { padding: 3px 6px; border-bottom: 1px solid var(--dk-line); }
+.sz-tabulka th.dk-r { text-align: right; }
+.sz-riadok { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--dk-soft); }
+.sz-riadok strong { color: var(--dk-ink); font-weight: 600; }
+.sz-input, .sz-select {
+  border: 1px solid var(--dk-border); border-radius: 7px; background: #fff;
+  padding: 2px 6px; font: inherit; color: var(--dk-ink);
+}
+.sz-input:focus, .sz-select:focus { outline: none; border-color: var(--dk-accent); }
+.sz-kurz { width: 80px; text-align: right; }
+.sz-siroky { flex: 1 1 200px; min-width: 0; }
+.sz-input-err { border-color: var(--dk-err); }
+.sz-odkaz {
+  margin-left: auto; border: 0; background: none; padding: 0;
+  font: inherit; color: var(--dk-pohoda); cursor: pointer;
+}
+.sz-odkaz:hover { text-decoration: underline; }
+.sz-varovanie { margin: 0; color: var(--dk-warn); }
+.sz-varovanie a { color: inherit; text-decoration: underline; }
+.sz-info { margin: 0; color: var(--dk-muted); font-size: 11.5px; }
+.sz-check { display: flex; align-items: center; gap: 6px; color: var(--dk-soft); font-size: 12px; }
+.sz-check input { accent-color: var(--dk-accent); }
+
 /* „?" s návrhom poradcu nesie bodku — inak by o skrytom texte nikto nevedel. */
 .dv-preco-btn.dv-preco-ma-navrh { position: relative; }
 .dv-preco-btn.dv-preco-ma-navrh::after {

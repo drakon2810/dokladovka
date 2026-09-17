@@ -38,6 +38,7 @@ const VZORKY: Record<string, unknown> = {
   'naklady.pomerne': { nazov: 'Telefón', klucoveSlova: ['telefon'], percentoDph: 70, predkontaciaKod: '518200', clenenieDphNedanoveKod: 'PN' },
   'zasady.tovar_na_ceste': { pouziva: false },
   'zasady.drobny_majetok': { hranica: 1700 },
+  'samozdanenie.postup': { robimeVPohode: true },
 };
 const hodnotaFaktu = (kluc: string) => (ZOZNAMOVE.has(kluc) ? [VZORKY[kluc]] : VZORKY[kluc]);
 

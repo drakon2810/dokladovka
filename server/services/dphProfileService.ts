@@ -46,6 +46,8 @@ export interface DphProfil {
   oslobodenePlnenia?: boolean;
   koeficient?: number;
   samozdanenie: Partial<Record<DruhSamozdanenia, SamozdanenieDruh>>;
+  /** samozdanenie.postup: firma interné doklady samozdanenia zakladá sama v POHODE. */
+  samozdanenieVPohode?: boolean;
   vratenieDph?: { uplatnujeme: boolean; predkontaciaId?: string; predkontaciaKod?: string };
   /** Z vozidla.pravidla: percento = daňový náklad, percentoDph = odpočet. */
   pravidlaAut: DphPravidloOdpoctu[];
@@ -170,6 +172,9 @@ export async function loadDphProfil(
         break;
       case 'zasady.drobny_majetok':
         profil.drobnyMajetokHranica = hodnota.hranica;
+        break;
+      case 'samozdanenie.postup':
+        profil.samozdanenieVPohode = hodnota.robimeVPohode;
         break;
       default:
         if (kluc.startsWith('samozdanenie.')) {

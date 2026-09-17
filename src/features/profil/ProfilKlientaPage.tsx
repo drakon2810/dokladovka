@@ -641,7 +641,7 @@ export function ProfilKlientaPage() {
     switch (sekcia) {
       case 'samozdanenie':
         return [
-          skupina('profilKlienta.skupina.prijate', DRUHY_PRIJATE.map((druh) => `samozdanenie.${druh}`)),
+          skupina('profilKlienta.skupina.prijate', DRUHY_PRIJATE.map((druh) => `samozdanenie.${druh}`).concat('samozdanenie.postup')),
           skupina('profilKlienta.skupina.vystavene', DRUHY_VYSTAVENE.map((druh) => `samozdanenie.${druh}`)),
           skupina('profilKlienta.skupina.vratenie', ['zahranicie.vratenie_dph']),
         ];

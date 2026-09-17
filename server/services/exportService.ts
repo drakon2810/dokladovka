@@ -1,6 +1,7 @@
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { buildServerDataPack, type PohodaCodeLookup, type PohodaXmlDocument } from '../pohodaXml.js';
+import { prijateCasti, type Samozdanenie } from './samozdanenieService.js';
 
 interface CodeListRow extends Record<string, unknown> {
   id: string;
@@ -15,6 +16,7 @@ interface DocumentRow extends Record<string, unknown> {
   status: string;
   approved_version?: number;
   approved_snapshot?: PohodaXmlDocument['snapshot'];
+  samozdanenie?: Samozdanenie | null;
 }
 
 export async function buildApprovedDocumentsXml(
@@ -28,7 +30,7 @@ export async function buildApprovedDocumentsXml(
   const uniqueIds = [...new Set(input.documentIds)];
   if (uniqueIds.length === 0) throw new HttpError(400, 'no_documents', 'Nie sú vybrané žiadne doklady');
   const documents = await database.query<DocumentRow>(
-    `SELECT id, organization_id, status, approved_version, approved_snapshot
+    `SELECT id, organization_id, status, approved_version, approved_snapshot, samozdanenie
        FROM documents WHERE tenant_id=$1 AND id = ANY($2::text[])`,
     [input.tenantId, uniqueIds],
   );
@@ -61,6 +63,13 @@ export async function buildApprovedDocumentsXml(
     // Názov predkontácie ide do <inv:text> dokladu.
     if (row.kind === 'predkontacie') codeLists.predkontacieNazvy!.set(row.id, row.name);
   }
+  // Interné doklady samozdanenia čísluje rad interných dokladov z predvolieb firmy.
+  const radInternych = (await database.query<{ code: string } & Record<string, unknown>>(
+    `SELECT c.code FROM organization_series_defaults d
+       JOIN code_list_items c ON c.id=d.ciselny_rad_id AND c.active=true
+      WHERE d.tenant_id=$1 AND d.organization_id=$2 AND d.document_type='MZDY'`,
+    [input.tenantId, input.organizationId],
+  )).rows[0]?.code;
   // Poradie v dataPacku = poradie vybrané v exportnom dialógu (dátum/číslo);
   // SELECT ... = ANY($2) poradie vstupu nezachováva.
   const order = new Map(uniqueIds.map((documentId, index) => [documentId, index]));
@@ -69,8 +78,13 @@ export async function buildApprovedDocumentsXml(
     ico: input.ico,
     documents: [...documents.rows]
       .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
-      .map((row) => ({ id: row.id, snapshot: row.approved_snapshot! })),
+      .map((row) => ({
+        id: row.id,
+        snapshot: row.approved_snapshot!,
+        prijate: prijateCasti(row.samozdanenie),
+      })),
     codeLists,
+    radInternych,
   };
   try {
     return buildServerDataPack(balik);
