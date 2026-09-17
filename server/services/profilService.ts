@@ -321,7 +321,7 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
   }
   const vsetky = [...doklady.values()];
   const kodyFirmy = (await tx.query<{ id: string; kind: string; code: string; name: string } & Record<string, unknown>>(
-    `SELECT id, kind, btrim(code) AS code, name FROM code_list_items
+    `SELECT id, kind, btrim(code) AS code, name, ucet_md FROM code_list_items
       WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')`, kde,
   )).rows;
   const fakty = new Map((await tx.query<Record<string, any>>(
@@ -383,7 +383,10 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
       const druh: DruhSamozdanenia | undefined = DD_REFY_DOVOZ.includes(popis.ref) ? 'dovoz'
         : DD_REFY_TOVAR.includes(popis.ref) ? 'tovar_eu'
         : !DD_REFY_SLUZBY.includes(popis.ref) || !krajina ? undefined
-          : krajina === 'SK' ? 'prenesenie_prijate' : EU_DPH_PREFIXY.includes(krajina) ? 'sluzby_eu' : 'sluzby_mimo_eu';
+          // Tuzemské prenesenie (§69 ods. 12) nesie DDsluz. DDsl§69 je vždy zahraničná osoba (ods. 3) —
+          // slovenská adresa (pobočka, registrácia) neprezradí, či z EÚ, tak sa nezaradí.
+          : krajina === 'SK' ? (popis.ref === 'D02' ? 'prenesenie_prijate' : undefined)
+            : EU_DPH_PREFIXY.includes(krajina) ? 'sluzby_eu' : 'sluzby_mimo_eu';
       if (druh) ddVyskyty.set(druh, [...(ddVyskyty.get(druh) ?? []), { hodnota: { ddKod: popis.kod, ...(riadok.kv ? { kv: riadok.kv } : {}) }, doklad, pk: riadok.pk }]);
     }
   }
@@ -466,7 +469,10 @@ export async function aktualizujProfil(tx: Queryable, firma: Firma): Promise<{ n
     .filter((kod) => kod.kind === 'cleneniaDph' && popisKodu(kod.code)?.strana !== 'U'
       && !clenenieVyzeraNaOdpocet({ kod: kod.code, nazov: kod.name ?? '' }))
     .map((kod) => [kod.code, kod.code] as const));
-  const predkontacieFirmy = new Set(kodyFirmy.filter((kod) => kod.kind === 'predkontacie').map((kod) => kod.code));
+  // Len nákladové účty (trieda 5) — PN na 325/314 je záväzok či záloha, nie náklad bez nároku.
+  const predkontacieFirmy = new Set(kodyFirmy
+    .filter((kod) => kod.kind === 'predkontacie' && String(kod.ucet_md ?? '').trim().startsWith('5'))
+    .map((kod) => kod.code));
   const bezNaroku = [...await uctyBezOdpoctu(tx, firma, [...new Set(vsetky.map((doklad) => doklad.agenda))],
     cleneniaBezOdpoctu, undefined, MIN_DOKLADOV_NAVRHU)]
     .filter(([ucet]) => predkontacieFirmy.has(ucet))

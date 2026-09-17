@@ -39,11 +39,11 @@ async function priprav() {
   return { database, firma, riadok, prepocitaj, fakty, otazky };
 }
 
-const kodyFirmy = async (database: Database, firma: Firma, kody: Array<[string, string, string?]>) => {
-  for (const [kind, code, name] of kody) {
+const kodyFirmy = async (database: Database, firma: Firma, kody: Array<[string, string, string?, string?]>) => {
+  for (const [kind, code, name, ucetMd] of kody) {
     await database.query(
-      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source) VALUES ($1,$2,$3,$4,$5,$6,'pohoda')`,
-      [randomUUID(), firma.tenantId, firma.organizationId, kind, code, name ?? code],
+      `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source,ucet_md) VALUES ($1,$2,$3,$4,$5,$6,'pohoda',$7)`,
+      [randomUUID(), firma.tenantId, firma.organizationId, kind, code, name ?? code, ucetMd ?? null],
     );
   }
 };
@@ -90,6 +90,10 @@ describe('profil klienta z histórie', () => {
       await riadok({ agenda: 'INT', cislo: `R${n}`, nazov: 'recable', ico: '44556677', krajina: 'SK', dph: 'DDsluz', kv: 'B1' });
       await riadok({ agenda: 'INT', cislo: `R${n}`, nazov: 'recable', ico: '44556677', krajina: 'SK', idx: 1, dph: 'PDsluz', kv: 'B1' });
     }
+    // DDsl§69 je zahraničná osoba aj pri slovenskej adrese — nie tuzemské prenesenie.
+    for (const n of [1, 2, 3, 4, 5]) {
+      await riadok({ agenda: 'INT', cislo: `M${n}`, nazov: 'microsoft ireland', krajina: 'SK', dph: 'DDsl§69', kv: 'B1' });
+    }
     for (const n of [1, 2]) {
       await riadok({ agenda: 'INT', cislo: `O${n}`, nazov: 'openai llc', krajina: 'US', dph: 'DDsl§69', kv: 'B1' });
       // Odpočet PDsluz inej protistrany sa k páru nepripletie.
@@ -118,12 +122,17 @@ describe('profil klienta z histórie', () => {
   it('účet bez nároku podľa položiek a tovar na ceste z denníka', async () => {
     const { database, firma, riadok, prepocitaj, fakty } = await priprav();
     await kodyFirmy(database, firma, [
-      ['predkontacie', 'repre'], ['predkontacie', '518100'],
+      ['predkontacie', 'repre', 'repre', '513100'], ['predkontacie', '518100', '518100', '518100'],
+      ['predkontacie', '325100-PHM', '325100-PHM', '325100'],
       ['cleneniaDph', 'PN', 'Nezahrňovať do priznania DPH'], ['cleneniaDph', 'PD', 'Tuzemské plnenia'],
     ]);
     for (const n of [1, 2, 3, 4, 5]) {
       await riadok({ agenda: 'FP', cislo: `H${n}`, nazov: 'hotel', dph: 'PD', kv: 'B2' });
       await riadok({ agenda: 'FP', cislo: `H${n}`, nazov: 'hotel', idx: 1, pk: 'repre', dph: 'PN' });
+    }
+    // PN na záväzku (325) nie je náklad bez nároku, hoci sa opakuje.
+    for (const n of [1, 2, 3, 4, 5]) {
+      await riadok({ agenda: 'OZ', cislo: `Z${n}`, nazov: 'leasing', idx: 1, pk: '325100-PHM', dph: 'PN' });
     }
     // Zberný účet s občasnou nedaňovou položkou bez nároku nie je.
     for (const n of [1, 2, 3, 4, 5, 6, 7]) {
