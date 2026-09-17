@@ -111,6 +111,24 @@ export interface PraxVariant {
   okrajovy?: boolean;
 }
 
+/**
+ * Druh operácie protistrany: jej doklady s tou istou hlavičkou (účet, DPH, KV)
+ * a slová, ktorými sa ich text líši od ostatných dokladov protistrany.
+ *
+ * Protistrana nemusí robiť jednu vec. Zamestnanec ALPINY má zúčtovanie
+ * stravného (stravné, cestovné, zúčtovanie zálohy) aj pokuty; pravidlo
+ * kľúčované len protistranou dalo spor či prevažujúcu podobu a stravné dostalo
+ * v 45 zo 47 dokladov iný účet. Slová nie sú zoznam druhov v kóde — sú to slová
+ * z textov hlavičky a položiek, ktoré má aspoň polovica (a aspoň MIN_DOKLADOV)
+ * dokladov druhu a žiadny iný podstatný doklad protistrany; meno protistrany
+ * medzi ne nepatrí — je na dokladoch každého jej druhu.
+ *
+ * Prax druhu je tá istá prax (odvodPrax) len nad dokladmi druhu: víťaz, spor,
+ * zmena režimu aj rozpis víťaza. Druh tak spor v podieloch neskryje.
+ */
+export type DruhPraxe = { slova: string[] }
+  & Omit<UctoPravidlo, 'id' | 'agenda' | 'protistrana' | 'protistranaIco' | 'druhy' | 'podlaTextu'>;
+
 export interface UctoPravidlo {
   id: string;
   agenda: string;
@@ -128,6 +146,9 @@ export interface UctoPravidlo {
   varianty: PraxVariant[];
   /** Dátum, od ktorého firma protistranu účtuje novým spôsobom. */
   zmenaRezimu?: string;
+  druhy: DruhPraxe[];
+  /** Pravidlo je druh operácie vybraný podľa týchto slov textu dokladu (pravidloPodlaTextu). */
+  podlaTextu?: string[];
 }
 
 /** Riadok dokladu, z ktorého sa odvodzuje tvar rozpisu. */
@@ -158,6 +179,7 @@ export interface Prax {
   zmenaRezimu?: { od: string };
   /** Ustálený tvar položiek — len z dokladov víťaznej podoby. */
   rozpis: PravidloRiadok[];
+  druhy: DruhPraxe[];
 }
 
 /**
@@ -352,7 +374,7 @@ function tvarDokladu(doklad: DokladPraxe): TvarCast[] {
  * Výstup nezávisí od poradia vstupu. S asOf sa berú len doklady pred dátumom;
  * doklad bez dátumu sa nepočíta nikdy — o režime ani o úniku budúcnosti nič nepovie.
  */
-export function odvodPrax(doklady: DokladPraxe[], asOf?: string): Prax {
+export function odvodPrax(doklady: DokladPraxe[], asOf?: string, protistrana = ''): Prax {
   const platne = doklady
     .filter((doklad) => doklad.hlavicka && doklad.datum && (!asOf || doklad.datum < asOf))
     .sort((a, b) => porovnaj(a.kluc, b.kluc));
@@ -418,7 +440,79 @@ export function odvodPrax(doklady: DokladPraxe[], asOf?: string): Prax {
     konflikt: platne.length > 0 && !vitaz,
     zmenaRezimu: prechod ? { od: prechod.variant.od } : undefined,
     rozpis: polozky.length >= MIN_DOKLADOV ? odvodRozpis(polozky) : [],
+    druhy: odvodDruhy(podstatne.flatMap((skupina) => skupina.doklady), protistrana),
   };
+}
+
+/** Viac slov druhu netreba — rozhoduje, či doklad nesie aspoň jedno. */
+const SLOV_DRUHU = 10;
+
+/**
+ * Druhy operácie z podstatných dokladov protistrany (okrajový doklad slovo
+ * druhu nezruší). Druh je hlavička s účtom; doklady bez účtu v hlavičke druhom
+ * nie sú, no ich slová ostatné druhy odlišovať nesmú. Jedna hlavička druhy
+ * nemá — spor v tvare či podieloch rieši prax, text o ňom nič nepovie.
+ */
+function odvodDruhy(doklady: DokladPraxe[], protistrana: string): DruhPraxe[] {
+  const meno = new Set(slovaTextu(protistrana));
+  const skupiny = new Map<string, DokladPraxe[]>();
+  for (const doklad of doklady) {
+    const kluc = trojica(doklad.hlavicka!);
+    skupiny.set(kluc, [...(skupiny.get(kluc) ?? []), doklad]);
+  }
+  if (skupiny.size < 2) return [];
+  const slovaDokladu = new Map(doklady.map((doklad) =>
+    [doklad, new Set([doklad.hlavicka!, ...doklad.polozky].flatMap((riadok) => slovaTextu(riadok.text)))]));
+  const pocty = (skupina: DokladPraxe[]) => {
+    const pocet = new Map<string, number>();
+    for (const doklad of skupina) for (const slovo of slovaDokladu.get(doklad)!) pocet.set(slovo, (pocet.get(slovo) ?? 0) + 1);
+    return pocet;
+  };
+  const vsade = pocty(doklady);
+  const druhy: DruhPraxe[] = [];
+  for (const skupina of skupiny.values()) {
+    if (!kod(skupina[0].hlavicka!.predkontaciaKod)) continue;
+    const slova = [...pocty(skupina).entries()]
+      .filter(([slovo, pocet]) => !meno.has(slovo)
+        && pocet >= MIN_DOKLADOV && pocet * 2 >= skupina.length && vsade.get(slovo) === pocet)
+      .sort(([a, x], [b, y]) => y - x || porovnaj(a, b))
+      .slice(0, SLOV_DRUHU)
+      .map(([slovo]) => slovo);
+    if (slova.length === 0) continue;
+    // Slovo druhu je aspoň v MIN_DOKLADOV dokladoch, takže pravidlo druhu vznikne vždy.
+    const { protistranaIco: _ico, druhy: _druhy, ...prax } = odvodPravidlo(skupina)!;
+    druhy.push({ slova, ...prax });
+  }
+  return druhy.sort((a, b) => b.dokladov - a.dokladov);
+}
+
+/**
+ * Pravidlo pre druh operácie, ktorý určuje text dokladu. Druh sa vyberie, len
+ * keď text nesie slová PRÁVE JEDNÉHO druhu; žiadny či viac druhov je
+ * nejednoznačnosť a ostáva pravidlo protistrany s jeho sporom aj otázkou.
+ * Celá prax ide z dokladov druhu — hlavička, zhoda, rozpis, spor s podobami
+ * aj zmena režimu; nikdy účet druhu a tvar či spor víťaza protistrany.
+ */
+export function pravidloPodlaTextu(pravidlo: UctoPravidlo | undefined, text: string): UctoPravidlo | undefined {
+  const slova = new Set(slovaTextu(text));
+  const trafene = (pravidlo?.druhy ?? []).filter((druh) => druh.slova.some((slovo) => slova.has(slovo)));
+  if (!pravidlo || trafene.length !== 1) return pravidlo;
+  const [druh] = trafene;
+  // Po poliach, nie rozkladom: druh z jsonb nemá kľúče s undefined (spor bez
+  // účtu, bez zmeny režimu) a rozklad by ich nechal z pravidla protistrany.
+  return preNavrh({
+    ...pravidlo,
+    dokladov: druh.dokladov,
+    zhoda: druh.zhoda,
+    predkontaciaKod: druh.predkontaciaKod,
+    clenenieDphKod: druh.clenenieDphKod,
+    clenenieKvKod: druh.clenenieKvKod,
+    rozpis: druh.rozpis,
+    konflikt: druh.konflikt,
+    varianty: druh.varianty,
+    zmenaRezimu: druh.zmenaRezimu,
+    podlaTextu: druh.slova.filter((slovo) => slova.has(slovo)),
+  });
 }
 
 /**
@@ -429,8 +523,9 @@ export function odvodPrax(doklady: DokladPraxe[], asOf?: string): Prax {
 function odvodPravidlo(
   doklady: DokladPraxe[],
   asOf?: string,
+  protistrana?: string,
 ): Omit<UctoPravidlo, 'id' | 'agenda' | 'protistrana'> | undefined {
-  const prax = odvodPrax(doklady, asOf);
+  const prax = odvodPrax(doklady, asOf, protistrana);
   if (prax.dokladov < MIN_DOKLADOV) return undefined;
   const { vitaz } = prax;
   const ulozene = prax.varianty.slice(0, MAX_VARIANTOV);
@@ -451,6 +546,7 @@ function odvodPravidlo(
       ? { ...variant, vitaz: true, ...(prax.zmenaRezimu ? { zmenaRezimu: true } : {}) }
       : variant)),
     zmenaRezimu: prax.zmenaRezimu?.od,
+    druhy: prax.druhy,
   };
 }
 
@@ -520,7 +616,7 @@ export async function prepocitajPravidla(
 ): Promise<{ pravidiel: number; sRozpisom: number; konfliktov: number; zmienRezimu: number }> {
   const pravidla: UctoPravidlo[] = [];
   for (const skupina of await nacitajDokladyPraxe(database, input)) {
-    const odvodene = odvodPravidlo(skupina.doklady);
+    const odvodene = odvodPravidlo(skupina.doklady, undefined, skupina.protistrana);
     if (odvodene) pravidla.push({ id: randomUUID(), agenda: skupina.agenda, protistrana: skupina.protistrana, ...odvodene });
   }
 
@@ -532,13 +628,13 @@ export async function prepocitajPravidla(
     await database.query(
       `INSERT INTO ucto_pravidla
         (id,tenant_id,organization_id,agenda,protistrana,protistrana_ico,dokladov,zhoda,
-         predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,rozpis,varianty,konflikt)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14)`,
+         predkontacia_kod,clenenie_dph_kod,clenenie_kv_kod,rozpis,varianty,konflikt,druhy)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15::jsonb)`,
       [pravidlo.id, input.tenantId, input.organizationId, pravidlo.agenda, pravidlo.protistrana,
         pravidlo.protistranaIco ?? null, pravidlo.dokladov, pravidlo.zhoda,
         pravidlo.predkontaciaKod ?? null, pravidlo.clenenieDphKod ?? null,
         pravidlo.clenenieKvKod ?? null, JSON.stringify(pravidlo.rozpis), JSON.stringify(pravidlo.varianty),
-        pravidlo.konflikt],
+        pravidlo.konflikt, JSON.stringify(pravidlo.druhy)],
     );
   }
   return {
@@ -566,7 +662,7 @@ async function pravidloKDatumu(
   // a vyhrá pravidlo s najviac dokladmi (pri zhode prvé podľa agendy a mena).
   let najlepsie: UctoPravidlo | undefined;
   for (const skupina of await nacitajDokladyPraxe(database, input, { agendy, ...protistrana, doDatumu })) {
-    const odvodene = odvodPravidlo(skupina.doklady, doDatumu);
+    const odvodene = odvodPravidlo(skupina.doklady, doDatumu, skupina.protistrana);
     if (!odvodene) continue;
     const trafene = (protistrana.ico && odvodene.protistranaIco === protistrana.ico)
       || (protistrana.nazov && skupina.protistrana === protistrana.nazov);
@@ -614,6 +710,7 @@ export async function najdiPravidlo(
     konflikt: row.konflikt === true,
     varianty,
     zmenaRezimu: varianty.find((variant) => variant.vitaz && variant.zmenaRezimu)?.od,
+    druhy: (row.druhy ?? []) as DruhPraxe[],
   });
 }
 
