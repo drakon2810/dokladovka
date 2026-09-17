@@ -589,10 +589,13 @@ function interneDokladySamozdanenia(
   if (!interny?.ddKod || !interny.ddPredkontaciaKod || !datum || zaklad === undefined || dan === undefined || sadzbaPohody === 'none') {
     throw new Error(`Doklad ${id} nemá úplné údaje samozdanenia — schváľte ho znova`);
   }
+  // Sekcia KV je na každom riadku vlastná (ddKv/pKv z prepisu na doklade);
+  // spoločné `kv` z profilu klienta platí, kým ju účtovník nerozdelí.
   const doklady = [
-    { rola: 'dd' as const, predkontacia: interny.ddPredkontaciaKod, clenenie: interny.ddKod },
+    { rola: 'dd' as const, predkontacia: interny.ddPredkontaciaKod, clenenie: interny.ddKod, kv: interny.ddKv ?? interny.kv },
     // Neplatiteľ, §7 a §7a daň priznáva bez odpočtu — doklad odpočtu nevzniká.
-    ...((samozdanenie.odpocet ?? 0) > 0 ? [{ rola: 'p' as const, predkontacia: interny.pPredkontaciaKod, clenenie: interny.pKod }] : []),
+    ...((samozdanenie.odpocet ?? 0) > 0
+      ? [{ rola: 'p' as const, predkontacia: interny.pPredkontaciaKod, clenenie: interny.pKod, kv: interny.pKv ?? interny.kv }] : []),
   ].filter((doklad) => !prijate.includes(doklad.rola));
   const cisloFaktury = clamp(extracted.cisloFaktury, 32);
   const text = escapeXml(clamp(`Samozdanenie k FP ${cisloFaktury}`, 90));
@@ -603,7 +606,7 @@ function interneDokladySamozdanenia(
     const kody = [
       `<int:accounting><typ:ids>${escapeXml(doklad.predkontacia)}</typ:ids></int:accounting>`,
       `<int:classificationVAT><typ:ids>${escapeXml(doklad.clenenie)}</typ:ids></int:classificationVAT>`,
-      ...(interny.kv ? [`<int:classificationKVDPH><typ:ids>${escapeXml(interny.kv)}</typ:ids></int:classificationKVDPH>`] : []),
+      ...(doklad.kv ? [`<int:classificationKVDPH><typ:ids>${escapeXml(doklad.kv)}</typ:ids></int:classificationKVDPH>`] : []),
     ];
     return `  <dat:dataPackItem id="${escapeXml(`${id}-sz-${doklad.rola}`)}" version="2.0">
     <int:intDoc version="2.0">

@@ -2,20 +2,39 @@
 // ktorý sa rozbalí na mieste (maketa „Samozdanenie kompaktne", variant 1b).
 // Zvinutý riadok nesie druh plnenia, vymeranú daň a to, čo účtovníka zablokuje
 // pri schválení; celý blok zaberá výšku len vtedy, keď ho naozaj otvorí.
-// Počíta server (základ, daň, dátum, kódy z profilu klienta); editor len volí a
-// prepisuje druh, dátum, sadzbu a kurz. Každá zmena sa hneď uloží.
+// Počíta server (základ, daň, dátum, kódy z profilu klienta); editor volí,
+// prepisuje druh, dátum, sadzbu, kurz, kódy interných dokladov a základ.
+// Každá zmena sa hneď uloží — server ostáva jediným zdrojom toho, čo pôjde
+// do POHODY.
+//
+// Rozpracovaný doklad blok SLEDUJE: základ a daň sa prepočítajú zo sumy, ktorú
+// má editor práve v ruke, a riadok ich označí ako neuložené. ROFA prepísala na
+// faktúre AF260391 položku z 1 542,80 na 150,00 (spolu 7 184,77) a blok ďalej
+// ukazoval základ 8 577,57 a DPH 1 972,84 — účtovník videl v položkách jedno
+// číslo a v dani, ktorú sa chystal vytvoriť, druhé.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { BlokSamozdanenia, DovodNevznikaSamozdanenia, DruhSamozdaneniaPrijateho, RozhodnutieSamozdanenia, VolbaSamozdanenia } from '../../data/types';
+import type {
+  BlokSamozdanenia, CodeListItem, DovodNevznikaSamozdanenia, DruhSamozdaneniaPrijateho, InternySamozdanenia,
+  RozhodnutieSamozdanenia, VolbaSamozdanenia,
+} from '../../data/types';
 import { getSamozdanenie, potvrdKodySamozdanenia, ulozSamozdanenie } from '../../data/api';
+import { predkontaciePreTyp } from '../../data/pohoda/agendas';
 import { showToast } from '../../components/toast';
 import { sk, t, tv, type SkKey } from '../../i18n/sk';
-import { formatDateSk } from './DcInline';
+import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { fmtMoney } from './ItemsSection';
 
 const VOLBY: VolbaSamozdanenia[] = ['vytvorit', 'v_pohode', 'nevznika'];
 const DRUHY: DruhSamozdaneniaPrijateho[] = ['sluzby_eu', 'tovar_eu', 'sluzby_mimo_eu', 'prenesenie_prijate', 'dovoz'];
 const DOVODY: DovodNevznikaSamozdanenia[] = ['slovenska_dph', 'miesto_dodania', 'nie_plnenie', 'iny'];
+/** Sekcie KV, ktoré k samozdaneniu patria — zhodne so `chybaRoliKodov` na serveri. */
+const KV_SAMOZDANENIA = ['B1', 'KN'];
+/** Ktoré polia prepisu nesie ktorý riadok náhľadu. */
+const POLIA_RIADKU = {
+  vymeranie: { predkontacia: 'ddPredkontaciaKod', clenenie: 'ddKod', kv: 'ddKv' },
+  odpocet: { predkontacia: 'pPredkontaciaKod', clenenie: 'pKod', kv: 'pKv' },
+} as const;
 
 export const nazovDruhu = (druh: DruhSamozdaneniaPrijateho) => (sk as Record<string, string>)[`profilKlienta.fakt.samozdanenie.${druh}.nazov`] ?? druh;
 
@@ -23,7 +42,8 @@ export type ZmenaSamozdanenia =
   | { pole: 'volba'; hodnota: VolbaSamozdanenia }
   | { pole: 'druh'; hodnota: DruhSamozdaneniaPrijateho }
   | { pole: 'datum'; hodnota: string }
-  | { pole: 'sadzba' | 'kurz'; hodnota: number | undefined }
+  | { pole: 'sadzba' | 'kurz' | 'zaklad'; hodnota: number | undefined }
+  | { pole: 'interny'; hodnota: Partial<InternySamozdanenia> }
   | { pole: 'dovod'; hodnota: DovodNevznikaSamozdanenia | undefined }
   | { pole: 'dovodText' | 'cislaInternych'; hodnota: string };
 
@@ -38,25 +58,89 @@ export function zmenRozhodnutie(blok: BlokSamozdanenia['hodnota'], zmena: ZmenaS
   const teraz: RozhodnutieSamozdanenia = { volba, dovod, dovodText, cislaInternych, rucne };
   switch (zmena.pole) {
     case 'volba': return { ...teraz, volba: zmena.hodnota };
+    // Iný druh plnenia = iná rodina kódov (DDnadEU proti DDsluz), takže prepis
+    // kódov padá s ním; vlastný základ je o sume faktúry a rodiny sa netýka.
     case 'druh': return {
-      ...teraz, volba: zmena.hodnota === 'dovoz' ? 'v_pohode' : volba, rucne: { kurz: rucne.kurz, druh: zmena.hodnota },
+      ...teraz, volba: zmena.hodnota === 'dovoz' ? 'v_pohode' : volba,
+      rucne: { kurz: rucne.kurz, zaklad: rucne.zaklad, druh: zmena.hodnota },
     };
-    case 'datum': return { ...teraz, rucne: { kurz: rucne.kurz, druh: rucne.druh, datumDanovejPovinnosti: zmena.hodnota || undefined } };
+    case 'datum': return {
+      ...teraz,
+      rucne: {
+        kurz: rucne.kurz, zaklad: rucne.zaklad, interny: rucne.interny, druh: rucne.druh,
+        datumDanovejPovinnosti: zmena.hodnota || undefined,
+      },
+    };
     case 'sadzba': return { ...teraz, rucne: { ...rucne, sadzba: zmena.hodnota } };
     case 'kurz': return { ...teraz, rucne: { ...rucne, kurz: zmena.hodnota } };
+    case 'zaklad': return { ...teraz, rucne: { ...rucne, zaklad: zmena.hodnota } };
+    // Prepis kódov sa dopĺňa po poliach: zmena predkontácie vymerania nesmie
+    // zahodiť členenie odpočtu, ktoré účtovník opravil pred ňou.
+    case 'interny': return { ...teraz, rucne: { ...rucne, interny: { ...rucne.interny, ...zmena.hodnota } } };
     case 'dovod': return { ...teraz, dovod: zmena.hodnota, dovodText: zmena.hodnota === 'iny' ? dovodText : undefined };
     default: return { ...teraz, [zmena.pole]: zmena.hodnota || undefined };
   }
 }
 
-/** Riadky náhľadu interných dokladov; odpočet len keď firma daň odpočítava. */
+/**
+ * Riadky náhľadu interných dokladov; odpočet len keď firma daň odpočítava.
+ * Sekcia KV je na každom riadku vlastná — spoločné `kv` z profilu platí, kým
+ * ju účtovník na doklade nerozdelí (vymeranie B1, odpočet niekedy KN).
+ */
 export function riadkyNahladu(hodnota: BlokSamozdanenia['hodnota']) {
   const interny = hodnota.interny;
   const odpocet = hodnota.odpocet === undefined ? Boolean(interny?.pKod) : hodnota.odpocet > 0;
   return [
-    { kluc: 'vymeranie' as const, predkontacia: interny?.ddPredkontaciaKod, clenenie: interny?.ddKod, kv: interny?.kv, zaklad: hodnota.zaklad, dan: hodnota.dan },
-    ...(odpocet ? [{ kluc: 'odpocet' as const, predkontacia: interny?.pPredkontaciaKod, clenenie: interny?.pKod, kv: interny?.kv, zaklad: hodnota.zaklad, dan: hodnota.odpocet }] : []),
+    {
+      kluc: 'vymeranie' as const, predkontacia: interny?.ddPredkontaciaKod, clenenie: interny?.ddKod,
+      kv: interny?.ddKv ?? interny?.kv, zaklad: hodnota.zaklad, dan: hodnota.dan,
+    },
+    ...(odpocet ? [{
+      kluc: 'odpocet' as const, predkontacia: interny?.pPredkontaciaKod, clenenie: interny?.pKod,
+      kv: interny?.pKv ?? interny?.kv, zaklad: hodnota.zaklad, dan: hodnota.odpocet,
+    }] : []),
   ];
+}
+
+/**
+ * Základ zo sumy rozpracovaného dokladu — musí sedieť na cent so serverom
+ * (`zostavSamozdanenie` v server/services/samozdanenieService.ts): v EUR je to
+ * suma dokladu, v cudzej mene suma delená kurzom, oboje na centy.
+ *
+ * ponytail: dva riadky aritmetiky sú zámerne zdvojené — server a prehliadač
+ * nemajú spoločný modul a ťahať kvôli tomu serverový kód do bundle by bolo
+ * horšie ako duplicita, ktorú drží test.
+ */
+export function zakladZDokladu(sumaSpolu: number | undefined, mena: string, kurz?: number): number | undefined {
+  const suma = Number(sumaSpolu);
+  if (!(suma > 0)) return undefined;
+  if (mena === 'EUR') return Math.round(suma * 100) / 100;
+  return kurz && kurz > 0 ? Math.round((suma / kurz + Number.EPSILON) * 100) / 100 : undefined;
+}
+
+/** Daň na centy podľa §26 ods. 3 — zhodne s `danZoZakladu` na serveri. */
+export function danZoZakladu(zaklad: number, sadzba: number): number {
+  return Math.round((Math.round(zaklad * 100) * sadzba) / 100) / 100;
+}
+
+/**
+ * Hodnota, ktorú blok ukazuje: uložený stav zo servera, a na rozpracovanom
+ * doklade základ a daň prepočítané z editora. Vlastný základ účtovníka
+ * (zmiešaná faktúra) prepočet neprebíja — to nie je suma dokladu.
+ */
+export function hodnotaSEditorom(
+  blok: BlokSamozdanenia,
+  sumaSpolu: number | undefined,
+): { hodnota: BlokSamozdanenia['hodnota']; neulozene: boolean } {
+  const { hodnota } = blok;
+  if (hodnota.rucne?.zaklad !== undefined || sumaSpolu === undefined) return { hodnota, neulozene: false };
+  const zaklad = zakladZDokladu(sumaSpolu, blok.mena, hodnota.kurz);
+  if (zaklad === undefined || zaklad === hodnota.zaklad) return { hodnota, neulozene: false };
+  const dan = hodnota.sadzba === undefined ? undefined : danZoZakladu(zaklad, hodnota.sadzba);
+  return {
+    neulozene: true,
+    hodnota: { ...hodnota, zaklad, dan, ...(hodnota.odpocet ? { odpocet: dan } : {}) },
+  };
 }
 
 /**
@@ -80,16 +164,36 @@ const cislo = (raw: string) => {
   return raw.trim() && Number.isFinite(hodnota) && hodnota > 0 ? hodnota : undefined;
 };
 
-export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId: string; version: number; readOnly: boolean }) {
+export interface SamozdanenieBlokProps {
+  documentId: string;
+  version: number;
+  readOnly: boolean;
+  /** Suma z rozpracovaného editora — základ a daň ju musia sledovať. */
+  sumaSpolu?: number;
+  /**
+   * Predkontácia z rozpracovaného editora. Doklad ju uloženú ešte nemusí mať
+   * a server z nej odvodzuje rodinu plnenia — bez nej by účtovník rodinu videl
+   * zmeniť až po schválení.
+   */
+  predkontaciaId?: string;
+  /** Číselníky firmy pre prepis kódov interných dokladov; bez nich zostáva náhľad textom. */
+  codeLists?: { predkontacie: CodeListItem[]; cleneniaDph: CodeListItem[] };
+}
+
+export function SamozdanenieBlok({
+  documentId, version, readOnly, sumaSpolu, predkontaciaId, codeLists,
+}: SamozdanenieBlokProps) {
   const [blok, setBlok] = useState<BlokSamozdanenia | null>(null);
   const [uklada, setUklada] = useState(false);
   const [otvorene, setOtvorene] = useState(false);
   const [zmenaDruhu, setZmenaDruhu] = useState(false);
   const [pamatat, setPamatat] = useState(true);
 
+  // Znova zo servera len pri zmene dokladu, po uložení (version) a pri zmene
+  // účtu — nie pri písaní. Sumu si blok prepočíta sám (hodnotaSEditorom).
   useEffect(() => {
     let active = true;
-    getSamozdanenie(documentId)
+    getSamozdanenie(documentId, predkontaciaId)
       .then((nacitany) => {
         if (!active) return;
         setBlok(nacitany);
@@ -98,14 +202,17 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [documentId, version]);
+  }, [documentId, version, predkontaciaId]);
 
   if (!blok) return null;
-  const { hodnota } = blok;
   const upravitelny = blok.upravitelny && !readOnly && !uklada;
+  // Zvinutý riadok aj náhľad ukazujú to isté číslo, aké je v položkách.
+  const { hodnota, neulozene } = hodnotaSEditorom(blok, upravitelny ? sumaSpolu : undefined);
 
+  // Ukladá sa vždy uložený stav zo servera plus jedna zmena — nikdy nie
+  // predbežne prepočítaný základ z editora.
   const uloz = async (zmena: ZmenaSamozdanenia, navyse: { pamatatDodavatela?: boolean; vsetkyFaktury?: boolean } = {}) => {
-    const rozhodnutie = zmenRozhodnutie(hodnota, zmena);
+    const rozhodnutie = zmenRozhodnutie(blok.hodnota, zmena);
     setUklada(true);
     try {
       const ulozeny = await ulozSamozdanenie(documentId, {
@@ -139,6 +246,28 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
     }
   };
 
+  // Prepis kódov: ponúkajú sa len aktívne kódy firmy — presne tie, ktoré
+  // server pri uložení pustí. Predkontácie sú z agendy interných dokladov,
+  // sekcia KV len z rodiny samozdanenia. Prázdna položka vráti kód z profilu.
+  const kodOpts = (items: CodeListItem[] | undefined, vybrany?: string): DcOption[] => [
+    { value: '', label: t('samozdanenie.zProfilu') },
+    ...(items ?? []).filter((item) => item.active || item.kod === vybrany)
+      .map((item) => ({ value: item.kod, label: `${item.kod} · ${item.nazov}`, title: `${item.kod} · ${item.nazov}` })),
+  ];
+  const predkontaciaOpts = kodOpts(codeLists && predkontaciePreTyp(codeLists.predkontacie, { typ: 'MZDY', podtyp: 'bezna' }));
+  const clenenieOpts = kodOpts(codeLists?.cleneniaDph);
+  const kvOpts: DcOption[] = [{ value: '', label: t('samozdanenie.zProfilu') }, ...KV_SAMOZDANENIA.map((kod) => ({ value: kod, label: kod }))];
+  /** Prepis jedného poľa riadka; prázdna hodnota prepis zruší a vráti profil. */
+  const prepis = (kluc: 'vymeranie' | 'odpocet', pole: 'predkontacia' | 'clenenie' | 'kv') => (kod: string) =>
+    void uloz({ pole: 'interny', hodnota: { [POLIA_RIADKU[kluc][pole]]: kod.trim() || undefined } });
+  // Vlastný základ účtovníka, ktorý nesedí so sumou faktúry, je legitímny
+  // (zmiešaná faktúra), ale v riadku musí byť vidieť, že je jeho — nie dokladu.
+  const vlastnyZaklad = hodnota.rucne?.zaklad !== undefined && hodnota.rucne.zaklad !== blok.zakladDokladu;
+  // Prepis je OPRAVA praxe firmy, nie jej náhrada: kým profil pre tento druh
+  // nemá kódy (alebo ich len navrhuje), patrí sem odkaz do profilu a potvrdenie
+  // návrhu — inak by účtovník vypĺňal doklad kódmi, ktoré firma nikde nemá.
+  const opravitelne = upravitelny && !navrh && Boolean(codeLists) && Boolean(hodnota.interny);
+
   const chyby = chybyRiadku(blok);
   // Tón riadku: zamknutý doklad je sivý, blokujúca chyba jantárová, inak modrá
   // ako celé zaúčtovanie do POHODY.
@@ -170,7 +299,12 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
         onClick={() => setOtvorene(!otvorene)}
       >
         <span className="sz-hlava-lbl">{t('samozdanenie.titul')}</span>
-        <span className="sz-suhrn"><span className="sz-bod" aria-hidden="true" />{suhrn}</span>
+        <span
+          className={`sz-suhrn${neulozene ? ' sz-neulozene' : ''}`}
+          title={neulozene ? t('samozdanenie.neulozenaSuma') : undefined}
+        >
+          <span className="sz-bod" aria-hidden="true" />{suhrn}
+        </span>
         <span className="sz-hlava-volba">
           {t(`samozdanenie.volba.${hodnota.volba}` as SkKey)}
           <span className="sz-caret" aria-hidden="true">{otvorene ? '▾' : '▸'}</span>
@@ -247,18 +381,63 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
                         </tr>
                       </thead>
                       <tbody>
+                        {/* Kódy a základ sa opravujú priamo tu: profil klienta
+                            drží prax firmy, ale jeden doklad sa od nej môže
+                            líšiť a účtovník ho inak nemá ako opraviť. Navrhnuté
+                            kódy (našedo) sa najprv potvrdzujú, neprepisujú. */}
                         {riadkyNahladu(navrh ? { ...hodnota, interny: navrh } : hodnota).map((riadok) => (
                           <tr key={riadok.kluc}>
                             <td>{t(`samozdanenie.riadok.${riadok.kluc}`)}</td>
-                            <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.predkontacia ?? '—'}</td>
-                            <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.clenenie ?? '—'}</td>
-                            <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.kv ?? '—'}</td>
-                            <td className="dk-r">{euro(riadok.zaklad)}</td>
-                            <td className="dk-r">{euro(riadok.dan)}</td>
+                            {opravitelne ? (
+                              <>
+                                <td>
+                                  <DcPick
+                                    value={riadok.predkontacia} options={predkontaciaOpts} searchable
+                                    title={t('samozdanenie.stlpec.predkontacia')} onChange={prepis(riadok.kluc, 'predkontacia')}
+                                  />
+                                </td>
+                                <td>
+                                  <DcPick
+                                    value={riadok.clenenie} options={clenenieOpts} searchable
+                                    title={t('samozdanenie.stlpec.clenenie')} onChange={prepis(riadok.kluc, 'clenenie')}
+                                  />
+                                </td>
+                                <td>
+                                  <DcPick
+                                    value={riadok.kv} options={kvOpts}
+                                    title={t('samozdanenie.stlpec.kv')} onChange={prepis(riadok.kluc, 'kv')}
+                                  />
+                                </td>
+                                <td className="dk-r">
+                                  <DcCell
+                                    align="right" inputMode="decimal" commit="blur"
+                                    tone={vlastnyZaklad ? 'warn' : undefined}
+                                    title={vlastnyZaklad ? tv('samozdanenie.vlastnyZaklad', { suma: euro(blok.zakladDokladu) }) : undefined}
+                                    value={riadok.zaklad === undefined ? '' : String(riadok.zaklad)}
+                                    display={euro(riadok.zaklad)}
+                                    onCommit={(raw) => {
+                                      const zadany = cislo(raw);
+                                      // Prázdne pole prepis zruší — základ sa vráti k sume dokladu.
+                                      if (zadany !== hodnota.rucne?.zaklad) void uloz({ pole: 'zaklad', hodnota: zadany });
+                                    }}
+                                  />
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.predkontacia ?? '—'}</td>
+                                <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.clenenie ?? '—'}</td>
+                                <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.kv ?? '—'}</td>
+                                <td className="dk-r">{euro(riadok.zaklad)}</td>
+                              </>
+                            )}
+                            <td className={`dk-r${neulozene ? ' sz-neulozene' : ''}`}>{euro(riadok.dan)}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
+                    {neulozene && <p className="sz-varovanie">{t('samozdanenie.neulozenaSuma')}</p>}
+                    {vlastnyZaklad && <p className="sz-info">{tv('samozdanenie.vlastnyZaklad', { suma: euro(blok.zakladDokladu) })}</p>}
                     <div className="sz-riadok">
                       <span>{t('samozdanenie.datum')}</span>
                       {upravitelny ? (
