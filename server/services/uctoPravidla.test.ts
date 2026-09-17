@@ -81,6 +81,10 @@ describe('pravidlá odvodené z histórie', () => {
       ['PHM-501200', 'PD', 0.8],
       ['PHM-Nadspotreba', 'PN', 0.2],
     ]);
+    // Počet dokladov za pozíciou: prevahu si žiada už odvodenie, ale
+    // predvyplnenie položiek potrebuje aj absolútny počet — dve doklady prevahu
+    // splnia a prax to ešte nie je.
+    expect(phm?.rozpis.map((r) => r.dokladov)).toEqual([3, 3]);
 
     // Dodávateľ, ktorý sa nedelí, rozpis nedostane — inak by pravidlo tvrdilo
     // rozdelenie tam, kde žiadne nie je.
@@ -248,7 +252,7 @@ describe('druh operácie podľa textu dokladu', () => {
     return {
       id: 'p', agenda: 'FP', protistrana: 'slovnaft', dokladov: prax.dokladov, zhoda: prax.vitaz?.dokladov ?? 0,
       predkontaciaKod: prax.vitaz?.predkontaciaKod, clenenieDphKod: prax.vitaz?.clenenieDphKod, rozpis: prax.rozpis,
-      konflikt: prax.konflikt, varianty: prax.varianty, zmenaRezimu: prax.zmenaRezimu?.od,
+      texty: prax.texty, konflikt: prax.konflikt, varianty: prax.varianty, zmenaRezimu: prax.zmenaRezimu?.od,
       druhy: JSON.parse(JSON.stringify(prax.druhy)),
     };
   };
@@ -424,6 +428,74 @@ describe('prax protistrany z celých dokladov', () => {
       [3, [{ ...nedanova, podielDph: 0.2 }]],
     ]));
     expect(prax.varianty).toHaveLength(2);
+  });
+});
+
+// Prax podľa TEXTU položky — čistá funkcia, bez databázy. Prípad je O2 SLOVAKIA
+// u ROFY: faktúry o desiatich položkách, ktorých počet ani poradie nie sú
+// ustálené, a hlavička v spore (9 dokladov, dve rovnaké). Rozpis z pozícií aj
+// hlavička teda správne mlčia a protistrane nezostalo NIČ — hoci po riadkoch je
+// prax jasná. „splátka" je pritom otázka, nie prax: stojí na štyroch účtoch
+// podľa zariadenia a text o zariadení nič nevie.
+describe('prax protistrany podľa textu položky', () => {
+  type Riadok = [text: string, predkontacia: string | null, dph: string, kv: string];
+  const doklad = (cislo: string, datum: string, hlavicka: [string, string], polozky: Riadok[]): DokladPraxe => ({
+    kluc: `FP|${cislo}|${datum}`,
+    datum,
+    hlavicka: { riadokIndex: 0, text: 'o2 slovakia', predkontaciaKod: hlavicka[0], clenenieDphKod: hlavicka[1], clenenieKvKod: 'B2' },
+    polozky: polozky.map(([text, predkontaciaKod, clenenieDphKod, clenenieKvKod], index) => ({
+      riadokIndex: index + 1, text, suma: 10,
+      predkontaciaKod: predkontaciaKod ?? undefined, clenenieDphKod, clenenieKvKod,
+    })),
+  });
+
+  const o2 = Array.from({ length: 9 }, (_, i) => doklad(`26FP${i}`, `2026-0${i + 1}-15`,
+    // Päť dokladov z deviatich prevahu 0,6 nedá — hlavička je v spore a účet nemá.
+    i < 5 ? ['518002 - mobil, int', 'PD'] : ['CV', 'PN'],
+    [
+      // Mesiac v texte robí z každého dokladu iný text; prax nesie slovo „mobil".
+      // Siedmy doklad účet nemá (riadok zdedil hlavičku) — do menovateľa patrí.
+      ...(i < 7 ? [[`mobil ${i + 1}-2026`, i < 6 ? '518002 - mobil, int' : null, 'PD', 'B2'] as Riadok] : []),
+      ...(i < 5 ? [['poistka', 'CV', 'PN', 'KN'] as Riadok] : []),
+      ...(i < 3 ? [['platba mobilom', '518999-nedaňové', 'PD', 'B2'] as Riadok] : []),
+      // Tá istá „splátka" na troch účtoch podľa zariadenia, aj dva razy v jednom doklade.
+      ...(i < 7 ? [['splátka', '325004-router', 'PN', 'KN'] as Riadok] : []),
+      ...(i < 7 ? [['splátka', '325007-MT Xiaomi', 'PN', 'KN'] as Riadok] : []),
+      ...(i < 5 ? [['splátka', '325003-Apple iPhone', 'PN', 'KN'] as Riadok] : []),
+      // Jediný výskyt je príklad, nie prax.
+      ...(i === 8 ? [['xiaomi 17t 256gb', '501010 - DrHM', 'PD', 'B2'] as Riadok] : []),
+    ]));
+
+  it('spor hlavičky prax textov nezruší a text na viacerých účtoch ostáva sporný', () => {
+    const prax = odvodPrax(o2, undefined, 'o2 slovakia');
+    // Hlavička aj rozpis z pozícií mlčia — a práve preto je prax textov jediný dôkaz.
+    expect(prax.konflikt).toBe(true);
+    expect(prax.vitaz).toBeUndefined();
+    expect(prax.rozpis).toEqual([]);
+    expect(prax.texty.map((text) => [text.slova.join('+'), text.predkontaciaKod, text.dokladov, text.sporny ?? false])).toEqual([
+      ['splatka', undefined, 7, true],
+      ['mobil', '518002 - mobil, int', 6, false],
+      ['poistka', 'CV', 5, false],
+      ['mobilom+platba', '518999-nedaňové', 3, false],
+    ]);
+    // Členenie aj sekcia idú s účtom: poistka je mimo odpočtu.
+    expect(prax.texty.find((text) => text.slova[0] === 'poistka'))
+      .toMatchObject({ clenenieDphKod: 'PN', clenenieKvKod: 'KN' });
+    // Meno protistrany zhodu niesť nesmie — inak by rozhodlo o každej položke.
+    expect(prax.texty.some((text) => text.slova.includes('slovakia'))).toBe(false);
+  });
+
+  it('prax textu drží aj proti menšine, ktorá sama prax nie je', () => {
+    // Šesť dokladov „mobil" na 518002 a dva na inom účte: menšina pod
+    // MIN_DOKLADOV prax nezruší. Tretí taký doklad už áno — text je otázka.
+    const iny = (i: number): DokladPraxe =>
+      doklad(`26FPX${i}`, `2026-1${i}-15`, ['518002 - mobil, int', 'PD'], [[`mobil 1${i}-2026`, '518300 - iné', 'PD', 'B2']]);
+    const dva = odvodPrax([...o2, iny(0), iny(1)], undefined, 'o2 slovakia');
+    expect(dva.texty.find((text) => text.slova[0] === 'mobil'))
+      .toMatchObject({ predkontaciaKod: '518002 - mobil, int', dokladov: 6 });
+    const tri = odvodPrax([...o2, iny(0), iny(1), iny(2)], undefined, 'o2 slovakia');
+    expect(tri.texty.find((text) => text.slova[0] === 'mobil')).toMatchObject({ sporny: true });
+    expect(tri.texty.find((text) => text.slova[0] === 'mobil')?.predkontaciaKod).toBeUndefined();
   });
 });
 

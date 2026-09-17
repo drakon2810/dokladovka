@@ -1,0 +1,17 @@
+-- Prax protistrany podľa TEXTU položky, nezávisle od hlavičky.
+--
+-- Doteraz sa rozpis odvodzoval len z POZÍCIÍ položiek (rozpis) a len z dokladov
+-- víťaznej podoby hlavičky. O2 posiela ROFE faktúry o desiatich položkách,
+-- ktorých počet ani poradie nie sú ustálené, a jej hlavička je v spore
+-- (9 dokladov, zhoda 2) — protistrane teda nezostalo nič, hoci po riadkoch je
+-- prax jasná: „mobil <mesiac>" na 518002, „poistka" na CV s PN/KN, „platba
+-- mobilom" na 518999. Účtovník preto nemal na doklade čo stlačiť.
+--
+-- texty: [{ slova, text, predkontaciaKod, clenenieDphKod, clenenieKvKod,
+-- dokladov, sporny }]. „slova" sú významové slová textu (bez mena protistrany,
+-- bez čísel), podľa nich sa text nového dokladu k praxi prirovnáva. Text
+-- s viacerými doloženými zaúčtovaniami je „sporny" a nepredvyplní sa: „splátka"
+-- u O2 stojí na štyroch účtoch podľa zariadenia a text o zariadení nič nevie.
+--
+-- Prázdne pole (aj pred prepočtom praxe) = návrh po položkách nič nedopĺňa.
+ALTER TABLE ucto_pravidla ADD COLUMN texty jsonb NOT NULL DEFAULT '[]'::jsonb;

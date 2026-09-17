@@ -819,7 +819,17 @@ export function InvoicePanel({
 
   const predkConfidence = suggestion && suggestion.source !== 'none' && suggestion.predkontaciaId && suggestion.predkontaciaId === ucto.predkontaciaId
     ? Math.round(suggestion.confidence * 100) : undefined;
-  const canAi = !readOnly && suggestion != null && suggestion.source !== 'none' && Boolean(suggestion.predkontaciaId);
+  /**
+   * Tlačidlo je zapnuté podľa toho, či má návrh ČO vyplniť — nielen podľa účtu
+   * v hlavičke. Protistrana, ktorej doklady sa rozpadajú na veľa účtov (O2
+   * SLOVAKIA: 9 dokladov, dve rovnaké), jeden účet v hlavičke právom nemá, a
+   * tlačidlo tak ostávalo vypnuté navždy — hoci členenie DPH aj účty položiek
+   * návrh vedel. Prázdny návrh (source 'none', alebo bez jediného poľa)
+   * tlačidlo naďalej nezapne: vyzeralo by, že sa niečo stane.
+   */
+  const canAi = !readOnly && suggestion != null && suggestion.source !== 'none' && Boolean(
+    suggestion.predkontaciaId || suggestion.clenenieDphId || suggestion.clenenieKvKod
+    || suggestion.ciselnyRadId || suggestion.strediskoId || suggestion.riadky?.length);
   /**
    * Návrh, ktorý ešte nikto nepoužil, sa ukáže v prázdnom poli ako bledá
    * predloha. Sám sa doklad predvyplní až od istoty 90 % — dovtedy účtovník
@@ -840,12 +850,15 @@ export function InvoicePanel({
     // rovnaká logika ako pri ručnom výbere členenia nižšie.
     const kvKod = suggestion.clenenieKvKod
       ?? codeLists.cleneniaDph.find((item) => item.id === suggestion.clenenieDphId)?.kvSekcia;
+    // Pole, ktoré návrh NEMÁ, sa nemaže. Odkedy tlačidlo zapína aj samotný
+    // rozpis po položkách, stlačil by ho účtovník aj pri návrhu bez účtu
+    // v hlavičke — a účet, ktorý si dovtedy vypísal, by mu zmizol.
     updateUcto({
-      predkontaciaId: suggestion.predkontaciaId,
-      clenenieDphId: suggestion.clenenieDphId,
-      ciselnyRadId: suggestion.ciselnyRadId,
-      strediskoId: suggestion.strediskoId,
-      clenenieKvKod: kvKod,
+      ...(suggestion.predkontaciaId ? { predkontaciaId: suggestion.predkontaciaId } : {}),
+      ...(suggestion.clenenieDphId ? { clenenieDphId: suggestion.clenenieDphId } : {}),
+      ...(suggestion.ciselnyRadId ? { ciselnyRadId: suggestion.ciselnyRadId } : {}),
+      ...(suggestion.strediskoId ? { strediskoId: suggestion.strediskoId } : {}),
+      ...(kvKod ? { clenenieKvKod: kvKod } : {}),
     });
     // Rozpis po položkách — doklad, ktorý firma podľa účtovného denníka
     // spravidla delí (napr. reprezentácia na vlastný účet, bez nároku na
