@@ -75,7 +75,7 @@ export function sadzbyDphPre(datum: string | undefined) {
   return SK_SADZBY_DPH.find((riadok) => !datum || riadok.od <= datum.slice(0, 10));
 }
 
-interface ExtraktDokladu {
+export interface ExtraktDokladu {
   dodavatelNazov: string;
   dodavatelIcDph: string;
   /** Krajina adresy dodávateľa (ISO) — spolu s IČ DPH hovorí, čia daň je na doklade. */
@@ -88,7 +88,7 @@ interface ExtraktDokladu {
   texty: string[];
 }
 
-function extrakt(dokument: DphPosudokDokument): ExtraktDokladu {
+export function extrakt(dokument: DphPosudokDokument): ExtraktDokladu {
   const extracted = (dokument.extracted ?? {}) as Record<string, any>;
   const dodavatel = (extracted.dodavatel ?? {}) as Record<string, any>;
   const rozpis = Array.isArray(extracted.rozpisDph) ? extracted.rozpisDph : [];
@@ -173,7 +173,7 @@ function pravidloVarovanie(kod: string, pravidla: DphPravidloOdpoctu[], texty: s
   });
 }
 
-const NAZVY_DRUHOV: Record<DruhSamozdanenia, string> = {
+export const NAZVY_DRUHOV: Record<DruhSamozdanenia, string> = {
   sluzby_eu: 'Služby z EÚ (§69 ods. 3)',
   sluzby_mimo_eu: 'Služby spoza EÚ (§69 ods. 3)',
   tovar_eu: 'Nadobudnutie tovaru z EÚ (§11)',

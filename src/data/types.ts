@@ -282,6 +282,45 @@ export interface DphPosudok {
   blokacie: DphZistenie[];
 }
 
+export type VolbaSamozdanenia = 'vytvorit' | 'v_pohode' | 'nevznika';
+export type DovodNevznikaSamozdanenia = 'slovenska_dph' | 'miesto_dodania' | 'nie_plnenie' | 'iny';
+export type DruhSamozdaneniaPrijateho = 'sluzby_eu' | 'tovar_eu' | 'sluzby_mimo_eu' | 'prenesenie_prijate' | 'dovoz';
+
+/** Voľba účtovníka v bloku samozdanenia; `rucne` sú hodnoty, ktoré prepísal. */
+export interface RozhodnutieSamozdanenia {
+  volba: VolbaSamozdanenia;
+  druh?: DruhSamozdaneniaPrijateho;
+  dovod?: DovodNevznikaSamozdanenia;
+  dovodText?: string;
+  cislaInternych?: string;
+  rucne?: { datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number };
+}
+
+/** Samozdanenie prijatej faktúry tak, ako ho spočítal server (documents.samozdanenie). */
+export interface BlokSamozdanenia {
+  uzemie: 'eu' | 'mimo_eu' | 'sk';
+  predvolene: { volba: VolbaSamozdanenia; zdroj: string };
+  hodnota: RozhodnutieSamozdanenia & {
+    druh: DruhSamozdaneniaPrijateho;
+    zdroj: 'predvolene' | 'dodavatel' | 'firma' | 'uctovnik';
+    datumDanovejPovinnosti?: string;
+    sadzba?: number;
+    kurz?: number;
+    zaklad?: number;
+    dan?: number;
+    odpocet?: number;
+    interny?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
+  };
+  sadzby: number[];
+  mena: string;
+  chyby: Array<'dovoz' | 'kody' | 'datum' | 'kurz' | 'dovod'>;
+  statusNepotvrdeny: boolean;
+  upravitelny: boolean;
+  dodavatel: string;
+  robimeVPohode: boolean;
+  pamatDodavatela: boolean;
+}
+
 /** Partner (kontrahent) — adresár dodávateľov s predvoľbami zaúčtovania. */
 export interface Partner {
   id: string;

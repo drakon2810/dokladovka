@@ -1,5 +1,6 @@
 import { HttpError } from './http.js';
 import { jeCudziDodavatel, SK_SADZBY_DPH } from './services/dphAdvisor.js';
+import type { RolaPrenosu, Samozdanenie } from './services/samozdanenieService.js';
 
 export function escapeXml(value: unknown): string {
   return String(value ?? '')
@@ -79,11 +80,14 @@ interface Snapshot {
   podtyp?: string;
   extracted: Record<string, any>;
   ucto: Record<string, string | undefined>;
+  samozdanenie?: Samozdanenie;
 }
 
 export interface PohodaXmlDocument {
   id: string;
   snapshot: Snapshot;
+  /** Časti faktúry so samozdanením, ktoré POHODA už prijala — opakovaný prenos ich vynechá. */
+  prijate?: readonly RolaPrenosu[];
 }
 
 export interface PohodaCodeLookup {
@@ -556,14 +560,105 @@ ${lines.join('\n')}
   }).join('\n');
 }
 
+/**
+ * Interné doklady samozdanenia k prijatej faktúre: vymeranie dane (DD…) a pri
+ * nároku odpočet (P…), každý vo vlastnej položke dataPacku `<id>-sz-dd|p`.
+ * Hodnoty sú zo snapshotu schválenia — profil klienta sa medzitým mohol zmeniť.
+ *
+ * NEOVERENÉ v testovacej POHODE SK (import ešte neprebehol):
+ * - originalDocumentNumber = číslo faktúry dodávateľa: či z neho POHODA berie
+ *   číslo dokladu do B1 KV, alebo ho treba inde (XSD hovorí len „Pôvodné číslo
+ *   dokladu, iba SK").
+ * - dateKVDPH = dátum daňovej povinnosti (obdobie KV) a dateDelivery = dátum
+ *   dodania z faktúry; pri tovare z EÚ sa môžu líšiť.
+ * - Oba doklady nesú rovnaký základ a daň v tej istej sadzbe; smer (daň na
+ *   výstupe / odpočet) určuje len členenie DPH.
+ * - Bez číselného radu INT v predvoľbách sa <int:number> vynechá a číslo
+ *   pridelí POHODA z predvoleného radu agendy.
+ */
+function interneDokladySamozdanenia(
+  id: string,
+  extracted: Record<string, any>,
+  samozdanenie: Samozdanenie,
+  partner: string,
+  radInternych: string | undefined,
+  prijate: readonly RolaPrenosu[],
+): string[] {
+  const { interny, datumDanovejPovinnosti: datum, sadzba, zaklad, dan } = samozdanenie;
+  const sadzbaPohody = datum ? vatRateName(sadzba, datum, false) : 'none';
+  if (!interny?.ddKod || !interny.ddPredkontaciaKod || !datum || zaklad === undefined || dan === undefined || sadzbaPohody === 'none') {
+    throw new Error(`Doklad ${id} nemá úplné údaje samozdanenia — schváľte ho znova`);
+  }
+  const doklady = [
+    { rola: 'dd' as const, predkontacia: interny.ddPredkontaciaKod, clenenie: interny.ddKod },
+    // Neplatiteľ, §7 a §7a daň priznáva bez odpočtu — doklad odpočtu nevzniká.
+    ...((samozdanenie.odpocet ?? 0) > 0 ? [{ rola: 'p' as const, predkontacia: interny.pPredkontaciaKod, clenenie: interny.pKod }] : []),
+  ].filter((doklad) => !prijate.includes(doklad.rola));
+  const cisloFaktury = clamp(extracted.cisloFaktury, 32);
+  const text = escapeXml(clamp(`Samozdanenie k FP ${cisloFaktury}`, 90));
+  const vKosi = (kategoria: SadzbaPohody, suma: number) => amount(kategoria === sadzbaPohody ? suma : 0);
+  const dodanie = isoDate(extracted.datumDodania) ?? isoDate(extracted.datumVystavenia) ?? datum;
+  return doklady.map((doklad) => {
+    if (!doklad.predkontacia || !doklad.clenenie) throw new Error(`Doklad ${id} nemá kódy odpočtu samozdanenia — schváľte ho znova`);
+    const kody = [
+      `<int:accounting><typ:ids>${escapeXml(doklad.predkontacia)}</typ:ids></int:accounting>`,
+      `<int:classificationVAT><typ:ids>${escapeXml(doklad.clenenie)}</typ:ids></int:classificationVAT>`,
+      ...(interny.kv ? [`<int:classificationKVDPH><typ:ids>${escapeXml(interny.kv)}</typ:ids></int:classificationKVDPH>`] : []),
+    ];
+    return `  <dat:dataPackItem id="${escapeXml(`${id}-sz-${doklad.rola}`)}" version="2.0">
+    <int:intDoc version="2.0">
+      <int:intDocHeader>
+        ${radInternych ? `<int:number><typ:ids>${escapeXml(radInternych)}</typ:ids></int:number>` : ''}
+        ${cisloFaktury ? `<int:originalDocumentNumber>${escapeXml(cisloFaktury)}</int:originalDocumentNumber>` : ''}
+        <int:date>${datum}</int:date>
+        <int:dateTax>${datum}</int:dateTax>
+        <int:dateAccounting>${datum}</int:dateAccounting>
+        <int:dateDelivery>${dodanie}</int:dateDelivery>
+        <int:dateKVDPH>${datum}</int:dateKVDPH>
+        ${kody.join('\n        ')}
+        <int:text>${text}</int:text>
+        <int:partnerIdentity>${partner}</int:partnerIdentity>
+      </int:intDocHeader>
+      <int:intDocDetail>
+      <int:intDocItem>
+        <int:text>${text}</int:text>
+        <int:quantity>1</int:quantity>
+        <int:coefficient>1.0</int:coefficient>
+        <int:payVAT>false</int:payVAT>
+        <int:rateVAT>${sadzbaPohody}</int:rateVAT>
+        <int:homeCurrency>
+          <typ:unitPrice>${amount(zaklad)}</typ:unitPrice>
+          <typ:price>${amount(zaklad)}</typ:price>
+          <typ:priceVAT>${amount(dan)}</typ:priceVAT>
+          <typ:priceSum>${amount(zaklad + dan)}</typ:priceSum>
+        </int:homeCurrency>
+        ${kody.join('\n        ')}
+      </int:intDocItem>
+      </int:intDocDetail>
+      <int:intDocSummary><int:homeCurrency>
+        <typ:priceHigh>${vKosi('high', zaklad)}</typ:priceHigh>
+        <typ:priceHighVAT>${vKosi('high', dan)}</typ:priceHighVAT>
+        <typ:priceLow>${vKosi('low', zaklad)}</typ:priceLow>
+        <typ:priceLowVAT>${vKosi('low', dan)}</typ:priceLowVAT>
+        <typ:price3>${vKosi('third', zaklad)}</typ:price3>
+        <typ:price3VAT>${vKosi('third', dan)}</typ:price3VAT>
+        <typ:priceNone>0.00</typ:priceNone>
+      </int:homeCurrency></int:intDocSummary>
+    </int:intDoc>
+  </dat:dataPackItem>`;
+  });
+}
+
 export function buildServerDataPack(input: {
   id: string;
   ico: string;
   documents: PohodaXmlDocument[];
   codeLists: PohodaCodeLookup;
+  /** Kód číselného radu interných dokladov z predvolieb firmy (MZDY). */
+  radInternych?: string;
 }): string {
   if (!/^\d{8}$/.test(input.ico)) throw new Error('IČO účtovnej jednotky je neplatné');
-  const items = input.documents.map(({ id, snapshot }) => {
+  const items = input.documents.map(({ id, snapshot, prijate = [] }) => {
     // Bankový výpis nemá číselný rad ani členenie DPH — vetví sa pred spoločnou
     // kontrolou číselníkov nižšie.
     if (snapshot.typ === 'BV') return bankDataPackItems(id, snapshot, input.codeLists);
@@ -762,7 +857,12 @@ export function buildServerDataPack(input: {
       || input.codeLists.predkontacieNazvy?.get(snapshot.ucto.predkontaciaId ?? '')
       || extracted.cisloFaktury
       || '';
-    return `  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
+    // Samozdanenie ide v tom istom dataPacku hneď za faktúrou. Časť, ktorú
+    // POHODA pri predošlom prenose prijala, sa znova neposiela.
+    const interne = snapshot.typ === 'FP' && snapshot.samozdanenie?.volba === 'vytvorit'
+      ? interneDokladySamozdanenia(id, extracted, snapshot.samozdanenie, partner, input.radInternych, prijate)
+      : [];
+    const faktura = prijate.includes('faktura') ? [] : [`  <dat:dataPackItem id="${escapeXml(id)}" version="2.0">
     <inv:invoice version="2.0">
       <inv:invoiceHeader>
         <inv:invoiceType>${invoiceType(snapshot.typ, snapshot.podtyp)}</inv:invoiceType>
@@ -792,7 +892,8 @@ export function buildServerDataPack(input: {
         ${currency}
       </inv:homeCurrency></inv:invoiceSummary>${dokumentyXml('inv')}
     </inv:invoice>
-  </dat:dataPackItem>`;
+  </dat:dataPackItem>`];
+    return [...faktura, ...interne].join('\n');
   }).join('\n');
   return `<?xml version="1.0" encoding="Windows-1250"?>
 <dat:dataPack version="2.0" id="${escapeXml(input.id)}" ico="${input.ico}"

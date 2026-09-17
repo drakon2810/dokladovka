@@ -1489,6 +1489,8 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
   accounting: Record<string, string | undefined>;
   /** Druh od extrakcie pred prvou zmenou účtovníkom (documents.navrh_druhu); bez neho sa druh nemenil. */
   navrhDruhu?: { typ: string; podtyp: string };
+  /** Voľba samozdanenia: predvolená proti schválenej. */
+  samozdanenie?: { navrhnute: string; schvalene: string };
 }): Promise<void> {
   const navrh = await tx.query<{
     predkontacia_id?: string; clenenie_dph_id?: string; clenenie_kv_kod?: string;
@@ -1531,6 +1533,11 @@ export async function zaznamenajOpravu(tx: Queryable, input: {
     navrhnute.podtyp = druh.podtyp;
     schvalene.podtyp = input.podtyp;
     zmenene.push('podtyp');
+  }
+  if (input.samozdanenie) {
+    navrhnute.samozdanenie = input.samozdanenie.navrhnute;
+    schvalene.samozdanenie = input.samozdanenie.schvalene;
+    if (input.samozdanenie.navrhnute !== input.samozdanenie.schvalene) zmenene.push('samozdanenie');
   }
   const strana = protistranaDokladu(input.documentType, input.extracted);
   await tx.query(

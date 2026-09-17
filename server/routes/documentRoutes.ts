@@ -23,6 +23,11 @@ import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieServi
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 import { ingestFiles } from '../inbound/ingestFiles.js';
 import { zapisOpravuTypu } from '../services/firemnyProfilService.js';
+import { ulozFakt } from '../services/profilService.js';
+import {
+  DOVODY_NEVZNIKA, DRUHY_PRIJATEHO, spravaChyby, stavSamozdaneniaDokladu, ulozPamatDodavatela, VOLBY_SAMOZDANENIA, type Samozdanenie,
+} from '../services/samozdanenieService.js';
+import { zamkniPrax } from '../services/uctoProfileService.js';
 import { podtypPreTyp } from '../workerService.js';
 
 interface DocumentScope extends Record<string, unknown> {
@@ -38,6 +43,7 @@ interface DocumentScope extends Record<string, unknown> {
   history: Array<Record<string, unknown>>;
   split_from_document_id?: string | null;
   navrh_druhu?: { typ: string; podtyp: string } | null;
+  samozdanenie?: Samozdanenie | null;
 }
 
 async function scopedDocument(database: Database, tenantId: string, id: string): Promise<DocumentScope> {
@@ -45,7 +51,7 @@ async function scopedDocument(database: Database, tenantId: string, id: string):
   // (invoiceType) aj pamäť rozhodnutí — bez neho bol každý dobropis „bežná".
   const result = await database.query<DocumentScope>(
     `SELECT id, organization_id, status, processing_status, version, document_type, podtyp, extracted, accounting,
-            history, split_from_document_id, navrh_druhu
+            history, split_from_document_id, navrh_druhu, samozdanenie
        FROM documents WHERE id=$1 AND tenant_id=$2`, [id, tenantId],
   );
   if (!result.rows[0]) throw new HttpError(404, 'document_not_found', 'Doklad neexistuje');
@@ -490,10 +496,19 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     if (dphPosudok.blokacie.length > 0) {
       throw new HttpError(409, 'dph_profil_blokacia', dphPosudok.blokacie[0].sprava);
     }
+    // Samozdanenie: voľba sa určí vždy — bez uloženej sa zapíše predvolená —
+    // a spolu s vypočítaným základom a daňou sa zmrazí do snapshotu pre export.
+    const samozdanenie = await stavSamozdaneniaDokladu(database, auth.tenantId, document, dphProfil);
+    if (samozdanenie && samozdanenie.chyby.length > 0) {
+      throw new HttpError(409, 'samozdanenie_neuplne', spravaChyby(samozdanenie.chyby[0], samozdanenie.hodnota, samozdanenie.mena));
+    }
     const approvedVersion = expectedVersion + 1;
     // Podtyp ide do snapshotu spolu s typom — invoiceType pre POHODU sa určuje
     // z dvojice a bez neho by dobropis odišiel ako bežná faktúra.
-    const snapshot = { version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, podtyp: document.podtyp ?? 'bezna', extracted: document.extracted, ucto: document.accounting };
+    const snapshot = {
+      version: approvedVersion, approvedAt: new Date().toISOString(), typ: document.document_type, podtyp: document.podtyp ?? 'bezna', extracted: document.extracted, ucto: document.accounting,
+      ...(samozdanenie ? { samozdanenie: samozdanenie.hodnota } : {}),
+    };
     // Schválenie je jeden celok: stav so snapshotom, pamäť rozhodnutí, spätná
     // väzba pravidiel, záznam opravy aj audit. Keď zápisy bežali po jednom,
     // zlyhanie pamäte po uložení stavu vrátilo klientovi chybu pri už
@@ -502,9 +517,11 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     // transakciu držalo otvorenú.
     return database.transaction(async (tx) => {
       const result = await tx.query<Record<string, unknown>>(
-        `UPDATE documents SET status='schvaleny', version=$1, approved_version=$1, approved_snapshot=$2::jsonb, updated_at=now()
+        `UPDATE documents SET status='schvaleny', version=$1, approved_version=$1, approved_snapshot=$2::jsonb, updated_at=now(),
+                samozdanenie=$6::jsonb
           WHERE id=$3 AND tenant_id=$4 AND version=$5 RETURNING *`,
-        [approvedVersion, JSON.stringify(snapshot), id, auth.tenantId, expectedVersion],
+        [approvedVersion, JSON.stringify(snapshot), id, auth.tenantId, expectedVersion,
+          samozdanenie ? JSON.stringify(samozdanenie.hodnota) : null],
       );
       if (!result.rows[0]) throw new HttpError(409, 'version_conflict', 'Doklad bol medzitým zmenený');
       const rozhodnutie = {
@@ -521,7 +538,10 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       // Samokontrola pravidiel: zhoda so schváleným = potvrdenie, rozdiel = oprava.
       await updateRuleFeedback(tx, { tenantId: auth.tenantId, documentId: id, accounting: document.accounting });
       // Čo účtovník oproti návrhu zmenil — meranie kvality návrhov aj podklad na učenie.
-      await zaznamenajOpravu(tx, { ...rozhodnutie, navrhDruhu: document.navrh_druhu ?? undefined });
+      await zaznamenajOpravu(tx, {
+        ...rozhodnutie, navrhDruhu: document.navrh_druhu ?? undefined,
+        ...(samozdanenie ? { samozdanenie: { navrhnute: samozdanenie.predvolene.volba, schvalene: samozdanenie.hodnota.volba } } : {}),
+      });
       // Otázka k schválenému dokladu už nie je otvorená.
       await tx.query('UPDATE accounting_suggestions SET otazka=NULL WHERE document_id=$1 AND tenant_id=$2', [id, auth.tenantId]);
       await writeAudit(tx, { tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId, action: 'document.approved', entityType: 'document', entityId: id, correlationId: request.id, metadata: { version: approvedVersion } });
@@ -630,6 +650,87 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       accounting: document.accounting,
       ...await cleneniaDphDokladu(database, auth.tenantId, document),
     }, profil);
+  });
+
+  // Samozdanenie prijatej faktúry: blok nad zaúčtovaním. Schválený doklad
+  // ukazuje zmrazené hodnoty — práve tie idú do POHODY.
+  // ponytail: schválený doklad, ktorý po zmene profilu (zrušené prijaté
+  // prenesenie) prestal byť kandidátom, blok nemá — export ide zo snapshotu aj tak.
+  const blokSamozdanenia = async (tenantId: string, document: DocumentScope) => {
+    const stav = await stavSamozdaneniaDokladu(database, tenantId, document);
+    if (!stav) return null;
+    const { profil, pamat, ...blok } = stav;
+    const uzamknuty = ['schvaleny', 'exportovany'].includes(document.status);
+    return {
+      ...blok,
+      ...(uzamknuty && document.samozdanenie ? { hodnota: document.samozdanenie, chyby: [] } : {}),
+      upravitelny: !uzamknuty,
+      dodavatel: String((document.extracted as { dodavatel?: { nazov?: string } })?.dodavatel?.nazov ?? ''),
+      robimeVPohode: profil.samozdanenieVPohode === true,
+      pamatDodavatela: Boolean(pamat),
+    };
+  };
+
+  app.get('/api/documents/:id/samozdanenie', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    return { blok: await blokSamozdanenia(auth.tenantId, document) };
+  });
+
+  // Voľbu ukladá účtovník; s ňou aj pamäť dodávateľa („Pamätať pre dodávateľa")
+  // a nastavenie firmy („Takto to robíme pri všetkých faktúrach").
+  app.put('/api/documents/:id/samozdanenie', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { pamatatDodavatela, vsetkyFaktury, ...rozhodnutie } = z.object({
+      volba: z.enum(VOLBY_SAMOZDANENIA),
+      druh: z.enum(DRUHY_PRIJATEHO).optional(),
+      dovod: z.enum(DOVODY_NEVZNIKA).optional(),
+      dovodText: z.string().trim().max(240).optional(),
+      cislaInternych: z.string().trim().max(240).optional(),
+      rucne: z.object({
+        datumDanovejPovinnosti: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        sadzba: z.number().min(0).max(100).optional(),
+        kurz: z.number().positive().max(1_000_000).optional(),
+      }).strict().optional(),
+      pamatatDodavatela: z.boolean().optional(),
+      vsetkyFaktury: z.boolean().optional(),
+    }).strict().parse(request.body);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    if (['schvaleny', 'exportovany'].includes(document.status)) {
+      throw new HttpError(409, 'samozdanenie_uzamknute', 'Schválený doklad má samozdanenie uzamknuté — najprv zrušte schválenie úpravou dokladu');
+    }
+    const firma = { tenantId: auth.tenantId, organizationId: document.organization_id };
+    const stav = await stavSamozdaneniaDokladu(database, auth.tenantId, { ...document, samozdanenie: { ...rozhodnutie, zdroj: 'uctovnik' } });
+    if (!stav) throw new HttpError(422, 'samozdanenie_netyka', 'Doklad nie je kandidátom na samozdanenie');
+    const { hodnota } = stav;
+    await database.transaction(async (tx) => {
+      await tx.query('UPDATE documents SET samozdanenie=$1::jsonb, updated_at=now() WHERE id=$2 AND tenant_id=$3',
+        [JSON.stringify(hodnota), id, auth.tenantId]);
+      if (hodnota.volba === 'nevznika' && pamatatDodavatela === false) {
+        await ulozPamatDodavatela(tx, { ...firma, userId: auth.userId, extracted: document.extracted });
+      } else if (hodnota.volba === 'nevznika' && pamatatDodavatela && hodnota.dovod && !stav.chyby.includes('dovod')) {
+        await ulozPamatDodavatela(tx, {
+          ...firma, userId: auth.userId, extracted: document.extracted,
+          pamat: { dovod: hodnota.dovod, ...(hodnota.dovodText ? { dovodText: hodnota.dovodText } : {}) },
+        });
+      }
+      if (hodnota.volba === 'v_pohode' && vsetkyFaktury !== undefined && vsetkyFaktury !== (stav.profil.samozdanenieVPohode === true)) {
+        await zamkniPrax(tx, firma);
+        await ulozFakt(tx, { ...firma, userId: auth.userId }, 'samozdanenie.postup', { stav: 'potvrdene', hodnota: { robimeVPohode: vsetkyFaktury } });
+      }
+      await writeAudit(tx, {
+        tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,
+        action: 'document.samozdanenie_ulozene', entityType: 'document', entityId: id, correlationId: request.id,
+        metadata: { volba: hodnota.volba, druh: hodnota.druh, dovod: hodnota.dovod, pamatatDodavatela, vsetkyFaktury },
+      });
+    });
+    return { blok: await blokSamozdanenia(auth.tenantId, { ...document, samozdanenie: hodnota }) };
   });
 
   // „Prečo?" — pôvod zaúčtovania dokladu: zdroj návrhu, istota, dôvod a

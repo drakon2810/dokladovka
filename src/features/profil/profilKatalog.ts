@@ -19,7 +19,7 @@ export const SEKCIE: ReadonlyArray<{ id: Sekcia; kluce: readonly string[] }> = [
   { id: 'dph', kluce: ['dph.status', 'dph.clenenie_bez_odpoctu', 'dph.oslobodene_plnenia'] },
   {
     id: 'samozdanenie',
-    kluce: [...DRUHY_PRIJATE, ...DRUHY_VYSTAVENE].map((druh) => `samozdanenie.${druh}`).concat('zahranicie.vratenie_dph'),
+    kluce: [...DRUHY_PRIJATE, ...DRUHY_VYSTAVENE].map((druh) => `samozdanenie.${druh}`).concat('samozdanenie.postup', 'zahranicie.vratenie_dph'),
   },
   { id: 'vozidla', kluce: ['vozidla.pravidla'] },
   { id: 'naklady', kluce: ['naklady.bez_naroku', 'naklady.pomerne'] },
@@ -89,6 +89,9 @@ export function vetaHodnoty(kluc: string, hodnota: unknown): string {
       return h.pouziva === true ? t('profilKlienta.veta.tovarNaCesteAno') : h.pouziva === false ? t('profilKlienta.veta.tovarNaCesteNie') : '—';
     case 'zasady.drobny_majetok':
       return typeof h.hranica === 'number' ? tv('profilKlienta.veta.drobnyMajetok', { suma: `${cislo(h.hranica)} €` }) : '—';
+    case 'samozdanenie.postup':
+      return h.robimeVPohode === true ? t('profilKlienta.veta.samozdanenieVPohode')
+        : h.robimeVPohode === false ? t('profilKlienta.veta.samozdanenieDokladovka') : '—';
   }
   if (!kluc.startsWith('samozdanenie.')) return '—';
   const faktura = obj(h.faktura);
@@ -291,12 +294,13 @@ const POLIA: Record<string, PoleFormulara[]> = {
   ],
   'zasady.tovar_na_ceste': [{ cesta: 'pouziva', typ: 'anoNie', povinne: true }],
   'zasady.drobny_majetok': [{ cesta: 'hranica', typ: 'cislo', min: 1, povinne: true }],
+  'samozdanenie.postup': [{ cesta: 'robimeVPohode', typ: 'anoNie', povinne: true }],
 };
 
 /** Polia formulára; pri zozname sú to polia jednej položky. */
 export function poliaFaktu(kluc: string): PoleFormulara[] {
   const druh = kluc.replace(/^samozdanenie\./, '');
-  if (druh !== kluc) return DRUHY_S_INTERNYM.includes(druh) ? [...FAKTURA, ...INTERNY] : FAKTURA;
+  if (druh !== kluc && !POLIA[kluc]) return DRUHY_S_INTERNYM.includes(druh) ? [...FAKTURA, ...INTERNY] : FAKTURA;
   return POLIA[kluc] ?? [];
 }
 

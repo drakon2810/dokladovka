@@ -20,6 +20,7 @@ import { DcCell, DcPick, formatDateSk, type DcOption } from './DcInline';
 import { ItemsSection, fmtMoney, navrhPreRiadky, parseNum, parseOpt, pouziNavrhNaPolozky, rozpisZPoloziek, type ItemsCodeLists } from './ItemsSection';
 import { ITEMS_PATH, type SourceMap } from './sourceHighlight';
 import { patchVariantu, polozkyInakoNezPodoba, zobrazOtazku } from './predvyplnenie';
+import { SamozdanenieBlok } from './SamozdanenieBlok';
 import './invoicePanel.css';
 import './sourceHighlight.css';
 
@@ -898,6 +899,9 @@ export function InvoicePanel({
 
   return (
     <div className="dk-doc">
+      {/* Samozdanenie prijatej faktúry bez DPH — server rozhodne, či sa doklad týka. */}
+      {draft.typ === 'FP' && <SamozdanenieBlok documentId={draft.id} version={draft.version} readOnly={readOnly} />}
+
       {/* Zaúčtovanie dokladu (účtovný zápis pre POHODU) */}
       <div className="dk-head">
         <span className="dk-head-mark">P</span>

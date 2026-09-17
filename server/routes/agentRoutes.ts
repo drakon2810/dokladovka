@@ -14,6 +14,7 @@ import { HttpError } from '../http.js';
 import { constantTimeStringEqual, createPairingCode, randomToken, sha256 } from '../security.js';
 import { doplnUcetMdZKodu } from '../services/ucetMdZKodu.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
+import { polozkyPrenosu, zapisPrenosSamozdanenia } from '../services/samozdanenieService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
 import { klucPolozky, konfliktPolozky, osvojRadBezIdentifikatora } from './codeListRoutes.js';
 import { historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
@@ -681,7 +682,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     const body = z.object({
       exportJobId: z.string().uuid(),
       perDocument: z.array(z.object({
-        documentId: z.string().uuid(),
+        // Faktúra so samozdanením má v dataPacku aj interné doklady `<id>-sz-dd|p`.
+        documentId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-sz-(dd|p))?$/i),
         state: z.enum(['ok', 'warning', 'error']),
         pohodaNumber: z.string().max(100).optional(),
         message: z.string().max(1000).optional(),
@@ -697,7 +699,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
         return { accepted: true, idempotent: true, status: job.status };
       }
       if (job.status !== 'sent') throw new HttpError(409, 'export_job_not_sent', 'Export job nebol vydaný agentovi');
-      const expected = new Set(job.document_ids);
+      const expected = polozkyPrenosu(job.document_ids, job.request_xml);
       const actual = new Set(body.perDocument.map((item) => item.documentId));
       if (actual.size !== body.perDocument.length || actual.size !== expected.size || [...actual].some((id) => !expected.has(id))) {
         throw new HttpError(400, 'result_documents_mismatch', 'Výsledok neobsahuje presne doklady export jobu');
@@ -745,6 +747,7 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
           );
         }
       }
+      await zapisPrenosSamozdanenia(tx, { tenantId: agent.tenant_id, organizationId: job.organization_id, perDocument: body.perDocument });
       const status = okCount === body.perDocument.length ? 'confirmed' : 'failed';
       const responseMeta = {
         ...body.rawResponseMeta,
