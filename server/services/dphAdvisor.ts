@@ -162,8 +162,9 @@ export function clenenieVyzeraNaOdpocet(clenenie: { kod: string; nazov: string }
  * Pravidlo pre autá delí dve rôzne dane: daňový náklad (základ) a odpočet DPH.
  * Pomerné odpočítanie (§ 49 ods. 4) delí len odpočet — základ ostáva na účte.
  */
-function pravidloVarovanie(kod: string, pravidla: DphPravidloOdpoctu[], texty: string[], lenOdpocet: boolean): DphZistenie[] {
+function pravidloVarovanie(kod: string, pravidla: DphPravidloOdpoctu[], texty: string[], lenOdpocet: boolean, documentType: string): DphZistenie[] {
   return pravidla.flatMap((pravidlo) => {
+    if (pravidlo.typyDokladov?.length && !pravidlo.typyDokladov.includes(documentType)) return [];
     const zhoda = najdiKlucoveSlovo(texty, pravidlo.klucoveSlova);
     if (!zhoda) return [];
     const odpocet = pravidlo.percentoDph ?? pravidlo.percento;
@@ -328,8 +329,8 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
 
   // Pravidlá pre autá, pomerné odpočítanie a koeficient — len pre platiteľa.
   if (profil.platitelDph === 'platitel') {
-    varovania.push(...pravidloVarovanie('dph_auto_odpocet', profil.pravidlaAut, doklad.texty, false));
-    varovania.push(...pravidloVarovanie('dph_pomerny_odpocet', profil.pomerneOdpocitanie, doklad.texty, true));
+    varovania.push(...pravidloVarovanie('dph_auto_odpocet', profil.pravidlaAut, doklad.texty, false, dokument.documentType));
+    varovania.push(...pravidloVarovanie('dph_pomerny_odpocet', profil.pomerneOdpocitanie, doklad.texty, true, dokument.documentType));
     if (profil.oslobodenePlnenia && profil.koeficient !== undefined) {
       navrhy.push({
         kod: 'dph_koeficient',
@@ -365,7 +366,8 @@ export function dphPokynyPreAi(profil: DphProfil): string[] {
   }
   for (const pravidlo of profil.pravidlaAut) {
     const nedanove = pravidlo.clenenieDphNedanoveKod ? ` s členením ${pravidlo.clenenieDphNedanoveKod}` : '';
-    pokyny.push(`Ak sa v doklade vyskytuje ${slova(pravidlo)}, daňový náklad je ${pravidlo.percento} % a odpočet DPH ${pravidlo.percentoDph ?? pravidlo.percento} % (${pravidlo.kategoria}; daňová časť ${pravidlo.predkontaciaKod}, nedaňová ${pravidlo.predkontaciaNedanovaKod}${nedanove}).`);
+    const typy = pravidlo.typyDokladov?.length ? ` typu ${pravidlo.typyDokladov.join(', ')}` : '';
+    pokyny.push(`Ak sa v doklade${typy} vyskytuje ${slova(pravidlo)}, daňový náklad je ${pravidlo.percento} % a odpočet DPH ${pravidlo.percentoDph ?? pravidlo.percento} % (${pravidlo.kategoria}; daňová časť ${pravidlo.predkontaciaKod}, nedaňová ${pravidlo.predkontaciaNedanovaKod}${nedanove}).`);
   }
   for (const pravidlo of profil.pomerneOdpocitanie) {
     pokyny.push(`Ak sa v doklade vyskytuje ${slova(pravidlo)}, odpočet DPH je len ${pravidlo.percentoDph ?? pravidlo.percento} % (${pravidlo.kategoria}; obe časti na ${pravidlo.predkontaciaKod}, neodpočítaná s členením ${pravidlo.clenenieDphNedanoveKod}).`);

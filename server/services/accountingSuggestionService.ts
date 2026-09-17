@@ -3935,6 +3935,7 @@ export async function navrhniZauctovanie(
     .filter((row) => row.kind === 'predkontacie').map((row) => row.id));
   const pravidlaRezu = [...(dphProfil?.pravidlaAut ?? []), ...(dphProfil?.pomerneOdpocitanie ?? [])].filter((pravidlo) =>
     pravidlo.klucoveSlova.length > 0
+    && (!pravidlo.typyDokladov?.length || pravidlo.typyDokladov.includes(documentContext.documentType))
     && pravidlo.percento > 0 && pravidlo.percento < 100
     && pravidlo.predkontaciaId && pravidlo.predkontaciaNedanovaId
     && aktivnePredkontacie.has(pravidlo.predkontaciaId)

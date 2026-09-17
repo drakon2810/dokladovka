@@ -579,6 +579,8 @@ export function ProfilKlientaPage() {
                   tv('profilKlienta.dlazdica.percenta', { zaklad: String(pravidlo.percentoZakladu), dph: String(pravidlo.percentoDph) }),
                   tv('profilKlienta.dlazdica.ucty', { danovy: retazec(pravidlo.predkontaciaKod), nedanovy: retazec(pravidlo.predkontaciaNedanovaKod) })
                     + clenenieText(pravidlo.clenenieDphNedanoveKod),
+                  ...(Array.isArray(pravidlo.typyDokladov) && pravidlo.typyDokladov.length
+                    ? [tv('profilKlienta.dlazdica.typy', { typy: (pravidlo.typyDokladov as string[]).join(', ') })] : []),
                 ]}
                 title={titulKodov(pravidlo)}
               >

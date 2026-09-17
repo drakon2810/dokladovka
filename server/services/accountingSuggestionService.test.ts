@@ -2872,6 +2872,13 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
     return { riadky, zmeny, phm, nadspotreba, dphPn };
   };
 
+  // Faktúra karty a bloček zaplatený kartou majú iný záväzok — pravidlo pre bloček faktúru nereže.
+  it('pravidlo s typom dokladu nereže iný typ dokladu', async () => {
+    const { riadky, zmeny } = await rezPhm([['vozidla.pravidla', [{ ...PHM_AUTO[0], typyDokladov: ['OZ'] }]]]);
+    expect((riadky ?? []).some((riadok) => riadok.podiel !== undefined && riadok.podiel !== null)).toBe(false);
+    expect((zmeny ?? []).map((zmena) => zmena.dovod)).not.toContain('rez_podla_profilu');
+  }, 90_000);
+
   it('rozreže palivo osobného auta a naftu do ťahača nechá celú', async () => {
     const { riadky: vysledok, zmeny, phm, nadspotreba, dphPn } = await rezPhm();
     const riadky = vysledok!;

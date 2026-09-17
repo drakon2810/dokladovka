@@ -26,6 +26,8 @@ export interface DphPravidloOdpoctu {
   percentoDph?: number;
   predkontaciaId?: string;
   predkontaciaNedanovaId?: string;
+  /** Len na týchto typoch dokladov; bez neho na všetkých. */
+  typyDokladov?: string[];
   /** Členenie DPH nedaňovej časti; sekciu KV dedí z hlavičky, kým nesie časť dane. */
   clenenieDphNedanoveId?: string;
   /** Kódy tých istých účtov — pokyny modelu nesú kódy, nie id. */
@@ -134,6 +136,7 @@ export async function loadDphProfil(
         profil.pravidlaAut = polozky.map((pravidlo) => ({
           kategoria: pravidlo.nazov, percento: pravidlo.percentoZakladu, percentoDph: pravidlo.percentoDph,
           klucoveSlova: pravidlo.klucoveSlova,
+          ...(pravidlo.typyDokladov?.length ? { typyDokladov: pravidlo.typyDokladov } : {}),
           predkontaciaKod: pravidlo.predkontaciaKod, predkontaciaId: predkontacia(pravidlo.predkontaciaKod),
           predkontaciaNedanovaKod: pravidlo.predkontaciaNedanovaKod, predkontaciaNedanovaId: predkontacia(pravidlo.predkontaciaNedanovaKod),
           ...(pravidlo.clenenieDphNedanoveKod

@@ -280,6 +280,7 @@ const POLIA: Record<string, PoleFormulara[]> = {
     { cesta: 'predkontaciaKod', typ: 'predkontacia', povinne: true },
     { cesta: 'predkontaciaNedanovaKod', typ: 'predkontacia', povinne: true },
     { cesta: 'clenenieDphNedanoveKod', typ: 'clenenie' },
+    { cesta: 'typyDokladov', typ: 'slova' },
   ],
   'naklady.bez_naroku': [{ cesta: 'predkontaciaKod', typ: 'predkontacia', povinne: true }, { cesta: 'clenenieKod', typ: 'clenenie', povinne: true }],
   'naklady.pomerne': [

@@ -81,6 +81,8 @@ export const PROFIL_KATALOG: readonly PolozkaKatalogu[] = [
     schema: z.array(z.object({
       nazov, klucoveSlova, percentoZakladu: percento, percentoDph: percento,
       predkontaciaKod: kod, predkontaciaNedanovaKod: kod, clenenieDphNedanoveKod: kod.optional(),
+      // Ten istý benzín sa na faktúre karty účtuje inak ako na bločku zaplatenom kartou (iný záväzok).
+      typyDokladov: z.array(z.enum(['FP', 'FV', 'OZ', 'PD', 'BV', 'MZDY'])).min(1).max(6).optional(),
     }).strict()).max(50),
   },
   {
