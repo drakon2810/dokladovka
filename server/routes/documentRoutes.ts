@@ -23,7 +23,8 @@ import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieServi
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
 import { ingestFiles } from '../inbound/ingestFiles.js';
 import { zapisOpravuTypu } from '../services/firemnyProfilService.js';
-import { ulozFakt } from '../services/profilService.js';
+import { chybaRoliKodov } from '../services/profilKatalog.js';
+import { overAktivneKody, ulozFakt } from '../services/profilService.js';
 import {
   DOVODY_NEVZNIKA, DRUHY_PRIJATEHO, prijateCasti, spravaChyby, stavSamozdaneniaDokladu, ulozPamatDodavatela, VOLBY_SAMOZDANENIA, type Samozdanenie,
 } from '../services/samozdanenieService.js';
@@ -671,6 +672,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
   // ponytail: schválený doklad, ktorý po zmene profilu (zrušené prijaté
   // prenesenie) prestal byť kandidátom, blok nemá — export ide zo snapshotu aj tak.
   const ZMRAZENE_SAMOZDANENIE = ['schvaleny', 'exportovany', 'chyba'];
+  /** Kód číselníka POHODY tak, ako ho drží profil klienta (profilKatalog.ts). */
+  const KOD_CISELNIKA = z.string().trim().min(1).max(100);
   /**
    * Kódy interných dokladov, ktoré profil pre tento druh NAVRHUJE z histórie
    * firmy, ale účtovník ich ešte nepotvrdil. Engine potvrdené fakty vyžaduje —
@@ -683,8 +686,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     [tenantId, document.organization_id, `samozdanenie.${druh}`],
   )).rows[0]?.hodnota?.interny;
 
-  const blokSamozdanenia = async (tenantId: string, document: DocumentScope) => {
-    const stav = await stavSamozdaneniaDokladu(database, tenantId, document);
+  const blokSamozdanenia = async (tenantId: string, document: DocumentScope, predkontaciaId?: string) => {
+    const stav = await stavSamozdaneniaDokladu(database, tenantId, document, undefined, predkontaciaId);
     if (!stav) return null;
     const { profil, pamat, ...blok } = stav;
     const zmrazeny = ZMRAZENE_SAMOZDANENIE.includes(document.status);
@@ -701,12 +704,17 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     };
   };
 
+  // `predkontaciaId` je účet z rozpracovaného editora: doklad ho uložený ešte
+  // nemá a práve z neho sa učí rodina plnenia. Bez neho by účtovník videl
+  // „Služby z EÚ" a po schválení by sa zmrazilo „Tovar z EÚ". Na to, čo pôjde
+  // do POHODY, sa neberie — export ide zo snapshotu prepočítaného z dokladu.
   app.get('/api/documents/:id/samozdanenie', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { predkontaciaId } = z.object({ predkontaciaId: z.string().trim().min(1).max(64).optional() }).parse(request.query);
     const document = await scopedDocument(database, auth.tenantId, id);
     await requireOrganizationAccess(database, auth, document.organization_id);
-    return { blok: await blokSamozdanenia(auth.tenantId, document) };
+    return { blok: await blokSamozdanenia(auth.tenantId, document, predkontaciaId) };
   });
 
   // Voľbu ukladá účtovník; s ňou aj pamäť dodávateľa („Pamätať pre dodávateľa")
@@ -726,6 +734,12 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
         datumDanovejPovinnosti: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         sadzba: z.number().min(0).max(100).optional(),
         kurz: z.number().positive().max(1_000_000).optional(),
+        // Vlastný základ účtovníka — zmiešaná faktúra, z ktorej sa samozdaňuje len časť.
+        zaklad: z.number().positive().max(1_000_000_000).optional(),
+        interny: z.object({
+          ddKod: KOD_CISELNIKA.optional(), ddPredkontaciaKod: KOD_CISELNIKA.optional(), ddKv: KOD_CISELNIKA.optional(),
+          pKod: KOD_CISELNIKA.optional(), pPredkontaciaKod: KOD_CISELNIKA.optional(), pKv: KOD_CISELNIKA.optional(),
+        }).strict().optional(),
       }).strict().optional(),
       pamatatDodavatela: z.boolean().optional(),
       vsetkyFaktury: z.boolean().optional(),
@@ -738,6 +752,15 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const firma = { tenantId: auth.tenantId, organizationId: document.organization_id };
     const stav = await stavSamozdaneniaDokladu(database, auth.tenantId, { ...document, samozdanenie: { ...rozhodnutie, zdroj: 'uctovnik' } });
     if (!stav) throw new HttpError(422, 'samozdanenie_netyka', 'Doklad nie je kandidátom na samozdanenie');
+    // Kódy prepísané na doklade sa overujú ako fakt profilu — klientovi sa
+    // neveria: kód musí byť v správnej úlohe (DD na vymeranie, P na odpočet,
+    // KV v rodine B1/KN) a aktívny v číselníku TEJTO firmy. Inak by do POHODY
+    // odišiel interný doklad s členením, ktoré tam neexistuje.
+    if (rozhodnutie.rucne?.interny) {
+      const zlaRola = chybaRoliKodov(`samozdanenie.${stav.hodnota.druh}`, { interny: rozhodnutie.rucne.interny });
+      if (zlaRola) throw new HttpError(400, 'samozdanenie_kod_zla_rola', zlaRola);
+      await overAktivneKody(database, firma, { interny: rozhodnutie.rucne.interny });
+    }
     const { hodnota } = stav;
     await database.transaction(async (tx) => {
       await tx.query('UPDATE documents SET samozdanenie=$1::jsonb, updated_at=now() WHERE id=$2 AND tenant_id=$3',

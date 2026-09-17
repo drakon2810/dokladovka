@@ -102,9 +102,30 @@ export async function nacitajProfil(db: Queryable, firma: Firma): Promise<Profil
 }
 
 /**
- * Zápis faktu účtovníkom. Kód, ktorý firma v číselníku nemá (alebo už nie je
- * aktívny), engine aj tak ignoruje — preto ho server odmietne hneď, nie potichu.
+ * Kódy v hodnote, ktoré firma v číselníku nemá (alebo už nie sú aktívne).
+ * Engine ich aj tak ignoruje — preto ich server odmietne hneď, nie potichu.
+ * Rovnaká kontrola platí pre fakt profilu aj pre kódy prepísané na doklade
+ * (samozdanenie): klientovi sa neveria ani v jednom prípade.
  */
+export async function overAktivneKody(tx: Queryable, firma: Firma, hodnota: unknown): Promise<void> {
+  const kody = kodyHodnoty(hodnota);
+  const aktivne = new Set((await tx.query<{ kind: string; code: string } & Record<string, unknown>>(
+    `SELECT kind, btrim(code) AS code FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')
+        AND btrim(code) = ANY($3::text[])`,
+    [firma.tenantId, firma.organizationId, [...kody.predkontacie, ...kody.cleneniaDph]],
+  )).rows.map((row) => `${row.kind}:${row.code}`));
+  const neplatne = [...new Set([
+    ...kody.predkontacie.filter((kod) => !aktivne.has(`predkontacie:${kod}`)),
+    ...kody.cleneniaDph.filter((kod) => !aktivne.has(`cleneniaDph:${kod}`)),
+    ...kody.kv.filter((kod) => platnyKvKod(kod) !== kod),
+  ])];
+  if (neplatne.length > 0) {
+    throw new HttpError(400, 'profil_kod_neplatny', `Kódy nie sú aktívne v číselníku firmy: ${neplatne.join(', ')}`, { kody: neplatne });
+  }
+}
+
+/** Zápis faktu účtovníkom. */
 export async function ulozFakt(
   tx: Queryable,
   firma: Firma & { userId: string },
@@ -122,21 +143,7 @@ export async function ulozFakt(
     hodnota = overena.data;
     const zlaRola = chybaRoliKodov(kluc, hodnota);
     if (zlaRola) throw new HttpError(400, 'profil_kod_zla_rola', zlaRola);
-    const kody = kodyHodnoty(hodnota);
-    const aktivne = new Set((await tx.query<{ kind: string; code: string } & Record<string, unknown>>(
-      `SELECT kind, btrim(code) AS code FROM code_list_items
-        WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND kind IN ('predkontacie','cleneniaDph')
-          AND btrim(code) = ANY($3::text[])`,
-      [firma.tenantId, firma.organizationId, [...kody.predkontacie, ...kody.cleneniaDph]],
-    )).rows.map((row) => `${row.kind}:${row.code}`));
-    const neplatne = [...new Set([
-      ...kody.predkontacie.filter((kod) => !aktivne.has(`predkontacie:${kod}`)),
-      ...kody.cleneniaDph.filter((kod) => !aktivne.has(`cleneniaDph:${kod}`)),
-      ...kody.kv.filter((kod) => platnyKvKod(kod) !== kod),
-    ])];
-    if (neplatne.length > 0) {
-      throw new HttpError(400, 'profil_kod_neplatny', `Kódy nie sú aktívne v číselníku firmy: ${neplatne.join(', ')}`, { kody: neplatne });
-    }
+    await overAktivneKody(tx, firma, hodnota);
   }
   // Dôkaz z histórie ostáva — z neho sa pozná, či potvrdená hodnota s praxou nesedí.
   await tx.query(

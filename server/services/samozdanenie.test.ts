@@ -72,6 +72,57 @@ describe('samozdanenie — druh plnenia', () => {
   it('firma, ktorá samozdanenie nerieši, blok nedostane', () => {
     expect(zostav({ profil: profil({ samozdaneniePostup: 'neriesime' }) })).toBeUndefined();
   });
+
+  it('prax účtu rozhodne, keď dodávateľ vlastnú nemá; nezhoda signálov sa nevyjadrí', () => {
+    // Green Lab Magyarország: v histórii ROFY jediný doklad s DD kódom, takže
+    // prax dodávateľa (správne) mlčí a rodinu má povedať účet 131.
+    expect(zostav({ praxUctu: 'tovar' })?.hodnota.druh).toBe('tovar_eu');
+    expect(zostav({ praxUctu: 'sluzby' })?.hodnota.druh).toBe('sluzby_eu');
+    // Prax s dodávateľom je prvá — s účtom sa zhoduje aj nezhoduje.
+    expect(zostav({ praxDodavatela: 'tovar', praxUctu: 'tovar' })?.hodnota.druh).toBe('tovar_eu');
+    // Nezhoda: zlá rodina znamená zlé členenie, zlý dátum povinnosti aj zlú
+    // sekciu KV, takže novší signál nesmie starší prebiť — rozhodne územie.
+    expect(zostav({ praxDodavatela: 'sluzby', praxUctu: 'tovar' })?.hodnota.druh).toBe('sluzby_eu');
+    expect(zostav({ praxDodavatela: 'tovar', praxUctu: 'sluzby' })?.hodnota.druh).toBe('sluzby_eu');
+    // Ručná zmena účtovníka je nad oboma signálmi.
+    expect(zostav({ praxUctu: 'tovar', ulozene: { volba: 'vytvorit', zdroj: 'uctovnik', rucne: { druh: 'sluzby_eu' } } })?.hodnota.druh)
+      .toBe('sluzby_eu');
+    // Mimo EÚ sa os tovar/služba nepoužíva vôbec — tovar z tretej krajiny je dovoz.
+    expect(zostav({ praxUctu: 'tovar', extracted: faktura({}, { nazov: 'Shenzhen Ltd', krajina: 'CN' }) })?.hodnota.druh)
+      .toBe('sluzby_mimo_eu');
+  });
+});
+
+describe('samozdanenie — prepis kódov a základu na doklade', () => {
+  it('prepis prežije prepočet, KV je na každom riadku a vlastný základ je vidieť', () => {
+    const stav = zostav({ ulozene: {
+      volba: 'vytvorit', zdroj: 'uctovnik',
+      rucne: { interny: { ddPredkontaciaKod: 'cInt', pKv: 'KN' }, zaklad: 400 },
+    } });
+    expect(stav?.hodnota.interny).toMatchObject({
+      ddKod: 'DDsl§69', ddPredkontaciaKod: 'cInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1', pKv: 'KN',
+    });
+    // Zmiešaná faktúra: základ účtovníka platí a daň sa počíta z neho, ale blok
+    // vie, čo je suma dokladu, aby rozdiel v riadku označil.
+    expect(stav?.hodnota).toMatchObject({ zaklad: 400, dan: 92, odpocet: 92 });
+    expect(stav?.zakladDokladu).toBe(1000);
+    expect(stav?.chyby).toEqual([]);
+    // Bez prepisu ide základ za sumou dokladu.
+    expect(zostav()?.hodnota.zaklad).toBe(1000);
+    expect(zostav()?.hodnota.interny).toEqual(KODY);
+  });
+
+  it('riadok, ktorý POHODA už prijala, prepis nezmení', () => {
+    const odoslane = {
+      volba: 'vytvorit' as const, zdroj: 'uctovnik' as const, druh: 'sluzby_eu' as const,
+      interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' },
+      rucne: { interny: { ddPredkontaciaKod: 'cInt', pPredkontaciaKod: 'cInt' } },
+      export: { dd: { stav: 'ok' as const, at: '2026-06-20T10:00:00.000Z' } },
+    };
+    // Vymeranie je v POHODE — ostáva, ako odišlo. Odpočet ešte nie, prepis platí.
+    expect(zostav({ ulozene: odoslane })?.hodnota.interny)
+      .toMatchObject({ ddPredkontaciaKod: 'aInt', pPredkontaciaKod: 'cInt' });
+  });
 });
 
 describe('samozdanenie — predvolená voľba', () => {

@@ -22,7 +22,29 @@ export type DruhPrijateho = typeof DRUHY_PRIJATEHO[number];
 export type ZdrojVolby = 'predvolene' | 'dodavatel' | 'firma' | 'uctovnik';
 export type RolaPrenosu = 'faktura' | 'dd' | 'p';
 
-export interface RucneParametre { druh?: DruhPrijateho; datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number }
+/**
+ * Kódy interných dokladov prepísané na jednom doklade. Tvar je ako v profile
+ * klienta, len sekcia KV je na každý riadok zvlášť: vymeranie ide do B1,
+ * odpočet firma niekedy nezahŕňa (KN) a jedno spoločné `kv` z profilu to
+ * nerozlíši.
+ */
+export interface RucneInterny {
+  ddKod?: string; ddPredkontaciaKod?: string; ddKv?: string;
+  pKod?: string; pPredkontaciaKod?: string; pKv?: string;
+}
+
+export interface RucneParametre {
+  druh?: DruhPrijateho;
+  datumDanovejPovinnosti?: string;
+  sadzba?: number;
+  kurz?: number;
+  /**
+   * Základ, keď sa samozdaňuje len časť faktúry. Zmiešaná faktúra je reálny
+   * prípad — bez neho ide základ vždy za celou sumou dokladu.
+   */
+  zaklad?: number;
+  interny?: RucneInterny;
+}
 
 /** Čo firma s dodávateľom samozdaňovala doteraz — len os „tovar alebo služba". */
 export type PraxDodavatela = 'tovar' | 'sluzby';
@@ -50,7 +72,7 @@ export interface Samozdanenie extends RozhodnutieSamozdanenia {
   dan?: number;
   odpocet?: number;
   /** Kódy firmy pre interné doklady v okamihu výpočtu — export ich berie zo snapshotu. */
-  interny?: SamozdanenieDruh['interny'];
+  interny?: NonNullable<SamozdanenieDruh['interny']> & { ddKv?: string; pKv?: string };
   export?: Partial<Record<RolaPrenosu, { stav: 'ok' | 'warning' | 'chyba'; cislo?: string; sprava?: string; at: string }>>;
 }
 
@@ -63,6 +85,12 @@ export interface StavSamozdanenia {
   /** Sadzby na výber — znížené len pri tovare z EÚ. */
   sadzby: number[];
   mena: string;
+  /**
+   * Základ zo sumy dokladu (v cudzej mene delený kurzom). Blok ho potrebuje,
+   * aby v riadku ukázal, že vlastný základ účtovníka so sumou faktúry nesedí.
+   * Nie je súčasťou `hodnota` — do snapshotu ani do POHODY nevstupuje.
+   */
+  zakladDokladu?: number;
   /** Bránia schváleniu zvolenej voľby. */
   chyby: ChybaSamozdanenia[];
   statusNepotvrdeny: boolean;
@@ -105,6 +133,8 @@ export function zostavSamozdanenie(vstup: {
   pamat?: PamatDodavatela;
   /** Prax firmy s týmto dodávateľom z POHODY — určuje tovar proti službe. */
   praxDodavatela?: PraxDodavatela;
+  /** Prax firmy s ÚČTOM dokladu, naučená z ostatných dodávateľov (praxUctuSamozdanenia). */
+  praxUctu?: PraxDodavatela;
   ulozene?: Partial<Samozdanenie> | null;
 }): StavSamozdanenia | undefined {
   const { profil } = vstup;
@@ -127,7 +157,8 @@ export function zostavSamozdanenie(vstup: {
   // Uložená hodnota je rozhodnutie, keď ju zvolil účtovník. Zápis schválenia
   // z predvolieb sa prepočíta (oprava dodávateľa, nové nastavenie firmy) — okrem
   // dokladu, ktorého časť už prijala POHODA: ten ostáva, ako odišiel.
-  const prijate = prijateCasti(vstup.ulozene).length > 0;
+  const prijateRoly = prijateCasti(vstup.ulozene);
+  const prijate = prijateRoly.length > 0;
   const ulozene = vstup.ulozene?.volba && ((vstup.ulozene.zdroj ?? 'uctovnik') === 'uctovnik' || prijate) ? vstup.ulozene : undefined;
   const volba = ulozene?.volba ?? predvolene.volba;
   // Druh pripína výslovná zmena účtovníka (rucne.druh) a doklad, ktorý už raz
@@ -135,14 +166,26 @@ export function zostavSamozdanenie(vstup: {
   // POHODA prijala (aj s varovaním), nie doklad inej rodiny.
   const odoslane = prijate || Boolean(vstup.ulozene?.export);
   const pripnuty = odoslane ? vstup.ulozene?.druh : ulozene?.rucne?.druh;
-  // Územie rozhoduje o EÚ/tretej krajine/tuzemsku, prax dodávateľa o tom, či ide
-  // o tovar alebo službu — z dokladu sa to spoľahlivo prečítať nedá. ROFA tak
+  // Prax s dodávateľom je prvý signál. Keď dodávateľ históriu nemá, rozhoduje
+  // ÚČET dokladu: Green Lab Magyarország dodala ROFE „Silica Gel" za 124 €
+  // a v histórii má jediný doklad s DD kódom, takže prax dodávateľa sa
+  // (správne) nevyjadrila a územie odpovedalo „Služby z EÚ" — účtovník však
+  // zaúčtoval DDnadEU/PDnadEU. Účet 131 má firma naučený z OSTATNÝCH
+  // dodávateľov ako tovar (110/110 dokladov).
+  //
+  // Keď si signály odporujú, nerozhodne ani jeden: zlá rodina znamená zlé
+  // členenie DPH, zlý dátum daňovej povinnosti a zlú sekciu KV v reálnom
+  // priznaní, takže novší signál nesmie ten starší ticho prebiť.
+  const osPraxe = vstup.praxDodavatela && vstup.praxUctu && vstup.praxDodavatela !== vstup.praxUctu
+    ? undefined : vstup.praxDodavatela ?? vstup.praxUctu;
+  // Územie rozhoduje o EÚ/tretej krajine/tuzemsku, prax o tom, či ide o tovar
+  // alebo službu — z dokladu sa to spoľahlivo prečítať nedá. ROFA tak
   // dostávala „Služby z EÚ" na 113 zo 118 dokladov, hoci firma ich 108× zaúčtovala
   // ako nadobudnutie tovaru (DDnadEU/PDnadEU). Prax mimo EÚ sa nepoužíva: tovar
   // z tretej krajiny je dovoz (§21), ten sa samozdanením nevymeriava a v histórii
   // preto nemá jediný doklad, z ktorého by sa dal odvodiť.
   const druh = pripnuty && (DRUHY_PRIJATEHO as readonly string[]).includes(pripnuty) ? pripnuty
-    : uzemie === 'eu' ? (vstup.praxDodavatela === 'tovar' ? 'tovar_eu' : 'sluzby_eu')
+    : uzemie === 'eu' ? (osPraxe === 'tovar' ? 'tovar_eu' : 'sluzby_eu')
       : uzemie === 'mimo_eu' ? 'sluzby_mimo_eu' : 'prenesenie_prijate';
   const rucne = ulozene?.rucne ?? {};
   const extracted = (vstup.extracted ?? {}) as Record<string, unknown>;
@@ -163,12 +206,31 @@ export function zostavSamozdanenie(vstup: {
   const mena = doklad.mena.trim().toUpperCase() || 'EUR';
   const kurz = mena === 'EUR' ? undefined : kladne(rucne.kurz) ?? kladne(extracted.kurz);
   // Kurz = jednotiek cudzej meny za 1 EUR, ako v kurzovom lístku ECB/NBS.
-  const zaklad = mena === 'EUR' ? Math.round(doklad.sumaSpolu * 100) / 100
+  const zakladDokladu = mena === 'EUR' ? Math.round(doklad.sumaSpolu * 100) / 100
     : kurz ? Math.round((doklad.sumaSpolu / kurz + Number.EPSILON) * 100) / 100 : undefined;
+  // Zmiešaná faktúra: samozdaňuje sa len časť plnenia, základ preto nemusí byť
+  // celá suma dokladu. Vlastný základ účtovníka platí — blok ho v riadku označí,
+  // aby sa číslo, ktoré so sumou faktúry nesedí, nedostalo do POHODY nepovšimnuté.
+  const zaklad = kladne(rucne.zaklad) ?? zakladDokladu;
   const dan = zaklad === undefined || sadzba === undefined ? undefined : danZoZakladu(zaklad, sadzba);
   // Neplatiteľ, §7 a §7a daň priznáva, ale neodpočítava. Nepotvrdený status: oba doklady a upozornenie.
   const sOdpoctom = profil.platitelDph === 'platitel' || profil.platitelDph === 'nezname';
-  const interny = profil.samozdanenie[druh]?.interny;
+  // Kódy interných dokladov dodáva profil klienta; na jednom doklade ich môže
+  // účtovník prepísať (rucne.interny) — predkontáciu, členenie aj sekciu KV
+  // zvlášť pre vymeranie a pre odpočet. Riadok, ktorý POHODA už prijala, ostáva
+  // presne taký, aký odišiel: ten interný doklad v POHODE existuje a snapshot sa
+  // s ním nesmie rozísť ani vtedy, keď sa profil alebo prepis medzitým zmenil.
+  const zProfilu = profil.samozdanenie[druh]?.interny;
+  const vPohode = vstup.ulozene?.interny;
+  const prepis = Object.fromEntries(Object.entries(rucne.interny ?? {}).filter(([, kod]) => kod !== undefined));
+  const interny: Samozdanenie['interny'] = zProfilu && {
+    ...zProfilu,
+    ...prepis,
+    ...(vPohode && prijateRoly.includes('dd')
+      ? { ddKod: vPohode.ddKod, ddPredkontaciaKod: vPohode.ddPredkontaciaKod, ddKv: vPohode.ddKv ?? vPohode.kv } : {}),
+    ...(vPohode && prijateRoly.includes('p')
+      ? { pKod: vPohode.pKod, pPredkontaciaKod: vPohode.pPredkontaciaKod, pKv: vPohode.pKv ?? vPohode.kv } : {}),
+  };
   const dovod = volba !== 'nevznika' ? undefined : ulozene ? ulozene.dovod : predvolene.dovod;
   const dovodText = dovod !== 'iny' ? undefined : (ulozene ? ulozene.dovodText : predvolene.dovodText)?.trim() || undefined;
   const cislaInternych = volba === 'v_pohode' ? ulozene?.cislaInternych?.trim() || undefined : undefined;
@@ -187,6 +249,7 @@ export function zostavSamozdanenie(vstup: {
     predvolene,
     sadzby,
     mena,
+    ...(zakladDokladu !== undefined ? { zakladDokladu } : {}),
     chyby,
     statusNepotvrdeny: profil.platitelDph === 'nezname',
     hodnota: {
@@ -239,6 +302,44 @@ export async function nacitajPamatDodavatela(
 }
 
 /**
+ * Zhoda partnera v histórii ($3 čísla, $4 meno) — pre oba signály tá istá.
+ * Meno sa porovnáva bez interpunkcie: POHODA má „ROFA Laboratory & Process
+ * Analyzers GmbH", faktúra „ROFA - Laboratory & Process Analyzers, GmbH" —
+ * presná zhoda na takom páre zlyhá a prax dodávateľa sa nenájde.
+ */
+const ZHODA_PARTNERA = `((cardinality($3::text[]) > 0
+              AND regexp_replace(coalesce(supplier_ico, ''), '\\D', '', 'g') = ANY($3::text[]))
+          OR ($4::text <> ''
+              AND regexp_replace(lower(coalesce(supplier_name_normalized, '')), '[^a-z0-9]', '', 'g') = $4))`;
+
+/** Identifikátory dodávateľa pre ZHODA_PARTNERA, alebo undefined keď doklad žiadny nemá. */
+function klucePartnera(extracted: unknown): { cisla: string[]; nazov: string } | undefined {
+  const dodavatel = ((extracted as Record<string, any> | null)?.dodavatel ?? {}) as { ico?: string; icDph?: string; nazov?: string };
+  // Zahraničný dodávateľ má v POHODE v poli IČO daňové číslo bez predpony
+  // (ATU74777039 → 74777039) alebo nič. Krátke číslo sa nepoužije: „FN 520079 y"
+  // z rakúskej faktúry nie je identifikátor, ale zle prečítané registračné číslo.
+  const cisla = [dodavatel.ico, dodavatel.icDph]
+    .map((hodnota) => String(hodnota ?? '').replace(/\D/g, ''))
+    .filter((hodnota) => hodnota.length >= 8);
+  const nazov = normalizeName(dodavatel.nazov).replace(/[^a-z0-9]/g, '');
+  return cisla.length === 0 && !nazov ? undefined : { cisla, nazov };
+}
+
+/** Os tovar/služba z DD kódov histórie: jednomyseľne a aspoň päť dokladov, inak nič. */
+function osZDdKodov(riadky: ReadonlyArray<{ kod: string; dokladov: string }>): PraxDodavatela | undefined {
+  let tovar = 0;
+  let sluzby = 0;
+  for (const riadok of riadky) {
+    const ref = popisKodu(riadok.kod)?.ref ?? '';
+    if (DD_REFY_TOVAR.includes(ref)) tovar += Number(riadok.dokladov);
+    else if (DD_REFY_SLUZBY.includes(ref)) sluzby += Number(riadok.dokladov);
+  }
+  if (tovar >= MIN_DOKLADOV_PRAXE && sluzby === 0) return 'tovar';
+  if (sluzby >= MIN_DOKLADOV_PRAXE && tovar === 0) return 'sluzby';
+  return undefined;
+}
+
+/**
  * Tovar alebo služba podľa toho, čo firma s týmto dodávateľom samozdaňovala
  * doteraz. Rodinu nesie interný doklad (DD kód), nie faktúra — na faktúre je
  * „nezahrňovať do priznania".
@@ -257,40 +358,84 @@ export async function praxSamozdaneniaDodavatela(
   extracted: unknown,
   doDatumu?: string,
 ): Promise<PraxDodavatela | undefined> {
-  const dodavatel = ((extracted as Record<string, any> | null)?.dodavatel ?? {}) as { ico?: string; icDph?: string; nazov?: string };
-  // Zahraničný dodávateľ má v POHODE v poli IČO daňové číslo bez predpony
-  // (ATU74777039 → 74777039) alebo nič. Krátke číslo sa nepoužije: „FN 520079 y"
-  // z rakúskej faktúry nie je identifikátor, ale zle prečítané registračné číslo.
-  const cisla = [dodavatel.ico, dodavatel.icDph]
-    .map((hodnota) => String(hodnota ?? '').replace(/\D/g, ''))
-    .filter((hodnota) => hodnota.length >= 8);
-  // Meno sa porovnáva bez interpunkcie: POHODA má „ROFA Laboratory & Process
-  // Analyzers GmbH", faktúra „ROFA - Laboratory & Process Analyzers, GmbH" —
-  // presná zhoda na takom páre zlyhá a prax dodávateľa sa nenájde.
-  const nazov = normalizeName(dodavatel.nazov).replace(/[^a-z0-9]/g, '');
-  if (cisla.length === 0 && !nazov) return undefined;
-  const riadky = (await db.query<{ kod: string; dokladov: string } & Record<string, unknown>>(
+  const kluc = klucePartnera(extracted);
+  if (!kluc) return undefined;
+  return osZDdKodov((await db.query<{ kod: string; dokladov: string } & Record<string, unknown>>(
     `SELECT clenenie_dph_kod AS kod, count(DISTINCT (agenda, doklad_cislo)) AS dokladov
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND clenenie_dph_kod IS NOT NULL
-        AND ((cardinality($3::text[]) > 0
-              AND regexp_replace(coalesce(supplier_ico, ''), '\\D', '', 'g') = ANY($3::text[]))
-          OR ($4::text <> ''
-              AND regexp_replace(lower(coalesce(supplier_name_normalized, '')), '[^a-z0-9]', '', 'g') = $4))
+        AND ${ZHODA_PARTNERA}
         AND ($5::date IS NULL OR datum < $5::date)
       GROUP BY 1`,
-    [firma.tenantId, firma.organizationId, cisla, nazov, doDatumu ?? null],
-  )).rows;
-  let tovar = 0;
-  let sluzby = 0;
-  for (const riadok of riadky) {
-    const ref = popisKodu(riadok.kod)?.ref ?? '';
-    if (DD_REFY_TOVAR.includes(ref)) tovar += Number(riadok.dokladov);
-    else if (DD_REFY_SLUZBY.includes(ref)) sluzby += Number(riadok.dokladov);
-  }
-  if (tovar >= MIN_DOKLADOV_PRAXE && sluzby === 0) return 'tovar';
-  if (sluzby >= MIN_DOKLADOV_PRAXE && tovar === 0) return 'sluzby';
-  return undefined;
+    [firma.tenantId, firma.organizationId, kluc.cisla, kluc.nazov, doDatumu ?? null],
+  )).rows);
+}
+
+/**
+ * Účtovná trieda predkontácie — trojmiestny účet MD. Kód predkontácie je
+ * v POHODE voľný text rezaný na 20 znakov a ten istý účet firma kóduje
+ * viacerými menami („131100", „131 Nákup materiálu"), takže signál nižšie sa
+ * učí z ÚČTU, nie z kódu — inak by sa jedna prax rozpadla na niekoľko a mlčala.
+ */
+export async function uctovnaTriedaPredkontacie(
+  db: Queryable,
+  firma: { tenantId: string; organizationId: string },
+  predkontaciaId: string | undefined,
+): Promise<string | undefined> {
+  if (!predkontaciaId) return undefined;
+  return (await db.query<{ trieda: string | null } & Record<string, unknown>>(
+    `SELECT substring(coalesce(ucet_md, code) from '^[0-9]{3}') AS trieda FROM code_list_items
+      WHERE tenant_id=$1 AND organization_id=$2 AND kind='predkontacie' AND id=$3`,
+    [firma.tenantId, firma.organizationId, predkontaciaId],
+  )).rows[0]?.trieda ?? undefined;
+}
+
+/**
+ * Tovar alebo služba podľa ÚČTU, na ktorý doklad ide — naučené z OSTATNÝCH
+ * dodávateľov firmy. Druhý signál pre dodávateľa, ktorý vlastnú prax ešte
+ * nemá (Green Lab Magyarország: jediný doklad v histórii).
+ *
+ * Meranie na ôsmich firmách a 1 199 dokladoch samozdanenia: keď sa mapa
+ * „účet → tovar/služba" učí bez držaného partnera, uhádne jeho os v 1 206
+ * z 1 213 prípadov (99,4 %) a účtové bunky sú na firmu čisté na 95–100 %.
+ * Mapa musí byť VŽDY na firmu: účet 501 znamená tovar v ROFE, BAJVETE
+ * a Shenzhene, ale službu v SLO SERVICES, ALPINE a Recable — globálna tabuľka
+ * účtov by teda bola nesprávna.
+ *
+ * Vlastný dodávateľ dokladu je z učenia vynechaný: signál musí byť nezávislý
+ * od praxe dodávateľa, inak by si pri nezhode len prikývli. Disciplína je
+ * rovnaká — jednomyseľne a aspoň päť dokladov, inak sa nevyjadrí.
+ */
+export async function praxUctuSamozdanenia(
+  db: Queryable,
+  firma: { tenantId: string; organizationId: string },
+  trieda: string,
+  extracted: unknown,
+  doDatumu?: string,
+): Promise<PraxDodavatela | undefined> {
+  const kluc = klucePartnera(extracted) ?? { cisla: [], nazov: '' };
+  return osZDdKodov((await db.query<{ kod: string; dokladov: string } & Record<string, unknown>>(
+    // Partnerský kľúč histórie: IČO, bez neho meno bez interpunkcie. Faktúry
+    // na tom istom účte dajú zoznam dodávateľov, ich interné doklady rodinu.
+    `WITH riadky AS (
+       SELECT agenda, doklad_cislo, clenenie_dph_kod, predkontacia_kod,
+              coalesce(nullif(regexp_replace(coalesce(supplier_ico, ''), '\\D', '', 'g'), ''),
+                       regexp_replace(lower(coalesce(supplier_name_normalized, '')), '[^a-z0-9]', '', 'g')) AS partner
+         FROM ucto_historia
+        WHERE tenant_id=$1 AND organization_id=$2
+          AND NOT ${ZHODA_PARTNERA}
+          AND ($5::date IS NULL OR datum < $5::date)
+     ), dodavatelia AS (
+       SELECT DISTINCT partner FROM riadky
+        WHERE partner <> '' AND (agenda='FP' OR agenda='OZ' OR agenda LIKE 'FP-%')
+          AND substring(coalesce(predkontacia_kod, '') from '^[0-9]{3}') = $6
+     )
+     SELECT r.clenenie_dph_kod AS kod, count(DISTINCT (r.agenda, r.doklad_cislo)) AS dokladov
+       FROM riadky r JOIN dodavatelia d ON d.partner = r.partner
+      WHERE r.agenda='INT' AND r.clenenie_dph_kod IS NOT NULL
+      GROUP BY 1`,
+    [firma.tenantId, firma.organizationId, kluc.cisla, kluc.nazov, doDatumu ?? null, trieda],
+  )).rows);
 }
 
 /** „Pamätať pre dodávateľa": zapne uloží dôvod, vypne ho zabudne. */
@@ -315,25 +460,41 @@ export async function ulozPamatDodavatela(
   );
 }
 
-/** Stav bloku pre uložený doklad — profil klienta a pamäť dodávateľa z databázy. */
+/**
+ * Stav bloku pre uložený doklad — profil klienta a pamäť dodávateľa z databázy.
+ *
+ * `predkontaciaId` prebije účet uložený na doklade: `documents.accounting` je
+ * pri prvom vykreslení často ešte prázdne a účet doplní až ten istý klik, čo
+ * doklad schvaľuje. Bez neho by rodina plnenia (a s ňou členenie, dátum
+ * povinnosti aj sekcia KV) tichom preskočila medzi tým, čo účtovník videl,
+ * a tým, čo sa zmrazilo do snapshotu.
+ */
 export async function stavSamozdaneniaDokladu(
   db: Queryable,
   tenantId: string,
-  document: { organization_id: string; document_type: string; podtyp?: string | null; extracted: unknown; samozdanenie?: Partial<Samozdanenie> | null },
+  document: {
+    organization_id: string; document_type: string; podtyp?: string | null; extracted: unknown;
+    accounting?: Record<string, unknown> | null; samozdanenie?: Partial<Samozdanenie> | null;
+  },
   profilDokladu?: DphProfil,
+  predkontaciaId?: string,
 ): Promise<(StavSamozdanenia & { profil: DphProfil; pamat?: PamatDodavatela }) | undefined> {
   const firma = { tenantId, organizationId: document.organization_id };
   const profil = profilDokladu ?? await loadDphProfil(db, tenantId, firma.organizationId) ?? predvolenyDphProfil(tenantId, firma.organizationId);
   const extracted = (document.extracted ?? {}) as Record<string, unknown>;
   const datumPraxe = typeof extracted.datumDodania === 'string' ? extracted.datumDodania
     : typeof extracted.datumVystavenia === 'string' ? extracted.datumVystavenia : undefined;
-  const [pamat, praxDodavatela] = await Promise.all([
+  const predkontacia = predkontaciaId ?? (typeof document.accounting?.predkontaciaId === 'string' ? document.accounting.predkontaciaId : undefined);
+  const [pamat, praxDodavatela, trieda] = await Promise.all([
     nacitajPamatDodavatela(db, firma, document.extracted),
     praxSamozdaneniaDodavatela(db, firma, document.extracted, datumPraxe),
+    uctovnaTriedaPredkontacie(db, firma, predkontacia),
   ]);
+  // Bez účtu na doklade signál neexistuje — rozhodne prax dodávateľa, inak územie.
+  const praxUctu = trieda ? await praxUctuSamozdanenia(db, firma, trieda, document.extracted, datumPraxe) : undefined;
   const stav = zostavSamozdanenie({
     documentType: document.document_type, podtyp: document.podtyp, extracted,
-    profil, pamat, praxDodavatela, ulozene: document.samozdanenie,
+    profil, pamat, praxDodavatela, praxUctu, ulozene: document.samozdanenie,
   });
   return stav && { ...stav, profil, ...(pamat ? { pamat } : {}) };
 }

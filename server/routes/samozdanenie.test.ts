@@ -24,6 +24,9 @@ async function pripravApp() {
   for (const [kind, code] of [
     ['predkontacie', '518/Služby'], ['cleneniaDph', 'PN'], ['ciselneRady', '26FP'],
     ['predkontacie', 'aInt'], ['predkontacie', 'bInt'], ['cleneniaDph', 'DDsl§69'], ['cleneniaDph', 'PDsluz'],
+    // Prepis kódov na doklade a účty, z ktorých sa učí rodina plnenia.
+    ['predkontacie', 'cInt'], ['cleneniaDph', 'DDnadEU'], ['cleneniaDph', 'PDnadEU'],
+    ['predkontacie', '131100'], ['predkontacie', '501100'],
   ]) {
     kody[code] = randomUUID();
     await database.query(
@@ -35,7 +38,11 @@ async function pripravApp() {
   return { database, seeded, app, headers, kody };
 }
 
-async function vlozFakturu(database: Db, seeded: Seeded, kody: Record<string, string>, dodavatel = { nazov: 'Google Ireland Ltd', icDph: 'IE6388047V', krajina: 'IE' }) {
+async function vlozFakturu(
+  database: Db, seeded: Seeded, kody: Record<string, string>,
+  dodavatel = { nazov: 'Google Ireland Ltd', icDph: 'IE6388047V', krajina: 'IE' },
+  predkontacia = '518/Služby',
+) {
   const id = randomUUID();
   await database.query(
     `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
@@ -46,7 +53,7 @@ async function vlozFakturu(database: Db, seeded: Seeded, kody: Record<string, st
         datumVystavenia: '2026-06-12', datumDodania: '2026-06-10', datumSplatnosti: '2026-06-26',
         mena: 'EUR', rozpisDph: [{ sadzba: 0, zaklad: 1000, dph: 0 }], sumaSpolu: 1000, polozky: [],
       }),
-      JSON.stringify({ predkontaciaId: kody['518/Služby'], clenenieDphId: kody.PN, ciselnyRadId: kody['26FP'] })],
+      JSON.stringify({ predkontaciaId: kody[predkontacia], clenenieDphId: kody.PN, ciselnyRadId: kody['26FP'] })],
   );
   return id;
 }
@@ -213,6 +220,142 @@ describe('samozdanenie — druh z praxe dodávateľa', () => {
     await vlozPrax(database, seeded, ['DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU'], '2026-07-01');
     const blok = await app.inject({ method: 'GET', url: `/api/documents/${id}/samozdanenie`, headers: { cookie: headers.cookie } });
     expect(blok.json().blok.hodnota.druh).toBe('sluzby_eu');
+    await app.close();
+  }, 120_000);
+});
+
+describe('samozdanenie — druh z účtu dokladu', () => {
+  /**
+   * Prax firmy „účet → tovar/služba", naučená z OSTATNÝCH dodávateľov: faktúry
+   * na tom istom účte dajú zoznam dodávateľov, ich interné doklady rodinu.
+   */
+  const vlozPraxUctu = async (database: Db, seeded: Seeded, ucet: string, ddKod: string, dokladov = 5) => {
+    for (let poradie = 0; poradie < dokladov; poradie += 1) {
+      const partner = `dodavatel ${ucet} ${poradie}`;
+      for (const [agenda, pk, dph] of [['FP', ucet, null], ['INT', null, ddKod]] as const) {
+        await database.query(
+          `INSERT INTO ucto_historia
+            (id,tenant_id,organization_id,agenda,doklad_cislo,datum,line_text_normalized,
+             predkontacia_kod,clenenie_dph_kod,supplier_name_normalized,source,riadok_hash)
+           VALUES ($1,$2,$3,$4,$5,'2026-05-01'::date,'polozka',$6,$7,$8,'mdb',$1)`,
+          [randomUUID(), seeded.tenantId, seeded.organizationId, agenda, `${agenda}-${ucet}-${poradie}`, pk, dph, partner],
+        );
+      }
+    }
+  };
+
+  it('Green Lab: dodávateľ bez praxe, účet 131 naučený z iných dodávateľov → tovar z EÚ', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    // Faktúra za „Silica Gel" z Maďarska na 124 € bez DPH; v histórii má
+    // dodávateľ jediný doklad, takže prax dodávateľa sa nevyjadrí.
+    const greenLab = { nazov: 'Green Lab Magyarország Mérnöki Iroda Kft.', icDph: 'HU12345678', krajina: 'HU' };
+    const id = await vlozFakturu(database, seeded, kody, greenLab, '131100');
+    const druh = async (query = '') => (await app.inject({
+      method: 'GET', url: `/api/documents/${id}/samozdanenie${query}`, headers: { cookie: headers.cookie },
+    })).json().blok.hodnota.druh;
+
+    // Bez naučeného účtu odpovedá územie — presne to sa stalo vlastníkovi.
+    expect(await druh()).toBe('sluzby_eu');
+    await vlozPraxUctu(database, seeded, '131100', 'DDnadEU');
+    expect(await druh()).toBe('tovar_eu');
+
+    // Štyri doklady na účte sú príklad, nie prax.
+    const bezDokladov = await vlozFakturu(database, seeded, kody, greenLab, '501100');
+    await vlozPraxUctu(database, seeded, '501100', 'DDnadEU', 4);
+    const maly = await app.inject({ method: 'GET', url: `/api/documents/${bezDokladov}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(maly.json().blok.hodnota.druh).toBe('sluzby_eu');
+
+    // Účet z rozpracovaného editora: doklad ho uložený nemá, ale rodina ho
+    // musí sledovať už teraz — inak by sa zmenila až pri schválení.
+    const bezUctu = await vlozFakturu(database, seeded, kody, greenLab, 'nic');
+    const cerstvy = await app.inject({
+      method: 'GET', url: `/api/documents/${bezUctu}/samozdanenie?predkontaciaId=${kody['131100']}`, headers: { cookie: headers.cookie },
+    });
+    expect(cerstvy.json().blok.hodnota.druh).toBe('tovar_eu');
+    // Bez účtu (ani na doklade, ani z editora) rozhoduje územie.
+    const sirota = await app.inject({ method: 'GET', url: `/api/documents/${bezUctu}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(sirota.json().blok.hodnota.druh).toBe('sluzby_eu');
+    await app.close();
+  }, 120_000);
+
+  it('ten istý účet znamená službu v inej firme; nezhoda s praxou dodávateľa sa nevyjadrí', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    // Účet 501 je tovar v ROFE, ale služba v SLO SERVICES — mapa je vždy na
+    // firmu, globálna tabuľka účtov by bola nesprávna.
+    const id = await vlozFakturu(database, seeded, kody,
+      { nazov: 'Green Lab Kft.', icDph: 'HU12345678', krajina: 'HU' }, '501100');
+    await vlozPraxUctu(database, seeded, '501100', 'DDsl§69');
+    const blok = await app.inject({ method: 'GET', url: `/api/documents/${id}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(blok.json().blok.hodnota.druh).toBe('sluzby_eu');
+
+    // Dodávateľ s vlastnou praxou na tovar proti účtu na službu: ani jeden
+    // signál nerozhodne a ostane územie (inak by hrozilo zlé členenie a KV).
+    const sPraxou = await vlozFakturu(database, seeded, kody,
+      { nazov: 'Parr Instrument GmbH', icDph: 'ATU74777039', krajina: 'AT' }, '501100');
+    for (let poradie = 0; poradie < 5; poradie += 1) {
+      await database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,line_text_normalized,clenenie_dph_kod,supplier_name_normalized,source,riadok_hash)
+         VALUES ($1,$2,$3,'INT',$4,'2026-05-01'::date,'vymeranie dane','DDnadEU','parr instrument gmbh','mdb',$1)`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, `INT-parr-${poradie}`],
+      );
+    }
+    const nezhoda = await app.inject({ method: 'GET', url: `/api/documents/${sPraxou}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(nezhoda.json().blok.hodnota.druh).toBe('sluzby_eu');
+    await app.close();
+  }, 120_000);
+});
+
+describe('samozdanenie — prepis kódov a základu na doklade', () => {
+  it('prepis sa uloží, dostane sa do exportu a kód v zlej úlohe server odmietne', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    await potvrdFakt(database, seeded, 'samozdanenie.sluzby_eu', KODY_SLUZIEB);
+    const id = await vlozFakturu(database, seeded, kody);
+    const uloz = (payload: Record<string, unknown>) =>
+      app.inject({ method: 'PUT', url: `/api/documents/${id}/samozdanenie`, headers, payload });
+
+    // Kód odpočtu na riadku vymerania a sekcia KV mimo rodiny samozdanenia.
+    const zlyDd = await uloz({ volba: 'vytvorit', rucne: { interny: { ddKod: 'PDsluz' } } });
+    expect(zlyDd.statusCode, zlyDd.body).toBe(400);
+    expect(zlyDd.json()).toMatchObject({ code: 'samozdanenie_kod_zla_rola' });
+    expect(zlyDd.json().message).toContain('nie je daň na výstupe');
+    expect((await uloz({ volba: 'vytvorit', rucne: { interny: { pKod: 'DDsl§69' } } })).json().message).toContain('nie je odpočet');
+    expect((await uloz({ volba: 'vytvorit', rucne: { interny: { ddKv: 'A1' } } })).json().message).toContain('Sekcia KV A1');
+    // Kód, ktorý firma v číselníku aktívny nemá, sa neuloží ani potichu.
+    const neznamy = await uloz({ volba: 'vytvorit', rucne: { interny: { ddPredkontaciaKod: 'zzInt' } } });
+    expect(neznamy.statusCode).toBe(400);
+    expect(neznamy.json().message).toContain('nie sú aktívne v číselníku firmy');
+
+    // Prijatý prepis: iná predkontácia vymerania, iná sekcia KV odpočtu, vlastný základ.
+    const ulozeny = await uloz({
+      volba: 'vytvorit',
+      rucne: { interny: { ddPredkontaciaKod: 'cInt', pKv: 'KN' }, zaklad: 400 },
+    });
+    expect(ulozeny.statusCode, ulozeny.body).toBe(200);
+    expect(ulozeny.json().blok).toMatchObject({
+      zakladDokladu: 1000,
+      hodnota: { zaklad: 400, dan: 92, interny: { ddPredkontaciaKod: 'cInt', pPredkontaciaKod: 'bInt', kv: 'B1', pKv: 'KN' } },
+    });
+
+    // Schválenie prepis zmrazí do snapshotu a export ho pošle do POHODY.
+    expect((await app.inject({ method: 'POST', url: `/api/documents/${id}/approve`, headers, payload: { expectedVersion: 1 } })).statusCode).toBe(200);
+    const snapshot = (await database.query<Record<string, any>>('SELECT approved_snapshot FROM documents WHERE id=$1', [id])).rows[0];
+    expect(snapshot.approved_snapshot.samozdanenie).toMatchObject({ zaklad: 400, interny: { ddPredkontaciaKod: 'cInt', pKv: 'KN' } });
+
+    const export_ = await app.inject({
+      method: 'POST', url: '/api/exports/pohoda/xml', headers,
+      payload: { organizationId: seeded.organizationId, documentIds: [id] },
+    });
+    expect(export_.statusCode, export_.body).toBe(201);
+    const xml = export_.json().xml as string;
+    const interny = (rola: string) => xml.slice(xml.indexOf(`id="${id}-sz-${rola}"`)).split('</dat:dataPackItem>')[0];
+    expect(interny('dd')).toContain('<int:accounting><typ:ids>cInt</typ:ids></int:accounting>');
+    expect(interny('dd')).toContain('<typ:ids>B1</typ:ids>');
+    expect(interny('dd')).toContain('<typ:unitPrice>400.00</typ:unitPrice>');
+    // Sekcia KV odpočtu je vlastná — pred prepisom ju oba riadky mali spoločnú.
+    expect(interny('p')).toContain('<int:accounting><typ:ids>bInt</typ:ids></int:accounting>');
+    expect(interny('p')).toContain('<typ:ids>KN</typ:ids>');
+    expect(interny('p')).not.toContain('<typ:ids>B1</typ:ids>');
     await app.close();
   }, 120_000);
 });

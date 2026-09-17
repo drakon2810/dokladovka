@@ -987,8 +987,15 @@ export function InvoicePanel({
       )}
 
       {/* Samozdanenie prijatej faktúry bez DPH — jeden riadok zaúčtovania,
-          server rozhodne, či sa doklad týka. */}
-      {draft.typ === 'FP' && <SamozdanenieBlok documentId={draft.id} version={draft.version} readOnly={readOnly} />}
+          server rozhodne, či sa doklad týka. Suma a predkontácia idú z
+          rozpracovaného editora: základ musí sledovať položky a rodina plnenia
+          účet, aby sa účtovník nedozvedel oboje až po schválení. */}
+      {draft.typ === 'FP' && (
+        <SamozdanenieBlok
+          documentId={draft.id} version={draft.version} readOnly={readOnly}
+          sumaSpolu={ex.sumaSpolu} predkontaciaId={ucto.predkontaciaId} codeLists={codeLists}
+        />
+      )}
 
       <div className="dk-two">
         {/* Základné informácie */}

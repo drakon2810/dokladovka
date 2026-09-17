@@ -33,12 +33,18 @@ interface DcCellProps {
   tone?: 'err' | 'warn';
   /** Zvýraznenie zdroja údajov — trieda `dv-src …` z panelu. */
   srcClass?: string;
+  /**
+   * Kedy sa hodnota odovzdá. `change` (predvolené) pri každom písmene — bunka
+   * plní draft dokladu v pamäti. `blur` až po dopísaní: pole, ktoré sa ukladá
+   * na server (základ samozdanenia), nesmie posielať požiadavku na klávesu.
+   */
+  commit?: 'change' | 'blur';
   onCommit: (value: string) => void;
 }
 
 export function DcCell({
   value, display, placeholder = '—', align = 'left', disabled = false, title,
-  type = 'text', inputMode, tone, srcClass = '', onCommit,
+  type = 'text', inputMode, tone, srcClass = '', commit = 'change', onCommit,
 }: DcCellProps) {
   // Počas editácie sa v poli drží presne to, čo účtovník napísal. Bez toho by
   // sa „135," po prepočte na číslo vrátilo ako „135" a desatinné miesta by sa
@@ -49,6 +55,11 @@ export function DcCell({
   /** Hodnota pri začatí editácie — Escape ju vráti späť. */
   const povodna = useRef('');
   const zacniEditovat = () => { povodna.current = value; setDraft(value); };
+  /** Koniec editácie pri `commit="blur"`: odovzdá sa len naozaj zmenená hodnota. */
+  const ukonci = (napisane: string) => {
+    if (commit === 'blur' && napisane !== povodna.current) onCommit(napisane);
+    setDraft(null);
+  };
 
   // Zameranie musí prebehnúť pred vykreslením, inak bliká pôvodný text.
   useLayoutEffect(() => {
@@ -66,11 +77,11 @@ export function DcCell({
         type={type === 'date' ? 'date' : 'text'}
         inputMode={inputMode}
         value={draft}
-        onChange={(event) => { setDraft(event.target.value); onCommit(event.target.value); }}
-        onBlur={() => setDraft(null)}
+        onChange={(event) => { setDraft(event.target.value); if (commit === 'change') onCommit(event.target.value); }}
+        onBlur={() => ukonci(draft)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter') { event.preventDefault(); setDraft(null); }
-          if (event.key === 'Escape') { event.preventDefault(); onCommit(povodna.current); setDraft(null); }
+          if (event.key === 'Enter') { event.preventDefault(); ukonci(draft); }
+          if (event.key === 'Escape') { event.preventDefault(); if (commit === 'change') onCommit(povodna.current); setDraft(null); }
         }}
       />
     );

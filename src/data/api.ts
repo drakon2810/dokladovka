@@ -2853,9 +2853,16 @@ export async function getDphAdvice(documentId: string): Promise<DphPosudok> {
 }
 
 /** Blok samozdanenia prijatej faktúry; null = doklad sa samozdanenia netýka. */
-export async function getSamozdanenie(documentId: string): Promise<BlokSamozdanenia | null> {
+/**
+ * `predkontaciaId` je účet z rozpracovaného editora — doklad ho uložený ešte
+ * nemusí mať a práve z neho server odvodzuje rodinu plnenia (tovar/služba).
+ */
+export async function getSamozdanenie(documentId: string, predkontaciaId?: string): Promise<BlokSamozdanenia | null> {
   if (!REST_DATA_MODE) return null;
-  return (await restRequest<{ blok: BlokSamozdanenia | null }>(`/api/documents/${encodeURIComponent(documentId)}/samozdanenie`))?.blok ?? null;
+  const parametre = predkontaciaId ? `?predkontaciaId=${encodeURIComponent(predkontaciaId)}` : '';
+  return (await restRequest<{ blok: BlokSamozdanenia | null }>(
+    `/api/documents/${encodeURIComponent(documentId)}/samozdanenie${parametre}`,
+  ))?.blok ?? null;
 }
 
 /** Uloží voľbu samozdanenia; s ňou pamäť dodávateľa a nastavenie firmy. Vráti prepočítaný blok. */

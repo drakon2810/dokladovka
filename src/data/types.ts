@@ -309,13 +309,37 @@ export type VolbaSamozdanenia = 'vytvorit' | 'v_pohode' | 'nevznika';
 export type DovodNevznikaSamozdanenia = 'slovenska_dph' | 'miesto_dodania' | 'nie_plnenie' | 'iny';
 export type DruhSamozdaneniaPrijateho = 'sluzby_eu' | 'tovar_eu' | 'sluzby_mimo_eu' | 'prenesenie_prijate' | 'dovoz';
 
+/**
+ * Kódy interných dokladov samozdanenia — z profilu klienta, prípadne prepísané
+ * na jednom doklade. Sekcia KV je na každý riadok zvlášť (ddKv/pKv): vymeranie
+ * ide do B1, odpočet firma niekedy nezahŕňa (KN).
+ */
+export interface InternySamozdanenia {
+  ddKod: string;
+  ddPredkontaciaKod?: string;
+  pKod?: string;
+  pPredkontaciaKod?: string;
+  /** Spoločná sekcia KV z profilu; ddKv/pKv ju na riadku prebijú. */
+  kv?: string;
+  ddKv?: string;
+  pKv?: string;
+}
+
 /** Voľba účtovníka v bloku samozdanenia; `rucne` sú hodnoty, ktoré prepísal (aj druh plnenia). */
 export interface RozhodnutieSamozdanenia {
   volba: VolbaSamozdanenia;
   dovod?: DovodNevznikaSamozdanenia;
   dovodText?: string;
   cislaInternych?: string;
-  rucne?: { druh?: DruhSamozdaneniaPrijateho; datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number };
+  rucne?: {
+    druh?: DruhSamozdaneniaPrijateho;
+    datumDanovejPovinnosti?: string;
+    sadzba?: number;
+    kurz?: number;
+    /** Základ, keď sa samozdaňuje len časť faktúry (zmiešaná faktúra). */
+    zaklad?: number;
+    interny?: Partial<InternySamozdanenia>;
+  };
 }
 
 /** Samozdanenie prijatej faktúry tak, ako ho spočítal server (documents.samozdanenie). */
@@ -331,12 +355,14 @@ export interface BlokSamozdanenia {
     zaklad?: number;
     dan?: number;
     odpocet?: number;
-    interny?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
+    interny?: InternySamozdanenia;
   };
   /** Kódy, ktoré profil pre tento druh navrhuje z histórie, ale ešte nie sú potvrdené. */
-  navrhKodov?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
+  navrhKodov?: InternySamozdanenia;
   sadzby: number[];
   mena: string;
+  /** Základ zo sumy dokladu — podľa neho blok pozná, že vlastný základ účtovníka s faktúrou nesedí. */
+  zakladDokladu?: number;
   chyby: Array<'dovoz' | 'kody' | 'datum' | 'kurz' | 'dovod'>;
   statusNepotvrdeny: boolean;
   upravitelny: boolean;

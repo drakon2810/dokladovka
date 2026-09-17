@@ -132,6 +132,9 @@ const DRUH_POLA: Record<string, 'predkontacie' | 'cleneniaDph' | 'kv'> = {
   pKod: 'cleneniaDph',
   pPredkontaciaKod: 'predkontacie',
   kv: 'kv',
+  // Sekcia KV prepísaná na jednom riadku interného dokladu (samozdanenie na doklade).
+  ddKv: 'kv',
+  pKv: 'kv',
 };
 
 /**
@@ -140,7 +143,10 @@ const DRUH_POLA: Record<string, 'predkontacie' | 'cleneniaDph' | 'kv'> = {
  */
 export function chybaRoliKodov(kluc: string, hodnota: unknown): string | undefined {
   if (!kluc.startsWith('samozdanenie.')) return undefined;
-  const h = (hodnota ?? {}) as { faktura?: { clenenieKod?: string }; interny?: { ddKod?: string; pKod?: string; kv?: string } };
+  const h = (hodnota ?? {}) as {
+    faktura?: { clenenieKod?: string };
+    interny?: { ddKod?: string; pKod?: string; kv?: string; ddKv?: string; pKv?: string };
+  };
   const strana = (kod?: string) => (kod ? popisKodu(kod)?.strana : undefined);
   const vydany = kluc.slice('samozdanenie.'.length) in REFY_VYDANYCH_DRUHOV;
   const dd = strana(h.interny?.ddKod);
@@ -150,7 +156,11 @@ export function chybaRoliKodov(kluc: string, hodnota: unknown): string | undefin
   const faktura = strana(h.faktura?.clenenieKod);
   if (faktura === 'DD') return `${h.faktura!.clenenieKod} patrí na interný doklad, nie na faktúru`;
   if (faktura && (faktura === 'U') !== vydany) return `${h.faktura!.clenenieKod} nepatrí na ${vydany ? 'vydanú' : 'prijatú'} faktúru`;
-  if (h.interny?.kv && !['B1', 'KN'].includes(h.interny.kv)) return `Sekcia KV ${h.interny.kv} k samozdaneniu nepatrí`;
+  // Aj sekcia prepísaná na jednom riadku interného dokladu (ddKv/pKv) musí
+  // ostať v rodine samozdanenia — vymeranie do B1, odpočet niekedy do KN.
+  for (const sekcia of [h.interny?.kv, h.interny?.ddKv, h.interny?.pKv]) {
+    if (sekcia && !['B1', 'KN'].includes(sekcia)) return `Sekcia KV ${sekcia} k samozdaneniu nepatrí`;
+  }
   return undefined;
 }
 
