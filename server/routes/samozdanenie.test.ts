@@ -133,7 +133,7 @@ describe('samozdanenie — schválenie', () => {
 
 describe('samozdanenie — druh z praxe dodávateľa', () => {
   /** Interné doklady dodávateľa v histórii POHODY — rodinu nesie DD kód. */
-  const vlozPrax = async (database: Db, seeded: Seeded, kody: string[], datum = '2026-05-01') => {
+  const vlozPrax = async (database: Db, seeded: Seeded, kody: string[], datum = '2026-05-01', meno = 'google ireland ltd') => {
     for (const [poradie, kod] of kody.entries()) {
       await database.query(
         `INSERT INTO ucto_historia
@@ -144,7 +144,7 @@ describe('samozdanenie — druh z praxe dodávateľa', () => {
     }
     await database.query(
       `UPDATE ucto_historia SET supplier_name_normalized=$1 WHERE tenant_id=$2 AND organization_id=$3`,
-      ['google ireland ltd', seeded.tenantId, seeded.organizationId],
+      [meno, seeded.tenantId, seeded.organizationId],
     );
   };
 
@@ -169,6 +169,40 @@ describe('samozdanenie — druh z praxe dodávateľa', () => {
     // Jediný servisný doklad toho istého dodávateľa prax zneistí — späť na územie.
     await vlozPrax(database, seeded, ['DDsl§69'], '2026-05-03');
     expect(await druh()).toBe('sluzby_eu');
+    await app.close();
+  }, 120_000);
+
+  it('meno s inou interpunkciou sa spáruje a navrhnuté kódy sa potvrdia z dokladu', async () => {
+    const { database, seeded, app, headers, kody } = await pripravApp();
+    // POHODA má „ROFA Laboratory & Process Analyzers GmbH", faktúra „ROFA - …, GmbH".
+    const id = await vlozFakturu(database, seeded, kody,
+      { nazov: 'ROFA - Laboratory & Process Analyzers, GmbH', icDph: 'ATU74777039', krajina: 'AT' });
+    await vlozPrax(database, seeded, ['DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU', 'DDnadEU'],
+      '2026-05-01', 'rofa laboratory & process analyzers gmbh');
+    // Profil druh navrhuje z histórie, ale potvrdený nie je — náhľad ho ukáže našedo.
+    await database.query(
+      `INSERT INTO profil_fakty (organization_id,tenant_id,kluc,stav,hodnota,zdroj)
+       VALUES ($1,$2,'samozdanenie.tovar_eu','navrhnute',$3::jsonb,'historia')`,
+      [seeded.organizationId, seeded.tenantId, JSON.stringify({ interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt', pKod: 'PDsluz', pPredkontaciaKod: 'bInt', kv: 'B1' } })],
+    );
+    const prvy = await app.inject({ method: 'GET', url: `/api/documents/${id}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(prvy.json().blok).toMatchObject({
+      chyby: ['kody'], hodnota: { druh: 'tovar_eu' },
+      navrhKodov: { ddKod: 'DDsl§69', pKod: 'PDsluz' },
+    });
+
+    const potvrdene = await app.inject({ method: 'POST', url: `/api/documents/${id}/samozdanenie/kody`, headers });
+    expect(potvrdene.statusCode, potvrdene.body).toBe(200);
+    expect(potvrdene.json().blok.navrhKodov).toBeUndefined();
+    expect(potvrdene.json().blok).toMatchObject({
+      chyby: [],
+      hodnota: { druh: 'tovar_eu', interny: { ddKod: 'DDsl§69', ddPredkontaciaKod: 'aInt' } },
+    });
+    const fakt = (await database.query<Record<string, any>>(
+      'SELECT stav FROM profil_fakty WHERE organization_id=$1 AND kluc=$2',
+      [seeded.organizationId, 'samozdanenie.tovar_eu'],
+    )).rows[0];
+    expect(fakt.stav).toBe('potvrdene');
     await app.close();
   }, 120_000);
 

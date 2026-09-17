@@ -2870,6 +2870,14 @@ export async function ulozSamozdanenie(
   })).blok;
 }
 
+/** Potvrdenie navrhnutých kódov interných dokladov priamo z dokladu. */
+export async function potvrdKodySamozdanenia(documentId: string): Promise<BlokSamozdanenia | null> {
+  if (!REST_DATA_MODE) throw new Error('Samozdanenie vyžaduje spustený backend');
+  return (await restRequest<{ blok: BlokSamozdanenia | null }>(
+    `/api/documents/${encodeURIComponent(documentId)}/samozdanenie/kody`, { method: 'POST' },
+  )).blok;
+}
+
 /** „Prečo?" — pôvod zaúčtovania dokladu: zdroj návrhu, istota, pravidlo, dôvod. */
 export async function getDocumentPreco(documentId: string): Promise<DocumentPreco | undefined> {
   if (!REST_DATA_MODE) return undefined;

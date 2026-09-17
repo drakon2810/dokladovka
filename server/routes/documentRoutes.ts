@@ -659,13 +659,28 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
   // ponytail: schválený doklad, ktorý po zmene profilu (zrušené prijaté
   // prenesenie) prestal byť kandidátom, blok nemá — export ide zo snapshotu aj tak.
   const ZMRAZENE_SAMOZDANENIE = ['schvaleny', 'exportovany', 'chyba'];
+  /**
+   * Kódy interných dokladov, ktoré profil pre tento druh NAVRHUJE z histórie
+   * firmy, ale účtovník ich ešte nepotvrdil. Engine potvrdené fakty vyžaduje —
+   * bez nich má náhľad samé pomlčky a doklad sa nedá schváliť. Návrh sa preto
+   * ukáže našedo a potvrdiť sa dá jedným tlačidlom priamo z dokladu.
+   */
+  const navrhKodovDruhu = async (tenantId: string, document: DocumentScope, druh: string) => (await database.query<{ hodnota: any }>(
+    `SELECT hodnota FROM profil_fakty
+      WHERE tenant_id=$1 AND organization_id=$2 AND kluc=$3 AND stav='navrhnute'`,
+    [tenantId, document.organization_id, `samozdanenie.${druh}`],
+  )).rows[0]?.hodnota?.interny;
+
   const blokSamozdanenia = async (tenantId: string, document: DocumentScope) => {
     const stav = await stavSamozdaneniaDokladu(database, tenantId, document);
     if (!stav) return null;
     const { profil, pamat, ...blok } = stav;
     const zmrazeny = ZMRAZENE_SAMOZDANENIE.includes(document.status);
+    const navrhKodov = !zmrazeny && blok.chyby.includes('kody')
+      ? await navrhKodovDruhu(tenantId, document, blok.hodnota.druh) : undefined;
     return {
       ...blok,
+      ...(navrhKodov ? { navrhKodov } : {}),
       ...(zmrazeny && document.samozdanenie ? { hodnota: document.samozdanenie, chyby: [] } : {}),
       upravitelny: !zmrazeny && prijateCasti(document.samozdanenie).length === 0,
       dodavatel: String((document.extracted as { dodavatel?: { nazov?: string } })?.dodavatel?.nazov ?? ''),
@@ -739,6 +754,40 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
       });
     });
     return { blok: await blokSamozdanenia(auth.tenantId, { ...document, samozdanenie: hodnota }) };
+  });
+
+  // Potvrdenie kódov interných dokladov priamo z dokladu. Hodnotu berie server
+  // z návrhu profilu (vyvodeného z histórie firmy), nie od klienta — účtovník
+  // potvrdzuje presne to, čo vidí našedo v náhľade.
+  app.post('/api/documents/:id/samozdanenie/kody', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    requireCsrf(request, auth);
+    requireRole(auth, ['admin', 'uctovnik']);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const document = await scopedDocument(database, auth.tenantId, id);
+    await requireOrganizationAccess(database, auth, document.organization_id);
+    const stav = await stavSamozdaneniaDokladu(database, auth.tenantId, document);
+    if (!stav) throw new HttpError(409, 'samozdanenie_neaktualne', 'Doklad sa samozdanenia netýka');
+    if (ZMRAZENE_SAMOZDANENIE.includes(document.status)) {
+      throw new HttpError(409, 'samozdanenie_zmrazene', 'Doklad už nie je rozpracovaný');
+    }
+    const firma = { tenantId: auth.tenantId, organizationId: document.organization_id };
+    const kluc = `samozdanenie.${stav.hodnota.druh}`;
+    const navrh = (await database.query<{ hodnota: any }>(
+      `SELECT hodnota FROM profil_fakty WHERE tenant_id=$1 AND organization_id=$2 AND kluc=$3 AND stav='navrhnute'`,
+      [auth.tenantId, document.organization_id, kluc],
+    )).rows[0]?.hodnota;
+    if (!navrh) throw new HttpError(409, 'profil_navrh_chyba', 'Pre tento druh plnenia profil nič nenavrhuje — doplňte kódy v profile klienta');
+    await database.transaction(async (tx) => {
+      await zamkniPrax(tx, firma);
+      await ulozFakt(tx, { ...firma, userId: auth.userId }, kluc, { stav: 'potvrdene', hodnota: navrh });
+      await writeAudit(tx, {
+        tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,
+        action: 'document.samozdanenie_kody_potvrdene', entityType: 'document', entityId: id, correlationId: request.id,
+        metadata: { kluc, hodnota: navrh },
+      });
+    });
+    return { blok: await blokSamozdanenia(auth.tenantId, document) };
   });
 
   // „Prečo?" — pôvod zaúčtovania dokladu: zdroj návrhu, istota, dôvod a

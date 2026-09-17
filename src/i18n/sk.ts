@@ -1612,6 +1612,8 @@ export const sk = {
   'samozdanenie.info': 'Po schválení pôjdu do POHODY spolu s faktúrou.',
   'samozdanenie.lenCitanie': 'Doklad je schválený alebo odoslaný do POHODY — samozdanenie sa už nedá zmeniť.',
   'samozdanenie.chyba.kody': 'Doplňte samozdanenie {druh} v profile klienta',
+  'samozdanenie.navrhKodov': 'Kódy nižšie sú z vlastnej histórie firmy a čakajú na potvrdenie.',
+  'samozdanenie.potvrditKody': 'Potvrdiť kódy v profile',
   'samozdanenie.chyba.kurz': 'Doplňte kurz {mena} k EUR — bez neho sa interné doklady nedajú vytvoriť.',
   'samozdanenie.chyba.datum': 'Doplňte platný dátum daňovej povinnosti.',
   'samozdanenie.dovoz': 'Dovoz spracujte v POHODE',

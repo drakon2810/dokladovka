@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { BlokSamozdanenia, DovodNevznikaSamozdanenia, DruhSamozdaneniaPrijateho, RozhodnutieSamozdanenia, VolbaSamozdanenia } from '../../data/types';
-import { getSamozdanenie, ulozSamozdanenie } from '../../data/api';
+import { getSamozdanenie, potvrdKodySamozdanenia, ulozSamozdanenie } from '../../data/api';
 import { showToast } from '../../components/toast';
 import { sk, t, tv, type SkKey } from '../../i18n/sk';
 import { formatDateSk } from './DcInline';
@@ -124,6 +124,21 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
   const sadzba = hodnota.sadzba ?? blok.sadzby[0] ?? '—';
   const euro = (suma?: number) => (suma === undefined ? '—' : fmtMoney(suma, 'EUR'));
 
+  // Návrh kódov z histórie firmy: náhľad ho ukáže našedo a potvrdí sa jedným
+  // tlačidlom — inak by účtovník videl samé pomlčky a musel hľadať profil sám.
+  const navrh = blok.navrhKodov;
+  const potvrdKody = async () => {
+    setUklada(true);
+    try {
+      const ulozeny = await potvrdKodySamozdanenia(documentId);
+      if (ulozeny) setBlok(ulozeny);
+    } catch (chyba) {
+      showToast(chyba instanceof Error && chyba.message ? chyba.message : t('samozdanenie.ulozenieZlyhalo'), { tone: 'error' });
+    } finally {
+      setUklada(false);
+    }
+  };
+
   const chyby = chybyRiadku(blok);
   // Tón riadku: zamknutý doklad je sivý, blokujúca chyba jantárová, inak modrá
   // ako celé zaúčtovanie do POHODY.
@@ -198,11 +213,18 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
                 {hodnota.volba === volba && volba === 'vytvorit' && (
                   <div className="sz-obsah">
                     {hodnota.druh === 'dovoz' && <p className="sz-varovanie">{t('samozdanenie.dovoz')}</p>}
-                    {blok.chyby.includes('kody') && (
+                    {blok.chyby.includes('kody') && (navrh ? (
+                      <div className="sz-riadok sz-varovanie">
+                        <span>{t('samozdanenie.navrhKodov')}</span>
+                        <button type="button" className="sz-potvrdit" disabled={!upravitelny} onClick={() => void potvrdKody()}>
+                          {t('samozdanenie.potvrditKody')}
+                        </button>
+                      </div>
+                    ) : (
                       <p className="sz-varovanie">
                         <Link to="/profil-klienta">{tv('samozdanenie.chyba.kody', { druh: nazovDruhu(hodnota.druh) })}</Link>
                       </p>
-                    )}
+                    ))}
                     {blok.statusNepotvrdeny && <p className="sz-varovanie">{t('samozdanenie.statusNepotvrdeny')}</p>}
                     <table className="sz-tabulka">
                       <thead>
@@ -225,12 +247,12 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
                         </tr>
                       </thead>
                       <tbody>
-                        {riadkyNahladu(hodnota).map((riadok) => (
+                        {riadkyNahladu(navrh ? { ...hodnota, interny: navrh } : hodnota).map((riadok) => (
                           <tr key={riadok.kluc}>
                             <td>{t(`samozdanenie.riadok.${riadok.kluc}`)}</td>
-                            <td>{riadok.predkontacia ?? '—'}</td>
-                            <td>{riadok.clenenie ?? '—'}</td>
-                            <td>{riadok.kv ?? '—'}</td>
+                            <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.predkontacia ?? '—'}</td>
+                            <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.clenenie ?? '—'}</td>
+                            <td className={navrh ? 'sz-nepotvrdene' : undefined}>{riadok.kv ?? '—'}</td>
                             <td className="dk-r">{euro(riadok.zaklad)}</td>
                             <td className="dk-r">{euro(riadok.dan)}</td>
                           </tr>

@@ -257,20 +257,29 @@ export async function praxSamozdaneniaDodavatela(
   extracted: unknown,
   doDatumu?: string,
 ): Promise<PraxDodavatela | undefined> {
-  const dodavatel = ((extracted as Record<string, any> | null)?.dodavatel ?? {}) as { ico?: string; nazov?: string };
-  const ico = String(dodavatel.ico ?? '').replace(/\D/g, '');
-  // Zahraničný dodávateľ má v histórii IČO prázdne alebo „-", takže meno je
-  // jediný kľúč práve pri dokladoch, o ktoré tu ide.
-  const nazov = normalizeName(dodavatel.nazov);
-  if (!ico && !nazov) return undefined;
+  const dodavatel = ((extracted as Record<string, any> | null)?.dodavatel ?? {}) as { ico?: string; icDph?: string; nazov?: string };
+  // Zahraničný dodávateľ má v POHODE v poli IČO daňové číslo bez predpony
+  // (ATU74777039 → 74777039) alebo nič. Krátke číslo sa nepoužije: „FN 520079 y"
+  // z rakúskej faktúry nie je identifikátor, ale zle prečítané registračné číslo.
+  const cisla = [dodavatel.ico, dodavatel.icDph]
+    .map((hodnota) => String(hodnota ?? '').replace(/\D/g, ''))
+    .filter((hodnota) => hodnota.length >= 8);
+  // Meno sa porovnáva bez interpunkcie: POHODA má „ROFA Laboratory & Process
+  // Analyzers GmbH", faktúra „ROFA - Laboratory & Process Analyzers, GmbH" —
+  // presná zhoda na takom páre zlyhá a prax dodávateľa sa nenájde.
+  const nazov = normalizeName(dodavatel.nazov).replace(/[^a-z0-9]/g, '');
+  if (cisla.length === 0 && !nazov) return undefined;
   const riadky = (await db.query<{ kod: string; dokladov: string } & Record<string, unknown>>(
     `SELECT clenenie_dph_kod AS kod, count(DISTINCT (agenda, doklad_cislo)) AS dokladov
        FROM ucto_historia
       WHERE tenant_id=$1 AND organization_id=$2 AND clenenie_dph_kod IS NOT NULL
-        AND (($3::text <> '' AND supplier_ico=$3) OR ($4::text <> '' AND supplier_name_normalized=$4))
+        AND ((cardinality($3::text[]) > 0
+              AND regexp_replace(coalesce(supplier_ico, ''), '\\D', '', 'g') = ANY($3::text[]))
+          OR ($4::text <> ''
+              AND regexp_replace(lower(coalesce(supplier_name_normalized, '')), '[^a-z0-9]', '', 'g') = $4))
         AND ($5::date IS NULL OR datum < $5::date)
       GROUP BY 1`,
-    [firma.tenantId, firma.organizationId, ico, nazov, doDatumu ?? null],
+    [firma.tenantId, firma.organizationId, cisla, nazov, doDatumu ?? null],
   )).rows;
   let tovar = 0;
   let sluzby = 0;

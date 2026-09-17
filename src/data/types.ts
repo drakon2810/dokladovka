@@ -333,6 +333,8 @@ export interface BlokSamozdanenia {
     odpocet?: number;
     interny?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
   };
+  /** Kódy, ktoré profil pre tento druh navrhuje z histórie, ale ešte nie sú potvrdené. */
+  navrhKodov?: { ddKod: string; ddPredkontaciaKod?: string; pKod?: string; pPredkontaciaKod?: string; kv?: string };
   sadzby: number[];
   mena: string;
   chyby: Array<'dovoz' | 'kody' | 'datum' | 'kurz' | 'dovod'>;

@@ -577,6 +577,15 @@ input.dk-cell-edit::-webkit-calendar-picker-indicator { cursor: pointer; opacity
   font: inherit; color: var(--dk-pohoda); cursor: pointer;
 }
 .sz-odkaz:hover { text-decoration: underline; }
+/* Kódy z histórie, ktoré ešte nikto nepotvrdil — náhľad, nie rozhodnutie. */
+.sz-nepotvrdene { color: var(--dk-muted); font-style: italic; }
+.sz-potvrdit {
+  border: 1px solid var(--dk-accent); border-radius: 8px; background: #fff;
+  padding: 3px 9px; font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--dk-accent-dark); cursor: pointer;
+}
+.sz-potvrdit:hover:not(:disabled) { background: var(--dk-accent-tint); }
+.sz-potvrdit:disabled { border-color: var(--dk-border); color: var(--dk-faint); cursor: default; }
 .sz-varovanie { margin: 0; color: var(--dk-warn); }
 .sz-varovanie a { color: inherit; text-decoration: underline; }
 .sz-info { margin: 0; color: var(--dk-muted); font-size: 11.5px; }
