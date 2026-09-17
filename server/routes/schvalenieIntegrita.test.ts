@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
-import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { createTestDatabase, potvrdFakt, seedTestUser, testConfig } from '../testHelpers.js';
 import { MemoryObjectStorage } from '../storage.js';
 
 // Schválenie je posledná brána pred POHODOU. Overovalo len, či id z hlavičky
@@ -88,10 +88,7 @@ describe('integrita schválenia', () => {
     expect(dobry.statusCode, dobry.body).toBe(200);
 
     // R1 z auditu cez server: neplatiteľ, hlavička bez odpočtu, položka s odpočtom.
-    await database.query(
-      `INSERT INTO organization_dph_profiles (organization_id, tenant_id, platitel_dph) VALUES ($1,$2,'neplatitel')`,
-      [seeded.organizationId, seeded.tenantId],
-    );
+    await potvrdFakt(database, seeded, 'dph.status', { status: 'neplatitel' });
     const r1 = await schval(await vlozDoklad({ ...zaklad, clenenieDphId: kody.clenenieUN }, { clenenieDphId: kody.clenenie }));
     expect(r1.statusCode, r1.body).toBe(409);
     expect(r1.json().code).toBe('dph_profil_blokacia');

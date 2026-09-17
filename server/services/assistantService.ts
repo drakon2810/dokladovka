@@ -6,7 +6,6 @@
 import { normalizeName, textSimilarity } from './accountingSuggestionService.js';
 import { dphPokynyPreAi } from './dphAdvisor.js';
 import { loadDphProfil } from './dphProfileService.js';
-import { loadUctovnyProfil } from './accountingProfileService.js';
 import type { Database } from '../db/database.js';
 
 export interface AssistantScope {
@@ -16,8 +15,7 @@ export interface AssistantScope {
 
 export interface AssistantEvidence {
   firma: Record<string, unknown>;
-  profilDph?: { platitelDph: string; rezim: string; pokyny: string[] };
-  uctovnyProfil?: Record<string, unknown>;
+  profilDph?: { platitelDph: string; pokyny: string[] };
   pouzivanePredkontacie: Array<{ kod: string; nazov: string; pocet: number }>;
   pravidla: Array<Record<string, unknown>>;
   podobneRozhodnutia: Array<Record<string, unknown>>;
@@ -47,7 +45,6 @@ export async function zozbierajDokazy(
   )).rows[0];
 
   const dphProfil = await loadDphProfil(database, scope.tenantId, scope.organizationId);
-  const uctovnyProfil = await loadUctovnyProfil(database, scope.tenantId, scope.organizationId);
 
   // Reálne používané predkontácie — nie celý číselník (stovky riadkov), ale to,
   // čo firma naozaj používa, zoradené podľa frekvencie.
@@ -154,10 +151,7 @@ export async function zozbierajDokazy(
       icDph: organizacia?.ic_dph ?? undefined,
     },
     profilDph: dphProfil
-      ? { platitelDph: dphProfil.platitelDph, rezim: dphProfil.rezim, pokyny: dphPokynyPreAi(dphProfil) }
-      : undefined,
-    uctovnyProfil: uctovnyProfil
-      ? { obdobieUctovania: uctovnyProfil.obdobieUctovania, zaokruhlovanieDph: uctovnyProfil.zaokruhlovanieDph }
+      ? { platitelDph: dphProfil.platitelDph, pokyny: dphPokynyPreAi(dphProfil) }
       : undefined,
     pouzivanePredkontacie: pouzivane.rows.map((row) => ({ kod: row.code, nazov: row.name, pocet: Number(row.pocet) })),
     pravidla: pravidla.rows.map((row) => ({

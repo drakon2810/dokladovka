@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../db/database.js';
-import type { ParovacieKriterium } from './accountingProfileService.js';
 
 // Partneri (kontrahenti) — automatické zakladanie z dokladov a párovanie
 // dodávateľa podľa priority z účtovného profilu (IČO → IČ DPH → IBAN → názov).
@@ -93,22 +92,10 @@ export function mapPartnerRow(row: Record<string, unknown>): PartnerZaznam {
   };
 }
 
-const PREDVOLENA_PRIORITA: ParovacieKriterium[] = ['ico', 'ic_dph', 'iban', 'nazov'];
+// Poradie kritérií párovania karty partnera — rovnaké pre všetky firmy.
+const PRIORITA_PAROVANIA = ['ico', 'ic_dph', 'iban', 'nazov'] as const;
 
-async function prioritaParovania(
-  tx: Queryable,
-  tenantId: string,
-  organizationId: string,
-): Promise<ParovacieKriterium[]> {
-  const profile = await tx.query<{ parovanie_dodavatelov?: ParovacieKriterium[] } & Record<string, unknown>>(
-    'SELECT parovanie_dodavatelov FROM organization_accounting_profiles WHERE organization_id=$1 AND tenant_id=$2',
-    [organizationId, tenantId],
-  );
-  const priorita = profile.rows[0]?.parovanie_dodavatelov;
-  return Array.isArray(priorita) && priorita.length > 0 ? priorita : PREDVOLENA_PRIORITA;
-}
-
-/** Nájde aktívneho partnera podľa priority párovania z účtovného profilu. */
+/** Nájde aktívneho partnera: IČO, potom IČ DPH, IBAN a názov. */
 export async function najdiPartnera(
   tx: Queryable,
   tenantId: string,
@@ -121,8 +108,7 @@ export async function najdiPartnera(
   );
   if (partneri.rows.length === 0) return undefined;
   const zoznam = partneri.rows.map(mapPartnerRow);
-  const priorita = await prioritaParovania(tx, tenantId, organizationId);
-  for (const kriterium of priorita) {
+  for (const kriterium of PRIORITA_PAROVANIA) {
     const zhody = zoznam.filter((partner) => {
       switch (kriterium) {
         case 'ico':

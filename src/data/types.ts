@@ -206,61 +206,64 @@ export interface ApprovalRule {
   active: boolean;
 }
 
-/** Záznam koeficientu DPH v profile klienta (história po rokoch). */
-export interface DphKoeficientZaznam {
-  rok: number;
-  typ: 'zalohovy' | 'rocny';
-  hodnota: number;
-  platnostOd?: string;
-  platnostDo?: string;
+/**
+ * Profil klienta — tvary odpovede servera (server/services/profilService.ts).
+ * Hodnota faktu je podľa kľúča katalógu (server/services/profilKatalog.ts);
+ * kódy POHODY sú v nej ako kódy, nie id.
+ */
+export interface ProfilDokaz {
+  dokladov: number;
+  od?: string;
+  do?: string;
+  navrh?: unknown;
+  varianty?: Array<{ hodnota: unknown; dokladov: number }>;
+  priklady?: Array<{ agenda: string; cislo: string; datum: string }>;
 }
 
-/** Pravidlo odpočtu s kľúčovými slovami (autá, pomerné odpočítanie). */
-export interface DphPravidloOdpoctu {
-  kategoria: string;
+export interface ProfilFakt {
+  kluc: string;
+  stav: 'potvrdene' | 'navrhnute' | 'nepouziva_sa';
+  hodnota: unknown;
+  zdroj: 'historia' | 'uctovnik' | 'migracia';
+  dokaz?: ProfilDokaz;
+  /** Meno používateľa, nie id. */
+  potvrdil?: string;
+  potvrdeneAt?: string;
+  updatedAt: string;
+}
+
+export interface ProfilOtazka {
+  id: string;
+  kluc: string;
+  druh: 'fakt' | 'spor_protistrany';
+  stav: 'otvorena' | 'odlozena';
+  blokuje: boolean;
+  dokladov: number;
+  data: unknown;
+  createdAt: string;
+}
+
+/** Ustálené delenie položky z histórie — návrh pravidla vozidiel (id z číselníka, nie kódy). */
+export interface NavrhPravidlaDelenia {
+  klucoveSlova: string[];
   percento: number;
-  klucoveSlova: string[];
-  /**
-   * Podiel DANE, keď sa líši od podielu základu: auto používané aj súkromne
-   * delí základ 80/20, ale odpočet dane je od 2026 spravidla polovičný (§ 85n).
-   */
   percentoDph?: number;
-  /** Obdobie platnosti podľa dňa plnenia (vrátane hraníc); bez dátumov platí vždy. */
-  platnostOd?: string;
-  platnostDo?: string;
-  /** Účty oboch častí — bez nich je pravidlo len upozornením. */
-  predkontaciaId?: string;
-  predkontaciaNedanovaId?: string;
+  predkontaciaId: string;
+  predkontaciaNedanovaId: string;
   clenenieDphNedanoveId?: string;
+  dokladov: number;
+  priklady: Array<{ cislo: string; datum: string }>;
 }
 
-/** Kategória bez nároku na odpočet (reprezentácia, občerstvenie…). */
-export interface DphKategoriaBezNaroku {
-  kategoria: string;
-  klucoveSlova: string[];
+export interface ProfilKlienta {
+  fakty: ProfilFakt[];
+  /** Otvorené a odložené, blokujúce a s viac dokladmi prvé. */
+  otazky: ProfilOtazka[];
+  navrhyDelenia: NavrhPravidlaDelenia[];
+  prepocitaneAt?: string;
 }
 
-/** DPH profil klienta — inštrukcia pre AI aj deterministický kontrolór. */
-export interface DphProfil {
-  organizationId: string;
-  tenantId: string;
-  platitelDph: 'platitel' | 'neplatitel' | 'registracia_7a';
-  obdobieDph: 'mesacne' | 'stvrtrocne';
-  uzavreteDo?: string;
-  koeficient: DphKoeficientZaznam[];
-  pomerneOdpocitanie: DphPravidloOdpoctu[];
-  rezim: 'tuzemsky' | 'zahranicny';
-  nakupyZEu: boolean;
-  sluzbyZEu: boolean;
-  prenesenieDp: boolean;
-  pravidlaAut: DphPravidloOdpoctu[];
-  bezNaroku: DphKategoriaBezNaroku[];
-  samozdanenieAktivne: boolean;
-  samozdanenieClenenieDphId?: string;
-  samozdanenieClenenieKvKod?: string;
-  clenenieBezOdpoctuId?: string;
-  updatedAt?: string;
-}
+export type OdpovedOtazky = { akcia: 'variant'; index: number } | { akcia: 'ine'; text: string } | { akcia: 'neskor' };
 
 /** Jedno zistenie DPH poradcu k dokladu. */
 export interface DphZistenie {
@@ -277,28 +280,6 @@ export interface DphPosudok {
   navrhy: DphZistenie[];
   varovania: DphZistenie[];
   blokacie: DphZistenie[];
-}
-
-/** Kritérium párovania dodávateľa (priorita zľava doprava). */
-export type ParovacieKriterium = 'ico' | 'ic_dph' | 'iban' | 'nazov';
-
-/** Riadok účtovného rozvrhu s analytickými účtami. */
-export interface UctovnyRozvrhRiadok {
-  ucet: string;
-  nazov: string;
-  analytiky: string[];
-}
-
-/** Účtovný profil klienta — 2. časť profilu (obdobie, zaokrúhľovanie, párovanie). */
-export interface UctovnyProfil {
-  organizationId: string;
-  tenantId: string;
-  obdobieUctovania: 'mesacne' | 'stvrtrocne';
-  zaokruhlovanieCelkom: 'centy' | 'pat_centov' | 'eura';
-  zaokruhlovanieDph: 'matematicky' | 'nahor' | 'nadol';
-  parovanieDodavatelov: ParovacieKriterium[];
-  uctovnyRozvrh: UctovnyRozvrhRiadok[];
-  updatedAt?: string;
 }
 
 /** Partner (kontrahent) — adresár dodávateľov s predvoľbami zaúčtovania. */
@@ -1078,5 +1059,5 @@ export interface SignalPripravenosti {
 
 export interface PripravenostFirmy {
   stav: 'nepripravena' | 'overit' | 'pripravena';
-  signaly: Record<'mostik' | 'firma' | 'ciselniky' | 'historia' | 'profil' | 'meranie', SignalPripravenosti>;
+  signaly: Record<'mostik' | 'firma' | 'ciselniky' | 'historia' | 'profil' | 'meranie' | 'otazky', SignalPripravenosti>;
 }

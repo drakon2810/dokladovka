@@ -24,7 +24,7 @@ export interface Signal {
 
 export interface Pripravenost {
   stav: 'nepripravena' | 'overit' | 'pripravena';
-  signaly: Record<'mostik' | 'firma' | 'ciselniky' | 'historia' | 'profil' | 'meranie', Signal>;
+  signaly: Record<'mostik' | 'firma' | 'ciselniky' | 'historia' | 'profil' | 'meranie' | 'otazky', Signal>;
 }
 
 type Cas = Date | string | null | undefined;
@@ -68,6 +68,8 @@ export interface VstupPripravenosti {
   kategorie: boolean;
   /** Posledné meranie metodikou 2 a agendy jeho okna, ktoré sa do vzorky nedostali (manifest.vynechaneAgendy). */
   meranie: { kedy: Cas; vynechane: string[] } | null;
+  /** Nezodpovedané otázky profilu klienta (otvorené aj odložené). */
+  otazky: { blokujucich: number; ostatnych: number };
 }
 
 // ponytail: pevné 3 h na čerstvosť synchronizácie firmy — agent ťahá číselníky
@@ -169,8 +171,15 @@ export function vypocitajPripravenost(
       ? { stav: 'overit', dovod: 'meranie_ciastocne', kedy: iso(meranie.kedy), detail: meranie.vynechane.join(', ') }
     : { ...ok, kedy: iso(meranie.kedy) };
 
-  const signaly = { mostik, firma, ciselniky, historia, profil, meranie: meranieSignal };
-  // Meranie nikdy neblokuje: bez neho sa dá účtovať, len sa nevie, ako presne.
+  // Otázky profilu klienta: bez odpovede na blokujúcu (napr. registrácia DPH)
+  // engine nevie to podstatné, ostatné len spresňujú. Odložená otázka je stále
+  // nezodpovedaná. Ako meranie návrhy nezastaví — účtovať sa dá, len horšie.
+  const otazky: Signal = vstup.otazky.blokujucich > 0 ? { stav: 'caka', dovod: 'otazky_blokujuce', pocet: vstup.otazky.blokujucich }
+    : vstup.otazky.ostatnych > 0 ? { stav: 'overit', dovod: 'otazky_otvorene', pocet: vstup.otazky.ostatnych }
+    : ok;
+
+  const signaly = { mostik, firma, ciselniky, historia, profil, meranie: meranieSignal, otazky };
+  // Meranie ani otázky nikdy neblokujú: bez nich sa dá účtovať, len sa nevie, ako presne.
   const stav = [mostik, firma, ciselniky, historia, profil].some((signal) => signal.stav === 'chyba' || signal.stav === 'caka')
     ? 'nepripravena'
     : Object.values(signaly).every((signal) => signal.stav === 'ok') ? 'pripravena' : 'overit';

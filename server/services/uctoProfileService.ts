@@ -10,6 +10,7 @@ import { textPreVektor, vytvorVektory, type Embedder } from './embeddingService.
 import { DOKLAD_KLUC_SQL, MIN_ZHODA, prepocitajPravidla, variantyRozpisu, type RozpisVariant } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { overPravnuStranku } from './uctoPravnaKontrola.js';
+import { aktualizujProfil } from './profilService.js';
 
 // Jednorazová analýza korpusu histórie → kategórie plnení.
 //
@@ -443,7 +444,7 @@ export async function prepocitajKategorie(
  * a analýza s prepočtom v deadlocku na opačnom poradí tabuliek. Zámok patrí
  * transakcii, uvoľní ho COMMIT aj ROLLBACK; v tej istej transakcii sa smie brať znova.
  */
-async function zamkniPrax(tx: Queryable, input: { tenantId: string; organizationId: string }) {
+export async function zamkniPrax(tx: Queryable, input: { tenantId: string; organizationId: string }) {
   await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ucto_prax:${input.tenantId}:${input.organizationId}`]);
 }
 
@@ -462,7 +463,9 @@ export async function prepocitajPrax(
   // Kategória hovorí o DRUHU plnenia, takže jej rozpis platí aj pre dodávateľa,
   // ktorého firma nikdy nemala — to pravidlo protistrany nedokáže.
   const { kategoriiSRozpisom } = await doplnRozpisKategorii(database, input);
-  return { ...pravidla, kategoriiZmenenych, kategoriiSRozpisom };
+  // Profil klienta až po pravidlách: spory protistrán sa berú z čerstvých ucto_pravidla.
+  const profil = await aktualizujProfil(database, input);
+  return { ...pravidla, kategoriiZmenenych, kategoriiSRozpisom, profil };
 }
 
 export interface UctoKategoria {

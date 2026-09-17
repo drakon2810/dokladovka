@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { aiOdpoved, createTestDatabase, potvrdFakt, seedTestUser, testConfig } from '../testHelpers.js';
 import { forgetUctoDecision, maybeAiAccountingSuggestion, mesiacZNazvu, otazkaPraxe, rebuildAccountingSuggestion, recordUctoDecision, textSimilarity, updateRuleFeedback, zuzPonukuPredkontacii } from './accountingSuggestionService.js';
 import { prepocitajPravidla } from './uctoPravidlaService.js';
 
@@ -1253,11 +1253,8 @@ describe('accounting suggestions', () => {
       );
     }
     // Neplatiteľ s definovaným členením bez odpočtu → ponuka pre model sa zúži naň.
-    await database.query(
-      `INSERT INTO organization_dph_profiles (organization_id,tenant_id,platitel_dph,clenenie_bez_odpoctu_id)
-       VALUES ($1,$2,'neplatitel',$3)`,
-      [seeded.organizationId, seeded.tenantId, bezOdp],
-    );
+    await potvrdFakt(database, seeded, 'dph.status', { status: 'neplatitel' });
+    await potvrdFakt(database, seeded, 'dph.clenenie_bez_odpoctu', { clenenieKod: 'BO' });
 
     const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierIco: '11112222', supplierName: 'Dodávateľ' };
     await rebuildAccountingSuggestion(database, input);
@@ -1701,11 +1698,8 @@ describe('AI nevyberá číselný rad', () => {
         [randomUUID(), seeded.tenantId, seeded.organizationId, pred, pd, randomUUID()],
       );
     }
-    await database.query(
-      `INSERT INTO organization_dph_profiles (organization_id,tenant_id,platitel_dph,clenenie_bez_odpoctu_id)
-       VALUES ($1,$2,'neplatitel',$3)`,
-      [seeded.organizationId, seeded.tenantId, bezOdpoctu],
-    );
+    await potvrdFakt(database, seeded, 'dph.status', { status: 'neplatitel' });
+    await potvrdFakt(database, seeded, 'dph.clenenie_bez_odpoctu', { clenenieKod: 'PB' });
 
     const parser = {
       create: vi.fn().mockResolvedValue(aiOdpoved({
@@ -1847,7 +1841,8 @@ describe('AI nevyberá číselný rad', () => {
     const seeded = await seedTestUser(database);
     const documentId = randomUUID();
     const pn = randomUUID();
-    const ddsl = randomUUID();
+    // Kód, ktorý firma nikdy nepoužila; DD by vypadlo aj bez histórie — na faktúru nepatrí nikdy.
+    const pdNadEu = randomUUID();
     const pred = randomUUID();
     await database.query(
       `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
@@ -1860,7 +1855,7 @@ describe('AI nevyberá číselný rad', () => {
        VALUES ($1,$2,$3,'predkontacie','518/321','518/321','pohoda')`,
       [pred, seeded.tenantId, seeded.organizationId],
     );
-    for (const [id, code] of [[pn, 'PN'], [ddsl, 'DDsl§69']] as const) {
+    for (const [id, code] of [[pn, 'PN'], [pdNadEu, 'PDnadEU']] as const) {
       await database.query(
         `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source)
          VALUES ($1,$2,$3,'cleneniaDph',$4,$4,'pohoda')`,
@@ -1881,7 +1876,7 @@ describe('AI nevyberá číselný rad', () => {
     const payload = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
     const ponuka = payload.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod);
     // Nová firma nemá čím zúžiť — dostane celý číselník, inak by nemala z čoho vybrať.
-    expect(ponuka).toEqual(expect.arrayContaining(['PN', 'DDsl§69']));
+    expect(ponuka).toEqual(expect.arrayContaining(['PN', 'PDnadEU']));
   }, 90_000);
 
 });
@@ -2473,6 +2468,37 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
     expect(navrh.clenenie_kv_kod).toBe('KN');
   }, 90_000);
 
+  // Firma bez histórie: to, že na reprezentácii neodpočítava, vie len účtovník.
+  // Potvrdený účet bez nároku platí od prvého dokladu, aj keď model dá B2.
+  it('potvrdený účet bez nároku prepíše odpočet aj bez histórie', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await potvrdFakt(database, seeded, 'naklady.bez_naroku', [{ predkontaciaKod: 'repre', clenenieKod: 'PN' }]);
+    const documentId = await doklad(database, kde);
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'B2',
+        ciselnyRadId: null, confidence: 0.9, reason: 'Reprezentácia', riadky: null,
+      })),
+    };
+    const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(), input, kontext, parser)).toBe(true);
+
+    const navrh = await navrhDokladu(database, documentId);
+    expect(navrh).toMatchObject({ predkontacia_id: repre, clenenie_dph_id: dphPn, clenenie_kv_kod: 'KN' });
+    const zmeny = (await database.query<Record<string, any>>(
+      'SELECT t.zmeny FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1', [documentId],
+    )).rows[0].zmeny;
+    expect(zmeny).toContainEqual({ pole: 'clenenieDphId', z: dphPd, na: dphPn, dovod: 'ucet_bez_odpoctu' });
+    // Pokyn modelu nesie kódy, nie id.
+    const pokyny = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text).profilKlienta.pokyny;
+    expect(pokyny).toEqual(['Na účte repre firma neodpočítava — členenie PN.']);
+  }, 90_000);
+
   // Dovoz tovaru: daň sa platí colnému úradu a odpočítava sa z colného
   // rozhodnutia, ktoré do kontrolného výkazu nepatrí. PDtovar s KN je teda
   // zákonná dvojica (v knihách klientov 9 hlavičiek OZ) — odpočet sa rušiť nesmie.
@@ -2692,7 +2718,12 @@ describe('číselný rad nového dodávateľa podľa krajiny', () => {
 // s tou istou faktúrou účtujú inak a obe správne. Preto to nie je odhad
 // z histórie, ale nastavenie klienta, ktoré platí od PRVÉHO dokladu.
 describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
-  const rezPhm = async (pravidloNavyse: Record<string, unknown>, extracted: Record<string, unknown>) => {
+  // Nastavenie klienta: základ 80/20, daň 50/50 (od 2026 § 85n), oba účty.
+  const PHM_AUTO = [{
+    nazov: 'Osobné auto', percentoZakladu: 80, percentoDph: 50, klucoveSlova: ['natural 95', 'premiová nafta'],
+    predkontaciaKod: 'PHM-501200', predkontaciaNedanovaKod: 'PHM-Nadspotreba', clenenieDphNedanoveKod: 'PN',
+  }];
+  const rezPhm = async (fakty: Array<[string, unknown]> = [['vozidla.pravidla', PHM_AUTO]]) => {
     const database = await createTestDatabase();
     databases.push(database);
     const seeded = await seedTestUser(database);
@@ -2720,23 +2751,13 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
         [id, ...kde, kod, nazov],
       );
     }
-    // Nastavenie klienta: základ 80/20, daň 50/50 (od 2026 § 85n), oba účty.
-    await database.query(
-      `INSERT INTO organization_dph_profiles (organization_id,tenant_id,pravidla_aut)
-       VALUES ($2,$1,$3::jsonb)`,
-      [seeded.tenantId, seeded.organizationId, JSON.stringify([{
-        kategoria: 'Osobné auto', percento: 80, percentoDph: 50,
-        klucoveSlova: ['natural 95', 'premiová nafta'],
-        predkontaciaId: phm, predkontaciaNedanovaId: nadspotreba, clenenieDphNedanoveId: dphPn,
-        ...pravidloNavyse,
-      }])],
-    );
+    for (const [kluc, hodnota] of fakty) await potvrdFakt(database, seeded, kluc, hodnota);
 
     const documentId = randomUUID();
     await database.query(
       `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
-       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,270,'EUR')`,
-      [documentId, ...kde, JSON.stringify(extracted)],
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,270,'EUR')`,
+      [documentId, ...kde],
     );
 
     const parser = {
@@ -2770,7 +2791,7 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
   };
 
   it('rozreže palivo osobného auta a naftu do ťahača nechá celú', async () => {
-    const { riadky: vysledok, zmeny, phm, nadspotreba, dphPn } = await rezPhm({}, {});
+    const { riadky: vysledok, zmeny, phm, nadspotreba, dphPn } = await rezPhm();
     const riadky = vysledok!;
     expect(zmeny).toContainEqual({ pole: 'riadok', index: 0, z: null, na: phm, dovod: 'rez_podla_profilu' });
     expect(zmeny).toContainEqual({ pole: 'riadok', index: 1, z: null, na: phm, dovod: 'rez_podla_profilu' });
@@ -2787,11 +2808,16 @@ describe('rozrezanie podľa pravidla pre autá z profilu klienta', () => {
     expect(riadky[1].clenenieKvKod).toBeUndefined();
   }, 90_000);
 
-  // Daň 50/50 pri osobnom aute zaviedol od 1. 1. 2026 § 85n. Pravidlo s dátumom
-  // platnosti nesmie rozrezať decembrové tankovanie z roku 2025.
-  it('pravidlo s dátumom platnosti nereže plnenie spred neho', async () => {
-    const { riadky } = await rezPhm({ platnostOd: '2026-01-01' }, { datumDodania: '2025-12-15', datumVystavenia: '2026-01-05' });
-    expect((riadky ?? []).some((riadok) => riadok.podiel != null)).toBe(false);
+  // Pomerné odpočítanie (§ 49 ods. 4) sa doteraz nerezalo nikdy — bolo len
+  // upozornením. Reže sa tým istým mechanizmom, obe časti na tom istom účte.
+  it('pomerné odpočítanie reže na tom istom účte, neodpočítaná časť bez nároku', async () => {
+    const { riadky, zmeny, phm, dphPn } = await rezPhm([['naklady.pomerne', [{
+      nazov: 'Nafta do služobného aj súkromného', klucoveSlova: ['premiová nafta'], percentoDph: 70,
+      predkontaciaKod: 'PHM-501200', clenenieDphNedanoveKod: 'PN',
+    }]]]);
+    expect(zmeny).toContainEqual({ pole: 'riadok', index: 1, z: null, na: phm, dovod: 'rez_podla_profilu' });
+    expect(riadky!.map((riadok) => [riadok.index, riadok.predkontaciaId, riadok.podiel, riadok.podielDph, riadok.clenenieDphId]))
+      .toEqual([[1, phm, 0.7, 0.7, undefined], [1, phm, 0.3, 0.3, dphPn]]);
   }, 90_000);
 });
 
@@ -3803,5 +3829,137 @@ describe('záznam behu AI návrhu', () => {
     const navrh = (await database.query<Record<string, any>>(
       'SELECT source FROM accounting_suggestions WHERE document_id=$1', [documentId])).rows[0];
     expect(navrh?.source).toBe('ai');
+  }, 90_000);
+});
+
+// Potvrdené fakty profilu klienta menia návrh deterministicky — platia od
+// prvého dokladu, aj vo firme bez histórie, a model ich neprebije.
+describe('fakty profilu klienta v návrhu zaúčtovania', () => {
+  const navrhni = async (moznosti: {
+    kody: Array<[string, string]>;
+    fakty?: Array<[string, unknown]>;
+    /** Hlavičky histórie FP: [predkontácia, členenie, počet dokladov]. */
+    historia?: Array<[string, string, number]>;
+    extracted?: Record<string, unknown>;
+    kontext?: Record<string, unknown>;
+    odpoved: (id: (kod: string) => string) => Record<string, unknown>;
+  }) => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const ids = new Map<string, string>();
+    for (const [kind, code] of moznosti.kody) {
+      ids.set(code, randomUUID());
+      await database.query(
+        `INSERT INTO code_list_items (id,tenant_id,organization_id,kind,code,name,source) VALUES ($1,$2,$3,$4,$5,$5,'pohoda')`,
+        [ids.get(code), seeded.tenantId, seeded.organizationId, kind, code],
+      );
+    }
+    for (const [kluc, hodnota] of moznosti.fakty ?? []) await potvrdFakt(database, seeded, kluc, hodnota);
+    for (const [predkontacia, clenenie, pocet] of moznosti.historia ?? []) {
+      for (let i = 0; i < pocet; i += 1) {
+        await database.query(
+          `INSERT INTO ucto_historia (id,tenant_id,organization_id,agenda,doklad_cislo,datum,line_text_normalized,predkontacia_kod,clenenie_dph_kod,source,riadok_hash,riadok_index)
+           VALUES ($1,$2,$3,'FP',$4,'2026-01-15','sluzba',$5,$6,'agent',$1,0)`,
+          [randomUUID(), seeded.tenantId, seeded.organizationId, `F${i}`, predkontacia, clenenie],
+        );
+      }
+    }
+    const documentId = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review',$4::jsonb,'{}'::jsonb,100,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId, JSON.stringify(moznosti.extracted ?? {})],
+    );
+    const id = (kod: string) => ids.get(kod)!;
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        clenenieKvKod: null, ciselnyRadId: null, confidence: 0.8, reason: 'Test', riadky: null, ...moznosti.odpoved(id),
+      })),
+    };
+    expect(await maybeAiAccountingSuggestion(database, testConfig(),
+      { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Dodávateľ' },
+      { documentType: 'FP', supplierName: 'Dodávateľ', totalAmount: 100, currency: 'EUR', lineDescriptions: ['služba'], ...moznosti.kontext },
+      parser)).toBe(true);
+    const navrh = (await database.query<Record<string, any>>(
+      `SELECT s.predkontacia_id, s.clenenie_dph_id, s.clenenie_kv_kod, s.riadky, t.zmeny
+         FROM accounting_suggestions s JOIN ucto_navrh_stopa t ON t.id::text=s.stopa_id WHERE s.document_id=$1`,
+      [documentId],
+    )).rows[0];
+    const prompt = JSON.parse((parser.create.mock.calls[0][0] as any).input[0].content[0].text);
+    return { navrh, id, prompt, ponuka: prompt.ciselniky.cleneniaDph.map((item: { kod: string }) => item.kod) };
+  };
+
+  // Ochrana pred DD na faktúre stála len na histórii agendy. Firma bez nej
+  // (prvá faktúra, nový klient) dostala DDsl§69 + B1 na prijatú faktúru.
+  it('DD kód na prijatej faktúre neprejde ani bez histórie', async () => {
+    const { navrh, id, ponuka } = await navrhni({
+      kody: [['predkontacie', '518/321'], ['cleneniaDph', 'PN'], ['cleneniaDph', 'DDsl§69']],
+      kontext: { supplierKrajina: 'ES' },
+      odpoved: (kod) => ({ predkontaciaId: kod('518/321'), clenenieDphId: kod('DDsl§69'), clenenieKvKod: 'B1' }),
+    });
+    expect(ponuka).toEqual(['PN']);
+    expect(navrh).toMatchObject({ predkontacia_id: id('518/321'), clenenie_dph_id: null, clenenie_kv_kod: null });
+    expect(navrh.zmeny).toContainEqual({ pole: 'clenenieDphId', z: id('DDsl§69'), na: null, dovod: 'clenenie_strana_dd' });
+  }, 90_000);
+
+  it('firma bez oslobodených plnení nedostane krátenie PK v ponuke a vrátené sa zahodí', async () => {
+    const { navrh, id, ponuka } = await navrhni({
+      kody: [['predkontacie', '518/321'], ['cleneniaDph', 'PD'], ['cleneniaDph', 'PK']],
+      fakty: [['dph.oslobodene_plnenia', { ano: false }]],
+      odpoved: (kod) => ({ predkontaciaId: kod('518/321'), clenenieDphId: kod('PK'), clenenieKvKod: 'B2' }),
+    });
+    expect(ponuka).toEqual(['PD']);
+    expect(navrh.clenenie_dph_id).toBeNull();
+    expect(navrh.zmeny).toContainEqual({ pole: 'clenenieDphId', z: id('PK'), na: null, dovod: 'clenenie_kratenie' });
+  }, 90_000);
+
+  // Členenie z účtu stojí nad modelom. Keby z histórie vrátilo PK, potvrdený fakt
+  // by prehral so zvykom — pri účtoch bez nároku to tak nie je, tu tiež nesmie.
+  it('krátenie PK nevráti ani história účtu, keď firma podľa profilu oslobodené plnenia nemá', async () => {
+    const { navrh, id } = await navrhni({
+      kody: [['predkontacie', '518/321'], ['cleneniaDph', 'PD'], ['cleneniaDph', 'PK']],
+      fakty: [['dph.oslobodene_plnenia', { ano: false }]],
+      historia: [['518/321', 'PK', 6]],
+      odpoved: (kod) => ({ predkontaciaId: kod('518/321'), clenenieDphId: kod('PD'), clenenieKvKod: 'B2' }),
+    });
+    expect(navrh.clenenie_dph_id).toBe(id('PD'));
+    expect(navrh.zmeny.map((zmena: { dovod: string }) => zmena.dovod)).not.toContain('clenenie_podla_uctu');
+  }, 90_000);
+
+  it('faktúra cudzieho dodávateľa bez DPH dostane členenie potvrdeného druhu samozdanenia', async () => {
+    const { navrh, id, prompt } = await navrhni({
+      kody: [['predkontacie', '518/321'], ['cleneniaDph', 'PD'], ['cleneniaDph', 'PN']],
+      fakty: [['samozdanenie.sluzby_eu', { faktura: { clenenieKod: 'PN', kv: 'KN' } }]],
+      extracted: {
+        dodavatel: { nazov: 'Google Ireland Ltd', icDph: 'IE6388047V', krajina: 'IE' },
+        datumDodania: '2026-07-01', rozpisDph: [{ sadzba: 0, zaklad: 100, dph: 0 }], sumaSpolu: 100,
+      },
+      kontext: { supplierKrajina: 'IE', supplierIcDph: 'IE6388047V' },
+      odpoved: (kod) => ({ predkontaciaId: kod('518/321'), clenenieDphId: kod('PD'), clenenieKvKod: 'B2' }),
+    });
+    expect(navrh).toMatchObject({ clenenie_dph_id: id('PN'), clenenie_kv_kod: 'KN' });
+    expect(navrh.zmeny).toContainEqual({ pole: 'clenenieDphId', z: id('PD'), na: id('PN'), dovod: 'fakt_samozdanenie' });
+    expect(prompt.profilKlienta.pokyny).toEqual(['Služby z EÚ (§69 ods. 3): faktúra PN, KV KN.']);
+  }, 90_000);
+
+  it('položka cudzej dane ide pri potvrdenom vrátení DPH na pohľadávku bez nároku a mimo výkazu', async () => {
+    const { navrh, id } = await navrhni({
+      kody: [['predkontacie', 'PHM-501200'], ['predkontacie', '378-DPH'], ['cleneniaDph', 'PD'], ['cleneniaDph', 'PN']],
+      fakty: [['zahranicie.vratenie_dph', { uplatnujeme: true, predkontaciaKod: '378-DPH' }]],
+      extracted: {
+        dodavatel: { nazov: 'OMV Austria', icDph: 'ATU12345678', krajina: 'AT' },
+        datumDodania: '2026-07-01', rozpisDph: [{ sadzba: 0, zaklad: 120, dph: 0 }], cudziaDan: 20, sumaSpolu: 120,
+      },
+      kontext: {
+        supplierKrajina: 'AT', lineDescriptions: ['Diesel', 'MWST 20 %'],
+        polozky: [{ popis: 'Diesel', sadzbaDph: 0, suma: 100 }, { popis: 'MWST 20 %', sadzbaDph: 0, suma: 20, cudziaDan: true }],
+      },
+      odpoved: (kod) => ({ predkontaciaId: kod('PHM-501200'), clenenieDphId: kod('PN'), clenenieKvKod: 'KN' }),
+    });
+    expect(navrh.riadky).toEqual([
+      { index: 1, popis: 'MWST 20 %', predkontaciaId: id('378-DPH'), clenenieDphId: id('PN'), clenenieKvKod: 'KN' },
+    ]);
+    expect(navrh.zmeny).toContainEqual({ pole: 'riadok', index: 1, z: null, na: id('378-DPH'), dovod: 'fakt_vratenie_dph' });
   }, 90_000);
 });

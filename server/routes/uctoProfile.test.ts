@@ -793,17 +793,18 @@ describe('návrhy pravidiel delenia položiek', () => {
       ],
     });
     const profil = await app.inject({
-      method: 'PUT', url: `/api/organizations/${seeded.organizationId}/dph-profile`, headers,
+      method: 'PUT', url: `/api/organizations/${seeded.organizationId}/profil/fakty/vozidla.pravidla`, headers,
       payload: {
-        platitelDph: 'platitel', obdobieDph: 'mesacne', rezim: 'tuzemsky', nakupyZEu: false, sluzbyZEu: false,
-        prenesenieDp: false, samozdanenieAktivne: false,
-        pravidlaAut: [{
-          kategoria: 'Známka', percento: 50, klucoveSlova: ['znamka'],
-          predkontaciaId: ids.get('predkontacie:Znamka'), predkontaciaNedanovaId: ids.get('predkontacie:Znamka-nedan'),
+        stav: 'potvrdene',
+        hodnota: [{
+          nazov: 'Známka', percentoZakladu: 50, percentoDph: 50, klucoveSlova: ['znamka'],
+          predkontaciaKod: 'Znamka', predkontaciaNedanovaKod: 'Znamka-nedan',
         }],
       },
     });
     expect(profil.statusCode, profil.body).toBe(200);
+    // Profil klienta vracia tie isté návrhy — potvrdené delenie ani tam.
+    expect(profil.json().navrhyDelenia.map((navrh: { klucoveSlova: string[] }) => navrh.klucoveSlova)).toEqual([['natural']]);
 
     const odpoved = await app.inject({ method: 'GET', url: `/api/organizations/${seeded.organizationId}/navrhy-pravidiel-delenia`, headers });
     expect(odpoved.statusCode, odpoved.body).toBe(200);

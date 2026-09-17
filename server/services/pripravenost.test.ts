@@ -34,6 +34,7 @@ function pripravena(): VstupPripravenosti {
     analyza: { stav: 'succeeded', chyba: null, zarazena: predHodinami(4.5), kedy: predHodinami(4), kategorii: 12, zlyhanychDavok: 0 },
     kategorie: true,
     meranie: { kedy: predHodinami(4), vynechane: [] },
+    otazky: { blokujucich: 0, ostatnych: 0 },
   };
 }
 
@@ -141,5 +142,15 @@ describe('pripravenosť firmy', () => {
 
   it('agenda histórie, ktorú meranie nevie merať (OP), meranie nezhodí', () => {
     expect(s({ meranie: { kedy: predHodinami(1), vynechane: [] } }).signaly.meranie).toMatchObject({ stav: 'ok' });
+  });
+
+  it('otázky profilu: blokujúca čaká, ostatné treba overiť, ani jedna firmu nezastaví', () => {
+    const blokujuca = s({ otazky: { blokujucich: 1, ostatnych: 3 } });
+    expect(blokujuca.signaly.otazky).toEqual({ stav: 'caka', dovod: 'otazky_blokujuce', pocet: 1 });
+    expect(blokujuca.stav).toBe('overit');
+    const ostatne = s({ otazky: { blokujucich: 0, ostatnych: 3 } });
+    expect(ostatne.signaly.otazky).toEqual({ stav: 'overit', dovod: 'otazky_otvorene', pocet: 3 });
+    expect(ostatne.stav).toBe('overit');
+    expect(s({}).signaly.otazky).toEqual({ stav: 'ok', dovod: 'ok' });
   });
 });

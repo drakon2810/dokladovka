@@ -705,7 +705,8 @@ export async function zmerajPresnost(
     // Agendy, na ktoré rozpočet vzorky nestačil (viac agend než miest).
     vynechaneAgendy: [...new Set(vsetky.map((doklad) => doklad.agenda))]
       .filter((agenda) => !merane.some((doklad) => doklad.agenda === agenda)),
-    aktualnyStav: ['code_list_items', 'dph_profil', 'organization_series_defaults', 'partners'],
+    // Profil klienta tu nie je: fakty potvrdené po dátume dokladu meranie nevidí (knownAt).
+    aktualnyStav: ['code_list_items', 'organization_series_defaults', 'partners'],
     polozky: 'riadky POHODY po zaúčtovaní — tvar a DPH sú horná hranica',
     webSearch: false,
     vyberVzorky: 'md5(agenda|doklad_cislo), kvóta po agendách, najväčší zvyšok',

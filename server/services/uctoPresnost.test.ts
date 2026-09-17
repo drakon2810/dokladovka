@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/database.js';
-import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { aiOdpoved, createTestDatabase, potvrdFakt, seedTestUser, testConfig } from '../testHelpers.js';
 import {
   castostOtazok, intervalSpolahlivosti, jeRozpisany, ohodnot, presnostNadPrahom, scitajPoAgendach, vyberVzorku, zmerajPresnost,
   type Skutocnost, type VysledokDokladu,
@@ -296,7 +296,7 @@ describe('meranie presnosti zaúčtovania', () => {
 // Neskorší doklad ani nič, čo vzniklo po dátume dokladu, nesmie zmeniť to, čo
 // o skoršom doklade model dostane — ani to, čo z odpovede spraví dospracovanie.
 describe('bez úniku budúcnosti', () => {
-  it('neskorší doklad, pravidlá, príklady, pokyny ani kategórie nezmenia prompt ani výsledok', async () => {
+  it('neskorší doklad, pravidlá, príklady, pokyny, kategórie ani fakty profilu nezmenia prompt ani výsledok', async () => {
     const { database, kde, vloz, kod, riadok } = await firma();
     const p518 = await kod('predkontacie', '518/321');
     const p501 = await kod('predkontacie', '501/321');
@@ -315,6 +315,8 @@ describe('bez úniku budúcnosti', () => {
       `INSERT INTO ai_instructions (id,scope,nazov,text,faza,created_at)
        VALUES ($1,'global','Staré pravidlo','platí','accounting','2026-01-01')`, [randomUUID()],
     );
+    // Fakt profilu potvrdený pred dokladom v prompte byť MÁ.
+    await potvrdFakt(database, kde, 'zasady.tovar_na_ceste', { pouziva: false }, '2026-01-01T00:00:00Z');
 
     // Sekciu KV model nedá: doplní ju prax firmy (kvPreClenenie), ktorá tiež musí stáť k dátumu.
     const parser = {
@@ -350,6 +352,9 @@ describe('bez úniku budúcnosti', () => {
       `INSERT INTO ai_instructions (id,scope,nazov,text,faza,created_at)
        VALUES ($1,'global','Nové pravidlo','platí','accounting','2026-06-01')`, [randomUUID()],
     );
+    // Odpoveď účtovníka až po dátume dokladu: neplatiteľ by zmenil pokyny aj ponuku členení.
+    await potvrdFakt(database, kde, 'dph.status', { status: 'neplatitel' }, '2026-06-01T00:00:00Z');
+    await potvrdFakt(database, kde, 'dph.clenenie_bez_odpoctu', { clenenieKod: 'PN' }, '2026-06-01T00:00:00Z');
     await vloz('ucto_kategorie', {
       nazov: 'Preprava', slovnik: JSON.stringify(['preprava']), predkontacia_id: p501, agendy: JSON.stringify(['FP']), pocet: 30,
     });
@@ -364,6 +369,7 @@ describe('bez úniku budúcnosti', () => {
     expect(predtym.prompt.kategorie).toEqual([]);
     expect(predtym.prompt.pravidla).toContain('Staré pravidlo');
     expect(predtym.prompt.pravidla).not.toContain('Nové pravidlo');
+    expect(predtym.prompt.profilKlienta).toEqual({ platitelDph: 'nezname', pokyny: ['Firma tovar na ceste (účet 139) neúčtuje.'] });
   }, 120_000);
 });
 

@@ -2,8 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { requireBrowserAuth } from '../auth.js';
 import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
-import { mapDphProfilRow } from '../services/dphProfileService.js';
-import { mapUctovnyProfilRow } from '../services/accountingProfileService.js';
 import { mapPartnerRow } from '../services/partnerService.js';
 
 function iso(value: unknown): string | undefined {
@@ -32,8 +30,8 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
     // Pool (max 10) prebytočné zaradí do fronty; PGlite serializuje interne.
     const [
       queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
-      extractionRuns, suggestions, dphAudit, payments, approvalRules, dphProfiles,
-      accountingProfiles, partners, noteTemplates, emailTemplates, orgDocuments, codeListRows, seriesDefaults,
+      extractionRuns, suggestions, dphAudit, payments, approvalRules,
+      partners, noteTemplates, emailTemplates, orgDocuments, codeListRows, seriesDefaults,
       users, batches, integration, installations, links, jobs, priprava,
     ] = await Promise.all([
       inScope('document_queues', 'name'),
@@ -65,8 +63,6 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       inScope('dph_audit', 'updated_at DESC'),
       inScope('document_payments', 'paid_on DESC'),
       inScope('approval_rules', 'organization_id'),
-      inScope('organization_dph_profiles', 'organization_id'),
-      inScope('organization_accounting_profiles', 'organization_id'),
       inScope('partners', 'name'),
       inScope('note_templates', 'created_at'),
       inScope('email_templates', 'name'),
@@ -226,8 +222,6 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
         organizationId: row.organization_id, documentType: row.document_type, ciselnyRadId: row.ciselny_rad_id,
         pokladnaKod: row.pokladna_kod ?? undefined,
       })),
-      dphProfiles: dphProfiles.rows.map(mapDphProfilRow),
-      accountingProfiles: accountingProfiles.rows.map(mapUctovnyProfilRow),
       partners: partners.rows.map(mapPartnerRow),
       noteTemplates: noteTemplates.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, organizationId: row.organization_id, text: row.text,

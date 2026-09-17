@@ -461,6 +461,9 @@ function polozkyPreModel(extracted: unknown) {
     sadzbaDph: typeof polozka.sadzbaDph === 'number' ? polozka.sadzbaDph : undefined,
     suma: typeof polozka.sumaSpolu === 'number' ? polozka.sumaSpolu : undefined,
     zaklad: typeof polozka.sumaBezDph === 'number' ? polozka.sumaBezDph : undefined,
+    // Cudziu daň normalizácia oddelí do vlastnej položky „…-dph" — podľa textu
+    // popisu („DPH IT 22 %") by ju engine spoznával len hádaním.
+    ...(typeof polozka.id === 'string' && polozka.id.endsWith('-dph') ? { cudziaDan: true } : {}),
   }));
 }
 

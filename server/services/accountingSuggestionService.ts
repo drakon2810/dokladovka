@@ -6,7 +6,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database, Queryable } from '../db/database.js';
 import { nacitajPokyny, pokynyPreModel } from './aiInstructionsService.js';
 import {
-  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph, pravidloPlati, sadzbyDphPre,
+  clenenieVyzeraNaOdpocet, dphPokynyPreAi, jeCudziDodavatel, najdiKlucoveSlovo, posudDph, sadzbyDphPre,
 } from './dphAdvisor.js';
 import { kosinus, vektorZRiadku, vytvorVektory, type Embedder } from './embeddingService.js';
 import { loadDphProfil, predvolenyDphProfil } from './dphProfileService.js';
@@ -17,7 +17,7 @@ import {
   DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, sekciaKvKluc, sporPraxe, variantyRozpisu,
   type PraxVariant,
 } from './uctoPravidlaService.js';
-import { jeDovozTovaru } from './pohodaDphKody.js';
+import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
 
 interface SuggestionInput {
   tenantId: string;
@@ -2018,15 +2018,19 @@ const BEZ_ODPOCTU_PREVAHA = 0.9;
  * Počítajú sa LEN položky. Hlavička rozdeleného dokladu nesie odpočtové
  * členenie aj vtedy, keď ho žiadny riadok neuplatní — repre má osem takých
  * hlavičiek a s nimi by prevahu nedosiahlo, hoci na položkách neodpočítava.
+ *
+ * Ten istý výber robí profil klienta pre fakt „účty bez nároku" (s prahom
+ * návrhu z histórie), preto sa dá zmeniť prah a vracia aj počet dokladov.
  */
-async function uctyBezOdpoctu(
+export async function uctyBezOdpoctu(
   database: Queryable,
   input: { tenantId: string; organizationId: string },
   agendy: readonly string[],
   /** Kód členenia BEZ nároku na odpočet → id. Iné sem nemajú čo robiť. */
   cleneniaBezOdpoctu: Map<string, string>,
   doDatumu?: string,
-): Promise<Map<string, string>> {
+  minDokladov = BEZ_ODPOCTU_DOKLADOV,
+): Promise<Map<string, { id: string; dokladov: number }>> {
   if (agendy.length === 0 || cleneniaBezOdpoctu.size === 0) return new Map();
   const rows = (await database.query<Record<string, any>>(
     `SELECT btrim(predkontacia_kod) AS ucet, btrim(clenenie_dph_kod) AS clenenie,
@@ -2046,12 +2050,12 @@ async function uctyBezOdpoctu(
     const id = cleneniaBezOdpoctu.get(String(row.clenenie));
     const dokladov = Number(row.dokladov);
     const spolu = Number(row.spolu);
-    if (!id || dokladov < BEZ_ODPOCTU_DOKLADOV) continue;
+    if (!id || dokladov < minDokladov) continue;
     if (!(spolu > 0) || dokladov / spolu < BEZ_ODPOCTU_PREVAHA) continue;
     const ucet = String(row.ucet);
     if ((najcastejsie.get(ucet)?.dokladov ?? 0) < dokladov) najcastejsie.set(ucet, { id, dokladov });
   }
-  return new Map([...najcastejsie].map(([ucet, hodnota]) => [ucet, hodnota.id]));
+  return najcastejsie;
 }
 
 /**
@@ -2484,7 +2488,8 @@ export interface AiSuggestionDocumentContext {
   lineDescriptions: string[];
   /** Položky so sadzbou DPH — sadzba na doklade je pre model dôkaz o režime. */
   /** suma = s DPH; zaklad = základ z extrakcie či korpusu, keď je známy. */
-  polozky?: Array<{ popis?: string; sadzbaDph?: number; suma?: number; zaklad?: number }>;
+  /** cudziaDan = položka zahraničnej dane, ktorú extrakcia oddelila (id „…-dph"). */
+  polozky?: Array<{ popis?: string; sadzbaDph?: number; suma?: number; zaklad?: number; cudziaDan?: boolean }>;
   /**
    * Sadzby z rozpisu DPH. Bloček sa často prečíta bez položiek, ale s rozpisom
    * — a sadzby sa doteraz zbierali VÝLUČNE z položiek, takže model dostal
@@ -2965,12 +2970,22 @@ export async function navrhniZauctovanie(
       ...doklady.flatMap(({ doklad }) => [doklad.hlavicka, ...doklad.polozky].map((riadok) => riadok?.predkontaciaId))],
   );
 
-  // DPH profil klienta: pokyny idú do promptu ako dáta a pre organizáciu bez
-  // nároku na odpočet sa ponuka členení zúži na členenie bez odpočtu — model
-  // tak odpočet ani nemôže navrhnúť.
-  const dphProfil = await loadDphProfil(database, input.tenantId, input.organizationId);
+  // DPH profil klienta (len potvrdené fakty, pri meraní len tie spred dokladu):
+  // pokyny idú do promptu ako dáta a pre organizáciu bez nároku na odpočet sa
+  // ponuka členení zúži na členenie bez odpočtu — model tak odpočet ani nemôže navrhnúť.
+  const dphProfil = await loadDphProfil(database, input.tenantId, input.organizationId, { knownAt: asOf });
   const vsetkyClenenia = byKind('cleneniaDph');
-  let cleneniaDph = vsetkyClenenia;
+  // Kódy, ktoré na doklad nepatria bez ohľadu na históriu: DD je daň pri
+  // samozdanení a patrí na interný doklad, nikdy na faktúru — firma bez histórie
+  // na agende ho inak dostať mohla. Krátenie (PK) nepatrí firme, ktorá podľa
+  // účtovníka oslobodené plnenia nemá. Model ich nedostane a vrátený sa zahodí.
+  const zakazaneClenenie = (kod: string): string | undefined => {
+    const popis = popisKodu(kod);
+    if (popis?.strana === 'DD' && (documentContext.documentType === 'FP' || documentContext.documentType === 'FV')) return 'clenenie_strana_dd';
+    if (dphProfil?.oslobodenePlnenia === false && popis?.strana === 'P' && popis.kod.startsWith('PK')) return 'clenenie_kratenie';
+    return undefined;
+  };
+  let cleneniaDph = vsetkyClenenia.filter((item) => !zakazaneClenenie(item.kod));
 
   // Z ponuky vypadne LEN kód s dôkazom, že patrí na iný doklad: nula použití na
   // tejto agende a nenulová inde. Kód, ktorý firma nepoužila nikde, ostáva —
@@ -3017,16 +3032,13 @@ export async function navrhniZauctovanie(
     if (zuzene.length > 0) cleneniaDph = zuzene;
   }
 
-  if (dphProfil && dphProfil.platitelDph !== 'platitel' && dphProfil.clenenieBezOdpoctuId) {
+  // Len potvrdený neplatiteľ: bez potvrdeného statusu (nezname) nevieme nič.
+  if ((dphProfil?.platitelDph === 'neplatitel' || dphProfil?.platitelDph === 'registracia_7a') && dphProfil.clenenieBezOdpoctuId) {
     const bezOdpoctu = cleneniaDph.filter((item) => item.id === dphProfil.clenenieBezOdpoctuId);
     if (bezOdpoctu.length > 0) cleneniaDph = bezOdpoctu;
   }
   const profilKlienta = dphProfil
-    ? {
-        platitelDph: dphProfil.platitelDph,
-        rezim: dphProfil.rezim,
-        pokyny: dphPokynyPreAi(dphProfil),
-      }
+    ? { platitelDph: dphProfil.platitelDph, pokyny: dphPokynyPreAi(dphProfil) }
     : undefined;
 
   // Textové pravidlá pre návrh zaúčtovania — tu už poznáme typ dokladu aj text
@@ -3055,7 +3067,7 @@ export async function navrhniZauctovanie(
   // dostane počet vynechaných a riadok pre vynechanú položku overením neprejde.
   // ponytail: 200 položiek × 120 znakov popisu; hromadný doklad nad strop by
   // potreboval dávky po položkách a zlúčenie rozpisu.
-  const polozkyDokladu: Array<{ popis?: string; sadzbaDph?: number; suma?: number; zaklad?: number }> = documentContext.polozky
+  const polozkyDokladu: Array<{ popis?: string; sadzbaDph?: number; suma?: number; zaklad?: number; cudziaDan?: boolean }> = documentContext.polozky
     ?? documentContext.lineDescriptions.map((popis) => ({ popis }));
   const polozkyPreModel = polozkyDokladu.slice(0, 200);
 
@@ -3316,12 +3328,22 @@ export async function navrhniZauctovanie(
   // číselný rad sa nepočítajú — rad určuje nastavenie firmy (radPreTyp nižšie),
   // takže model, ktorý nič nespoznal, by inak prázdnou odpoveďou prepísal dobrý
   // deterministický návrh (napr. predvoľbu partnera s istotou 0.9).
-  // Zúženie ponuky samo osebe nič nezakazuje — modelu vie ten istý kód podsunúť
-  // hneď dvoje: pokyny DPH profilu ho píšu do promptu doslovne aj s id
-  // („použi členenie DPH s id …", dphAdvisor.ts), a onlyActiveIds kontroluje iba
-  // active=true. Bez tejto poistky by DDsl§69 skončilo na prijatej faktúre
-  // rovnako ako predtým, len tichšie. Kód dokázateľne patriaci na iný doklad sa
-  // preto zahodí a rozhodne ďalší zdroj v poradí.
+  // Zúženie ponuky samo osebe nič nezakazuje — model kód pozná z histórie či
+  // pokynov a onlyActiveIds kontroluje iba active=true. Kód, ktorý na doklad
+  // nepatrí nikdy (DD na faktúre, krátenie bez oslobodených plnení), sa preto
+  // zahodí z odpovede modelu aj bez histórie; pravidlo účtovníka a kód z dokladu ostávajú.
+  if (validated.clenenie_dph_id && !pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
+    const kod = vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)?.kod ?? '';
+    const dovod = zakazaneClenenie(kod);
+    if (dovod) {
+      console.warn(`[ai-navrh] ${input.documentId}: členenie ${kod.trim()} na ${documentContext.documentType} nepatrí (${dovod}) — zahadzujem`);
+      zmen('clenenieDphId', validated.clenenie_dph_id, undefined, dovod);
+      delete validated.clenenie_dph_id;
+    }
+  }
+  // Rovnako kód dokázateľne patriaci na iný doklad: bez tejto poistky by DDsl§69
+  // skončilo na prijatej faktúre rovnako ako predtým, len tichšie. Rozhodne
+  // ďalší zdroj v poradí.
   if (mameHistoriuTu && validated.clenenie_dph_id) {
     const kod = vsetkyClenenia.find((item) => item.id === validated.clenenie_dph_id)?.kod.trim();
     const stat = kod ? pouzitie.get(kod) : undefined;
@@ -3351,7 +3373,9 @@ export async function navrhniZauctovanie(
     const zHistorie = kodClenenia
       ? vsetkyClenenia.find((item) => item.kod.trim() === kodClenenia.trim())?.id
       : undefined;
-    if (zHistorie && zHistorie !== validated.clenenie_dph_id) {
+    // Kód, ktorý potvrdený profil zakazuje (krátenie bez oslobodených plnení, DD
+    // na faktúre), nevráti ani história účtu — fakt má prednosť pred zvykom.
+    if (zHistorie && zHistorie !== validated.clenenie_dph_id && !zakazaneClenenie(kodClenenia!)) {
       console.info(`[ai-navrh] ${input.documentId}: členenie ${kodClenenia} podľa účtu ${String(kodUctu).trim()}`
         + ' — firma iné na ňom nemala');
       zmen('clenenieDphId', validated.clenenie_dph_id, zHistorie, 'clenenie_podla_uctu');
@@ -3380,6 +3404,25 @@ export async function navrhniZauctovanie(
   const bezOdpoctuPreUcet = await uctyBezOdpoctu(
     database, input, korpus.agendy, cleneniaBezOdpoctu,
     documentContext.historiaDoDatumu);
+  // Účet bez nároku potvrdený účtovníkom platí od prvého dokladu, aj bez
+  // histórie, a má prednosť pred ňou. Pravidlo a kód z dokladu ostávajú nad ním.
+  for (const ucet of dphProfil?.bezNarokuUcty ?? []) {
+    bezOdpoctuPreUcet.set(ucet.predkontaciaKod, { id: ucet.clenenieDphId, dokladov: 0 });
+  }
+  // Členenie bez nároku, keď ho treba dosadiť: z profilu klienta, inak to,
+  // ktorým firma na tejto agende neodpočítava najčastejšie. Keď nie je ani
+  // jedno, nie je čím nahradiť.
+  // ponytail: firma bez histórie aj bez profilu dostane prvé neodpočtové
+  // členenie z číselníka (PN aj PNeviem sú oba „bez nároku"). Istota ostáva
+  // na 0.8, takže doklad aj tak otvára účtovník; keby to vadilo, patrí sem
+  // výber podľa kv_section, nie podľa poradia v číselníku.
+  const clenenieBezNaroku = (dphProfil?.clenenieBezOdpoctuId
+    && vsetkyClenenia.some((item) => item.id === dphProfil.clenenieBezOdpoctuId)
+    ? dphProfil.clenenieBezOdpoctuId
+    : undefined)
+    ?? [...cleneniaBezOdpoctu]
+      .map(([kod, id]) => ({ id, tu: pouzitie.get(kod)?.tu ?? 0 }))
+      .sort((a, b) => b.tu - a.tu)[0]?.id;
   /**
    * Náhradné členenie pre účet, ktorý odpočet nepripúšťa — alebo nič, keď ho
    * zvolené členenie už neuplatňuje. Iné členenie bez odpočtu je rozhodnutie
@@ -3390,7 +3433,7 @@ export async function navrhniZauctovanie(
     clenenieDphId: string | undefined,
   ): string | undefined => {
     const kodUctu = codeLists.rows.find((row) => row.id === predkontaciaId)?.code?.trim();
-    const nahrada = kodUctu ? bezOdpoctuPreUcet.get(kodUctu) : undefined;
+    const nahrada = kodUctu ? bezOdpoctuPreUcet.get(kodUctu)?.id : undefined;
     if (!nahrada || nahrada === clenenieDphId) return undefined;
     const zvolene = vsetkyClenenia.find((item) => item.id === clenenieDphId);
     return !zvolene || clenenieVyzeraNaOdpocet(zvolene) ? nahrada : undefined;
@@ -3404,6 +3447,24 @@ export async function navrhniZauctovanie(
         + ' — členenie prepísané na bez nároku');
       zmen('clenenieDphId', validated.clenenie_dph_id, nahrada, 'ucet_bez_odpoctu');
       validated.clenenie_dph_id = nahrada;
+    }
+  }
+
+  // Samozdanenie z profilu: faktúra cudzieho dodávateľa bez dane dostane
+  // členenie, ktoré účtovník potvrdil pre druhy plnenia z jeho územia — ak je
+  // pre všetky rovnaké (druh plnenia z dokladu nevyčítame). Prebije odpoveď
+  // modelu aj históriu účtu; pravidlo a kód z dokladu nie. KV určí reťaz nižšie.
+  if (typ === 'FP' && dphProfil && !pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
+    const zFaktu = posudDph({ documentType: typ, extracted: (ulozeny.extracted ?? {}) as Record<string, unknown> }, dphProfil)
+      .navrhy.find((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat')?.clenenieDphId;
+    // Neplatiteľ a §7a smú mať len potvrdené členenie bez odpočtu — iný kód faktúry
+    // by záverečná kontrola zablokovala a návrh by zmizol celý.
+    const mimoNeplatitela = dphProfil.platitelDph !== 'platitel' && dphProfil.clenenieBezOdpoctuId !== undefined
+      && zFaktu !== dphProfil.clenenieBezOdpoctuId;
+    if (zFaktu && zFaktu !== validated.clenenie_dph_id && !mimoNeplatitela) {
+      console.info(`[ai-navrh] ${input.documentId}: cudzí dodávateľ bez DPH — členenie samozdanenia z profilu klienta`);
+      zmen('clenenieDphId', validated.clenenie_dph_id, zFaktu, 'fakt_samozdanenie');
+      validated.clenenie_dph_id = zFaktu;
     }
   }
 
@@ -3493,21 +3554,9 @@ export async function navrhniZauctovanie(
   if (typ !== 'FV' && kvKod === 'KN' && zvoleneClenenie && clenenieVyzeraNaOdpocet(zvoleneClenenie)
     && !jeDovozTovaru(zvoleneClenenie.kod)
     && !pravidlo.candidate.clenenie_dph_id && !naDoklade.clenenieDphId) {
-    // Členenie z profilu klienta, inak to, ktorým firma na tejto agende
-    // neodpočítava najčastejšie. Keď nemá ani jedno, nemáme čím nahradiť
-    // a rozpor ostáva na účtovníkovi — tichý odpočet je aj tak menšie zlo než
-    // vymyslený kód.
-    // ponytail: firma bez histórie aj bez DPH profilu dostane prvé neodpočtové
-    // členenie z číselníka (PN aj PNeviem sú oba „bez nároku"). Istota ostáva
-    // na 0.8, takže doklad aj tak otvára účtovník; keby to vadilo, patrí sem
-    // výber podľa kv_section, nie podľa poradia v číselníku.
-    const nahrada = (dphProfil?.clenenieBezOdpoctuId
-      && vsetkyClenenia.some((item) => item.id === dphProfil.clenenieBezOdpoctuId)
-      ? dphProfil.clenenieBezOdpoctuId
-      : undefined)
-      ?? [...cleneniaBezOdpoctu]
-        .map(([kod, id]) => ({ id, tu: pouzitie.get(kod)?.tu ?? 0 }))
-        .sort((a, b) => b.tu - a.tu)[0]?.id;
+    // Keď firma nemá členenie bez nároku, rozpor ostáva na účtovníkovi — tichý
+    // odpočet je aj tak menšie zlo než vymyslený kód.
+    const nahrada = clenenieBezNaroku;
     if (nahrada) {
       console.info(`[ai-navrh] ${input.documentId}: členenie ${zvoleneClenenie.kod} uplatňuje odpočet,`
         + ' ale sekcia KV je KN — prepisujem na členenie bez nároku');
@@ -3839,13 +3888,15 @@ export async function navrhniZauctovanie(
   // delenie deterministické a model doň nemá čo hovoriť — preto sa jeho riadok
   // na tej položke nahradí.
   //
+  // Pomerné odpočítanie (§ 49 ods. 4) reže tým istým mechanizmom: obe časti na
+  // tom istom účte, neodpočítaná s členením bez nároku.
+  //
   // Doklad bez položiek sa nerozreže; pravidlo vtedy ostáva upozornením
   // (posudDph) a pokynom do promptu (dphPokynyPreAi), ako doteraz.
   const aktivnePredkontacie = new Set(codeLists.rows
     .filter((row) => row.kind === 'predkontacie').map((row) => row.id));
-  const pravidlaRezu = (dphProfil?.pravidlaAut ?? []).filter((pravidlo) =>
+  const pravidlaRezu = [...(dphProfil?.pravidlaAut ?? []), ...(dphProfil?.pomerneOdpocitanie ?? [])].filter((pravidlo) =>
     pravidlo.klucoveSlova.length > 0
-    && pravidloPlati(pravidlo, datumPlnenia)
     && pravidlo.percento > 0 && pravidlo.percento < 100
     && pravidlo.predkontaciaId && pravidlo.predkontaciaNedanovaId
     && aktivnePredkontacie.has(pravidlo.predkontaciaId)
@@ -3884,6 +3935,25 @@ export async function navrhniZauctovanie(
       ]);
       console.info(`[ai-navrh] ${input.documentId}: položka ${index} rozrezaná podľa profilu`
         + ` (${pravidlo.kategoria}, základ ${pravidlo.percento} %, daň ${pravidlo.percentoDph ?? pravidlo.percento} %)`);
+    });
+  }
+  // Vrátenie zahraničnej DPH (§55a): položka cudzej dane, ktorú extrakcia
+  // oddelila, je pohľadávka voči cudziemu štátu — nie náklad a nie odpočet.
+  // Keď firma podľa účtovníka vrátenie uplatňuje, ide na jeho predkontáciu
+  // s členením bez nároku a mimo kontrolného výkazu.
+  const vratenie = dphProfil?.vratenieDph;
+  if (vratenie?.uplatnujeme && vratenie.predkontaciaId && aktivnePredkontacie.has(vratenie.predkontaciaId)) {
+    polozkyPreModel.forEach((polozka, index) => {
+      if (!polozka.cudziaDan) return;
+      zmeny.push({
+        pole: 'riadok', index,
+        z: (parsed.riadky ?? []).find((riadok) => riadok.index === index)?.predkontaciaId ?? null,
+        na: vratenie.predkontaciaId!, dovod: 'fakt_vratenie_dph',
+      });
+      rezyProfilu.set(index, [{
+        index, popis: polozka.popis ?? '', predkontaciaId: vratenie.predkontaciaId!,
+        ...(clenenieBezNaroku ? { clenenieDphId: clenenieBezNaroku } : {}), clenenieKvKod: 'KN',
+      }]);
     });
   }
   const vsetkyRiadky = rezyProfilu.size === 0

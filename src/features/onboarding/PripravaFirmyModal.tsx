@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { create } from 'zustand';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../auth/AuthContext';
 import type { Organization, PripravaFirmy, PripravenostFirmy, SignalPripravenosti } from '../../data/types';
 import { Modal } from '../../components/ui';
 import { analyzeUctoProfil, backfillUctoHistory, nacitajPripravenost } from '../../data/api';
@@ -283,6 +284,9 @@ interface Props {
 
 export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat }: Props) {
   const navigate = useNavigate();
+  // Profil klienta otvára len ten, kto účtuje — schvaľovateľa by route vrátila na úvod.
+  const role = useAuth().session?.user.role;
+  const mozeDoProfilu = role === 'admin' || role === 'uctovnik';
   const beziZaznam = usePripravaStore((stav) => stav.bezi);
   const pripravenost = usePripravenost(organizacia.id);
   const stavy = useMemo(() => stavKrokov(priprava, organizacia, pripravenost), [priprava, organizacia, pripravenost]);
@@ -393,6 +397,24 @@ export function PripravaFirmyModal({ organizacia, priprava, onClose, onKopirovat
           );
         })}
       </div>
+
+      {/* Otázky profilu klienta nie sú krok — pripravenosť neblokujú (ako meranie),
+          len pripomenú, že bez odpovedí sa DPH niektorých dokladov určí zle. */}
+      {pripravenost?.signaly.otazky && pripravenost.signaly.otazky.stav !== 'ok' && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900">
+          <span>{dovodPripravenosti(pripravenost.signaly.otazky)}</span>
+          {mozeDoProfilu && <button
+            type="button"
+            className="btn px-2.5 py-1 text-xs"
+            onClick={() => {
+              onClose();
+              navigate('/profil-klienta');
+            }}
+          >
+            {t('priprava.otvoritProfil')}
+          </button>}
+        </div>
+      )}
 
       <div className="pf-pata">
         <span className="pf-poznamka">{poznamkaPaty(vsetkoHotove, pripravenost)}</span>

@@ -21,6 +21,7 @@ import { registerPartnerRoutes } from './routes/partnerRoutes.js';
 import { registerAiTrainingRoutes } from './routes/aiTrainingRoutes.js';
 import { registerAiInstructionRoutes } from './routes/aiInstructionRoutes.js';
 import { registerUctoProfileRoutes } from './routes/uctoProfileRoutes.js';
+import { registerProfilRoutes } from './routes/profilRoutes.js';
 import { registerAssistantRoutes } from './routes/assistantRoutes.js';
 import { registerCompanyRegistryRoutes } from './routes/companyRegistryRoutes.js';
 import { registerSharePointRoutes, type SharePointClientFactory } from './routes/sharepointRoutes.js';
@@ -105,6 +106,7 @@ export async function buildApp(input: {
   registerAiTrainingRoutes(app, input.database, input.config, input.aiRulesParser);
   registerAiInstructionRoutes(app, input.database, input.config, input.aiRulesParser);
   registerUctoProfileRoutes(app, input.database, input.config, input.uctoProfileParser);
+  registerProfilRoutes(app, input.database);
   registerAssistantRoutes(app, input.database, input.storage, input.config, input.assistantParser);
   registerCompanyRegistryRoutes(app, input.database, input.config);
 

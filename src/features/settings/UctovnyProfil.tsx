@@ -2,12 +2,11 @@ import { useEffect, useState } from 'react';
 import {
   UCTO_AGENDA_NAZOV, UCTO_AGENDY,
   analyzaStav, analyzeUctoProfil, backfillUctoHistory, deleteUctoKategoria, getUctoHistoryStats,
-  listNavrhyPravidielDelenia, listUctoKategorie, listUctoPravidla, saveDphProfile, updateUctoKategoria,
-  type AnalyzaBeh, type NavrhPravidlaDelenia, type UctoHistoryStats, type UctoKategoria, type UctoPravidlo,
+  listUctoKategorie, listUctoPravidla, updateUctoKategoria,
+  type AnalyzaBeh, type UctoHistoryStats, type UctoKategoria, type UctoPravidlo,
 } from '../../data/api';
 import { useDataQuery } from '../../data/query';
-import { CLENENIE_KV_KODY, type DphProfil } from '../../data/types';
-import { useAuth } from '../../auth/AuthContext';
+import { CLENENIE_KV_KODY } from '../../data/types';
 import { showToast } from '../../components/toast';
 import { t } from '../../i18n/sk';
 
@@ -30,13 +29,10 @@ interface KategoriaUprava {
 
 export function UctovnyProfil({ orgId }: { orgId: string }) {
   const { data } = useDataQuery();
-  // DPH profil ukladá len admin (server účtovníkovi vráti 403).
-  const mozeDoProfilu = useAuth().session?.user.role === 'admin';
   const [stats, setStats] = useState<UctoHistoryStats>();
   const [kategorie, setKategorie] = useState<UctoKategoria[]>([]);
   const [pravidla, setPravidla] = useState<UctoPravidlo[]>([]);
-  const [navrhyDelenia, setNavrhyDelenia] = useState<NavrhPravidlaDelenia[]>([]);
-  const [busy, setBusy] = useState<'analyza' | 'kategoria' | 'delenie'>();
+  const [busy, setBusy] = useState<'analyza' | 'kategoria'>();
   const [beh, setBeh] = useState<AnalyzaBeh | null>(null);
   const analyzaBezi = beh?.status === 'queued' || beh?.status === 'running';
   const [uprava, setUprava] = useState<KategoriaUprava>();
@@ -44,16 +40,14 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
   const [agenda, setAgenda] = useState<string>();
 
   async function obnov() {
-    const [nasledujuce, zoznam, odvodene, delenia] = await Promise.all([
+    const [nasledujuce, zoznam, odvodene] = await Promise.all([
       getUctoHistoryStats(orgId).catch(() => undefined),
       listUctoKategorie(orgId).catch(() => []),
       listUctoPravidla(orgId).catch(() => []),
-      listNavrhyPravidielDelenia(orgId).catch(() => []),
     ]);
     setStats(nasledujuce);
     setKategorie(zoznam);
     setPravidla(odvodene);
-    setNavrhyDelenia(delenia);
   }
 
   useEffect(() => {
@@ -61,7 +55,6 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
     setStats(undefined);
     setKategorie([]);
     setPravidla([]);
-    setNavrhyDelenia([]);
     setUprava(undefined);
     setAgenda(undefined);
     setBeh(null);
@@ -72,14 +65,12 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       // Beh sa načíta hneď pri otvorení: analýzu mohol spustiť aj niekto iný,
       // alebo ten istý účtovník pred hodinou z iného počítača.
       analyzaStav(orgId).catch(() => null),
-      listNavrhyPravidielDelenia(orgId).catch(() => []),
-    ]).then(([nasledujuce, zoznam, odvodene, poslednyBeh, delenia]) => {
+    ]).then(([nasledujuce, zoznam, odvodene, poslednyBeh]) => {
       if (!active) return;
       setStats(nasledujuce);
       setKategorie(zoznam);
       setPravidla(odvodene);
       setBeh(poslednyBeh);
-      setNavrhyDelenia(delenia);
     });
     return () => {
       active = false;
@@ -215,45 +206,6 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
       setBusy(undefined);
     }
   }
-
-  /**
-   * Návrh delenia sa pridá do pravidiel áut DPH profilu cez to isté uloženie
-   * ako na karte profilu klienta — iný zápis profilu nie je. Firma bez profilu
-   * dostane predvolené nastavenia tej karty.
-   */
-  async function pouziDelenie(navrh: NavrhPravidlaDelenia) {
-    if (!window.confirm(t('uctoProfil.deleniaPotvrdenie'))) return;
-    const profil: DphProfil = data?.dphProfiles?.find((item) => item.organizationId === orgId) ?? {
-      organizationId: orgId, tenantId: '', platitelDph: 'platitel', obdobieDph: 'mesacne', koeficient: [],
-      pomerneOdpocitanie: [], rezim: 'tuzemsky', nakupyZEu: false, sluzbyZEu: false, prenesenieDp: false,
-      pravidlaAut: [], bezNaroku: [], samozdanenieAktivne: false,
-    };
-    // Server prijíma profil bez identity a času zmeny (striktná schéma).
-    const { organizationId: _organizacia, tenantId: _tenant, updatedAt: _zmenene, ...zaklad } = profil;
-    setBusy('delenie');
-    try {
-      await saveDphProfile(orgId, {
-        ...zaklad,
-        pravidlaAut: [...zaklad.pravidlaAut, {
-          kategoria: navrh.klucoveSlova.slice(0, 3).join(', ') || t('uctoProfil.deleniaKategoria'),
-          percento: navrh.percento,
-          klucoveSlova: navrh.klucoveSlova,
-          ...(navrh.percentoDph !== undefined ? { percentoDph: navrh.percentoDph } : {}),
-          predkontaciaId: navrh.predkontaciaId,
-          predkontaciaNedanovaId: navrh.predkontaciaNedanovaId,
-          ...(navrh.clenenieDphNedanoveId ? { clenenieDphNedanoveId: navrh.clenenieDphNedanoveId } : {}),
-        }],
-      });
-      setNavrhyDelenia((zoznam) => zoznam.filter((item) => item !== navrh));
-      showToast(t('uctoProfil.deleniaPridane'));
-    } catch (cause) {
-      showToast(cause instanceof Error ? cause.message : t('chyba.vseobecna'), { tone: 'error' });
-    } finally {
-      setBusy(undefined);
-    }
-  }
-  const kodPredkontacie = (id: string) =>
-    data?.codeLists.predkontacie.find((item) => item.id === id)?.kod ?? '—';
 
   // Kódy číselníkov firmy pre našepkávanie pri úprave (natívny datalist).
   // „BEZ…" predkontácie sa nenašepkávajú — server ich pri úprave odmieta.
@@ -412,43 +364,6 @@ export function UctovnyProfil({ orgId }: { orgId: string }) {
           </div>
         )}
       </section>
-
-      {/* Delenie položky, ktoré firma robí stále rovnako (PHM 80/20, daň 50/50).
-          Návrh nič nemení — pravidlo vznikne až po „Použiť" a potvrdení. */}
-      {navrhyDelenia.length > 0 && (
-        <section className="border-t border-line pt-3">
-          <h4 className="text-[13px] font-semibold">{t('uctoProfil.deleniaNadpis')}</h4>
-          <p className="mt-1 max-w-3xl text-xs text-ink-soft">{t('uctoProfil.deleniaPopis')}</p>
-          <ul className="mt-2 space-y-2 text-[13px]">
-            {navrhyDelenia.map((navrh) => (
-              <li key={`${navrh.predkontaciaId}-${navrh.predkontaciaNedanovaId}-${navrh.klucoveSlova.join(',')}`}
-                className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <b className="tnum">{navrh.percento} % / {100 - navrh.percento} %</b>{' '}
-                  {t('uctoProfil.deleniaZaklad')}
-                  {navrh.percentoDph !== undefined && (
-                    <span>
-                      {' · '}<b className="tnum">{navrh.percentoDph} % / {100 - navrh.percentoDph} %</b> {t('uctoProfil.deleniaDan')}
-                    </span>
-                  )}
-                  {' · '}{kodPredkontacie(navrh.predkontaciaId)} + {kodPredkontacie(navrh.predkontaciaNedanovaId)}
-                  <span className="block text-[11.5px] text-ink-soft">
-                    {t('uctoProfil.deleniaSlova')}: {navrh.klucoveSlova.join(', ')}
-                    {' · '}{navrh.dokladov} {t('uctoProfil.deleniaDokladov')}
-                    {navrh.priklady.length > 0
-                      && `, ${t('uctoProfil.deleniaPriklad')} ${navrh.priklady.map((priklad) => `${priklad.cislo} (${priklad.datum})`).join(', ')}`}
-                  </span>
-                </div>
-                <button type="button" className="btn px-2.5 py-1 text-xs" disabled={busy !== undefined || !mozeDoProfilu}
-                  title={mozeDoProfilu ? undefined : t('uctoProfil.deleniaLenAdmin')}
-                  onClick={() => void pouziDelenie(navrh)}>
-                  {t('uctoProfil.deleniaPouzit')}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
 
       {kategorie.length === 0 ? (
         <p className="text-[13px] text-ink-soft">{t('uctoProfil.ziadneKategorie')}</p>

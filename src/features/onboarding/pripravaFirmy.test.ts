@@ -30,7 +30,7 @@ const caka: SignalPripravenosti = { stav: 'caka', dovod: 'ciselniky_chybaju' };
 const pripravenost = (
   stav: PripravenostFirmy['stav'], signaly: Partial<PripravenostFirmy['signaly']>,
 ): PripravenostFirmy => ({
-  stav, signaly: { mostik: ok, firma: ok, ciselniky: ok, historia: ok, profil: ok, meranie: ok, ...signaly },
+  stav, signaly: { mostik: ok, firma: ok, ciselniky: ok, historia: ok, profil: ok, meranie: ok, otazky: ok, ...signaly },
 });
 
 describe('príprava firmy', () => {
@@ -147,5 +147,9 @@ describe('príprava firmy', () => {
       historia: { stav: 'chyba', dovod: 'historia_neuplna', detail: 'agenda FP: parts' },
       meranie: { stav: 'overit', dovod: 'meranie_chyba' },
     }))).toBe(`${t('pripravenost.historia_neuplna')} (agenda FP: parts)`);
+    // Otázky profilu klienta nie sú krok sprievodcu, dôvod však musí mať text.
+    expect(upozorneniePripravenosti(pripravenost('overit', { otazky: { stav: 'caka', dovod: 'otazky_blokujuce', pocet: 1 } })))
+      .toBe(t('pripravenost.otazky_blokujuce'));
+    expect(t('pripravenost.otazky_otvorene')).toBeTruthy();
   });
 });

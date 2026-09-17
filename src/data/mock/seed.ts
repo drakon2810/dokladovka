@@ -875,8 +875,6 @@ export function buildSeedState() {
     exportJobs: [],
     payments: [],
     approvalRules: [],
-    dphProfiles: [],
-    accountingProfiles: [],
     partners: [],
     noteTemplates: [],
     seriesDefaults: [],

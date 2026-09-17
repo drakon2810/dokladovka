@@ -26,7 +26,7 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
         WHERE tenant_id=$1 AND organization_id=$2 AND druh='historia' ${podmienka}
         ORDER BY created_at DESC LIMIT 1`, scope,
     );
-    const [integracia, agenti, prepojenie, synchronizacia, ciselniky, posledny, publikovany, stara, analyza, kategorie, meranie] = await Promise.all([
+    const [integracia, agenti, prepojenie, synchronizacia, ciselniky, posledny, publikovany, stara, analyza, kategorie, meranie, otazky] = await Promise.all([
       database.query<Record<string, any>>('SELECT mostik_enabled FROM tenant_integrations WHERE tenant_id=$1', [auth.tenantId]),
       database.query<Record<string, any>>(
         `SELECT count(*)::int AS pocet, max(last_seen_at) AS videny FROM agent_installations
@@ -71,6 +71,10 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
         `SELECT created_at, manifest->'vynechaneAgendy' AS vynechane FROM ucto_presnost
           WHERE tenant_id=$1 AND organization_id=$2 AND metodika=2 ORDER BY created_at DESC LIMIT 1`, scope,
       ),
+      database.query<Record<string, any>>(
+        `SELECT count(*) FILTER (WHERE blokuje)::int AS blokujucich, count(*) FILTER (WHERE NOT blokuje)::int AS ostatnych
+           FROM profil_otazky WHERE tenant_id=$1 AND organization_id=$2 AND stav IN ('otvorena','odlozena')`, scope,
+      ),
     ]);
     const importRiadok = (row: Record<string, any> | undefined): ImportHistorie | null => row
       ? { stav: row.stav, chyba: row.chyba, manifest: row.manifest, vytvoreny: row.created_at, publikovany: row.published_at }
@@ -100,6 +104,7 @@ export function registerPripravenostRoutes(app: FastifyInstance, database: Datab
       } : null,
       kategorie: kategorie.rows[0]?.existuje === true,
       meranie: meranie.rows[0] ? { kedy: meranie.rows[0].created_at, vynechane: meranie.rows[0].vynechane ?? [] } : null,
+      otazky: { blokujucich: Number(otazky.rows[0]?.blokujucich ?? 0), ostatnych: Number(otazky.rows[0]?.ostatnych ?? 0) },
     }, { teraz: new Date(), agentOfflineHodin: config.agentOfflineAlertHours });
     // Detail nesie surové texty (chyba analýzy, zamietnutý prenos), ktoré inak vidí
     // len admin a účtovník (GET ucto-profile/analyze). Schvaľovateľ dostane stav a dôvod.

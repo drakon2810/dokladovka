@@ -14,9 +14,9 @@ import type {
   DocumentStatus,
   DocumentType,
   DphPosudok,
-  DphProfil,
+  OdpovedOtazky,
   PartnerInput,
-  UctovnyProfil,
+  ProfilKlienta,
   ExportBatch,
   ExtractionRun,
   InboundEmail,
@@ -2702,8 +2702,6 @@ export async function getDataSnapshot(): Promise<AppDataState> {
     exportBatches: s.exportBatches.filter(belongsToTenant),
     payments: (s.payments ?? []).filter(belongsToTenant),
     approvalRules: (s.approvalRules ?? []).filter(belongsToTenant),
-    dphProfiles: (s.dphProfiles ?? []).filter(belongsToTenant),
-    accountingProfiles: (s.accountingProfiles ?? []).filter(belongsToTenant),
     partners: (s.partners ?? []).filter(belongsToTenant),
     noteTemplates: (s.noteTemplates ?? []).filter(belongsToTenant),
     emailTemplates: (s.emailTemplates ?? []).filter(belongsToTenant),
@@ -2723,30 +2721,39 @@ export async function saveApprovalRule(
   await refreshRestSnapshot();
 }
 
-/** Uloženie DPH profilu klienta (iba admin, jeden profil na organizáciu). */
-export async function saveDphProfile(
-  organizationId: string,
-  input: Omit<DphProfil, 'organizationId' | 'tenantId' | 'updatedAt'>,
-): Promise<void> {
-  if (!REST_DATA_MODE) throw new Error('DPH profil klienta vyžaduje spustený backend');
-  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/dph-profile`, {
-    method: 'PUT',
-    body: JSON.stringify(input),
-  });
-  await refreshRestSnapshot();
+// ===== Profil klienta — fakty firmy a otázky účtovníkovi =====
+// Každý zápis vráti celý profil nanovo, takže obrazovka nič nespája sama.
+
+function profilUrl(organizationId: string): string {
+  if (!REST_DATA_MODE) throw new Error('Profil klienta vyžaduje spustený backend');
+  return `/api/organizations/${encodeURIComponent(organizationId)}/profil`;
 }
 
-/** Uloženie účtovného profilu klienta (iba admin, jeden na organizáciu). */
-export async function saveAccountingProfile(
+export async function getProfil(organizationId: string): Promise<ProfilKlienta> {
+  return restRequest(profilUrl(organizationId));
+}
+
+/** Potvrdenie alebo zmena faktu; pri `nepouziva_sa` sa hodnota neposiela. */
+export async function ulozFakt(
   organizationId: string,
-  input: Omit<UctovnyProfil, 'organizationId' | 'tenantId' | 'updatedAt'>,
-): Promise<void> {
-  if (!REST_DATA_MODE) throw new Error('Účtovný profil klienta vyžaduje spustený backend');
-  await restRequest(`/api/organizations/${encodeURIComponent(organizationId)}/accounting-profile`, {
+  kluc: string,
+  telo: { stav: 'potvrdene'; hodnota: unknown } | { stav: 'nepouziva_sa' },
+): Promise<ProfilKlienta> {
+  return restRequest(`${profilUrl(organizationId)}/fakty/${encodeURIComponent(kluc)}`, {
     method: 'PUT',
-    body: JSON.stringify(input),
+    body: JSON.stringify(telo),
   });
-  await refreshRestSnapshot();
+}
+
+export async function odpovedzOtazke(organizationId: string, otazkaId: string, odpoved: OdpovedOtazky): Promise<ProfilKlienta> {
+  return restRequest(`${profilUrl(organizationId)}/otazky/${encodeURIComponent(otazkaId)}`, {
+    method: 'POST',
+    body: JSON.stringify(odpoved),
+  });
+}
+
+export async function prepocitajProfil(organizationId: string): Promise<ProfilKlienta> {
+  return restRequest(`${profilUrl(organizationId)}/prepocitat`, { method: 'POST' });
 }
 
 /** Vytvorenie partnera (kontrahenta) v adresári organizácie. */
@@ -3530,27 +3537,6 @@ export interface UctoPravidlo {
   /** Žiadna podoba neprevažuje — pravidlo nemá kódy, len podoby. */
   konflikt?: boolean;
   varianty?: UctoPravidloVariant[];
-}
-
-/** Ustálené delenie položky z histórie v tvare pravidla auta DPH profilu. */
-export interface NavrhPravidlaDelenia {
-  klucoveSlova: string[];
-  percento: number;
-  percentoDph?: number;
-  predkontaciaId: string;
-  predkontaciaNedanovaId: string;
-  clenenieDphNedanoveId?: string;
-  dokladov: number;
-  priklady: Array<{ cislo: string; datum: string }>;
-}
-
-/** Návrhy pravidiel delenia — nič sa neukladá, pravidlo pridá účtovník. */
-export async function listNavrhyPravidielDelenia(orgId: string): Promise<NavrhPravidlaDelenia[]> {
-  if (!REST_DATA_MODE) return [];
-  const odpoved = await restRequest<{ navrhy: NavrhPravidlaDelenia[] }>(
-    `/api/organizations/${encodeURIComponent(orgId)}/navrhy-pravidiel-delenia`,
-  );
-  return odpoved.navrhy;
 }
 
 /**

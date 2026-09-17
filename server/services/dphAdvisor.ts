@@ -1,9 +1,6 @@
-import type {
-  DphKoeficientZaznam,
-  DphPravidloOdpoctu,
-  DphProfil,
-} from './dphProfileService.js';
+import type { DphPravidloOdpoctu, DphProfil, SamozdanenieDruh } from './dphProfileService.js';
 import { popisKodu } from './pohodaDphKody.js';
+import { DRUHY_SAMOZDANENIA, type DruhSamozdanenia } from './profilKatalog.js';
 
 // dphAdvisor — čistá funkcia posudDph(dokument, profil). Jediný zdroj pravdy
 // pre DPH kontroly: worker (návrhy pre AI), approve (blokácie) a detail
@@ -37,7 +34,7 @@ export interface DphPosudokDokument {
   cleneniaPoloziek?: Array<{ id: string; kod: string; nazov: string }>;
 }
 
-const EU_DPH_PREFIXY = [
+export const EU_DPH_PREFIXY = [
   'AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'GR',
   'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI',
 ];
@@ -162,50 +159,39 @@ export function clenenieVyzeraNaOdpocet(clenenie: { kod: string; nazov: string }
 }
 
 /**
- * Koeficient pre rok plnenia. Keď na ten rok zápis chýba, platí ročný
- * koeficient predchádzajúceho roka — počas roka sa odpočet kráti práve ním
- * (§ 50 ods. 4). Starší sa nepoužije: koeficient z roku 2024 na doklade z roku
- * 2026 je iné číslo, nie odhad.
+ * Pravidlo pre autá delí dve rôzne dane: daňový náklad (základ) a odpočet DPH.
+ * Pomerné odpočítanie (§ 49 ods. 4) delí len odpočet — základ ostáva na účte.
  */
-function koeficientPre(zaznamy: DphKoeficientZaznam[], duzp?: string): DphKoeficientZaznam | undefined {
-  if (!duzp) return undefined;
-  const datum = duzp.slice(0, 10);
-  const rok = Number(datum.slice(0, 4));
-  const platne = zaznamy.filter((zaznam) => pravidloPlati(zaznam, datum));
-  const preRok = platne.filter((zaznam) => zaznam.rok === rok);
-  return preRok.find((zaznam) => zaznam.typ === 'zalohovy') ?? preRok[0]
-    ?? platne.find((zaznam) => zaznam.rok === rok - 1 && zaznam.typ === 'rocny');
-}
-
-/**
- * Platí pravidlo (alebo koeficient) pre plnenie k danému dňu? Bez dátumov
- * platí vždy. S dátumami a bez dňa plnenia nie — nevieme, či doň patrí.
- */
-export function pravidloPlati(pravidlo: { platnostOd?: string; platnostDo?: string }, datum: string | undefined): boolean {
-  if (!pravidlo.platnostOd && !pravidlo.platnostDo) return true;
-  if (!datum) return false;
-  const den = datum.slice(0, 10);
-  return (!pravidlo.platnostOd || pravidlo.platnostOd <= den) && (!pravidlo.platnostDo || den <= pravidlo.platnostDo);
-}
-
-function pravidloVarovanie(
-  kod: string,
-  pravidla: DphPravidloOdpoctu[],
-  texty: string[],
-  duzp: string | undefined,
-): DphZistenie[] {
-  const zistenia: DphZistenie[] = [];
-  for (const pravidlo of pravidla.filter((item) => pravidloPlati(item, duzp))) {
+function pravidloVarovanie(kod: string, pravidla: DphPravidloOdpoctu[], texty: string[], lenOdpocet: boolean): DphZistenie[] {
+  return pravidla.flatMap((pravidlo) => {
     const zhoda = najdiKlucoveSlovo(texty, pravidlo.klucoveSlova);
-    if (!zhoda) continue;
-    zistenia.push({
-      kod,
-      kategoria: pravidlo.kategoria,
-      percento: pravidlo.percento,
-      sprava: `Odpočet len ${pravidlo.percento} % — ${pravidlo.kategoria} (nájdené „${zhoda}“).`,
-    });
-  }
-  return zistenia;
+    if (!zhoda) return [];
+    const odpocet = pravidlo.percentoDph ?? pravidlo.percento;
+    const podiely = lenOdpocet ? `Odpočet DPH ${odpocet} %` : `Daňový náklad ${pravidlo.percento} %, odpočet DPH ${odpocet} %`;
+    return [{ kod, kategoria: pravidlo.kategoria, percento: pravidlo.percento, sprava: `${podiely} — ${pravidlo.kategoria} (nájdené „${zhoda}“).` }];
+  });
+}
+
+const NAZVY_DRUHOV: Record<DruhSamozdanenia, string> = {
+  sluzby_eu: 'Služby z EÚ (§69 ods. 3)',
+  sluzby_mimo_eu: 'Služby spoza EÚ (§69 ods. 3)',
+  tovar_eu: 'Nadobudnutie tovaru z EÚ (§11)',
+  prenesenie_prijate: 'Tuzemské prenesenie daňovej povinnosti, prijaté (§69 ods. 12)',
+  dovoz: 'Dovoz tovaru',
+  prenesenie_vystavene: 'Tuzemské prenesenie daňovej povinnosti, vystavené (§69 ods. 12)',
+  sluzby_zahranicie_vystavene: 'Služby s miestom dodania v zahraničí, vystavené',
+  zahranicie_vystavene: 'Iné plnenie s miestom dodania v zahraničí, vystavené',
+  tovar_do_eu: 'Dodanie tovaru do EÚ',
+};
+
+/** „Služby z EÚ (§69 ods. 3): faktúra PN, KV KN; interný doklad DDsl§69 a PDsluz, KV B1" — kódy, nie id. */
+function vetaDruhu(druh: DruhSamozdanenia, nastavenie: SamozdanenieDruh): string | undefined {
+  const kv = (kod?: string) => (kod ? `, KV ${kod}` : '');
+  const casti = [
+    nastavenie.faktura && `faktúra ${nastavenie.faktura.clenenieKod}${kv(nastavenie.faktura.kv)}`,
+    nastavenie.interny && `interný doklad ${[nastavenie.interny.ddKod, nastavenie.interny.pKod].filter(Boolean).join(' a ')}${kv(nastavenie.interny.kv)}`,
+  ].filter(Boolean);
+  return casti.length > 0 ? `${NAZVY_DRUHOV[druh]}: ${casti.join('; ')}` : undefined;
 }
 
 export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPosudok {
@@ -251,29 +237,31 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
     }
   }
 
-  // Uzavreté DPH obdobie: DUZP v už podanom období = dodatočné priznanie.
-  if (profil.uzavreteDo && doklad.duzp && doklad.duzp.slice(0, 10) <= profil.uzavreteDo) {
-    const obdobie = profil.obdobieDph === 'mesacne' ? 'mesačné' : 'štvrťročné';
-    varovania.push({
-      kod: 'dph_obdobie_uzavrete',
-      sprava: `DUZP ${doklad.duzp.slice(0, 10)} spadá do už podaného obdobia (${obdobie}, podané do ${profil.uzavreteDo}) — zvážte dodatočné priznanie.`,
-    });
-  }
-
-  // Kandidát na samozdanenie: dodávateľ s IČ DPH z inej krajiny EÚ a doklad bez DPH.
+  // Kandidát na samozdanenie: cudzí dodávateľ (z EÚ aj spoza nej) a doklad bez
+  // DPH. Beží aj bez profilu — o tom, že daň priznáva príjemca, rozhoduje doklad,
+  // nie nastavenie. IČ DPH z EÚ stačí aj bez prečítanej krajiny.
   const prefix = doklad.dodavatelIcDph.slice(0, 2);
-  const jeEuDodavatel = EU_DPH_PREFIXY.includes(prefix);
-  const relevantneSamozdanenie = profil.samozdanenieAktivne || profil.nakupyZEu || profil.sluzbyZEu
-    || profil.platitelDph === 'registracia_7a';
-  if (relevantneSamozdanenie && jeEuDodavatel && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
+  const cudziDodavatel = jeCudziDodavatel({ icDph: doklad.dodavatelIcDph, krajina: doklad.dodavatelKrajina })
+    || EU_DPH_PREFIXY.includes(prefix);
+  if (cudziDodavatel && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
+    // Cudzia firma so slovenskou adresou je cudzia podľa IČ DPH.
+    const uzemie = doklad.dodavatelKrajina && doklad.dodavatelKrajina !== 'SK' ? doklad.dodavatelKrajina : prefix;
     const sadzba = sadzbyDphPre(doklad.duzp)?.high;
     const dan = sadzba
       ? ` DPH ${sadzba} % = ${round2((doklad.zaklad * sadzba) / 100).toFixed(2)} na vstupe aj výstupe.` : '';
+    // Druh plnenia (služba či tovar) z dokladu nevyčítame. Členenie faktúry sa
+    // preto navrhne, len keď ho všetky potvrdené druhy pre územie majú rovnaké.
+    const druhy = (EU_DPH_PREFIXY.includes(uzemie) ? ['sluzby_eu', 'tovar_eu'] as const : ['sluzby_mimo_eu'] as const)
+      .flatMap((druh) => (profil.samozdanenie[druh] ? [[druh, profil.samozdanenie[druh]!] as const] : []));
+    const faktury = new Set(druhy.map(([, nastavenie]) => nastavenie.faktura?.clenenieDphId));
+    const kv = new Set(druhy.map(([, nastavenie]) => nastavenie.faktura?.kv));
+    const clenenieDphId = faktury.size === 1 ? [...faktury][0] : undefined;
+    const vety = druhy.map(([druh, nastavenie]) => vetaDruhu(druh, nastavenie)).filter(Boolean);
     navrhy.push({
       kod: 'dph_samozdanenie_kandidat',
-      sprava: `Kandidát na samozdanenie: dodávateľ s IČ DPH ${prefix} fakturuje bez DPH.${dan}`,
-      clenenieDphId: profil.samozdanenieClenenieDphId,
-      clenenieKvKod: profil.samozdanenieClenenieKvKod,
+      sprava: `Kandidát na samozdanenie: dodávateľ z ${uzemie} fakturuje bez DPH.${dan}${vety.length > 0 ? ` Firma účtuje: ${vety.join('. ')}.` : ''}`,
+      clenenieDphId,
+      clenenieKvKod: clenenieDphId && kv.size === 1 ? [...kv][0] : undefined,
     });
   }
 
@@ -296,8 +284,9 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
     }
   }
 
-  // Tuzemské prenesenie daňovej povinnosti (§69): SK dodávateľ fakturuje bez DPH.
-  if (profil.prenesenieDp && prefix === 'SK' && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
+  // Tuzemské prenesenie daňovej povinnosti (§69 ods. 12): SK dodávateľ fakturuje
+  // bez DPH — len vo firme, ktorá prenesenie podľa účtovníka prijíma.
+  if (profil.samozdanenie.prenesenie_prijate && prefix === 'SK' && doklad.dphSpolu === 0 && doklad.sumaSpolu > 0) {
     const bezneClenenie = dokument.clenenieDph && clenenieVyzeraNaOdpocet(dokument.clenenieDph);
     varovania.push({
       kod: 'dph_prenesenie_kandidat',
@@ -332,27 +321,15 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
     });
   }
 
-  // Pravidlá pre autá a pomerné odpočítanie — len pre platiteľa.
+  // Pravidlá pre autá, pomerné odpočítanie a koeficient — len pre platiteľa.
   if (profil.platitelDph === 'platitel') {
-    varovania.push(...pravidloVarovanie('dph_auto_odpocet', profil.pravidlaAut, doklad.texty, doklad.duzp));
-    varovania.push(...pravidloVarovanie('dph_pomerny_odpocet', profil.pomerneOdpocitanie, doklad.texty, doklad.duzp));
-
-    for (const kategoria of profil.bezNaroku) {
-      const zhoda = najdiKlucoveSlovo(doklad.texty, kategoria.klucoveSlova);
-      if (!zhoda) continue;
-      varovania.push({
-        kod: 'dph_bez_naroku',
-        kategoria: kategoria.kategoria,
-        sprava: `Bez nároku na odpočet — ${kategoria.kategoria} (nájdené „${zhoda}“).`,
-      });
-    }
-
-    const koeficient = koeficientPre(profil.koeficient, doklad.duzp);
-    if (koeficient) {
+    varovania.push(...pravidloVarovanie('dph_auto_odpocet', profil.pravidlaAut, doklad.texty, false));
+    varovania.push(...pravidloVarovanie('dph_pomerny_odpocet', profil.pomerneOdpocitanie, doklad.texty, true));
+    if (profil.oslobodenePlnenia && profil.koeficient !== undefined) {
       navrhy.push({
         kod: 'dph_koeficient',
-        percento: round2(koeficient.hodnota * 100),
-        sprava: `Organizácia kráti odpočet koeficientom ${koeficient.hodnota.toFixed(2).replace('.', ',')} (${koeficient.typ === 'zalohovy' ? 'zálohový' : 'ročný'}, ${koeficient.rok}).`,
+        percento: round2(profil.koeficient * 100),
+        sprava: `Organizácia kráti odpočet koeficientom ${profil.koeficient.toFixed(2).replace('.', ',')}.`,
       });
     }
   }
@@ -361,32 +338,46 @@ export function posudDph(dokument: DphPosudokDokument, profil: DphProfil): DphPo
 }
 
 /**
- * Pokyny pre AI návrh zaúčtovania odvodené z profilu — nezávislé od dokladu.
- * Vkladajú sa do promptu ako dáta (profilKlienta.pokyny).
+ * Pokyny pre AI (návrh zaúčtovania, právna kontrola, asistent) z potvrdených
+ * faktov — nezávislé od dokladu. Nesú KÓDY z číselníka firmy, nie id: model
+ * id nerozlúšti a surové id v pokyne mu podsúvalo kód bez významu.
  */
 export function dphPokynyPreAi(profil: DphProfil): string[] {
   const pokyny: string[] = [];
+  const slova = (pravidlo: DphPravidloOdpoctu) => pravidlo.klucoveSlova.map((slovo) => `„${slovo}“`).join(', ');
   if (profil.platitelDph === 'neplatitel' || profil.platitelDph === 'registracia_7a') {
-    pokyny.push('Organizácia nemá nárok na odpočet DPH — vždy vyber členenie DPH bez odpočtu.');
+    pokyny.push(`Organizácia nemá nárok na odpočet DPH — vždy vyber členenie DPH bez odpočtu${profil.clenenieBezOdpoctuKod ? ` (${profil.clenenieBezOdpoctuKod})` : ''}.`);
   }
-  if (profil.samozdanenieAktivne || profil.nakupyZEu || profil.sluzbyZEu) {
-    pokyny.push('Pri dodávateľovi z EÚ s dokladom bez DPH ide o samozdanenie'
-      + (profil.samozdanenieClenenieDphId ? ` — použi členenie DPH s id ${profil.samozdanenieClenenieDphId}.` : '.'));
+  for (const druh of DRUHY_SAMOZDANENIA) {
+    const veta = profil.samozdanenie[druh] && vetaDruhu(druh, profil.samozdanenie[druh]!);
+    if (veta) pokyny.push(`${veta}.`);
   }
-  if (profil.prenesenieDp) {
-    pokyny.push('Organizácia účtuje tuzemské prenesenie daňovej povinnosti (§69) — SK doklad bez DPH nie je bežný nákup.');
+  if (profil.oslobodenePlnenia === true) {
+    const koeficient = profil.koeficient === undefined ? '' : ` ${profil.koeficient.toFixed(2).replace('.', ',')}`;
+    pokyny.push(`Organizácia má aj oslobodené plnenia — odpočet kráti koeficientom${koeficient} (členenia krátenia PK).`);
+  } else if (profil.oslobodenePlnenia === false) {
+    pokyny.push('Organizácia nemá oslobodené plnenia — odpočet nekráti, členenia krátenia (PK) nepoužívaj.');
   }
-  for (const pravidlo of [...profil.pravidlaAut, ...profil.pomerneOdpocitanie]) {
-    if (pravidlo.klucoveSlova.length === 0) continue;
-    // Pokyny sú nezávislé od dokladu, preto obdobie ide do textu — model ho
-    // porovná s dňom plnenia sám a deterministický rez ho aj tak overí.
-    const obdobie = [pravidlo.platnostOd && `od ${pravidlo.platnostOd}`, pravidlo.platnostDo && `do ${pravidlo.platnostDo}`]
-      .filter(Boolean).join(' ');
-    pokyny.push(`Ak sa v doklade vyskytuje ${pravidlo.klucoveSlova.map((slovo) => `„${slovo}“`).join(', ')}, odpočet je len ${pravidlo.percento} % (${pravidlo.kategoria}${obdobie ? `; platí pre plnenie ${obdobie}` : ''}).`);
+  for (const pravidlo of profil.pravidlaAut) {
+    const nedanove = pravidlo.clenenieDphNedanoveKod ? ` s členením ${pravidlo.clenenieDphNedanoveKod}` : '';
+    pokyny.push(`Ak sa v doklade vyskytuje ${slova(pravidlo)}, daňový náklad je ${pravidlo.percento} % a odpočet DPH ${pravidlo.percentoDph ?? pravidlo.percento} % (${pravidlo.kategoria}; daňová časť ${pravidlo.predkontaciaKod}, nedaňová ${pravidlo.predkontaciaNedanovaKod}${nedanove}).`);
   }
-  for (const kategoria of profil.bezNaroku) {
-    if (kategoria.klucoveSlova.length === 0) continue;
-    pokyny.push(`Ak sa v doklade vyskytuje ${kategoria.klucoveSlova.map((slovo) => `„${slovo}“`).join(', ')}, je to ${kategoria.kategoria} bez nároku na odpočet.`);
+  for (const pravidlo of profil.pomerneOdpocitanie) {
+    pokyny.push(`Ak sa v doklade vyskytuje ${slova(pravidlo)}, odpočet DPH je len ${pravidlo.percentoDph ?? pravidlo.percento} % (${pravidlo.kategoria}; obe časti na ${pravidlo.predkontaciaKod}, neodpočítaná s členením ${pravidlo.clenenieDphNedanoveKod}).`);
+  }
+  for (const ucet of profil.bezNarokuUcty) {
+    pokyny.push(`Na účte ${ucet.predkontaciaKod} firma neodpočítava — členenie ${ucet.clenenieKod}.`);
+  }
+  if (profil.vratenieDph) {
+    pokyny.push(profil.vratenieDph.uplatnujeme
+      ? `Zahraničnú DPH si firma nechá vrátiť (§55a) — položka cudzej dane je pohľadávka${profil.vratenieDph.predkontaciaKod ? ` na ${profil.vratenieDph.predkontaciaKod}` : ''}, nie náklad.`
+      : 'Zahraničnú DPH si firma vrátiť nenecháva — cudzia daň je súčasťou nákladu.');
+  }
+  if (profil.tovarNaCeste !== undefined) {
+    pokyny.push(profil.tovarNaCeste ? 'Firma účtuje tovar na ceste (účet 139).' : 'Firma tovar na ceste (účet 139) neúčtuje.');
+  }
+  if (profil.drobnyMajetokHranica !== undefined) {
+    pokyny.push(`Majetok so základom od ${profil.drobnyMajetokHranica} € je dlhodobý; lacnejší je drobný majetok v nákladoch.`);
   }
   return pokyny;
 }

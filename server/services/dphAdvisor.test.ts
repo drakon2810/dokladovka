@@ -3,22 +3,7 @@ import { clenenieVyzeraNaOdpocet, dphPokynyPreAi, posudDph } from './dphAdvisor.
 import { predvolenyDphProfil, type DphProfil } from './dphProfileService.js';
 
 function profil(overrides: Partial<DphProfil> = {}): DphProfil {
-  return {
-    organizationId: 'org-1',
-    tenantId: 'tenant-1',
-    platitelDph: 'platitel',
-    obdobieDph: 'mesacne',
-    koeficient: [],
-    pomerneOdpocitanie: [],
-    rezim: 'tuzemsky',
-    nakupyZEu: false,
-    sluzbyZEu: false,
-    prenesenieDp: false,
-    pravidlaAut: [],
-    bezNaroku: [],
-    samozdanenieAktivne: false,
-    ...overrides,
-  };
+  return { ...predvolenyDphProfil('tenant-1', 'org-1'), platitelDph: 'platitel', ...overrides };
 }
 
 function dokument(extracted: Record<string, unknown>, clenenieDph?: { id: string; kod: string; nazov: string }) {
@@ -34,6 +19,22 @@ const FAKTURA_S_DPH = {
   sumaSpolu: 123,
   polozky: [{ popis: 'Natural 95 — PHM' }],
 };
+
+const ALZA_BEZ_DPH = {
+  dodavatel: { nazov: 'Alza.cz a.s.', icDph: 'CZ27082440' },
+  datumDodania: '2026-07-02',
+  mena: 'EUR',
+  rozpisDph: [{ sadzba: 0, zaklad: 200, dph: 0 }],
+  sumaSpolu: 200,
+};
+
+const PHM_AUTO = {
+  kategoria: 'PHM osobné auto', percento: 80, percentoDph: 50, klucoveSlova: ['PHM', 'servis'],
+  predkontaciaKod: 'PHM-501200', predkontaciaNedanovaKod: 'PHM-Nadspotreba', clenenieDphNedanoveKod: 'PN',
+};
+
+const kandidat = (vysledok: ReturnType<typeof posudDph>) =>
+  vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat');
 
 describe('dphAdvisor — posudDph', () => {
   it('neplatiteľ so zvoleným odpočtom je blokovaný; bez členenia len návrh', () => {
@@ -63,116 +64,101 @@ describe('dphAdvisor — posudDph', () => {
     expect(zle.blokacie).toHaveLength(1);
   });
 
-  it('kandidát na samozdanenie: EÚ dodávateľ bez DPH', () => {
-    const vysledok = posudDph(dokument({
-      dodavatel: { nazov: 'Alza.cz a.s.', icDph: 'CZ27082440' },
-      datumDodania: '2026-07-02',
-      mena: 'EUR',
-      rozpisDph: [{ sadzba: 0, zaklad: 200, dph: 0 }],
-      sumaSpolu: 200,
-    }), profil({ samozdanenieAktivne: true, samozdanenieClenenieDphId: 'cl-b1', samozdanenieClenenieKvKod: 'B1' }));
-    const kandidat = vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat');
-    expect(kandidat).toBeDefined();
-    expect(kandidat?.sprava).toContain('46.00');
-    expect(kandidat?.clenenieDphId).toBe('cl-b1');
-    expect(kandidat?.clenenieKvKod).toBe('B1');
+  it('kandidát na samozdanenie: EÚ dodávateľ bez DPH dostane členenie faktúry z potvrdených druhov', () => {
+    const faktura = { clenenieKod: 'PN', clenenieDphId: 'cl-pn', kv: 'KN' };
+    const vysledok = kandidat(posudDph(dokument(ALZA_BEZ_DPH), profil({
+      samozdanenie: {
+        sluzby_eu: { faktura, interny: { ddKod: 'DDsl§69', pKod: 'PDsluz', kv: 'B1' } },
+        tovar_eu: { faktura, interny: { ddKod: 'DDnadEU', pKod: 'PDnadEU', kv: 'B1' } },
+        // Spoza EÚ sa na českého dodávateľa nevzťahuje.
+        sluzby_mimo_eu: { faktura: { clenenieKod: 'PB', clenenieDphId: 'cl-pb' } },
+      },
+    })));
+    expect(vysledok).toMatchObject({ clenenieDphId: 'cl-pn', clenenieKvKod: 'KN' });
+    expect(vysledok?.sprava).toContain('46.00');
+    expect(vysledok?.sprava).toContain('Služby z EÚ (§69 ods. 3): faktúra PN, KV KN; interný doklad DDsl§69 a PDsluz, KV B1');
+    expect(vysledok?.sprava).not.toContain('cl-pn');
+
+    // Druhy s rôznou faktúrou: z dokladu nevieme, či ide o službu alebo tovar — členenie nenavrhneme.
+    const rozne = kandidat(posudDph(dokument(ALZA_BEZ_DPH), profil({
+      samozdanenie: { sluzby_eu: { faktura }, tovar_eu: { faktura: { clenenieKod: 'PB', clenenieDphId: 'cl-pb' } } },
+    })));
+    expect(rozne).toBeDefined();
+    expect(rozne?.clenenieDphId).toBeUndefined();
+    expect(rozne?.clenenieKvKod).toBeUndefined();
+  });
+
+  it('kandidát na samozdanenie beží aj bez profilu a aj pri dodávateľovi spoza EÚ', () => {
+    const svajciarsky = {
+      dodavatel: { nazov: 'Swiss Software AG', krajina: 'CH' },
+      datumDodania: '2026-07-02', mena: 'EUR', rozpisDph: [], sumaSpolu: 500,
+    };
+    const bezProfilu = kandidat(posudDph(dokument(svajciarsky), predvolenyDphProfil('tenant-1', 'org-1')));
+    expect(bezProfilu?.sprava).toContain('dodávateľ z CH');
+    expect(bezProfilu?.clenenieDphId).toBeUndefined();
+
+    const sProfilom = kandidat(posudDph(dokument(svajciarsky), profil({
+      samozdanenie: {
+        sluzby_mimo_eu: { faktura: { clenenieKod: 'PN', clenenieDphId: 'cl-pn', kv: 'KN' } },
+        sluzby_eu: { faktura: { clenenieKod: 'PB', clenenieDphId: 'cl-pb' } },
+      },
+    })));
+    expect(sProfilom).toMatchObject({ clenenieDphId: 'cl-pn', clenenieKvKod: 'KN' });
   });
 
   it('samozdanenie počíta sadzbou platnou v deň plnenia, nie dnešnou', () => {
-    const vysledok = posudDph(dokument({
-      dodavatel: { nazov: 'Alza.cz a.s.', icDph: 'CZ27082440' },
-      datumDodania: '2024-11-20',
-      mena: 'EUR',
-      rozpisDph: [{ sadzba: 0, zaklad: 200, dph: 0 }],
-      sumaSpolu: 200,
-    }), profil({ samozdanenieAktivne: true }));
-    const kandidat = vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat');
-    expect(kandidat?.sprava).toContain('DPH 20 % = 40.00');
+    const vysledok = posudDph(dokument({ ...ALZA_BEZ_DPH, datumDodania: '2024-11-20' }), profil());
+    expect(kandidat(vysledok)?.sprava).toContain('DPH 20 % = 40.00');
   });
 
   it('slovenský dodávateľ s DPH nie je kandidát na samozdanenie', () => {
-    const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({ samozdanenieAktivne: true }));
-    expect(vysledok.navrhy.some((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat')).toBe(false);
+    expect(kandidat(posudDph(dokument(FAKTURA_S_DPH), profil()))).toBeUndefined();
   });
 
-  it('pravidlo pre autá: kľúčové slovo PHM v položkách spustí varovanie 80 %', () => {
-    const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({
-      pravidlaAut: [{ kategoria: 'PHM osobné auto', percento: 80, klucoveSlova: ['PHM', 'servis'] }],
-    }));
-    const varovanie = vysledok.varovania.find((zistenie) => zistenie.kod === 'dph_auto_odpocet');
-    expect(varovanie).toBeDefined();
-    expect(varovanie?.percento).toBe(80);
-    expect(varovanie?.sprava).toContain('80 %');
+  it('pravidlo pre autá hovorí daňový náklad aj odpočet DPH; pomerné len odpočet, bez diakritiky', () => {
+    const auto = posudDph(dokument(FAKTURA_S_DPH), profil({ pravidlaAut: [PHM_AUTO] }))
+      .varovania.find((zistenie) => zistenie.kod === 'dph_auto_odpocet');
+    expect(auto).toMatchObject({ percento: 80, sprava: 'Daňový náklad 80 %, odpočet DPH 50 % — PHM osobné auto (nájdené „PHM“).' });
+
+    const pomerne = posudDph(dokument({ ...FAKTURA_S_DPH, polozky: [{ popis: 'Mobilný paušál 04/2026' }] }), profil({
+      pomerneOdpocitanie: [{
+        kategoria: 'Telefón', percento: 70, percentoDph: 70, klucoveSlova: ['mobilny pausal'],
+        predkontaciaKod: '518100', predkontaciaNedanovaKod: '518100', clenenieDphNedanoveKod: 'PN',
+      }],
+    })).varovania.find((zistenie) => zistenie.kod === 'dph_pomerny_odpocet');
+    expect(pomerne?.sprava).toBe('Odpočet DPH 70 % — Telefón (nájdené „mobilny pausal“).');
   });
 
-  it('pravidlo pre autá s obdobím platnosti mlčí mimo neho', () => {
-    const pravidlaAut = [{ kategoria: 'Osobné auto', percento: 80, percentoDph: 50, klucoveSlova: ['PHM'], platnostOd: '2026-01-01' }];
-    const vlani = posudDph(dokument({ ...FAKTURA_S_DPH, datumDodania: '2025-12-15' }), profil({ pravidlaAut }));
-    expect(vlani.varovania.some((zistenie) => zistenie.kod === 'dph_auto_odpocet')).toBe(false);
-    const tento = posudDph(dokument(FAKTURA_S_DPH), profil({ pravidlaAut }));
-    expect(tento.varovania.some((zistenie) => zistenie.kod === 'dph_auto_odpocet')).toBe(true);
-    expect(dphPokynyPreAi(profil({ pravidlaAut })).join(' ')).toContain('od 2026-01-01');
-  });
-
-  it('kľúčové slová sa zhodujú bez diakritiky a veľkosti písmen', () => {
-    const vysledok = posudDph(dokument({
-      dodavatel: { nazov: 'Reštaurácia Koliba' },
-      datumDodania: '2026-07-03',
-      rozpisDph: [{ sadzba: 23, zaklad: 50, dph: 11.5 }],
-      sumaSpolu: 61.5,
-      polozky: [{ popis: 'Občerstvenie na poradu' }],
-    }), profil({
-      bezNaroku: [{ kategoria: 'Reprezentácia', klucoveSlova: ['obcerstvenie', 'reprezentacia'] }],
-    }));
-    expect(vysledok.varovania.some((zistenie) => zistenie.kod === 'dph_bez_naroku')).toBe(true);
-  });
-
-  it('uzavreté obdobie: DUZP pred dátumom podania varuje na dodatočné priznanie', () => {
-    const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({ uzavreteDo: '2026-07-31' }));
-    expect(vysledok.varovania.some((zistenie) => zistenie.kod === 'dph_obdobie_uzavrete')).toBe(true);
-    const otvorene = posudDph(dokument(FAKTURA_S_DPH), profil({ uzavreteDo: '2026-06-30' }));
-    expect(otvorene.varovania.some((zistenie) => zistenie.kod === 'dph_obdobie_uzavrete')).toBe(false);
-  });
-
-  it('koeficient: návrh s hodnotou pre rok DUZP, zálohový má prednosť', () => {
-    const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({
-      koeficient: [
-        { rok: 2025, typ: 'rocny', hodnota: 0.9 },
-        { rok: 2026, typ: 'rocny', hodnota: 0.85 },
-        { rok: 2026, typ: 'zalohovy', hodnota: 0.87 },
-      ],
-    }));
-    const navrh = vysledok.navrhy.find((zistenie) => zistenie.kod === 'dph_koeficient');
+  it('koeficient: návrh s hodnotou len pri oslobodených plneniach', () => {
+    const navrh = posudDph(dokument(FAKTURA_S_DPH), profil({ oslobodenePlnenia: true, koeficient: 0.87 }))
+      .navrhy.find((zistenie) => zistenie.kod === 'dph_koeficient');
+    expect(navrh).toMatchObject({ percento: 87 });
     expect(navrh?.sprava).toContain('0,87');
-    expect(navrh?.sprava).toContain('2026');
-  });
-
-  it('koeficient iného roka sa nepoužije; ročný z minulého roka platí ako zálohový', () => {
-    const stary = posudDph(dokument(FAKTURA_S_DPH), profil({ koeficient: [{ rok: 2024, typ: 'rocny', hodnota: 0.8 }] }));
-    expect(stary.navrhy.some((zistenie) => zistenie.kod === 'dph_koeficient')).toBe(false);
-    const minuly = posudDph(dokument(FAKTURA_S_DPH), profil({ koeficient: [{ rok: 2025, typ: 'rocny', hodnota: 0.9 }] }));
-    expect(minuly.navrhy.find((zistenie) => zistenie.kod === 'dph_koeficient')?.percento).toBe(90);
+    expect(posudDph(dokument(FAKTURA_S_DPH), profil({ oslobodenePlnenia: true })).navrhy
+      .some((zistenie) => zistenie.kod === 'dph_koeficient')).toBe(false);
   });
 
   it('firma bez profilu nie je platiteľ ani neplatiteľ', () => {
     const nezname = predvolenyDphProfil('tenant-1', 'org-1');
     expect(nezname.platitelDph).toBe('nezname');
-    expect(dphPokynyPreAi(nezname).join(' ')).not.toContain('bez odpočtu');
+    expect(dphPokynyPreAi(nezname)).toEqual([]);
     const vysledok = posudDph(dokument(FAKTURA_S_DPH, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), nezname);
     expect(vysledok.blokacie).toHaveLength(0);
     expect(vysledok.navrhy.some((zistenie) => zistenie.kod === 'dph_bez_odpoctu')).toBe(false);
   });
 
-  it('prenesenie DP (§69): SK doklad bez DPH s bežným členením varuje', () => {
-    const vysledok = posudDph(dokument({
+  it('prenesenie DP (§69 ods. 12): SK doklad bez DPH varuje len firme s potvrdeným prijatým prenesením', () => {
+    const stavby = dokument({
       dodavatel: { nazov: 'Stavby SK s.r.o.', icDph: 'SK2020999999' },
       datumDodania: '2026-07-05',
       rozpisDph: [],
       sumaSpolu: 1500,
-    }, { id: 'cl-pd', kod: 'PD', nazov: 'Plný odpočet' }), profil({ prenesenieDp: true }));
-    const varovanie = vysledok.varovania.find((zistenie) => zistenie.kod === 'dph_prenesenie_kandidat');
-    expect(varovanie).toBeDefined();
+    }, { id: 'cl-pd', kod: 'PD', nazov: 'Plný odpočet' });
+    const varovanie = posudDph(stavby, profil({
+      samozdanenie: { prenesenie_prijate: { interny: { ddKod: 'DDsluz', pKod: 'PDsluz' } } },
+    })).varovania.find((zistenie) => zistenie.kod === 'dph_prenesenie_kandidat');
     expect(varovanie?.sprava).toContain('bežné členenie');
+    expect(posudDph(stavby, profil()).varovania.some((zistenie) => zistenie.kod === 'dph_prenesenie_kandidat')).toBe(false);
   });
 
   it('cudzia daň: rakúsky dodávateľ s 20 % blokuje tuzemské členenie s odpočtom', () => {
@@ -202,10 +188,10 @@ describe('dphAdvisor — posudDph', () => {
       ...rakuskaFaktura,
       rozpisDph: [{ sadzba: 0, zaklad: 106.8, dph: 0 }],
       cudziaDan: 17.8,
-    }, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), profil({ samozdanenieAktivne: true }));
+    }, { id: 'cl-pd', kod: 'PD', nazov: 'Tuzemské plnenia' }), profil());
     expect(poNormalizacii.blokacie.map((zistenie) => zistenie.kod)).toEqual(['dph_cudzia_dan_odpocet']);
     // A nie je to kandidát na samozdanenie — daň dodávateľ účtoval, len cudziu.
-    expect(poNormalizacii.navrhy.some((zistenie) => zistenie.kod === 'dph_samozdanenie_kandidat')).toBe(false);
+    expect(kandidat(poNormalizacii)).toBeUndefined();
 
     // Členenie bez odpočtu je správna voľba — návrh ostáva, blokácia nie.
     const bezOdpoctu = posudDph(
@@ -267,8 +253,9 @@ describe('dphAdvisor — posudDph', () => {
   it('neplatiteľ nedostáva varovania o krátení odpočtu', () => {
     const vysledok = posudDph(dokument(FAKTURA_S_DPH), profil({
       platitelDph: 'neplatitel',
-      pravidlaAut: [{ kategoria: 'PHM', percento: 80, klucoveSlova: ['PHM'] }],
-      koeficient: [{ rok: 2026, typ: 'zalohovy', hodnota: 0.87 }],
+      pravidlaAut: [PHM_AUTO],
+      oslobodenePlnenia: true,
+      koeficient: 0.87,
     }));
     expect(vysledok.varovania.some((zistenie) => zistenie.kod === 'dph_auto_odpocet')).toBe(false);
     expect(vysledok.navrhy.some((zistenie) => zistenie.kod === 'dph_koeficient')).toBe(false);
@@ -324,17 +311,35 @@ describe('dphAdvisor — clenenieVyzeraNaOdpocet', () => {
 });
 
 describe('dphAdvisor — dphPokynyPreAi', () => {
-  it('odvodzuje pokyny z profilu', () => {
+  it('pomenuje potvrdené fakty kódmi, nikdy nie id', () => {
     const pokyny = dphPokynyPreAi(profil({
-      platitelDph: 'neplatitel',
-      pravidlaAut: [{ kategoria: 'PHM', percento: 80, klucoveSlova: ['PHM'] }],
-      bezNaroku: [{ kategoria: 'Reprezentácia', klucoveSlova: ['reprezentácia'] }],
-      samozdanenieAktivne: true,
-      samozdanenieClenenieDphId: 'cl-b1',
+      platitelDph: 'registracia_7a',
+      clenenieBezOdpoctuKod: 'PB', clenenieBezOdpoctuId: 'cl-pb',
+      samozdanenie: {
+        sluzby_eu: {
+          faktura: { clenenieKod: 'PN', clenenieDphId: 'cl-pn', kv: 'KN' },
+          interny: { ddKod: 'DDsl§69', pKod: 'PDsluz', kv: 'B1' },
+        },
+        dovoz: { faktura: { clenenieKod: 'PDtovar', clenenieDphId: 'cl-pdtovar' } },
+      },
+      oslobodenePlnenia: false,
+      pravidlaAut: [{ ...PHM_AUTO, predkontaciaId: 'id-phm', predkontaciaNedanovaId: 'id-nad', clenenieDphNedanoveId: 'cl-pn' }],
+      bezNarokuUcty: [{ predkontaciaKod: '513100', predkontaciaId: 'id-repre', clenenieKod: 'PN', clenenieDphId: 'cl-pn' }],
+      vratenieDph: { uplatnujeme: true, predkontaciaKod: '378-DPH', predkontaciaId: 'id-378' },
+      tovarNaCeste: false,
+      drobnyMajetokHranica: 1700,
     }));
-    expect(pokyny.join(' ')).toContain('bez odpočtu');
-    expect(pokyny.join(' ')).toContain('80 %');
-    expect(pokyny.join(' ')).toContain('cl-b1');
-    expect(pokyny.join(' ')).toContain('Reprezentácia');
+    expect(pokyny).toEqual([
+      'Organizácia nemá nárok na odpočet DPH — vždy vyber členenie DPH bez odpočtu (PB).',
+      'Služby z EÚ (§69 ods. 3): faktúra PN, KV KN; interný doklad DDsl§69 a PDsluz, KV B1.',
+      'Dovoz tovaru: faktúra PDtovar.',
+      'Organizácia nemá oslobodené plnenia — odpočet nekráti, členenia krátenia (PK) nepoužívaj.',
+      'Ak sa v doklade vyskytuje „PHM“, „servis“, daňový náklad je 80 % a odpočet DPH 50 % (PHM osobné auto; daňová časť PHM-501200, nedaňová PHM-Nadspotreba s členením PN).',
+      'Na účte 513100 firma neodpočítava — členenie PN.',
+      'Zahraničnú DPH si firma nechá vrátiť (§55a) — položka cudzej dane je pohľadávka na 378-DPH, nie náklad.',
+      'Firma tovar na ceste (účet 139) neúčtuje.',
+      'Majetok so základom od 1700 € je dlhodobý; lacnejší je drobný majetok v nákladoch.',
+    ]);
+    expect(pokyny.join(' ')).not.toMatch(/cl-|id-/);
   });
 });

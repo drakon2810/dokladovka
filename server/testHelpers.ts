@@ -110,6 +110,25 @@ export async function seedTestUser(database: Database, options?: { role?: 'admin
 }
 
 /**
+ * Potvrdený fakt profilu klienta — engine číta len potvrdené. Hodnota nesie
+ * kódy z číselníka firmy (nie id), rovnako ako zápis cez PUT profilu.
+ */
+export async function potvrdFakt(
+  database: Database,
+  firma: { tenantId: string; organizationId: string },
+  kluc: string,
+  hodnota: unknown,
+  potvrdeneAt = new Date().toISOString(),
+) {
+  await database.query(
+    `INSERT INTO profil_fakty (organization_id, tenant_id, kluc, stav, hodnota, zdroj, potvrdene_at)
+     VALUES ($1,$2,$3,'potvrdene',$4::jsonb,'uctovnik',$5)
+     ON CONFLICT (organization_id, kluc) DO UPDATE SET stav='potvrdene', hodnota=excluded.hodnota, potvrdene_at=excluded.potvrdene_at`,
+    [firma.organizationId, firma.tenantId, kluc, JSON.stringify(hodnota), potvrdeneAt],
+  );
+}
+
+/**
  * Odpoveď Responses API tak, ako ju vracia model: pole output správ. Návrh
  * zaúčtovania číta finálnu správu, preto testy nesmú posielať iba holý objekt
  * — inak by prehliadli, že medzi správami môže byť preambula či tool call.

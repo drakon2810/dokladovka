@@ -7,7 +7,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { setCurrentOrg } from '../data/api';
 import { useDataQuery } from '../data/query';
-import { t } from '../i18n/sk';
+import { t, type SkKey } from '../i18n/sk';
+import type { Role } from '../data/types';
 import { OrgDot, ToastViewport } from '../components/ui';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { PripravaFirmyModal, KROKY, hotovychKrokov, usePripravaOrgId, otvorPripravu, zavriPripravu } from '../features/onboarding/PripravaFirmyModal';
@@ -67,6 +68,14 @@ function IconPartneri() {
     </svg>
   );
 }
+function IconProfilKlienta() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
+      <rect width="8" height="4" x="8" y="2" rx="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" />
+    </svg>
+  );
+}
 function IconNastavenia() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" {...stroke} className="shrink-0" aria-hidden>
@@ -107,14 +116,17 @@ function IconClock() {
   );
 }
 
-const NAV_ITEMS = [
+/** Položka bez `roly` je pre každého; s `roly` len pre vymenované (ako stráž route v App.tsx). */
+const NAV_ITEMS: ReadonlyArray<{ to: string; label: SkKey; icon: JSX.Element; end: boolean; badge: boolean; roly?: readonly Role[] }> = [
   { to: '/', label: 'nav.prehlad', icon: <IconPrehlad />, end: true, badge: false },
   { to: '/doklady', label: 'nav.doklady', icon: <IconDoklady />, end: false, badge: true },
   { to: '/nespracovane', label: 'nav.nespracovane', icon: <IconNespracovane />, end: false, badge: false },
   { to: '/partneri', label: 'nav.partneri', icon: <IconPartneri />, end: false, badge: false },
   { to: '/export', label: 'nav.export', icon: <IconExport />, end: false, badge: false },
   { to: '/asistent', label: 'nav.asistent', icon: <IconAsistent />, end: false, badge: false },
-] as const;
+  { to: '/profil-klienta', label: 'nav.profilKlienta', icon: <IconProfilKlienta />, end: false, badge: false, roly: ['admin', 'uctovnik'] },
+  { to: '/nastavenia', label: 'nav.nastavenia', icon: <IconNastavenia />, end: false, badge: false, roly: ['admin'] },
+];
 
 const RECENT_KEY = 'dokladovka.recentSearch';
 
@@ -387,7 +399,7 @@ export function Layout() {
         {/* Navigácia */}
         <nav className="flex-1 overflow-y-auto p-3">
           <div className="relative flex flex-col gap-1">
-            {NAV_ITEMS.map((item) => (
+            {NAV_ITEMS.filter((item) => !item.roly || item.roly.includes(role)).map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -421,33 +433,6 @@ export function Layout() {
                 )}
               </NavLink>
             ))}
-            {role === 'admin' && (
-              <NavLink
-                to="/nastavenia"
-                className={({ isActive }) =>
-                  `relative flex h-[38px] items-center gap-2.5 rounded-[11px] px-3 text-sm transition ${
-                    collapsed ? 'justify-center' : ''
-                  } ${isActive ? 'font-semibold text-accent-hover' : 'font-medium text-ink-soft hover:text-accent-hover'}`
-                }
-                title={t('nav.nastavenia')}
-              >
-                {({ isActive }) => (
-                  <>
-                    {isActive && (
-                      <motion.span
-                        layoutId="navIndicator"
-                        className="absolute inset-0 rounded-[11px] bg-tint"
-                        style={{ boxShadow: 'inset 0 0 0 1px rgba(14,122,95,.15), inset 3px 0 0 #0E7A5F, 0 6px 14px -8px rgba(14,122,95,.45)' }}
-                        transition={{ type: 'spring', stiffness: 520, damping: 40 }}
-                        aria-hidden
-                      />
-                    )}
-                    <span className="relative z-[1] flex shrink-0"><IconNastavenia /></span>
-                    {!collapsed && <span className="relative z-[1] flex-1 text-left">{t('nav.nastavenia')}</span>}
-                  </>
-                )}
-              </NavLink>
-            )}
           </div>
 
           {!collapsed && (

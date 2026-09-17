@@ -9,12 +9,10 @@ import type {
   DphAudit,
   ApprovalRule,
   DocumentPayment,
-  DphProfil,
   EmailTemplate,
   NoteTemplate,
   SeriesDefault,
   Partner,
-  UctovnyProfil,
   AgentInstallation,
   AppUser,
   CodeListItem,
@@ -58,8 +56,6 @@ export interface AppDataState {
   dphAudit: DphAudit[];
   payments: DocumentPayment[];
   approvalRules: ApprovalRule[];
-  dphProfiles: DphProfil[];
-  accountingProfiles: UctovnyProfil[];
   partners: Partner[];
   noteTemplates: NoteTemplate[];
   seriesDefaults: SeriesDefault[];
@@ -213,8 +209,6 @@ export function migratePersistedState(persisted: unknown, version: number): AppD
     exportJobs: state.exportJobs ?? [],
     payments: state.payments ?? [],
     approvalRules: state.approvalRules ?? [],
-    dphProfiles: state.dphProfiles ?? [],
-    accountingProfiles: state.accountingProfiles ?? [],
     partners: state.partners ?? [],
     noteTemplates: state.noteTemplates ?? [],
     seriesDefaults: state.seriesDefaults ?? [],

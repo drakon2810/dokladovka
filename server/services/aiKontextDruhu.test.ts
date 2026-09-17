@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { maybeAiAccountingSuggestion, rebuildAccountingSuggestion } from './accountingSuggestionService.js';
-import { aiOdpoved, createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { aiOdpoved, createTestDatabase, potvrdFakt, seedTestUser, testConfig } from '../testHelpers.js';
 
 const databases: Awaited<ReturnType<typeof createTestDatabase>>[] = [];
 afterEach(async () => Promise.all(databases.splice(0).map((database) => database.close())));
@@ -205,13 +205,10 @@ describe('AI kontext druhu dokladu', () => {
     const { database, seeded, kod, doklad } = await pripravFirmu();
     const phm = await kod('predkontacie', 'PHM-501200', { ucetMd: '501200' });
     const nadspotreba = await kod('predkontacie', 'PHM-Nadspotreba', { ucetMd: '501201' });
-    await database.query(
-      `INSERT INTO organization_dph_profiles (organization_id,tenant_id,pravidla_aut) VALUES ($2,$1,$3::jsonb)`,
-      [seeded.tenantId, seeded.organizationId, JSON.stringify([{
-        kategoria: 'Osobné auto', percento: 80, percentoDph: 50, klucoveSlova: ['natural 95'],
-        predkontaciaId: phm, predkontaciaNedanovaId: nadspotreba,
-      }])],
-    );
+    await potvrdFakt(database, seeded, 'vozidla.pravidla', [{
+      nazov: 'Osobné auto', percentoZakladu: 80, percentoDph: 50, klucoveSlova: ['natural 95'],
+      predkontaciaKod: 'PHM-501200', predkontaciaNedanovaKod: 'PHM-Nadspotreba',
+    }]);
     const documentId = await doklad('bezna', {});
     const polozky = Array.from({ length: 20 }, (_, index) => ({ popis: index === 17 ? 'Natural 95' : `Umývanie ${index}`, sadzbaDph: 23, suma: 10 }));
     const parser = {

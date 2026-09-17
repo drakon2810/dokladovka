@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { createTestDatabase, seedTestUser, testConfig } from '../testHelpers.js';
+import { createTestDatabase, potvrdFakt, seedTestUser, testConfig } from '../testHelpers.js';
 import { DphAuditor, bezPrazdnehoNavrhu, kodyPreStranu, nacitajCiselnikPreAudit, overeneFakty, posudNavrhDokladu, trebaDruhyHlas, zluc, zosuladSPraxou, type DphAuditVstup } from './dphAuditService.js';
 
 // Kontrola je druhá mienka k pamäti. Testy držia to, na čom stojí jej dôvera:
@@ -266,10 +266,14 @@ describe('záznam behov kontroly DPH', () => {
          VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,12.3,'EUR')`,
         [documentId, tenantId, organizationId],
       );
+      // Potvrdené zásady firmy idú kontrole ako fakty — inak by radila proti účtovníkovi.
+      await potvrdFakt(database, { tenantId, organizationId }, 'zasady.tovar_na_ceste', { pouziva: true });
       let volanie = 0;
+      let prompt: any;
       const auditor = new DphAuditor(config, {
-        parse: async () => {
+        parse: async (body: any) => {
           volanie += 1;
+          prompt ??= JSON.parse(body.input[0].content[0].text);
           if (volanie === 2) throw Object.assign(new Error('výpadok'), { status: 500 });
           return {
             output_parsed: { verdikt: 'neisty', odporucaneClenenieKod: 'PN', odporucanaKvSekcia: null, dovod: 'Neviem.', istota: 0.5 },
@@ -289,6 +293,7 @@ describe('záznam behov kontroly DPH', () => {
           usage: expect.objectContaining({ inputTokens: 100, outputTokens: 20 }) }),
         expect.objectContaining({ prompt_version: 'dph-kontrola-v1', status: 'failed', error_code: 'openai_500', usage: null }),
       ]);
+      expect(prompt.zasadyFirmy).toEqual(['Firma účtuje tovar na ceste (účet 139).']);
       // Prvá mienka platí ďalej.
       expect((await database.query('SELECT 1 FROM dph_audit WHERE document_id=$1', [documentId])).rowCount).toBe(1);
     } finally {

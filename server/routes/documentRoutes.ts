@@ -14,9 +14,10 @@ import { classifyXml } from '../inbound/xmlClassifier.js';
 import { detectedMimeType, safeName } from '../inbound/attachmentMime.js';
 import { extractionResultSchema } from '../extraction/contract.js';
 import { normalizeExtractionResult, validateExtractionResult, validateNormalizedExtraction } from '../extraction/normalize.js';
-import { agendaRadu, forgetUctoDecision, kvPreDruh, normalizeName, platnyKvKod, protistranaDokladu, rebuildAccountingSuggestion, recordUctoDecision, resolveSeriesDefault, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
+import { agendaRadu, forgetUctoDecision, kvPreDruh, normalizeName, protistranaDokladu, rebuildAccountingSuggestion, recordUctoDecision, resolveSeriesDefault, updateRuleFeedback, zaznamenajOpravu } from '../services/accountingSuggestionService.js';
 import { posudDph, type DphPosudokDokument } from '../services/dphAdvisor.js';
 import { zaradNavrhZauctovania } from '../services/navrhZauctovaniaJob.js';
+import { ulozPravidloProtistrany } from '../services/pravidloProtistrany.js';
 import { loadDphProfil, predvolenyDphProfil } from '../services/dphProfileService.js';
 import { PRECO_POLIA, precoVysvetlenie } from '../services/precoVysvetlenieService.js';
 import { isTechnicalDuplicate } from '../inbound/duplicateCheck.js';
@@ -524,10 +525,8 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
   });
 
   // R09 „Vždy pre tohto dodávateľa": podoba praxe, ktorú účtovník vybral, sa
-  // stane pravidlom protistrany. Dodávateľa určí server z dokladu, nie klient.
-  // Staré pravidlá LEN pre dodávateľa sa deaktivujú (nemažú — návrhy a „Prečo"
-  // na ne ukazujú): pravidlá sa skladajú od najstaršieho a staré by vyhralo.
-  // Pravidlá s kľúčovými slovami ostávajú — hovoria o druhu plnenia.
+  // stane pravidlom protistrany (ulozPravidloProtistrany). Dodávateľa určí
+  // server z dokladu, nie klient.
   app.post('/api/documents/:id/pravidlo-protistrany', async (request) => {
     const auth = await requireBrowserAuth(request, database);
     requireCsrf(request, auth);
@@ -549,84 +548,20 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     const ico = String(strana.ico ?? '').replace(/\D/g, '');
     const nazov = normalizeName(strana.nazov);
     if (!ico && !nazov) throw new HttpError(422, 'protistrana_chyba', 'Doklad nemá dodávateľa, pre ktorého by pravidlo platilo');
-    const kody = await database.query<{ id: string; kind: string; code: string } & Record<string, unknown>>(
-      `SELECT id, kind, code FROM code_list_items
-        WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND id = ANY($3::text[])`,
-      [auth.tenantId, document.organization_id, [body.predkontaciaId, body.clenenieDphId]],
-    );
-    const predkontacia = kody.rows.find((row) => row.id === body.predkontaciaId && row.kind === 'predkontacie');
-    const clenenie = kody.rows.find((row) => row.id === body.clenenieDphId && row.kind === 'cleneniaDph');
-    if (!predkontacia || !clenenie) throw new HttpError(422, 'neplatny_kod', 'Predkontácia alebo členenie DPH nie je aktívne v číselníku firmy');
-    const kv = body.clenenieKvKod ? platnyKvKod(body.clenenieKvKod) : undefined;
-    const dovod = `Účtovník vybral prax ${predkontacia.code.trim()} / ${clenenie.code.trim()}${kv ? ` / ${kv}` : ''}`
-      + ` pre tohto dodávateľa (doklad ${String((document.extracted as Record<string, unknown>)?.cisloFaktury ?? id).slice(0, 60)}).`;
-    const ruleId = randomUUID();
-    await database.transaction(async (tx) => {
-      // Deaktivujú sa pravidlá, ktoré by pri návrhu zasiahli — tá istá zhoda ako
-      // v zhodnePravidla (IČO ALEBO meno), inak by staršie pravidlo vyhralo.
-      const deaktivovane = (await tx.query<{ id: string; ciselny_rad_id: string | null; stredisko_id: string | null } & Record<string, unknown>>(
-        `UPDATE accounting_rules SET active=false, updated_at=now()
-          WHERE tenant_id=$1 AND organization_id=$2 AND active=true AND coalesce(keywords, '[]'::jsonb) = '[]'::jsonb
-            AND (($3::text <> '' AND regexp_replace(coalesce(supplier_ico, ''), '[^0-9]', '', 'g')=$3)
-              OR ($4::text <> '' AND supplier_name_normalized=$4))
-          RETURNING id, ciselny_rad_id, stredisko_id, created_at`,
-        [auth.tenantId, document.organization_id, ico, nazov],
-      )).rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-      // Rad a stredisko zo starých pravidiel sa prenesú — o nich účtovník
-      // nerozhodoval a nesmú ticho zmiznúť. Len kódy, ktoré sú ešte aktívne.
-      const prenesene = async (pole: 'ciselny_rad_id' | 'stredisko_id') => {
-        for (const row of deaktivovane) {
-          const kodId = row[pole];
-          if (!kodId) continue;
-          const aktivny = await tx.query('SELECT 1 FROM code_list_items WHERE id=$1 AND tenant_id=$2 AND organization_id=$3 AND active=true',
-            [kodId, auth.tenantId, document.organization_id]);
-          if (aktivny.rowCount) return kodId;
-        }
-        return null;
-      };
-      const rad = await prenesene('ciselny_rad_id');
-      const stredisko = await prenesene('stredisko_id');
-      await tx.query(
-        `INSERT INTO accounting_rules
-          (id,tenant_id,organization_id,supplier_ico,supplier_name_normalized,keywords,predkontacia_id,clenenie_dph_id,
-           clenenie_kv_kod,ciselny_rad_id,stredisko_id,origin,dovod,dovod_source,dovod_updated_at,dovod_updated_by)
-         VALUES ($1,$2,$3,$4,$5,'[]'::jsonb,$6,$7,$8,$9,$10,'manual',$11,'human',now(),$12)`,
-        [ruleId, auth.tenantId, document.organization_id, ico || null, nazov || null,
-          predkontacia.id, clenenie.id, kv ?? null, rad, stredisko, dovod, auth.userId],
-      );
-      // Otázka zmizne zo všetkých otvorených dokladov tejto protistrany — pravidlo
-      // o nej už rozhodlo a ďalší návrh ju nevytvorí.
-      const otvorene = (await tx.query<{ document_id: string; document_type: string; extracted: unknown } & Record<string, unknown>>(
-        `SELECT s.document_id, d.document_type, d.extracted FROM accounting_suggestions s
-           JOIN documents d ON d.id=s.document_id AND d.tenant_id=s.tenant_id
-          WHERE s.tenant_id=$1 AND s.organization_id=$2 AND s.otazka IS NOT NULL`,
-        [auth.tenantId, document.organization_id],
-      )).rows.filter((row) => {
-        const ina = protistranaDokladu(row.document_type, row.extracted);
-        const inaIco = String(ina.ico ?? '').replace(/\D/g, '');
-        return ico ? inaIco === ico : !inaIco && normalizeName(ina.nazov) === nazov;
-      }).map((row) => row.document_id);
-      if (otvorene.length > 0) {
-        await tx.query('UPDATE accounting_suggestions SET otazka=NULL WHERE tenant_id=$1 AND document_id = ANY($2::text[])',
-          [auth.tenantId, otvorene]);
-      }
-      // Ostatné otvorené doklady dodávateľa nesú ešte návrh so starou podobou —
-      // nový návrh už pôjde podľa pravidla. Aktuálny doklad má výber v koncepte.
-      for (const ineId of otvorene.filter((documentId) => documentId !== id)) {
-        await zaradNavrhZauctovania(tx, {
-          tenantId: auth.tenantId, organizationId: document.organization_id, documentId: ineId, correlationId: request.id,
-        });
-      }
+    return database.transaction(async (tx) => {
+      const pravidlo = await ulozPravidloProtistrany(tx, {
+        tenantId: auth.tenantId, organizationId: document.organization_id, userId: auth.userId, correlationId: request.id,
+        ico, nazov, ...body, documentId: id,
+        zdroj: `doklad ${String((document.extracted as Record<string, unknown>)?.cisloFaktury ?? id).slice(0, 60)}`,
+      });
+      if (!pravidlo) throw new HttpError(422, 'neplatny_kod', 'Predkontácia alebo členenie DPH nie je aktívne v číselníku firmy');
       await writeAudit(tx, {
         tenantId: auth.tenantId, organizationId: document.organization_id, actorType: 'user', actorId: auth.userId,
         action: 'ucto.pravidlo_z_otazky', entityType: 'document', entityId: id, correlationId: request.id,
-        metadata: {
-          ruleId, deaktivovane: deaktivovane.map((row) => row.id), predkontaciaId: predkontacia.id,
-          clenenieDphId: clenenie.id, clenenieKvKod: kv ?? null, ciselnyRadId: rad, strediskoId: stredisko,
-        },
+        metadata: pravidlo,
       });
+      return { ruleId: pravidlo.ruleId };
     });
-    return { ruleId };
   });
 
   // Komunikácia na doklade: komentár s @-spomenutiami. Spomenutia sa

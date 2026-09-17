@@ -12,7 +12,9 @@ import { PartnersPage } from '../features/partners/PartnersPage';
 import { AssistantPage } from '../features/assistant/AssistantPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { GlobalRulesPage } from '../features/pravidla/GlobalRulesPage';
+import { ProfilKlientaPage } from '../features/profil/ProfilKlientaPage';
 import { useDataQuery } from '../data/query';
+import type { Role } from '../data/types';
 import { t } from '../i18n/sk';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { AuthProvider } from '../auth/AuthProvider';
@@ -65,11 +67,11 @@ function MobileShell({ children }: { children: JSX.Element }) {
   return children;
 }
 
-function AdminRoute({ children }: { children: JSX.Element }) {
+function RoleRoute({ roly, children }: { roly: Role[]; children: JSX.Element }) {
   const { session, loading } = useAuth();
   const { loading: dataLoading } = useDataQuery();
   if (loading || dataLoading) return <p className="text-sm text-ink-soft">{t('stav.nacitavam')}</p>;
-  if (session?.user.role !== 'admin') return <Navigate to="/" replace />;
+  if (!session || !roly.includes(session.user.role)) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -111,9 +113,18 @@ export function App() {
             <Route
               path="/nastavenia"
               element={
-                <AdminRoute>
+                <RoleRoute roly={['admin']}>
                   <SettingsPage />
-                </AdminRoute>
+                </RoleRoute>
+              }
+            />
+            {/* Fakty firmy pozná ten, kto účtuje — admin aj účtovník. */}
+            <Route
+              path="/profil-klienta"
+              element={
+                <RoleRoute roly={['admin', 'uctovnik']}>
+                  <ProfilKlientaPage />
+                </RoleRoute>
               }
             />
             <Route path="*" element={<Navigate to="/" replace />} />

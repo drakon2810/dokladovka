@@ -156,6 +156,7 @@ export function CommandPalette({
       ['/partneri', t('nav.partneri')],
       ['/export', t('nav.export')],
     ];
+    if (role === 'admin' || role === 'uctovnik') pages.push(['/profil-klienta', t('nav.profilKlienta')]);
     if (role === 'admin') pages.push(['/nastavenia', t('nav.nastavenia')]);
     for (const [path, label] of pages) {
       list.push({

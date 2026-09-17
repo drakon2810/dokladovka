@@ -9,8 +9,6 @@ import { HttpError } from '../http.js';
 import { pridajAdminovKFirme } from './userRoutes.js';
 import type { ObjectStorage } from '../storage.js';
 import { insertCustomAlias, insertUniqueAlias, type AliasRecord } from '../services/organizationService.js';
-import { loadDphProfil } from '../services/dphProfileService.js';
-import { loadUctovnyProfil } from '../services/accountingProfileService.js';
 
 const organizationSchema = z.object({
   nazov: z.string().trim().min(1).max(200),
@@ -28,60 +26,6 @@ const organizationSchema = z.object({
 }).strict();
 
 const patchSchema = organizationSchema.partial().strict();
-
-const dphPravidloSchema = z.object({
-  kategoria: z.string().trim().min(1).max(120),
-  percento: z.number().min(0).max(100),
-  klucoveSlova: z.array(z.string().trim().min(1).max(60)).max(30),
-  // Podiel dane a oba účty. Bez nich ostáva pravidlo upozornením; s nimi vie
-  // doklad rozrezať samo, bez histórie firmy a bez úsudku modelu.
-  percentoDph: z.number().min(0).max(100).optional(),
-  predkontaciaId: z.string().optional(),
-  predkontaciaNedanovaId: z.string().optional(),
-  clenenieDphNedanoveId: z.string().optional(),
-  platnostOd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  platnostDo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-}).strict();
-
-const dphProfilSchema = z.object({
-  platitelDph: z.enum(['platitel', 'neplatitel', 'registracia_7a']),
-  obdobieDph: z.enum(['mesacne', 'stvrtrocne']),
-  uzavreteDo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  koeficient: z.array(z.object({
-    rok: z.number().int().min(2000).max(2100),
-    typ: z.enum(['zalohovy', 'rocny']),
-    hodnota: z.number().min(0).max(1),
-    platnostOd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    platnostDo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  }).strict()).max(20).default([]),
-  pomerneOdpocitanie: z.array(dphPravidloSchema).max(50).default([]),
-  rezim: z.enum(['tuzemsky', 'zahranicny']),
-  nakupyZEu: z.boolean(),
-  sluzbyZEu: z.boolean(),
-  prenesenieDp: z.boolean(),
-  pravidlaAut: z.array(dphPravidloSchema).max(50).default([]),
-  bezNaroku: z.array(z.object({
-    kategoria: z.string().trim().min(1).max(120),
-    klucoveSlova: z.array(z.string().trim().min(1).max(60)).max(30),
-  }).strict()).max(50).default([]),
-  samozdanenieAktivne: z.boolean(),
-  samozdanenieClenenieDphId: z.string().optional(),
-  samozdanenieClenenieKvKod: z.string().trim().max(10).optional(),
-  clenenieBezOdpoctuId: z.string().optional(),
-}).strict();
-
-const uctovnyProfilSchema = z.object({
-  obdobieUctovania: z.enum(['mesacne', 'stvrtrocne']),
-  zaokruhlovanieCelkom: z.enum(['centy', 'pat_centov', 'eura']),
-  zaokruhlovanieDph: z.enum(['matematicky', 'nahor', 'nadol']),
-  parovanieDodavatelov: z.array(z.enum(['ico', 'ic_dph', 'iban', 'nazov'])).min(1).max(4)
-    .refine((values) => new Set(values).size === values.length, 'Kritériá párovania sa nesmú opakovať'),
-  uctovnyRozvrh: z.array(z.object({
-    ucet: z.string().trim().min(1).max(10),
-    nazov: z.string().trim().min(1).max(200),
-    analytiky: z.array(z.string().trim().min(1).max(10)).max(50),
-  }).strict()).max(500).default([]),
-}).strict();
 
 interface OrganizationRow extends Record<string, unknown> {
   id: string;
@@ -190,105 +134,6 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
       metadata: { minAmount: body.minAmount, requiredRole: body.requiredRole, active: body.active },
     });
     return { organizationId, minAmount: body.minAmount, requiredRole: body.requiredRole, active: body.active };
-  });
-
-  // DPH profil klienta — jeden profil na organizáciu, upsert (admin).
-  // Odkazy na číselníky sa overujú proti aktívnym položkám organizácie.
-  app.put('/api/organizations/:organizationId/dph-profile', async (request) => {
-    const auth = await requireBrowserAuth(request, database);
-    requireCsrf(request, auth);
-    requireRole(auth, ['admin']);
-    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
-    await requireOrganizationAccess(database, auth, organizationId);
-    const body = dphProfilSchema.parse(request.body);
-    const clenenieIds = [body.samozdanenieClenenieDphId, body.clenenieBezOdpoctuId]
-      .filter((value): value is string => Boolean(value));
-    if (clenenieIds.length > 0) {
-      const valid = await database.query(
-        `SELECT id FROM code_list_items
-          WHERE tenant_id=$1 AND organization_id=$2 AND kind='cleneniaDph' AND active=true AND id=ANY($3::text[])`,
-        [auth.tenantId, organizationId, clenenieIds],
-      );
-      if (valid.rowCount !== new Set(clenenieIds).size) {
-        throw new HttpError(400, 'dph_clenenie_invalid', 'Členenie DPH nepatrí organizácii alebo nie je aktívne');
-      }
-    }
-    await database.query(
-      `INSERT INTO organization_dph_profiles
-        (organization_id, tenant_id, platitel_dph, obdobie_dph, uzavrete_do, koeficient,
-         pomerne_odpocitanie, rezim, nakupy_z_eu, sluzby_z_eu, prenesenie_dp, pravidla_aut,
-         bez_naroku, samozdanenie_aktivne, samozdanenie_clenenie_dph_id, samozdanenie_clenenie_kv_kod,
-         clenenie_bez_odpoctu_id, updated_by, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18,now())
-       ON CONFLICT (organization_id) DO UPDATE SET
-         platitel_dph=excluded.platitel_dph, obdobie_dph=excluded.obdobie_dph,
-         uzavrete_do=excluded.uzavrete_do, koeficient=excluded.koeficient,
-         pomerne_odpocitanie=excluded.pomerne_odpocitanie, rezim=excluded.rezim,
-         nakupy_z_eu=excluded.nakupy_z_eu, sluzby_z_eu=excluded.sluzby_z_eu,
-         prenesenie_dp=excluded.prenesenie_dp, pravidla_aut=excluded.pravidla_aut,
-         bez_naroku=excluded.bez_naroku, samozdanenie_aktivne=excluded.samozdanenie_aktivne,
-         samozdanenie_clenenie_dph_id=excluded.samozdanenie_clenenie_dph_id,
-         samozdanenie_clenenie_kv_kod=excluded.samozdanenie_clenenie_kv_kod,
-         clenenie_bez_odpoctu_id=excluded.clenenie_bez_odpoctu_id,
-         updated_by=excluded.updated_by, updated_at=now()`,
-      [organizationId, auth.tenantId, body.platitelDph, body.obdobieDph, body.uzavreteDo ?? null,
-        JSON.stringify(body.koeficient), JSON.stringify(body.pomerneOdpocitanie), body.rezim,
-        body.nakupyZEu, body.sluzbyZEu, body.prenesenieDp, JSON.stringify(body.pravidlaAut),
-        JSON.stringify(body.bezNaroku), body.samozdanenieAktivne,
-        body.samozdanenieClenenieDphId ?? null, body.samozdanenieClenenieKvKod ?? null,
-        body.clenenieBezOdpoctuId ?? null, auth.userId],
-    );
-    await writeAudit(database, {
-      tenantId: auth.tenantId,
-      organizationId,
-      actorType: 'user',
-      actorId: auth.userId,
-      action: 'organization.dph_profile_updated',
-      entityType: 'organization',
-      entityId: organizationId,
-      correlationId: request.id,
-      metadata: { platitelDph: body.platitelDph, obdobieDph: body.obdobieDph, rezim: body.rezim },
-    });
-    return await loadDphProfil(database, auth.tenantId, organizationId);
-  });
-
-  // Účtovný profil klienta (2. časť) — obdobie, zaokrúhľovanie, párovanie
-  // dodávateľov a účtovný rozvrh s analytikami. Upsert (admin).
-  app.put('/api/organizations/:organizationId/accounting-profile', async (request) => {
-    const auth = await requireBrowserAuth(request, database);
-    requireCsrf(request, auth);
-    requireRole(auth, ['admin']);
-    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
-    await requireOrganizationAccess(database, auth, organizationId);
-    const body = uctovnyProfilSchema.parse(request.body);
-    await database.query(
-      `INSERT INTO organization_accounting_profiles
-        (organization_id, tenant_id, obdobie_uctovania, zaokruhlovanie_celkom, zaokruhlovanie_dph,
-         parovanie_dodavatelov, uctovny_rozvrh, updated_by, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,now())
-       ON CONFLICT (organization_id) DO UPDATE SET
-         obdobie_uctovania=excluded.obdobie_uctovania,
-         zaokruhlovanie_celkom=excluded.zaokruhlovanie_celkom,
-         zaokruhlovanie_dph=excluded.zaokruhlovanie_dph,
-         parovanie_dodavatelov=excluded.parovanie_dodavatelov,
-         uctovny_rozvrh=excluded.uctovny_rozvrh,
-         updated_by=excluded.updated_by, updated_at=now()`,
-      [organizationId, auth.tenantId, body.obdobieUctovania, body.zaokruhlovanieCelkom,
-        body.zaokruhlovanieDph, JSON.stringify(body.parovanieDodavatelov),
-        JSON.stringify(body.uctovnyRozvrh), auth.userId],
-    );
-    await writeAudit(database, {
-      tenantId: auth.tenantId,
-      organizationId,
-      actorType: 'user',
-      actorId: auth.userId,
-      action: 'organization.accounting_profile_updated',
-      entityType: 'organization',
-      entityId: organizationId,
-      correlationId: request.id,
-      metadata: { obdobieUctovania: body.obdobieUctovania },
-    });
-    return await loadUctovnyProfil(database, auth.tenantId, organizationId);
   });
 
   // Predvolený číselný rad na typ dokladu — prázdna hodnota vráti automatiku
@@ -660,8 +505,7 @@ export function registerOrganizationRoutes(app: FastifyInstance, database: Datab
       await tx.query('DELETE FROM organization_email_aliases WHERE organization_id=$2 AND tenant_id=$1', scope);
       for (const table of [
         'code_list_items', 'accounting_rules', 'organization_accounting_defaults', 'partners',
-        'note_templates', 'email_templates', 'approval_rules', 'organization_dph_profiles',
-        'organization_accounting_profiles', 'organization_bank_accounts', 'organization_documents',
+        'note_templates', 'email_templates', 'approval_rules', 'organization_bank_accounts', 'organization_documents',
         'pohoda_company_links', 'agent_sync_runs', 'assistant_threads', 'organization_memberships',
         // Denník nemá ON DELETE CASCADE — bez neho zlyhalo mazanie každej firmy s denníkom.
         'ucto_dennik',

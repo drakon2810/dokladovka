@@ -12,7 +12,6 @@ import { QueuesTab } from './QueuesTab';
 import { MostikTab } from './MostikTab';
 import { SharePointTab } from './SharePointTab';
 import { ApprovalRulesTab } from './ApprovalRulesTab';
-import { ClientProfileTab } from './ClientProfileTab';
 import { TemplatesTab } from './TemplatesTab';
 import { TreningAiTab } from './TreningAiTab';
 import { AiPravidlaTab } from './AiPravidlaTab';
@@ -20,7 +19,6 @@ import { AiPravidlaTab } from './AiPravidlaTab';
 const TABS = [
   { id: 'organizacie', label: 'nast.tab.organizacie' },
   { id: 'fronty', label: 'nast.tab.fronty' },
-  { id: 'profil', label: 'nast.tab.profil' },
   { id: 'ciselniky', label: 'nast.tab.ciselniky' },
   { id: 'trening', label: 'nast.tab.trening' },
   { id: 'pravidla', label: 'nast.tab.pravidla' },
@@ -68,7 +66,6 @@ export function SettingsPage() {
 
       {tab === 'organizacie' && <OrganizationsTab />}
       {tab === 'fronty' && <QueuesTab />}
-      {tab === 'profil' && <ClientProfileTab />}
       {tab === 'ciselniky' && <CodeListsTab />}
       {tab === 'trening' && <TreningAiTab />}
       {tab === 'pravidla' && <AiPravidlaTab />}
