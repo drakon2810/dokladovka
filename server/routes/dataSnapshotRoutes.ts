@@ -32,7 +32,7 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       queues, bankAccounts, aliases, documents, inboundEmails, inboundAttachments,
       extractionRuns, suggestions, dphAudit, payments, approvalRules,
       partners, noteTemplates, emailTemplates, orgDocuments, codeListRows, seriesDefaults,
-      users, batches, integration, installations, links, jobs, priprava,
+      users, batches, integration, installations, links, jobs, priprava, beziaceKroky,
     ] = await Promise.all([
       inScope('document_queues', 'name'),
       inScope('organization_bank_accounts', 'label'),
@@ -109,7 +109,30 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
           WHERE o.tenant_id=$1 AND o.id=ANY($2::text[])`,
         [auth.tenantId, organizationIds, config.agentOfflineAlertHours],
       ),
+      // Ktoré doklady systém ešte rozrobené drží. Bez tohto signálu zoznam
+      // nevie, že na doklade beží krok pipeline, a účtovník ho otvorí uprostred
+      // behu AI — s poloprázdnymi poľami, ktoré sa mu menia pod rukami.
+      // Zámerne samostatný dopyt nad indexom stavu, nie podotázka ku každému
+      // dokladu: processing_jobs nemá index na document_id, takže korelovaná
+      // podotázka by pri každom polle prešla celú tabuľku pre každý doklad.
+      // Čakajúcich a bežiacich jobov je vždy len zopár riadkov.
+      database.query<Record<string, any>>(
+        `SELECT DISTINCT document_id, kind FROM processing_jobs
+          WHERE tenant_id=$1 AND organization_id=ANY($2::text[])
+            AND status IN ('queued','running') AND document_id IS NOT NULL`,
+        [auth.tenantId, organizationIds],
+      ),
     ]);
+
+    // Doklad môže mať rozrobený aj návrh, aj extrakciu (zmena druhu počas
+    // opakovaného spracovania) — extrakcia je širší krok, tá má prednosť.
+    const krokDokladu = new Map<string, 'extrakcia' | 'zauctovanie'>();
+    for (const row of beziaceKroky.rows) {
+      const krok = row.kind === 'navrh_zauctovania' ? 'zauctovanie' : 'extrakcia';
+      if (krok === 'extrakcia' || !krokDokladu.has(row.document_id)) {
+        krokDokladu.set(row.document_id, krok);
+      }
+    }
 
     const codeLists = {
       predkontacie: [], cleneniaDph: [], ciselneRady: [], strediska: [],
@@ -156,7 +179,8 @@ export function registerDataSnapshotRoutes(app: FastifyInstance, database: Datab
       })),
       documents: documents.rows.map((row) => ({
         id: row.id, tenantId: row.tenant_id, orgId: row.organization_id, queueId: row.queue_id ?? '', typ: row.document_type, podtyp: row.podtyp ?? 'bezna',
-        status: row.status, processingStatus: row.processing_status, pdfUrl: `/api/documents/${row.id}/file`, prijateDna: iso(row.created_at),
+        status: row.status, processingStatus: row.processing_status, prebiehajuciKrok: krokDokladu.get(row.id),
+        pdfUrl: `/api/documents/${row.id}/file`, prijateDna: iso(row.created_at),
         zdroj: row.source, confidence: Number(row.confidence), fieldConfidence: row.field_confidence,
         extracted: row.extracted, ucto: row.accounting, history: row.history, comments: row.comments,
         exportId: row.export_id ?? undefined, quarantineReason: row.quarantine_reason ?? undefined,

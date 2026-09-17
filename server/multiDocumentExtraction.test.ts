@@ -2,7 +2,7 @@
 // v `additionalDocuments` a worker z jedného prijatého súboru založí niekoľko
 // dokladov previazaných tou istou väzbou ako ručné rozdelenie.
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 import { createTestDatabase, seedTestUser, testConfig } from './testHelpers.js';
 import { MemoryObjectStorage } from './storage.js';
@@ -126,14 +126,36 @@ describe('viac dokladov z jedného súboru', () => {
     });
     expect(nahratie.statusCode).toBe(202);
 
-    await processNextJob(database, config, 'w1', { storage, provider: new RekapitulaciaProvider() });
+    // Okno medzi uloženými údajmi a hotovým zaúčtovaním: kontrola DPH a AI
+    // návrh bežia v CHVOSTE jobu, ktorý je v tej chvíli už 'succeeded'. Doklad
+    // preto vtedy nemá bežiaci job a pripravený vyzerať nesmie — vlastník ho
+    // presne v tomto okne otvoril a návrh sa mu prepísal pod rukami. Parser sa
+    // pozrie, v akom stave doklady sú, a potom spadne: chyba modelu je
+    // ošetrená, takže deterministický návrh aj tak ostane.
+    const vChvoste: string[] = [];
+    const aiParser = {
+      create: vi.fn(async () => {
+        const stavy = await database.query<Record<string, any>>(
+          'SELECT processing_status FROM documents WHERE organization_id=$1', [seeded.organizationId]);
+        vChvoste.push(...stavy.rows.map((row) => String(row.processing_status)));
+        throw new Error('model tu nie je — testu stačí, že sa naň niekto pozrel');
+      }),
+    };
+    await processNextJob(database, config, 'w1', { storage, provider: new RekapitulaciaProvider(), aiParser });
+    // Bez tohto by okno mohlo ostať nepozorované a test by ticho prešiel.
+    expect(aiParser.create).toHaveBeenCalled();
+    expect(new Set(vChvoste)).toEqual(new Set(['normalizing']));
 
     const doklady = await database.query<Record<string, any>>(
-      `SELECT id, document_type, total_amount, extracted, accounting, split_from_document_id
+      `SELECT id, document_type, total_amount, extracted, accounting, split_from_document_id, processing_status
          FROM documents WHERE organization_id=$1 ORDER BY created_at, split_from_document_id NULLS FIRST`,
       [seeded.organizationId],
     );
     expect(doklady.rowCount).toBe(3);
+    // Chvost dobehol → otvárajú sa všetky tri naraz, aj časti rozdeleného
+    // súboru: svoj návrh dostávajú v tom istom chvoste ako hlavný doklad.
+    expect(doklady.rows.map((row) => row.processing_status))
+      .toEqual(['ready_for_review', 'ready_for_review', 'ready_for_review']);
 
     const hlavny = doklady.rows.find((row) => !row.split_from_document_id);
     const casti = doklady.rows.filter((row) => row.split_from_document_id);

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 import { MemoryObjectStorage } from './storage.js';
 import { createTestDatabase, seedTestUser, testConfig } from './testHelpers.js';
-import { cisloVPohodeZDokladu, looksLikePdfStructure, processNextJob, retryDelaySeconds } from './workerService.js';
+import { randomUUID } from 'node:crypto';
+import { cisloVPohodeZDokladu, looksLikePdfStructure, processNextJob, retryDelaySeconds, uvolniZaseknuteDoklady } from './workerService.js';
 
 // Hodiny workera: klasifikácia trvá 30 s, extrakcia 2 s a potom padne.
 const hodiny = vi.hoisted(() => ({ ms: 0 }));
@@ -64,6 +65,61 @@ describe('cisloVPohodeZDokladu', () => {
     // POHODA berie do čísla dokladu najviac 32 znakov.
     expect(cisloVPohodeZDokladu('FV', { cisloFaktury: '9'.repeat(40) })).toHaveLength(32);
   });
+});
+
+// Doklad v 'normalizing' má extrakčný job už 'succeeded' — jeho výsledok je
+// zaplatený a uložený, takže ho nič nevyzdvihne. Keby workera niekto zabil
+// uprostred chvosta (kontrola DPH, návrh zaúčtovania), doklad by ostal
+// neotvoriteľný navždy. Sweep po štarte workera ho uvoľní.
+describe('uvolniZaseknuteDoklady', () => {
+  it('uvolní len zaseknutý doklad — nie ten, na ktorom chvost ešte beží', async () => {
+    const database = await createTestDatabase();
+    try {
+      const seeded = await seedTestUser(database);
+      const config = testConfig();
+      const doklad = async (processingStatus: string, staryOd: string) => {
+        const id = randomUUID();
+        await database.query(
+          `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,
+             source,extracted,accounting,total_amount,currency,updated_at)
+           VALUES ($1,$2,$3,'FP','extrahovany',$4,'{"typ":"email"}'::jsonb,'{}'::jsonb,'{}'::jsonb,100,'EUR',
+             now() - ($5::text)::interval)`,
+          [id, seeded.tenantId, seeded.organizationId, processingStatus, staryOd],
+        );
+        return id;
+      };
+      const job = async (documentId: string, status: string) => database.query(
+        `INSERT INTO processing_jobs (id,tenant_id,organization_id,document_id,kind,status,correlation_id)
+         VALUES ($1,$2,$3,$4,'extract_document',$5,'test')`,
+        [randomUUID(), seeded.tenantId, seeded.organizationId, documentId, status],
+      );
+
+      // Zabitý worker: chvost sa nedokončil, job je hotový, nikto nepríde.
+      const zaseknuty = await doklad('normalizing', '2 hours');
+      await job(zaseknuty, 'succeeded');
+      // Chvost práve beží — dotknutý pred chvíľou, uvoľní ho processNextJob sám.
+      const bezi = await doklad('normalizing', '5 seconds');
+      await job(bezi, 'succeeded');
+      // Starý doklad s čakajúcim jobom: ten ho prepíše, sweep doň nesmie siahnuť.
+      const vofronte = await doklad('normalizing', '2 hours');
+      await job(vofronte, 'queued');
+      // Trvalá chyba je koncový verdikt a nesmie sa premeniť na „hotové".
+      const zlyhany = await doklad('failed_permanent', '2 hours');
+      await job(zlyhany, 'failed');
+
+      expect(await uvolniZaseknuteDoklady(database, config)).toBe(1);
+      const stav = async (id: string) => (await database.query<Record<string, any>>(
+        'SELECT processing_status FROM documents WHERE id=$1', [id])).rows[0].processing_status;
+      expect(await stav(zaseknuty)).toBe('ready_for_review');
+      expect(await stav(bezi)).toBe('normalizing');
+      expect(await stav(vofronte)).toBe('normalizing');
+      expect(await stav(zlyhany)).toBe('failed_permanent');
+      // Opakovaný štart workera už nemá čo uvolniť.
+      expect(await uvolniZaseknuteDoklady(database, config)).toBe(0);
+    } finally {
+      await database.close();
+    }
+  }, 90_000);
 });
 
 describe('oneskorenie behu extrakcie', () => {

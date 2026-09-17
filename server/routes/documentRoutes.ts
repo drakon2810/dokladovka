@@ -371,6 +371,18 @@ export function registerDocumentRoutes(app: FastifyInstance, database: Database,
     if (!['na_kontrole', 'extrahovany'].includes(document.status) || document.processing_status !== 'ready_for_review') {
       throw new HttpError(409, 'document_not_ready', 'Doklad ešte nie je pripravený na schválenie');
     }
+    // Hotová extrakcia nie je hotové spracovanie: doklad po zmene druhu má vo
+    // fronte nový návrh zaúčtovania a stav spracovania o ňom nevie. Takýto
+    // doklad sa dal potvrdiť skôr, než AI dorobila predkontáciu — a hromadné
+    // schválenie ide práve touto cestou, doklad po doklade.
+    const rozrobene = await database.query<{ existuje: boolean } & Record<string, unknown>>(
+      `SELECT EXISTS (SELECT 1 FROM processing_jobs
+                       WHERE document_id=$1 AND tenant_id=$2 AND status IN ('queued','running')) AS existuje`,
+      [id, auth.tenantId],
+    );
+    if (rozrobene.rows[0]?.existuje) {
+      throw new HttpError(409, 'document_not_ready', 'Na doklade ešte beží spracovanie — schváliť sa dá až po jeho dokončení');
+    }
     // Schvaľovanie podľa sumy: od prahu smie schváliť len vyhradená rola
     // (admin vždy). Deterministická kontrola pred všetkými ostatnými.
     const approvalRule = await database.query<{ min_amount: string | number; required_role: string } & Record<string, unknown>>(

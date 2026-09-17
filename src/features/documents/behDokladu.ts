@@ -1,4 +1,4 @@
-import type { ExtractionRun } from '../../data/types';
+import type { DocumentItem, ExtractionRun, ProcessingStatus } from '../../data/types';
 
 export type EtapaBehu = 'extrakcia' | 'klasifikacia' | 'zauctovanie' | 'dph_kontrola' | 'vysvetlenie' | 'vektory';
 export type VysledokBehu = 'uspech' | 'zdrzanie' | 'chyba' | 'prebieha';
@@ -26,4 +26,51 @@ export function popisBehu(run: Pick<ExtractionRun, 'promptVersion' | 'status' | 
     : run.errorCode ? 'zdrzanie'
     : 'uspech';
   return { etapa, vysledok };
+}
+
+/**
+ * Stavy spracovania, za ktorými už nikto nič nerobí. `failed_retryable` medzi
+ * ne nepatrí: job po ňom ostáva vo fronte a za pár desiatok sekúnd sa doklad
+ * prepíše znova. `failed_permanent` áno — je to konečný verdikt a doklad musí
+ * ostať otvoriteľný, inak ho účtovník nemá ako opraviť.
+ */
+const KONCOVE_STAVY: readonly ProcessingStatus[] = ['ready_for_review', 'failed_permanent'];
+
+/**
+ * Čo na doklade ešte beží; `undefined` = systém na ňom skončil a dá sa otvoriť.
+ *
+ * Vlastník otvoril doklad, kým na ňom ešte bežala AI: polia boli poloprázdne,
+ * návrh zaúčtovania prázdny, „Automatické účtovanie" sa nedalo stlačiť a TYP
+ * hlásil FP na doklade, ktorý nikto neklasifikoval — a všetko sa mu to potom
+ * menilo pod rukami. Pokiaľ teda niečo beží, doklad sa neotvára vôbec.
+ *
+ * Pripravenosť znamená „systém na ňom dorobil", NIE „systém uspel": doklad bez
+ * návrhu, po zlyhanej extrakcii, v karanténe aj ručne vytvorený sú pripravené,
+ * lebo inak by v zozname ostali zamknuté navždy.
+ *
+ * Chvost extrakčného jobu (kontrola DPH a AI návrh zaúčtovania) beží už za
+ * transakciou, ktorá job označí za 'succeeded' — doklad v ňom teda nemá bežiaci
+ * job a pozná ho jedine stav 'normalizing', ktorý mu worker na ten čas nechá.
+ */
+export function prebiehaSpracovanie(
+  doklad: Pick<DocumentItem, 'processingStatus' | 'prebiehajuciKrok'>,
+): DocumentItem['prebiehajuciKrok'] {
+  if (doklad.prebiehajuciKrok) return doklad.prebiehajuciKrok;
+  if (KONCOVE_STAVY.includes(doklad.processingStatus)) return undefined;
+  // 'normalizing' = vyťažené údaje sú uložené a beží nad nimi zaúčtovanie;
+  // pomenovať to „AI extrakcia prebieha" by bola druhá nepravda za sebou.
+  return doklad.processingStatus === 'normalizing' ? 'zauctovanie' : 'extrakcia';
+}
+
+/**
+ * Doklad, ktorý ešte nikto neklasifikoval — jeho TYP je len zástupná hodnota.
+ *
+ * Stĺpec document_type je NOT NULL s CHECK na FP/FV/BV/MZDY/OZ/PD, takže nový
+ * doklad vzniká s 'FP' a pravý typ doplní až extrakcia. Jediné miesto, ktoré
+ * zapisuje status 'novy', je práve ten zakladajúci INSERT — po extrakcii má
+ * doklad vždy iný status (extrahovany/karantena/duplicita/chyba). Status je
+ * preto poctivý príznak „typ ešte nikto neurčil" a netreba naň nový stĺpec.
+ */
+export function jeNeklasifikovany(doklad: Pick<DocumentItem, 'status'>): boolean {
+  return doklad.status === 'novy';
 }
