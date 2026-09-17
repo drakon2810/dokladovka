@@ -316,6 +316,9 @@ export async function importUctoHistory(
       sadzbaDph: row.sadzbaDph ?? null,
       // „BEZ…" nie je účet, ale doklad bez zaúčtovania — do korpusu sa nedostane
       // ani ako kód, inak by z neho analýza spravila kategóriu s účtom BEZ321100.
+      // Značka pochybnosti („Neviem", „PNeviem") tu naopak OSTÁVA: prax ju
+      // musí rozoznať, aby taký doklad do podôb hlavičky nezapočítala. Účet
+      // bez zaúčtovania sa od nej líši — ten nie je ani značka, ani rozhodnutie.
       predkontaciaKod: jeBezPredkontacia(row.predkontaciaKod) ? null : row.predkontaciaKod?.trim() || null,
       predkontaciaId: jeBezPredkontacia(row.predkontaciaKod) ? null : id('predkontacie', row.predkontaciaKod),
       clenenieDphKod: row.clenenieDphKod?.trim() || null,

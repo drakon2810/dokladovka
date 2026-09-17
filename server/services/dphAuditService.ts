@@ -5,6 +5,7 @@ import type { ServerConfig } from '../config.js';
 import type { Database } from '../db/database.js';
 import { POHODA_DPH_KODY, popisKodu, type StranaPlnenia } from "./pohodaDphKody.js";
 import { agendaHistorie } from './accountingSuggestionService.js';
+import { P_REFY_PRE_DD } from './profilKatalog.js';
 import { dphPokynyPreAi } from './dphAdvisor.js';
 import { loadDphProfil } from './dphProfileService.js';
 import { zapisBehAi } from './behAi.js';
@@ -97,15 +98,24 @@ const EU_KRAJINY = new Set([
  * Kód, ktorý si firma založila sama a v referenčnom zozname nie je, tiež
  * vypadne: nevieme, do ktorého riadku priznania zapisuje, tak o ňom mlčíme.
  */
-export function kodyPreStranu<T extends { kod: string }>(documentType: string, kody: T[]): T[] {
+export function kodyPreStranu<T extends { kod: string }>(documentType: string, kody: T[], bezDane = false): T[] {
   const strana: StranaPlnenia | undefined = documentType === 'FV' ? 'U' : documentType === 'FP' ? 'P' : undefined;
   // Ostatné agendy (interný doklad, pokladnica) môžu stáť na oboch stranách.
   if (!strana) return kody;
+  // Odpočet samozdanenia (PDnadEU, PDsluz, PKtov§84a…) patrí k dani, ktorú si
+  // firma sama vymerala — teda na INTERNÝ doklad. Na faktúre BEZ DANE nie je čo
+  // odpočítať, a práve tam ho kontrola ROFE odporúčala („Kontrola navrhuje
+  // PDnadEU"): stlačené „Použiť" by daň odpočítalo dvakrát — raz na faktúre a
+  // raz na internom doklade samozdanenia. Firma, ktorá odpočet naozaj účtuje
+  // na faktúre, ho dostane z vlastnej praxe (pravidlo, pamäť); model ho
+  // odporúčať nemá.
+  const odpocetSamozdanenia = new Set(Object.values(P_REFY_PRE_DD).flat());
   return kody.filter((item) => {
     const popis = popisKodu(item.kod);
     // Kód, ktorý POHODA pri zadávaní vôbec neponúka, nie je pre model
     // rovnocenná možnosť — je to režim, ktorý firma nepoužíva.
-    return popis?.strana === strana && popis.ponukat !== false;
+    if (!popis || popis.strana !== strana || popis.ponukat === false) return false;
+    return !(bezDane && odpocetSamozdanenia.has(popis.ref));
   });
 }
 
@@ -204,7 +214,11 @@ export class DphAuditor {
   /** `priOdpovedi` dostane spotrebu tokenov — aj pri prázdnej odpovedi, model sa zaplatil. */
   async posud(vstup: DphAuditVstup, priOdpovedi?: (usage: unknown) => void): Promise<DphVerdikt | undefined> {
     const extracted = vstup.extracted as Record<string, any>;
-    const clenenia = kodyPreStranu(vstup.documentType, vstup.cleneniaDph);
+    // Faktúra bez dane: ponuka kódov vynechá odpočet samozdanenia (patrí na
+    // interný doklad, nie sem).
+    const dphSpolu = (Array.isArray(extracted.rozpisDph) ? extracted.rozpisDph : [])
+      .reduce((spolu: number, riadok: { dph?: number }) => spolu + Number(riadok?.dph ?? 0), 0);
+    const clenenia = kodyPreStranu(vstup.documentType, vstup.cleneniaDph, dphSpolu === 0);
     const response = await this.responses.parse({
       model: this.config.accountingModel,
       store: this.config.storeResponses,

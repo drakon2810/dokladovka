@@ -76,6 +76,17 @@ describe('kodyPreStranu', () => {
   // POHODA nesie stranu plnenia v prefixe: U… vydané, P… prijaté, DD…
   // vymeranie dane na samostatnom internom doklade. V knihách RCI stojí
   // DDsl§69 91× na INT a ani raz na prijatej faktúre — tam je PN.
+  // Odpočet samozdanenia patrí na interný doklad. Na faktúre BEZ DANE nie je
+  // čo odpočítať — ROFE tam kontrola odporúčala PDnadEU a „Použiť" by DPH
+  // odpočítalo dvakrát (raz na faktúre, raz na internom doklade).
+  it('faktúra bez dane nedostane do ponuky odpočet samozdanenia', () => {
+    const sDanou = kodyPreStranu('FP', cleneniaDph).map((item) => item.kod);
+    expect(sDanou).toContain('PDsluz');
+    const bezDane = kodyPreStranu('FP', cleneniaDph, true).map((item) => item.kod);
+    expect(bezDane).toContain('PN');
+    expect(bezDane).not.toContain('PDsluz');
+  });
+
   it('prijatá faktúra nevidí kódy vydanej strany ani vymeranie dane', () => {
     const kody = kodyPreStranu('FP', cleneniaDph).map((item) => item.kod);
     expect(kody).toContain('PN');

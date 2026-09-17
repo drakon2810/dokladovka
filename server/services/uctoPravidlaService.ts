@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Queryable } from '../db/database.js';
-import { pocetZhodSlov } from './accountingSuggestionService.js';
+import { jeDocasnyKod, pocetZhodSlov } from './accountingSuggestionService.js';
 import { clenenieVyzeraNaOdpocet } from './dphAdvisor.js';
 import { popisKodu } from './pohodaDphKody.js';
 import { loadDphProfil } from './dphProfileService.js';
@@ -390,8 +390,16 @@ function tvarDokladu(doklad: DokladPraxe): TvarCast[] {
  * doklad bez dátumu sa nepočíta nikdy — o režime ani o úniku budúcnosti nič nepovie.
  */
 export function odvodPrax(doklady: DokladPraxe[], asOf?: string, protistrana = ''): Prax {
+  // Doklad označený značkou pochybnosti („Neviem", „PNeviem") nie je prax, ale
+  // otázka: ROFA ňou označila päť posledných dokladov zahraničného dodávateľa
+  // a bez tohto filtra z nich vznikla „nová podoba hlavičky", ktorá prebila
+  // 52 dokladov na účte 131100 — doklad potom nedostal návrh účtu vôbec.
+  // Doklad bez účtu v hlavičke sa naďalej počíta: pri mzdách či rozúčtovaní
+  // stojí zaúčtovanie na položkách a prázdna hlavička je tam pravda dokladu.
   const platne = doklady
     .filter((doklad) => doklad.hlavicka && doklad.datum && (!asOf || doklad.datum < asOf))
+    .filter((doklad) => !jeDocasnyKod(doklad.hlavicka!.predkontaciaKod)
+      && !jeDocasnyKod(doklad.hlavicka!.clenenieDphKod))
     .sort((a, b) => porovnaj(a.kluc, b.kluc));
   const skupiny = new Map<string, { variant: PraxVariant; doklady: DokladPraxe[] }>();
   for (const doklad of platne) {

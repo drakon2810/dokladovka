@@ -300,6 +300,20 @@ describe('prax protistrany z celých dokladov', () => {
   });
   const den = (poradie: number) => new Date(Date.UTC(2025, 0, 1 + poradie)).toISOString().slice(0, 10);
 
+  // Značka pochybnosti („Neviem"/„PNeviem") príde z korpusu ako hlavička bez
+  // kódov: ROFA ňou označila päť posledných dokladov zahraničného dodávateľa
+  // a z tých piatich vznikla „nová podoba", ktorá prebila 52 dokladov na
+  // účte 131100 — doklad potom nedostal návrh účtu vôbec.
+  it('doklad označený značkou pochybnosti („Neviem") prax neurčuje', () => {
+    const rozhodnute = Array.from({ length: 8 }, (_, i) => doklad(`R${i}`, den(i), ['131100', 'PD']));
+    // Značka je na NOVŠÍCH dokladoch — bez filtra by vyhrala ako zmena režimu.
+    const nerozhodnute = Array.from({ length: 5 }, (_, i) => doklad(`N${i}`, den(30 + i), ['Neviem', 'PNeviem']));
+    const prax = odvodPrax([...rozhodnute, ...nerozhodnute]);
+    expect(prax.dokladov).toBe(8);
+    expect(prax.vitaz?.predkontaciaKod).toBe('131100');
+    expect(prax.konflikt).toBe(false);
+  });
+
   it('A 60 (VATx/VATz) a B 40 (VATy) je konflikt a každá podoba je z dokladov', () => {
     const doklady = [
       ...Array.from({ length: 30 }, (_, i) => doklad(`X${i}`, den(i * 3), ['A', 'VATx'])),

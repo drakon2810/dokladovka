@@ -181,6 +181,21 @@ export function jeBezPredkontacia(kod: string | undefined | null): boolean {
 }
 
 /**
+ * Kód, ktorým účtovník hovorí „rozhodnem sa neskôr" — nie zaúčtovanie.
+ *
+ * ROFA má v POHODE predkontáciu „Neviem" a členenie „PNeviem" a poslednými
+ * piatimi dokladmi zahraničného dodávateľa označila presne tie, ktoré ešte
+ * nikto nerozhodol. Prax firmy z nich urobila novú podobu hlavičky, tá
+ * prebila 52 dokladov na účte 131100 a doklad potom nedostal návrh účtu
+ * vôbec. Značka pochybnosti sa učiť nesmie — v ponuke kódov ostáva, aby ju
+ * účtovník mohol ďalej používať.
+ */
+export function jeDocasnyKod(kod: string | undefined | null): boolean {
+  const text = (kod ?? '').normalize('NFD').replace(/[^a-zA-Z?]/g, '').toLowerCase();
+  return text.includes('neviem') || text.includes('nakontrol') || /^\?+$/.test(text);
+}
+
+/**
  * Od koľkých historických DOKLADOV je kategória dosť overená na predvyplnenie.
  * ponytail: číslo ostalo z čias, keď sa počítali riadky; dokladov je menej,
  * takže predvypĺňa menej kategórií. Prekalibrovať na meraní presnosti.
