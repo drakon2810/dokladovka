@@ -39,9 +39,13 @@ async function vykresli(nacitany: BlokSamozdanenia | null, readOnly = false) {
 describe('SamozdanenieBlok — pomocné funkcie', () => {
   it('iný druh prepočíta dátum aj sadzbu, dovoz prepne na „Už zaúčtované"; iný dátum prepočíta sadzbu', () => {
     const hodnota = blok({}, { rucne: { datumDanovejPovinnosti: '2026-06-01', sadzba: 19, kurz: 1.08 } }).hodnota;
-    expect(zmenRozhodnutie(hodnota, { pole: 'druh', hodnota: 'tovar_eu' })).toMatchObject({ volba: 'vytvorit', druh: 'tovar_eu', rucne: { kurz: 1.08 } });
+    expect(zmenRozhodnutie(hodnota, { pole: 'druh', hodnota: 'tovar_eu' })).toMatchObject({ volba: 'vytvorit', rucne: { kurz: 1.08, druh: 'tovar_eu' } });
     expect(zmenRozhodnutie(hodnota, { pole: 'druh', hodnota: 'tovar_eu' }).rucne).not.toHaveProperty('sadzba');
-    expect(zmenRozhodnutie(hodnota, { pole: 'druh', hodnota: 'dovoz' })).toMatchObject({ volba: 'v_pohode', druh: 'dovoz' });
+    expect(zmenRozhodnutie(hodnota, { pole: 'druh', hodnota: 'dovoz' })).toMatchObject({ volba: 'v_pohode', rucne: { druh: 'dovoz' } });
+    // Druh odvodený serverom sa neposiela — pripol by sa a oprava dodávateľa by ho neprepočítala.
+    expect(zmenRozhodnutie(hodnota, { pole: 'volba', hodnota: 'v_pohode' })).not.toHaveProperty('druh');
+    expect(zmenRozhodnutie({ ...hodnota, rucne: { druh: 'tovar_eu' } }, { pole: 'datum', hodnota: '2026-07-15' }).rucne)
+      .toEqual({ druh: 'tovar_eu', datumDanovejPovinnosti: '2026-07-15' });
     expect(zmenRozhodnutie(hodnota, { pole: 'datum', hodnota: '2026-07-15' }).rucne)
       .toEqual({ kurz: 1.08, datumDanovejPovinnosti: '2026-07-15' });
     expect(zmenRozhodnutie({ ...hodnota, dovod: 'iny', dovodText: 'Licencia' }, { pole: 'dovod', hodnota: 'miesto_dodania' }))
@@ -78,6 +82,12 @@ describe('SamozdanenieBlok — vykreslenie', () => {
     expect(text).toContain('Status DPH firmy nie je potvrdený v profile klienta');
     expect(container.querySelector('a[href="/profil-klienta"]')?.textContent).toBe('Doplňte samozdanenie Služby z EÚ v profile klienta');
     zavri();
+
+    // Dátum mimo tabuľky sadzieb: bez sadzby a s chybou dátumu.
+    const bezSadzby = await vykresli(blok({ sadzby: [], chyby: ['datum'] }, { sadzba: undefined, dan: undefined, odpocet: undefined }));
+    expect([...bezSadzby.container.querySelectorAll('th')].at(-1)?.textContent).toBe('DPH — %');
+    expect(bezSadzby.container.textContent).toContain('Doplňte platný dátum daňovej povinnosti.');
+    bezSadzby.zavri();
   });
 
   it('prepnutie na „Nevzniká povinnosť" uloží voľbu s pamäťou dodávateľa; schválený doklad je len na čítanie', async () => {
@@ -85,7 +95,7 @@ describe('SamozdanenieBlok — vykreslenie', () => {
     const { container, zavri } = await vykresli(blok());
     const radio = container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[2];
     await act(async () => { radio.click(); });
-    expect(api.ulozSamozdanenie).toHaveBeenCalledWith('d1', expect.objectContaining({ volba: 'nevznika', druh: 'sluzby_eu', pamatatDodavatela: true }));
+    expect(api.ulozSamozdanenie).toHaveBeenCalledWith('d1', expect.objectContaining({ volba: 'nevznika', pamatatDodavatela: true }));
     expect(container.textContent).toContain('Pamätať pre dodávateľa Google Ireland Ltd');
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
     zavri();

@@ -20,12 +20,11 @@ export type DruhPrijateho = typeof DRUHY_PRIJATEHO[number];
 export type ZdrojVolby = 'predvolene' | 'dodavatel' | 'firma' | 'uctovnik';
 export type RolaPrenosu = 'faktura' | 'dd' | 'p';
 
-export interface RucneParametre { datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number }
+export interface RucneParametre { druh?: DruhPrijateho; datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number }
 
 /** Voľba účtovníka — to, čo posiela editor. */
 export interface RozhodnutieSamozdanenia {
   volba: VolbaSamozdanenia;
-  druh?: DruhPrijateho;
   dovod?: DovodNevznika;
   dovodText?: string;
   cislaInternych?: string;
@@ -70,6 +69,10 @@ const iso = (hodnota: unknown) => {
 };
 const kladne = (hodnota: unknown) => (Number(hodnota) > 0 ? Number(hodnota) : undefined);
 
+/** Časti faktúry so samozdanením, ktoré POHODA už prijala — znova sa neposielajú a voľba sa už nemení. */
+export const prijateCasti = (samozdanenie: Partial<Samozdanenie> | null | undefined): RolaPrenosu[] =>
+  Object.entries(samozdanenie?.export ?? {}).filter(([, vysledok]) => vysledok?.stav === 'ok').map(([rola]) => rola as RolaPrenosu);
+
 /** 15. deň mesiaca po dodaní (§20 ods. 1 písm. a). */
 function patnastyNasledujuceho(datum: string): string {
   const [rok, mesiac] = datum.split('-').map(Number);
@@ -109,9 +112,15 @@ export function zostavSamozdanenie(vstup: {
   const predvolene: StavSamozdanenia['predvolene'] = vstup.pamat
     ? { volba: 'nevznika', zdroj: 'dodavatel', dovod: vstup.pamat.dovod, ...(vstup.pamat.dovodText ? { dovodText: vstup.pamat.dovodText } : {}) }
     : profil.samozdanenieVPohode ? { volba: 'v_pohode', zdroj: 'firma' } : { volba: 'vytvorit', zdroj: 'predvolene' };
-  const ulozene = vstup.ulozene?.volba ? vstup.ulozene : undefined;
+  // Uložená hodnota je rozhodnutie, keď ju zvolil účtovník. Zápis schválenia
+  // z predvolieb sa prepočíta (oprava dodávateľa, nové nastavenie firmy) — okrem
+  // dokladu, ktorého časť už prijala POHODA: ten ostáva, ako odišiel.
+  const prijate = prijateCasti(vstup.ulozene).length > 0;
+  const ulozene = vstup.ulozene?.volba && ((vstup.ulozene.zdroj ?? 'uctovnik') === 'uctovnik' || prijate) ? vstup.ulozene : undefined;
   const volba = ulozene?.volba ?? predvolene.volba;
-  const druh = ulozene?.druh && (DRUHY_PRIJATEHO as readonly string[]).includes(ulozene.druh) ? ulozene.druh
+  // Druh pripína len výslovná zmena účtovníka (rucne.druh); inak ho určuje územie dodávateľa.
+  const pripnuty = prijate ? ulozene?.druh : ulozene?.rucne?.druh;
+  const druh = pripnuty && (DRUHY_PRIJATEHO as readonly string[]).includes(pripnuty) ? pripnuty
     : uzemie === 'eu' ? 'sluzby_eu' : uzemie === 'mimo_eu' ? 'sluzby_mimo_eu' : 'prenesenie_prijate';
   const rucne = ulozene?.rucne ?? {};
   const extracted = (vstup.extracted ?? {}) as Record<string, unknown>;
@@ -123,17 +132,18 @@ export function zostavSamozdanenie(vstup: {
     ? [vystavenie, patnastyNasledujuceho(dodanie)].filter((datum): datum is string => Boolean(datum)).sort()[0]
     : dodanie;
   const datum = iso(rucne.datumDanovejPovinnosti) ?? vypocitany;
-  const obdobie = sadzbyDphPre(datum)!;
-  const sadzby = druh === 'tovar_eu'
+  // Dátum pred tabuľkou sadzieb (pred 2011, aj rozpísaný rok „0002") sadzbu nemá — chyba dátumu.
+  const obdobie = sadzbyDphPre(datum);
+  const sadzby = !obdobie ? [] : druh === 'tovar_eu'
     ? [obdobie.high, obdobie.low, obdobie.third].filter((sadzba): sadzba is number => Boolean(sadzba))
     : [obdobie.high];
-  const sadzba = rucne.sadzba !== undefined && sadzby.includes(rucne.sadzba) ? rucne.sadzba : obdobie.high;
+  const sadzba = rucne.sadzba !== undefined && sadzby.includes(rucne.sadzba) ? rucne.sadzba : obdobie?.high;
   const mena = doklad.mena.trim().toUpperCase() || 'EUR';
   const kurz = mena === 'EUR' ? undefined : kladne(rucne.kurz) ?? kladne(extracted.kurz);
   // Kurz = jednotiek cudzej meny za 1 EUR, ako v kurzovom lístku ECB/NBS.
   const zaklad = mena === 'EUR' ? Math.round(doklad.sumaSpolu * 100) / 100
     : kurz ? Math.round((doklad.sumaSpolu / kurz + Number.EPSILON) * 100) / 100 : undefined;
-  const dan = zaklad === undefined ? undefined : danZoZakladu(zaklad, sadzba);
+  const dan = zaklad === undefined || sadzba === undefined ? undefined : danZoZakladu(zaklad, sadzba);
   // Neplatiteľ, §7 a §7a daň priznáva, ale neodpočítava. Nepotvrdený status: oba doklady a upozornenie.
   const sOdpoctom = profil.platitelDph === 'platitel' || profil.platitelDph === 'nezname';
   const interny = profil.samozdanenie[druh]?.interny;
@@ -145,7 +155,7 @@ export function zostavSamozdanenie(vstup: {
   if (volba === 'vytvorit') {
     if (druh === 'dovoz') chyby.push('dovoz');
     else if (!interny?.ddKod || !interny.ddPredkontaciaKod || (sOdpoctom && (!interny.pKod || !interny.pPredkontaciaKod))) chyby.push('kody');
-    if (!datum) chyby.push('datum');
+    if (!obdobie || !datum) chyby.push('datum');
     if (zaklad === undefined) chyby.push('kurz');
   }
   if (volba === 'nevznika' && (!dovod || (dovod === 'iny' && !dovodText))) chyby.push('dovod');
@@ -179,7 +189,7 @@ export function spravaChyby(chyba: ChybaSamozdanenia, hodnota: Pick<Samozdanenie
   switch (chyba) {
     case 'dovoz': return 'Dovoz spracujte v POHODE — interné doklady pre dovoz sa tu nevytvárajú. Zvoľte „Už zaúčtované v POHODE".';
     case 'kody': return `Doplňte samozdanenie „${NAZVY_DRUHOV[hodnota.druh]}" v profile klienta — chýbajú kódy interných dokladov.`;
-    case 'datum': return 'Doplňte dátum daňovej povinnosti samozdanenia.';
+    case 'datum': return 'Doplňte platný dátum daňovej povinnosti samozdanenia.';
     case 'kurz': return `Faktúra je v mene ${mena} — doplňte kurz pre samozdanenie.`;
     case 'dovod': return 'Vyberte dôvod, prečo nevzniká povinnosť samozdanenia.';
   }

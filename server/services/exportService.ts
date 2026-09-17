@@ -1,7 +1,7 @@
 import type { Database } from '../db/database.js';
 import { HttpError } from '../http.js';
 import { buildServerDataPack, type PohodaCodeLookup, type PohodaXmlDocument } from '../pohodaXml.js';
-import type { RolaPrenosu, Samozdanenie } from './samozdanenieService.js';
+import { prijateCasti, type Samozdanenie } from './samozdanenieService.js';
 
 interface CodeListRow extends Record<string, unknown> {
   id: string;
@@ -81,8 +81,7 @@ export async function buildApprovedDocumentsXml(
       .map((row) => ({
         id: row.id,
         snapshot: row.approved_snapshot!,
-        prijate: Object.entries(row.samozdanenie?.export ?? {})
-          .filter(([, vysledok]) => vysledok?.stav === 'ok').map(([rola]) => rola as RolaPrenosu),
+        prijate: prijateCasti(row.samozdanenie),
       })),
     codeLists,
     radInternych,

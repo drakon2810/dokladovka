@@ -286,14 +286,13 @@ export type VolbaSamozdanenia = 'vytvorit' | 'v_pohode' | 'nevznika';
 export type DovodNevznikaSamozdanenia = 'slovenska_dph' | 'miesto_dodania' | 'nie_plnenie' | 'iny';
 export type DruhSamozdaneniaPrijateho = 'sluzby_eu' | 'tovar_eu' | 'sluzby_mimo_eu' | 'prenesenie_prijate' | 'dovoz';
 
-/** Voľba účtovníka v bloku samozdanenia; `rucne` sú hodnoty, ktoré prepísal. */
+/** Voľba účtovníka v bloku samozdanenia; `rucne` sú hodnoty, ktoré prepísal (aj druh plnenia). */
 export interface RozhodnutieSamozdanenia {
   volba: VolbaSamozdanenia;
-  druh?: DruhSamozdaneniaPrijateho;
   dovod?: DovodNevznikaSamozdanenia;
   dovodText?: string;
   cislaInternych?: string;
-  rucne?: { datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number };
+  rucne?: { druh?: DruhSamozdaneniaPrijateho; datumDanovejPovinnosti?: string; sadzba?: number; kurz?: number };
 }
 
 /** Samozdanenie prijatej faktúry tak, ako ho spočítal server (documents.samozdanenie). */

@@ -27,17 +27,18 @@ export type ZmenaSamozdanenia =
 /**
  * Nové rozhodnutie po jednej zmene v bloku. Iný druh prepočíta dátum aj sadzbu
  * (tovar z EÚ má iný dátum) a dovoz prepne na „Už zaúčtované v POHODE"; iný
- * dátum prepočíta sadzbu. Ručný kurz ostáva — mena sa nemenila.
+ * dátum prepočíta sadzbu. Ručný kurz ostáva — mena sa nemenila. Druh ide len
+ * ako ručný (rucne.druh) — inak ho server určí z dodávateľa.
  */
 export function zmenRozhodnutie(blok: BlokSamozdanenia['hodnota'], zmena: ZmenaSamozdanenia): RozhodnutieSamozdanenia {
-  const { volba, druh, dovod, dovodText, cislaInternych, rucne = {} } = blok;
-  const teraz: RozhodnutieSamozdanenia = { volba, druh, dovod, dovodText, cislaInternych, rucne };
+  const { volba, dovod, dovodText, cislaInternych, rucne = {} } = blok;
+  const teraz: RozhodnutieSamozdanenia = { volba, dovod, dovodText, cislaInternych, rucne };
   switch (zmena.pole) {
     case 'volba': return { ...teraz, volba: zmena.hodnota };
     case 'druh': return {
-      ...teraz, druh: zmena.hodnota, volba: zmena.hodnota === 'dovoz' ? 'v_pohode' : volba, rucne: { kurz: rucne.kurz },
+      ...teraz, volba: zmena.hodnota === 'dovoz' ? 'v_pohode' : volba, rucne: { kurz: rucne.kurz, druh: zmena.hodnota },
     };
-    case 'datum': return { ...teraz, rucne: { kurz: rucne.kurz, datumDanovejPovinnosti: zmena.hodnota || undefined } };
+    case 'datum': return { ...teraz, rucne: { kurz: rucne.kurz, druh: rucne.druh, datumDanovejPovinnosti: zmena.hodnota || undefined } };
     case 'sadzba': return { ...teraz, rucne: { ...rucne, sadzba: zmena.hodnota } };
     case 'kurz': return { ...teraz, rucne: { ...rucne, kurz: zmena.hodnota } };
     case 'dovod': return { ...teraz, dovod: zmena.hodnota, dovodText: zmena.hodnota === 'iny' ? dovodText : undefined };
@@ -99,7 +100,8 @@ export function SamozdanenieBlok({ documentId, version, readOnly }: { documentId
       setUklada(false);
     }
   };
-  const sadzba = hodnota.sadzba ?? blok.sadzby[0];
+  // Dátum mimo tabuľky sadzieb sadzbu nemá — server hlási chybu dátumu.
+  const sadzba = hodnota.sadzba ?? blok.sadzby[0] ?? '—';
   const euro = (suma?: number) => (suma === undefined ? '—' : fmtMoney(suma, 'EUR'));
 
   return (

@@ -174,6 +174,18 @@ describe('samozdanenie — prenos cez Mostík', () => {
       faktura: { stav: 'ok', cislo: '26FP0001' }, dd: { stav: 'ok', cislo: 'INT0001' }, p: { stav: 'chyba', sprava: 'Členenie DPH neexistuje' },
     });
 
+    // Doklad s chybou prenosu aj po „Spracovať ručne" má voľbu uzamknutú a
+    // opätovné schválenie nezabudne, čo POHODA už prijala.
+    const uloz = () => app.inject({ method: 'PUT', url: `/api/documents/${id}/samozdanenie`, headers, payload: { volba: 'v_pohode' } });
+    const blok = await app.inject({ method: 'GET', url: `/api/documents/${id}/samozdanenie`, headers: { cookie: headers.cookie } });
+    expect(blok.json().blok).toMatchObject({ upravitelny: false, hodnota: { volba: 'vytvorit', export: { faktura: { stav: 'ok' } } } });
+    expect((await uloz()).statusCode).toBe(409);
+    expect((await app.inject({ method: 'POST', url: `/api/documents/${id}/process-manually`, headers })).statusCode).toBe(200);
+    expect((await uloz()).statusCode).toBe(409);
+    const verzia = (await database.query<Record<string, any>>('SELECT version FROM documents WHERE id=$1', [id])).rows[0].version;
+    const znova = await app.inject({ method: 'POST', url: `/api/documents/${id}/approve`, headers, payload: { expectedVersion: verzia } });
+    expect(znova.statusCode, znova.body).toBe(200);
+
     const druhy = await prenos({}, `/api/mostik/export-jobs/${prvy.jobId}/retry`);
     expect(polozky(druhy.xml)).toEqual([`${id}-sz-p`]);
     const druhyVysledok = await vysledok(druhy.jobId, [{ documentId: `${id}-sz-p`, state: 'ok', pohodaNumber: 'INT0002' }]);

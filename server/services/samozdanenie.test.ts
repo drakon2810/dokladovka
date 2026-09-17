@@ -57,6 +57,22 @@ describe('samozdanenie — predvolená voľba', () => {
     expect(zostav({ profil: vPohode, ulozene: { volba: 'vytvorit', zdroj: 'uctovnik' } })?.hodnota)
       .toMatchObject({ volba: 'vytvorit', zdroj: 'uctovnik' });
   });
+
+  it('hodnota zapísaná schválením z predvolieb sa prepočíta; druh pripne len ručná zmena, voľbu prenos do POHODY', () => {
+    const zoSchvalenia = { volba: 'vytvorit', druh: 'sluzby_eu', zdroj: 'predvolene' } as const;
+    const zUsa = faktura({}, { nazov: 'Slack', icDph: '', krajina: 'US' });
+    // Opravený dodávateľ a nové nastavenie firmy sa prejavia.
+    expect(zostav({ extracted: zUsa, ulozene: zoSchvalenia })?.hodnota).toMatchObject({ druh: 'sluzby_mimo_eu', zdroj: 'predvolene' });
+    expect(zostav({ profil: profil({ samozdanenieVPohode: true }), ulozene: zoSchvalenia })?.hodnota).toMatchObject({ volba: 'v_pohode', zdroj: 'firma' });
+    // Voľba účtovníka ostáva, druh bez ručnej zmeny ide za územím.
+    expect(zostav({ extracted: zUsa, ulozene: { volba: 'v_pohode', druh: 'sluzby_eu', zdroj: 'uctovnik' } })?.hodnota)
+      .toMatchObject({ volba: 'v_pohode', druh: 'sluzby_mimo_eu' });
+    expect(zostav({ extracted: zUsa, ulozene: { volba: 'vytvorit', zdroj: 'uctovnik', rucne: { druh: 'sluzby_eu' } } })?.hodnota.druh).toBe('sluzby_eu');
+    // Časť už v POHODE: voľba aj druh ostávajú, ako odišli.
+    const prenesene = { ...zoSchvalenia, export: { faktura: { stav: 'ok' as const, at: '2026-09-17T10:00:00Z' } } };
+    expect(zostav({ extracted: zUsa, profil: profil({ samozdanenieVPohode: true }), ulozene: prenesene })?.hodnota)
+      .toMatchObject({ volba: 'vytvorit', druh: 'sluzby_eu' });
+  });
 });
 
 describe('samozdanenie — výpočet', () => {
@@ -84,18 +100,27 @@ describe('samozdanenie — výpočet', () => {
 
   it('tovar z EÚ: skorší z vystavenia a 15. dňa mesiaca po dodaní, na výber znížené sadzby', () => {
     const tovar = (datumVystavenia: string, datumDodania: string, rucne = {}) => zostav({
-      extracted: faktura({ datumVystavenia, datumDodania }), ulozene: { volba: 'vytvorit', druh: 'tovar_eu', rucne },
+      extracted: faktura({ datumVystavenia, datumDodania }), ulozene: { volba: 'vytvorit', rucne: { druh: 'tovar_eu', ...rucne } },
     })?.hodnota;
     expect(tovar('2026-07-20', '2026-06-10')?.datumDanovejPovinnosti).toBe('2026-07-15');
     expect(tovar('2026-06-12', '2026-06-10')?.datumDanovejPovinnosti).toBe('2026-06-12');
     expect(tovar('2027-01-20', '2026-12-05')?.datumDanovejPovinnosti).toBe('2027-01-15');
     expect(tovar('2026-07-20', '2026-06-10', { sadzba: 19 })).toMatchObject({ sadzba: 19, dan: 190 });
-    expect(zostav({ ulozene: { volba: 'vytvorit', druh: 'tovar_eu' } })?.sadzby).toEqual([23, 19, 5]);
+    expect(zostav({ ulozene: { volba: 'vytvorit', rucne: { druh: 'tovar_eu' } } })?.sadzby).toEqual([23, 19, 5]);
     // Pri službe sa znížená sadzba nevyberá.
     expect(zostav({ ulozene: { volba: 'vytvorit', rucne: { sadzba: 19 } } })?.hodnota.sadzba).toBe(23);
     // Ručný dátum má prednosť a sadzba sa berie k nemu.
     expect(zostav({ ulozene: { volba: 'vytvorit', rucne: { datumDanovejPovinnosti: '2024-12-20' } } })?.hodnota)
       .toMatchObject({ datumDanovejPovinnosti: '2024-12-20', sadzba: 20, dan: 200 });
+  });
+
+  it('dátum pred tabuľkou sadzieb DPH je chyba dátumu, nie pád výpočtu', () => {
+    const stare = zostav({ extracted: faktura({ datumDodania: '2010-12-31' }) });
+    expect(stare?.chyby).toEqual(['datum']);
+    expect(stare?.hodnota.dan).toBeUndefined();
+    expect(zostav({ ulozene: { volba: 'vytvorit', rucne: { datumDanovejPovinnosti: '0002-06-10' } } })?.chyby).toEqual(['datum']);
+    // Bez výpočtu dane sa zaobíde „Už zaúčtované v POHODE".
+    expect(zostav({ extracted: faktura({ datumDodania: '2010-12-31' }), ulozene: { volba: 'v_pohode' } })?.chyby).toEqual([]);
   });
 
   it('neplatiteľ a §7a len vymeranie; nepotvrdený status oba doklady s upozornením', () => {
@@ -120,7 +145,7 @@ describe('samozdanenie — výpočet', () => {
 
   it('chyby voľby: chýbajúce kódy, dovoz, dôvod výnimky', () => {
     expect(zostav({ profil: profil({ samozdanenie: {} }) })?.chyby).toEqual(['kody']);
-    expect(zostav({ ulozene: { volba: 'vytvorit', druh: 'dovoz' } })?.chyby).toEqual(['dovoz']);
+    expect(zostav({ ulozene: { volba: 'vytvorit', rucne: { druh: 'dovoz' } } })?.chyby).toEqual(['dovoz']);
     expect(zostav({ ulozene: { volba: 'nevznika' } })?.chyby).toEqual(['dovod']);
     expect(zostav({ ulozene: { volba: 'nevznika', dovod: 'iny' } })?.chyby).toEqual(['dovod']);
     expect(zostav({ ulozene: { volba: 'nevznika', dovod: 'slovenska_dph', dovodText: 'zahodí sa' } })?.hodnota)
