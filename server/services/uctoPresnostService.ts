@@ -47,6 +47,14 @@ const DRUH_PODLA_AGENDY: Record<string, { typ: string; podtyp?: string; pokladna
 
 export type RezimMerania = 'bez_ai' | 'ai';
 export type OknoMerania = 'test' | 'validacia';
+/**
+ * Profil klienta pri meraní. k_datumu = len fakty potvrdené pred dátumom
+ * dokladu (historický replay). potvrdeny = dnešné potvrdené fakty aj na minulé
+ * doklady — retrospektívne použitie dnešnej politiky, NIE historická presnosť.
+ * vypnuty = žiadne fakty. Spolu na tej istej vzorke merajú účinok profilu.
+ */
+export type ProfilMerania = 'k_datumu' | 'potvrdeny' | 'vypnuty';
+export const PROFILY_MERANIA: readonly ProfilMerania[] = ['k_datumu', 'potvrdeny', 'vypnuty'];
 
 /** Delítko firmy bez histórie — pred ním nie je žiadny doklad ani záznam. */
 const PRED_HISTORIOU = '0001-01-01';
@@ -231,6 +239,35 @@ function prazdneSkore(): AgendaSkore {
     dokladov: 0, zdrzanie: 0, chyb: 0, rozpisanych: 0, falosnyRozpis: 0, chybajuciRozpis: 0,
     predkontacia: pole(), clenenieDph: pole(), kv: pole(), rad: pole(), tvar: pole(),
   };
+}
+
+/**
+ * Párové porovnanie dvoch behov na tých istých dokladoch (napr. profil vypnutý
+ * a potvrdený): koľko dokladov dopadlo inak a po poliach koľkokrát k lepšiemu
+ * (nesprávne → správne) a k horšiemu. Doklad len v jednom behu sa nepáruje,
+ * ale počíta — rozdiel vzoriek by inak vyzeral ako účinok.
+ */
+export function porovnajBehy(pred: VysledokDokladu[], po: VysledokDokladu[]) {
+  const kluc = (doklad: VysledokDokladu) => `${doklad.agenda}|${doklad.doklad}|${doklad.datum}`;
+  const obsah = (doklad: VysledokDokladu) =>
+    JSON.stringify([doklad.navrh, doklad.zdrzanie, doklad.chyba, doklad.navrhRozpisany, doklad.hodnotenie]);
+  const poKluci = new Map(po.map((doklad) => [kluc(doklad), doklad]));
+  const polia = Object.fromEntries(POLIA.map((pole) => [pole, { lepsie: 0, horsie: 0 }])) as Record<Pole, { lepsie: number; horsie: number }>;
+  let parov = 0;
+  let zmenenych = 0;
+  for (const prvy of pred) {
+    const druhy = poKluci.get(kluc(prvy));
+    if (!druhy) continue;
+    parov += 1;
+    if (obsah(prvy) !== obsah(druhy)) zmenenych += 1;
+    for (const pole of POLIA) {
+      const predtym = prvy.hodnotenie[pole]?.spravne ?? false;
+      const potom = druhy.hodnotenie[pole]?.spravne ?? false;
+      if (!predtym && potom) polia[pole].lepsie += 1;
+      if (predtym && !potom) polia[pole].horsie += 1;
+    }
+  }
+  return { parov, bezParu: pred.length + po.length - 2 * parov, zmenenych, polia };
 }
 
 export function scitajPoAgendach(doklady: VysledokDokladu[]): Record<string, AgendaSkore> {
@@ -555,6 +592,8 @@ export async function zmerajPresnost(
     /** Firma bez histórie (R18): žiadny doklad nevidí nič z histórie firmy, len
      *  číselníky a nastavenia. Kategórie sa vtedy nepoužijú. */
     bezHistorie?: boolean;
+    /** Profil klienta (ProfilMerania), predvolene k_datumu. */
+    profil?: ProfilMerania;
     /** Zapísať beh do ucto_presnost. Skript nezapisuje nikdy. */
     uloz?: boolean;
   } = {},
@@ -571,6 +610,7 @@ export async function zmerajPresnost(
   // a pokyny účtovníka — aj globálne —, použitie členení, rad); kategórie dátum
   // nemajú, preto sa vypnú.
   const kategorie = moznosti.kategorie && !moznosti.bezHistorie;
+  const profil = moznosti.profil ?? 'k_datumu';
 
   // Okná sú percentily dátumov DOKLADOV, nie „max mínus tri mesiace" —
   // leasingové splátky a rezervy sú zaúčtované dopredu, takže max bol 31. 12.
@@ -661,6 +701,7 @@ export async function zmerajPresnost(
         ...(rezim === 'ai' ? {} : { embedder: bezVektorov }),
         bezWebu: true,
         sKategoriami: kategorie,
+        profil,
       });
       // Samotné členenie DPH bez účtu nie je zaúčtovanie — zdržanie, nie zlý tvar.
       spor = vysledok.spor;
@@ -713,14 +754,21 @@ export async function zmerajPresnost(
     kategorie: kategorie ? 'horna_hranica' : 'vylucene',
     // Embeddingy OpenAI len v režime ai s kategóriami; nerátajú sa do maxAiVolani ani do tokenov.
     embeddingy: rezim === 'ai' && kategorie ? 'openai' : null,
-    vylucene: moznosti.bezHistorie
-      ? ['ucto_historia', 'ucto_dennik', 'ucto_pravidla', 'ucto_decisions', 'accounting_rules', 'ai_instructions', 'ucto_kategorie']
-      : kategorie ? [] : ['ucto_kategorie'],
+    vylucene: [
+      ...(moznosti.bezHistorie
+        ? ['ucto_historia', 'ucto_dennik', 'ucto_pravidla', 'ucto_decisions', 'accounting_rules', 'ai_instructions', 'ucto_kategorie']
+        : kategorie ? [] : ['ucto_kategorie']),
+      ...(profil === 'vypnuty' ? ['profil_fakty'] : []),
+    ],
     // Agendy, na ktoré rozpočet vzorky nestačil (viac agend než miest).
     vynechaneAgendy: [...new Set(vsetky.map((doklad) => doklad.agenda))]
       .filter((agenda) => !merane.some((doklad) => doklad.agenda === agenda)),
-    // Profil klienta tu nie je: fakty potvrdené po dátume dokladu meranie nevidí (knownAt).
-    aktualnyStav: ['code_list_items', 'organization_series_defaults', 'partners'],
+    profil,
+    ...(profil === 'potvrdeny'
+      ? { profilUpozornenie: 'retrospektívne použitie dnešnej politiky: dnešné potvrdené fakty aj na minulé doklady — nie historická presnosť' }
+      : {}),
+    // Profil pri k_datumu nie je aktuálny stav: fakty potvrdené po dátume dokladu meranie nevidí (knownAt).
+    aktualnyStav: ['code_list_items', 'organization_series_defaults', 'partners', ...(profil === 'potvrdeny' ? ['profil_fakty'] : [])],
     polozky: 'riadky POHODY po zaúčtovaní — tvar a DPH sú horná hranica',
     webSearch: false,
     vyberVzorky: 'md5(agenda|doklad_cislo), kvóta po agendách, najväčší zvyšok',

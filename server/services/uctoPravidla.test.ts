@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestDatabase, seedTestUser } from '../testHelpers.js';
 import {
-  najdiPravidlo, odvodNavrhyDelenia, odvodPrax, odvodRozpis, odvodRozpisVarianty, prepocitajPravidla, variantyRozpisu,
-  type DokladDelenia, type DokladPraxe,
+  najdiPravidlo, odvodNavrhyDelenia, odvodPrax, odvodRozpis, odvodRozpisVarianty, pravidloPodlaTextu, prepocitajPravidla, sporPraxe,
+  variantyRozpisu, type DokladDelenia, type DokladPraxe, type UctoPravidlo,
 } from './uctoPravidlaService.js';
 import { doplnRozpisKategorii } from './uctoKategoriaRozpis.js';
 import { ocistiSlovnik } from './uctoProfileService.js';
@@ -148,6 +148,139 @@ describe('spoločná prax protistrany', () => {
     const kDatumu = await najdiPravidlo(database, kde, ['FP'], { nazov: 'zmiesana s.r.o.' }, '2027-01-01');
     expect({ ...kDatumu, id: '' }).toEqual({ ...pravidlo, id: '' });
   }, 90_000);
+});
+
+// Druh operácie pred praxou protistrany. Zamestnanec má zúčtovanie stravného
+// (hlavička stravné, rozpis stravné / cestovné / záloha) aj pokuty; pokút je
+// viac, takže pravidlo protistrany by stravnému dalo účet pokuty.
+describe('druh operácie podľa textu dokladu', () => {
+  it('text vyberie druh s hlavičkou aj rozpisom; nejednoznačný text a nová protistrana ostávajú, ako boli', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = { tenantId: seeded.tenantId, organizationId: seeded.organizationId };
+    const riadok = (cislo: string, datum: string, index: number, text: string, predkontacia: string | null, suma: number | null) =>
+      database.query(
+        `INSERT INTO ucto_historia
+          (id,tenant_id,organization_id,agenda,doklad_cislo,datum,supplier_name_normalized,
+           line_text_normalized,suma,predkontacia_kod,riadok_index,source,riadok_hash)
+         VALUES ($1,$2,$3,'OZ',$4,$5,'mrkva jozef',$6,$7,$8,$9,'mdb',$10)`,
+        [randomUUID(), kde.tenantId, kde.organizationId, cislo, datum, text, suma, predkontacia, index, randomUUID()],
+      );
+    for (const [poradie, cislo] of ['ZC1', 'ZC2', 'ZC3'].entries()) {
+      const datum = `2026-0${poradie * 2 + 2}-10`;
+      await riadok(cislo, datum, 0, `zpc ${poradie + 5}.týždeň`, '333100-stravné', null);
+      await riadok(cislo, datum, 1, 'stravné', '333100-stravné', 1000);
+      await riadok(cislo, datum, 2, 'cestovné', 'cestovné381', 180);
+      await riadok(cislo, datum, 3, 'zúčtovanie zálohy', 'zúčt.zálohy', -300);
+    }
+    for (let mesiac = 1; mesiac <= 6; mesiac += 1) {
+      await riadok(`OZ${mesiac}`, `2026-0${mesiac}-05`, 0, `pokuta č. 38${mesiac}; mrkva jozef`, '325100-pokuty', null);
+    }
+    // Mzda bez účtu v hlavičke druhom nie je, ale jej slová druhy odlišovať nesmú.
+    for (let mesiac = 1; mesiac <= 3; mesiac += 1) {
+      await riadok(`MZ${mesiac}`, `2026-0${mesiac}-28`, 0, 'wage payments, zúčtovanie zálohy', null, null);
+    }
+    await prepocitajPravidla(database, kde);
+    const pravidlo = await najdiPravidlo(database, kde, ['OZ'], { nazov: 'Mrkva Jozef' });
+    // Samo pravidlo protistrany je spor bez účtu — stravné by dostalo prvý riadok denníka.
+    expect(pravidlo).toMatchObject({ konflikt: true, predkontaciaKod: undefined });
+    expect(pravidlo?.druhy.map((druh) => [druh.predkontaciaKod, druh.dokladov, druh.slova])).toEqual([
+      // Meno zamestnanca je v texte pokút, no identita protistrany druh neurčuje.
+      ['325100-pokuty', 6, ['pokuta']],
+      ['333100-stravné', 3, ['cestovne', 'stravne', 'tyzden', 'zpc']],
+    ]);
+    // Meranie k dátumu dostane tie isté druhy ako uložené pravidlo.
+    const kDatumu = await najdiPravidlo(database, kde, ['OZ'], { nazov: 'mrkva jozef' }, '2027-01-01');
+    expect(kDatumu?.druhy).toEqual(pravidlo?.druhy);
+
+    const stravne = pravidloPodlaTextu(pravidlo, 'stravné cestovné zúčtovanie zálohy');
+    expect(stravne).toMatchObject({
+      predkontaciaKod: '333100-stravné', dokladov: 3, zhoda: 3, konflikt: false, podlaTextu: ['cestovne', 'stravne'],
+    });
+    expect(stravne?.rozpis.map((item) => [item.text, item.predkontaciaKod])).toEqual([
+      ['stravné', '333100-stravné'], ['cestovné', 'cestovné381'], ['zúčtovanie zálohy', 'zúčt.zálohy'],
+    ]);
+    expect(pravidloPodlaTextu(pravidlo, 'Pokuta č. 999')).toMatchObject({
+      predkontaciaKod: '325100-pokuty', dokladov: 6, rozpis: [], konflikt: false,
+    });
+    // Slová dvoch druhov naraz alebo žiadneho: pravidlo protistrany bez zmeny.
+    expect(pravidloPodlaTextu(pravidlo, 'pokuta a stravné')).toBe(pravidlo);
+    expect(pravidloPodlaTextu(pravidlo, 'zúčtovanie zálohy')).toBe(pravidlo);
+    // Doklad nového druhu nesie len meno zamestnanca — účet pokút nedostane.
+    expect(pravidloPodlaTextu(pravidlo, 'Cestovný príkaz; Mrkva Jozef')).toBe(pravidlo);
+    // Nová protistrana pravidlo nemá — text jej cudzí druh nepriradí.
+    expect(pravidloPodlaTextu(undefined, 'stravné cestovné')).toBeUndefined();
+  }, 90_000);
+
+  it('jedna hlavička druhy nemá — spor v tvare text nerozhodne', () => {
+    const doklady: DokladPraxe[] = Array.from({ length: 8 }, (_, i) => ({
+      kluc: `D${i}`, datum: `2025-0${i + 1}-01`,
+      hlavicka: { riadokIndex: 0, text: i % 2 ? 'phm karta' : 'phm hotovost', predkontaciaKod: 'PHM', clenenieDphKod: 'PD' },
+      polozky: i % 2
+        ? [{ riadokIndex: 1, text: 'phm', suma: 80, predkontaciaKod: 'PHM', clenenieDphKod: 'PD' },
+          { riadokIndex: 2, text: 'phm', suma: 20, predkontaciaKod: 'NAD', clenenieDphKod: 'PN' }]
+        : [],
+    }));
+    const prax = odvodPrax(doklady);
+    expect(prax.konflikt).toBe(true);
+    expect(prax.druhy).toEqual([]);
+  });
+
+  // S druhou hlavičkou (diaľničná známka) druhy vzniknú. Druh je prax nad
+  // dokladmi druhu — zmenu režimu ani spor v podieloch text neskryje.
+  const nafta = (i: number, datum: string, rez?: number): DokladPraxe => ({
+    kluc: `N${i}`, datum,
+    hlavicka: { riadokIndex: 0, text: 'nafta', predkontaciaKod: 'PHM', clenenieDphKod: 'PD' },
+    polozky: rez === undefined
+      ? [{ riadokIndex: 1, text: 'nafta', suma: 100, predkontaciaKod: 'PHM', clenenieDphKod: 'PD' }]
+      : [{ riadokIndex: 1, text: 'nafta', suma: rez, predkontaciaKod: 'PHM', clenenieDphKod: 'PD' },
+        { riadokIndex: 2, text: 'nafta', suma: 100 - rez, predkontaciaKod: 'NAD', clenenieDphKod: 'PN' }],
+  });
+  const znamka = (i: number, datum: string): DokladPraxe => ({
+    kluc: `Z${i}`, datum,
+    hlavicka: { riadokIndex: 0, text: 'dialnicna znamka', predkontaciaKod: 'ZNAM', clenenieDphKod: 'PD' },
+    polozky: [],
+  });
+  // Ako z tabuľky: druhy prešli cez jsonb, kľúče s undefined v nich nie sú.
+  const pravidloZ = (doklady: DokladPraxe[]): UctoPravidlo => {
+    const prax = odvodPrax(doklady, undefined, 'slovnaft');
+    return {
+      id: 'p', agenda: 'FP', protistrana: 'slovnaft', dokladov: prax.dokladov, zhoda: prax.vitaz?.dokladov ?? 0,
+      predkontaciaKod: prax.vitaz?.predkontaciaKod, clenenieDphKod: prax.vitaz?.clenenieDphKod, rozpis: prax.rozpis,
+      konflikt: prax.konflikt, varianty: prax.varianty, zmenaRezimu: prax.zmenaRezimu?.od,
+      druhy: JSON.parse(JSON.stringify(prax.druhy)),
+    };
+  };
+
+  it('druh nesie zmenu režimu a rozpis víťaza, iný druh ju nezdedí', () => {
+    const pravidlo = pravidloZ([
+      ...Array.from({ length: 5 }, (_, i) => nafta(i, `2024-0${i + 1}-10`)),
+      ...Array.from({ length: 3 }, (_, i) => znamka(i, `2024-0${i + 6}-10`)),
+      ...Array.from({ length: 5 }, (_, i) => nafta(i + 5, `2025-0${i + 1}-10`, 80)),
+    ]);
+    expect(pravidlo).toMatchObject({ konflikt: false, zmenaRezimu: '2025-01-10', predkontaciaKod: 'PHM' });
+    const phm = pravidloPodlaTextu(pravidlo, 'Nafta motorová');
+    expect(phm).toMatchObject({
+      predkontaciaKod: 'PHM', dokladov: 10, zhoda: 5, konflikt: false, zmenaRezimu: '2025-01-10', podlaTextu: ['nafta'],
+    });
+    expect(phm?.rozpis.map((riadok) => [riadok.predkontaciaKod, riadok.podiel])).toEqual([['PHM', 0.8], ['NAD', 0.2]]);
+    const dialnicna = pravidloPodlaTextu(pravidlo, 'Diaľničná známka');
+    expect(dialnicna).toMatchObject({ predkontaciaKod: 'ZNAM', dokladov: 3, zhoda: 3, konflikt: false });
+    expect(dialnicna?.zmenaRezimu).toBeUndefined();
+  });
+
+  it('spor v podieloch druhu ostáva sporom aj vedľa inej hlavičky', () => {
+    const pravidlo = pravidloZ([
+      ...Array.from({ length: 8 }, (_, i) => nafta(i, `2025-0${i + 1}-10`, i % 2 ? 80 : 60)),
+      ...Array.from({ length: 3 }, (_, i) => znamka(i, `2025-0${i + 2}-20`)),
+    ]);
+    const phm = pravidloPodlaTextu(pravidlo, 'nafta');
+    expect(phm).toMatchObject({ dokladov: 8, konflikt: true, rozpis: [], podlaTextu: ['nafta'] });
+    expect(phm?.predkontaciaKod).toBeUndefined();
+    expect(phm?.varianty.map((variant) => variant.predkontaciaKod)).toEqual(['PHM', 'PHM']);
+    expect(sporPraxe(phm)).toBe('ucet');
+  });
 });
 
 // Prax ako spoločné podoby dokladov — čistá funkcia, bez databázy.

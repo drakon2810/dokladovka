@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/database.js';
 import { aiOdpoved, createTestDatabase, potvrdFakt, seedTestUser, testConfig } from '../testHelpers.js';
 import {
-  castostOtazok, intervalSpolahlivosti, jeRozpisany, ohodnot, presnostNadPrahom, scitajPoAgendach, vyberVzorku, zmerajPresnost,
+  castostOtazok, intervalSpolahlivosti, jeRozpisany, ohodnot, porovnajBehy, presnostNadPrahom, scitajPoAgendach, vyberVzorku, zmerajPresnost,
   type Skutocnost, type VysledokDokladu,
 } from './uctoPresnostService.js';
 import { prepocitajPravidla, sporPraxe } from './uctoPravidlaService.js';
@@ -272,6 +272,46 @@ describe('meranie presnosti zaúčtovania', () => {
     expect(vysledok.vysledok.FP.predkontacia).toEqual({ spravne: 1, znamych: 1, navrhnutych: 1 });
   }, 60_000);
 
+  // Druh operácie pred praxou protistrany: zamestnanec so zúčtovaním stravného aj
+  // pokutami. Pokút je viac, takže pravidlo protistrany dalo stravnému účet pokuty.
+  it('bez AI vyberie druh podľa textu dokladu aj s rozpisom; nová protistrana ostáva bez návrhu', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const stravne = await kod('predkontacie', '333100-stravné');
+    const cestovne = await kod('predkontacie', 'cestovné381');
+    const zaloha = await kod('predkontacie', 'zúčt.zálohy');
+    const pokuty = await kod('predkontacie', '325100-pokuty');
+    const zpc = async (cislo: string, datum: string, zamestnanec = 'mrkva jozef') => {
+      const spolocne = { agenda: 'OZ', doklad_cislo: cislo, datum, supplier_name_normalized: zamestnanec };
+      await riadok({ ...spolocne, line_text_normalized: 'zpc týždeň', suma: null, predkontacia_id: stravne, predkontacia_kod: '333100-stravné' });
+      for (const [index, text, suma, id, kodPredkontacie] of [
+        [1, 'stravné', 1000, stravne, '333100-stravné'], [2, 'cestovné', 180, cestovne, 'cestovné381'],
+        [3, 'zúčtovanie zálohy', -300, zaloha, 'zúčt.zálohy'],
+      ] as const) {
+        await riadok({ ...spolocne, riadok_index: index, line_text_normalized: text, suma, predkontacia_id: id, predkontacia_kod: kodPredkontacie });
+      }
+    };
+    const pokuta = (cislo: string, datum: string) => riadok({
+      agenda: 'OZ', doklad_cislo: cislo, datum, supplier_name_normalized: 'mrkva jozef',
+      line_text_normalized: `pokuta č. ${cislo}; mrkva jozef`, predkontacia_id: pokuty, predkontacia_kod: '325100-pokuty',
+    });
+    for (const [index, cislo] of ['26ZC001', '26ZC002', '26ZC003'].entries()) await zpc(cislo, `2026-0${index * 2 + 2}-10`);
+    // Šesť pokút z deviatich dokladov je prevažujúca podoba protistrany.
+    for (let mesiac = 1; mesiac <= 6; mesiac += 1) await pokuta(`26OZ00${mesiac}`, `2026-0${mesiac}-05`);
+    await zpc('26ZC090', '2026-08-20');
+    await pokuta('26OZ091', '2026-08-21');
+    await zpc('26ZC092', '2026-08-22', 'novák peter');
+
+    const vysledok = await zmerajPresnost(database, testConfig(), kde, { deliciDatum: '2026-08-01' });
+    const doklad = (cislo: string) => vysledok.doklady.find((item) => item.doklad === cislo)!;
+    expect(doklad('26ZC090')).toMatchObject({
+      navrh: { predkontacia: '333100-stravné' }, rozpisany: true, navrhRozpisany: true,
+      hodnotenie: { predkontacia: { spravne: true }, tvar: { spravne: true } },
+    });
+    expect(doklad('26OZ091')).toMatchObject({ navrh: { predkontacia: '325100-pokuty' }, hodnotenie: { predkontacia: { spravne: true } } });
+    // Nová protistrana nemá pravidlo ani druhy — ako doteraz sa zdrží.
+    expect(doklad('26ZC092')).toMatchObject({ novaProtistrana: true, navrh: null, zdrzanie: expect.any(String) });
+  }, 90_000);
+
   // Interný doklad samozdanenia nesie DPH, ktorú si firma vypočítala sama.
   // Faktúra zahraničného dodávateľa za ním je bez dane — kým meranie tú daň
   // podstrčilo ako daň dodávateľa, kontrola DPH ju brala za cudziu daň
@@ -371,6 +411,77 @@ describe('bez úniku budúcnosti', () => {
     expect(predtym.prompt.pravidla).not.toContain('Nové pravidlo');
     expect(predtym.prompt.profilKlienta).toEqual({ platitelDph: 'nezname', pokyny: ['Firma tovar na ceste (účet 139) neúčtuje.'] });
   }, 120_000);
+});
+
+// Účinok profilu klienta (analýza 2.4): tá istá vzorka s profilom k dátumu,
+// dnešným potvrdeným a vypnutým. Voľba smie meniť LEN profil v prompte a manifest
+// musí retrospektívne použitie dnešnej politiky pomenovať.
+describe('meranie účinku profilu', () => {
+  it('k_datumu, potvrdeny a vypnuty menia len profil a manifest ich označí', async () => {
+    const { database, kde, kod, riadok } = await firma();
+    const p518 = await kod('predkontacie', '518/321');
+    for (const [index, cislo] of ['26FP001', '26FP002', '26FP003', '26FP090'].entries()) {
+      await riadok({
+        doklad_cislo: cislo, datum: index === 3 ? '2026-08-20' : `2026-0${index + 1}-15`,
+        predkontacia_id: p518, predkontacia_kod: '518/321',
+      });
+    }
+    // Fakt spred dokladu vidí aj replay k dátumu; status potvrdený dnes len profil potvrdeny.
+    await potvrdFakt(database, kde, 'zasady.tovar_na_ceste', { pouziva: false }, '2026-01-01T00:00:00Z');
+    await potvrdFakt(database, kde, 'dph.status', { status: 'platitel' });
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: p518, clenenieDphId: null, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.8, reason: 'Preprava',
+      })),
+    };
+    const zmeraj = async (profil?: 'k_datumu' | 'potvrdeny' | 'vypnuty') => {
+      parser.create.mockClear();
+      const vysledok = await zmerajPresnost(database, testConfig(), kde, { rezim: 'ai', deliciDatum: '2026-08-01', profil }, parser);
+      return { vysledok, prompt: prompt(parser) };
+    };
+    const predvolene = await zmeraj();
+    const kDatumu = await zmeraj('k_datumu');
+    const potvrdeny = await zmeraj('potvrdeny');
+    const vypnuty = await zmeraj('vypnuty');
+
+    expect(kDatumu.prompt).toEqual(predvolene.prompt);
+    expect(kDatumu.prompt.profilKlienta).toEqual({ platitelDph: 'nezname', pokyny: ['Firma tovar na ceste (účet 139) neúčtuje.'] });
+    expect(potvrdeny.prompt.profilKlienta).toMatchObject({ platitelDph: 'platitel' });
+    expect(vypnuty.prompt.profilKlienta).toBeUndefined();
+    for (const beh of [potvrdeny, vypnuty]) {
+      expect({ ...beh.prompt, profilKlienta: undefined }).toEqual({ ...kDatumu.prompt, profilKlienta: undefined });
+      expect(beh.vysledok.doklady.map((doklad) => doklad.doklad)).toEqual(kDatumu.vysledok.doklady.map((doklad) => doklad.doklad));
+    }
+
+    expect(predvolene.vysledok.manifest).toMatchObject({ profil: 'k_datumu', vylucene: ['ucto_kategorie'] });
+    expect(predvolene.vysledok.manifest.profilUpozornenie).toBeUndefined();
+    expect(potvrdeny.vysledok.manifest).toMatchObject({
+      profil: 'potvrdeny', profilUpozornenie: expect.stringContaining('retrospektívne'),
+      aktualnyStav: expect.arrayContaining(['profil_fakty']),
+    });
+    expect(vypnuty.vysledok.manifest).toMatchObject({ profil: 'vypnuty', vylucene: ['ucto_kategorie', 'profil_fakty'] });
+  }, 120_000);
+
+  it('párové porovnanie počíta zmenené doklady a po poliach zlepšenia, zhoršenia aj doklady bez páru', () => {
+    const doklad = (cislo: string, predkontacia: boolean | null, dph: boolean | null): VysledokDokladu => ({
+      agenda: 'FP', doklad: cislo, datum: '2026-08-20', protistrana: null, rozpisany: false, navrhRozpisany: false,
+      hodnotenie: {
+        predkontacia: predkontacia === null ? null : { navrhnute: true, spravne: predkontacia },
+        clenenieDph: dph === null ? null : { navrhnute: true, spravne: dph },
+        kv: null, rad: null, tvar: null,
+      },
+      skutocne: { predkontacia: 'A', clenenieDph: 'PD', kv: null, rad: null },
+      navrh: { predkontacia: predkontacia ? 'A' : 'B', clenenieDph: dph ? 'PD' : 'PN', kv: null, rad: null },
+    });
+    const rozdiel = porovnajBehy(
+      [doklad('1', false, true), doklad('2', true, true), doklad('3', true, null), doklad('len-pred', true, true)],
+      [doklad('1', true, false), doklad('2', true, true), doklad('3', true, null), doklad('len-po', false, false)],
+    );
+    expect(rozdiel).toMatchObject({
+      parov: 3, bezParu: 2, zmenenych: 1,
+      polia: { predkontacia: { lepsie: 1, horsie: 0 }, clenenieDph: { lepsie: 0, horsie: 1 }, tvar: { lepsie: 0, horsie: 0 } },
+    });
+  });
 });
 
 // Firma bez histórie (R18): tie isté doklady, ale engine nesmie vidieť nič

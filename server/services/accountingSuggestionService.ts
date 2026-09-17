@@ -14,7 +14,7 @@ import { zapisBehAi } from './behAi.js';
 import { najdiPartnera } from './partnerService.js';
 import { najdiRozdelenie } from './uctoDennikService.js';
 import {
-  DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, sekciaKvKluc, sporPraxe, variantyRozpisu,
+  DOKLAD_KLUC_SQL, MIN_DOKLADOV, danovyKluc, najdiPravidlo, podobySporuDph, pravidloPodlaTextu, sekciaKvKluc, sporPraxe, variantyRozpisu,
   type PraxVariant,
 } from './uctoPravidlaService.js';
 import { jeDovozTovaru, popisKodu } from './pohodaDphKody.js';
@@ -2889,6 +2889,9 @@ export async function navrhniZauctovanie(
     bezWebu?: boolean;
     /** Meranie: kategórie aj pri dátume (horná hranica, pozri najdiKategorie). */
     sKategoriami?: boolean;
+    /** Meranie účinku profilu: vypnuty = bez faktov, potvrdeny = dnešné fakty
+     *  bez knownAt. Predvolene (k_datumu) len fakty potvrdené pred asOf. */
+    profil?: 'k_datumu' | 'potvrdeny' | 'vypnuty';
   } = {},
 ): Promise<VysledokNavrhu> {
   const doterajsi = ulozeny.doterajsi;
@@ -2990,9 +2993,11 @@ export async function navrhniZauctovanie(
   }, asOf);
   // Pravidlo protistrany: to isté, čo je v rozúčtovaní, ale zhrnuté cez všetky
   // doklady a spočítané bez modelu. Účtovník si ho vie prečítať a opraviť.
-  const pravidloProtistrany = await najdiPravidlo(
+  // Druh operácie ide pred praxou protistrany: text dokladu, ktorý jednoznačne
+  // patrí jednému jej druhu, dostane hlavičku aj rozpis toho druhu.
+  const pravidloProtistrany = pravidloPodlaTextu(await najdiPravidlo(
     database, input, korpus.agendy, protistranaKontextu,
-    documentContext.historiaDoDatumu);
+    documentContext.historiaDoDatumu), documentContext.lineDescriptions.join(' '));
   const spor = sporPraxe(pravidloProtistrany);
   // Model nevie účtovať na účet — vyberá predkontáciu. Ku každému účtu rozpadu
   // preto idú predkontácie, ktoré na tento účet účtujú; bez nich by mu ostalo
@@ -3020,7 +3025,9 @@ export async function navrhniZauctovanie(
   // DPH profil klienta (len potvrdené fakty, pri meraní len tie spred dokladu):
   // pokyny idú do promptu ako dáta a pre organizáciu bez nároku na odpočet sa
   // ponuka členení zúži na členenie bez odpočtu — model tak odpočet ani nemôže navrhnúť.
-  const dphProfil = await loadDphProfil(database, input.tenantId, input.organizationId, { knownAt: asOf });
+  const dphProfil = zavislosti.profil === 'vypnuty' ? undefined
+    : await loadDphProfil(database, input.tenantId, input.organizationId,
+      zavislosti.profil === 'potvrdeny' ? {} : { knownAt: asOf });
   const vsetkyClenenia = byKind('cleneniaDph');
   // Kódy, ktoré na doklad nepatria bez ohľadu na históriu: DD je daň pri
   // samozdanení a patrí na interný doklad, nikdy na faktúru — firma bez histórie
