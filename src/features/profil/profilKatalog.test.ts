@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { ProfilFakt, ProfilKlienta, ProfilOtazka } from '../../data/types';
+import type { ProfilFakt, ProfilKlienta, ProfilOtazka, VariantOtazky } from '../../data/types';
 import { sk } from '../../i18n/sk';
 import {
-  formularZHodnoty, hodnotaZFormulara, kluceFaktov, kodyHodnoty, nadpisOtazky, nazovFaktu, pocty, popisFaktu, popisOtazky,
-  poliaFaktu, pravidloZNavrhu, relevantneKluce, stavFaktu, stavSekcie, suhrnProfilu, triedOtazky, vetaHodnoty, ZOZNAMOVE,
+  castiVariantu, formularZHodnoty, hodnotaZFormulara, kluceFaktov, kodyHodnoty, nadpisOtazky, nazovFaktu, nazovTypuDokladu,
+  pocty, popisFaktu, popisOtazky, poliaFaktu, poliaVariantu, pravidloZNavrhu, relevantneKluce, stavFaktu, stavSekcie,
+  suhrnProfilu, triedOtazky, vetaCasti, vetaHodnoty, vetaVariantu, TYPY_DOKLADOV, ZOZNAMOVE,
 } from './profilKatalog';
 
 // Serverový katalóg (kľúče a zod schémy) je mimo projektu appky, tsc ho sem
@@ -33,6 +34,7 @@ const VZORKY: Record<string, unknown> = {
   'vozidla.pravidla': {
     nazov: 'PHM', klucoveSlova: ['natural 95', 'BA123XY'], percentoZakladu: 80, percentoDph: 50,
     predkontaciaKod: '501100', predkontaciaNedanovaKod: '501900', clenenieDphNedanoveKod: 'PN',
+    typyDokladov: ['FP', 'OZ'],
   },
   'naklady.bez_naroku': { predkontaciaKod: '513100', clenenieKod: 'PN' },
   'naklady.pomerne': { nazov: 'Telefón', klucoveSlova: ['telefon'], percentoDph: 70, predkontaciaKod: '518200', clenenieDphNedanoveKod: 'PN' },
@@ -142,6 +144,56 @@ describe('katalóg profilu klienta', () => {
     const spor = otazka('x', { druh: 'spor_protistrany', kluc: 'spor:FP:12345678', data: { agenda: 'FP', protistrana: 'ACME', varianty: [] } });
     expect(nadpisOtazky(spor)).toBe('Ako účtovať DPH pri protistrane ACME?');
     expect(popisOtazky(spor, [], () => 'Faktúra prijatá')).toMatch(/^Faktúra prijatá:/);
+  });
+
+  // Kódy protistrany za sebou („bInt · PDnadEU · B1") nepovedia, čo je čo.
+  it('možnosť otázky pomenuje každé pole a bez druhu dokladu sekciu KV nesľubuje', () => {
+    const variant: VariantOtazky = {
+      predkontaciaId: 'p1', clenenieDphId: 'c1', clenenieKvKod: 'B3', dokladov: 5, od: '2026-01-31', do: '2026-07-31',
+      kody: { predkontacia: 'PHM - Biensky VW', clenenieDph: 'PD', clenenieKv: 'B3' },
+    };
+    expect(poliaVariantu(variant, 'PD')).toEqual([
+      { nazov: 'Predkontácia', kod: 'PHM - Biensky VW' },
+      { nazov: 'Členenie DPH', kod: 'PD' },
+      { nazov: 'Sekcia KV', kod: 'B3' },
+    ]);
+    // Bez typu dokladu pravidlo platí na všetky doklady protistrany — sekciu vtedy určí doklad.
+    expect(poliaVariantu(variant).at(-1)).toEqual({ nazov: 'Sekcia KV', kod: 'podľa druhu dokladu' });
+    expect(vetaVariantu({ faktura: { clenenieKod: 'PN', kv: 'KN' } }, 'samozdanenie.sluzby_eu'))
+      .toBe('Členenie DPH PN · Sekcia KV KN');
+  });
+
+  // Bloček PHM m.bienský: 163,75 € sa delí 80/20 a odpočet dane je polovičný.
+  it('možnosť s rozúčtovaním ukáže časti, ich podiely aj zvyšok na účte hlavičky', () => {
+    const variant: VariantOtazky = {
+      predkontaciaId: 'p1', clenenieDphId: 'c1', clenenieKvKod: 'B3', dokladov: 5, od: '2026-01-31', do: '2026-07-31',
+      kody: { predkontacia: 'PHM - Biensky VW', clenenieDph: 'PD', clenenieKv: 'B3' },
+      casti: [{ predkontaciaKod: 'DPH PHM VW', clenenieDphKod: 'PN', clenenieKvKod: 'B3', podiel: 0.2, podielDph: 0.5 }],
+      dokladovCasti: 3,
+    };
+    const casti = castiVariantu(variant);
+    expect(casti.map(vetaCasti)).toEqual([
+      '20 % základu a 50 % dane na Predkontácia DPH PHM VW, Členenie DPH PN, Sekcia KV B3',
+      '80 % základu a 50 % dane na Predkontácia PHM - Biensky VW, Členenie DPH PD, Sekcia KV B3',
+    ]);
+    // Podoba bez rozpisu nemá čo ukázať a zvyšok si nevymýšľa.
+    expect(castiVariantu({ ...variant, casti: [], dokladovCasti: undefined })).toEqual([]);
+    expect(vetaCasti({ predkontaciaKod: '501100' })).toBe('Predkontácia 501100');
+  });
+
+  it('typy dokladov sa vyberajú zo zoznamu servera a nevybraté znamená všetky doklady', () => {
+    const polia = poliaFaktu('vozidla.pravidla');
+    // Pole nie je text: písané skratky server odmietne, preto sa vyberá.
+    expect(polia.find((pole) => pole.cesta === 'typyDokladov')).toEqual({ cesta: 'typyDokladov', typ: 'typy' });
+    expect(TYPY_DOKLADOV.map(nazovTypuDokladu))
+      .toEqual(['Faktúra prijatá', 'Faktúra vydaná', 'Ostatný záväzok', 'Pokladničný doklad', 'Bankový výpis', 'Interný doklad']);
+    const formular = formularZHodnoty('vozidla.pravidla', VZORKY['vozidla.pravidla']);
+    expect(formular.typyDokladov).toBe('FP, OZ');
+    expect(hodnotaZFormulara('vozidla.pravidla', formular)).toEqual({ hodnota: VZORKY['vozidla.pravidla'] });
+    // Nevybraté = pravidlo platí na všetky doklady, teda pole v hodnote vôbec nie je.
+    const { typyDokladov: _typy, ...bezTypov } = VZORKY['vozidla.pravidla'] as Record<string, unknown>;
+    expect(hodnotaZFormulara('vozidla.pravidla', { ...formular, typyDokladov: '' })).toEqual({ hodnota: bezTypov });
+    expect(polozkaKatalogu('vozidla.pravidla')!.schema.safeParse([bezTypov]).success).toBe(true);
   });
 
   it('návrh delenia sa prevedie na pravidlo s kódmi, neznámy účet nič nehádže', () => {

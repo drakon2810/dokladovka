@@ -31,9 +31,15 @@ const mocky = vi.hoisted(() => {
         id: '22222222-2222-4222-8222-222222222222', kluc: 'spor:FP:ACME', druh: 'spor_protistrany', stav: 'otvorena', blokuje: false,
         dokladov: 14, createdAt: '2026-09-16T10:00:00.000Z',
         data: {
-          agenda: 'FP', protistrana: 'ACME',
+          agenda: 'FP', protistrana: 'ACME', typDokladu: 'FP',
           varianty: [
-            { predkontaciaId: 'p1', clenenieDphId: 'c1', dokladov: 9, od: '2025-02-01', do: '2026-06-30', kody: { predkontacia: '518100', clenenieDph: 'PD', clenenieKv: 'B2' } },
+            {
+              predkontaciaId: 'p1', clenenieDphId: 'c1', dokladov: 9, od: '2025-02-01', do: '2026-06-30',
+              kody: { predkontacia: '518100', clenenieDph: 'PD', clenenieKv: 'B2' },
+              // Prax, ktorá doklad delí (PHM 80/20 s polovicou odpočtu) — karta to musí povedať.
+              casti: [{ predkontaciaKod: '501900', clenenieDphKod: 'PN', clenenieKvKod: 'B2', podiel: 0.2, podielDph: 0.5 }],
+              dokladovCasti: 6,
+            },
             { predkontaciaId: 'p1', clenenieDphId: 'c2', dokladov: 5, od: '2025-01-10', do: '2025-12-20', kody: { predkontacia: '518100', clenenieDph: 'PN' } },
           ],
         },
@@ -89,6 +95,7 @@ vi.mock('../../data/query', () => ({
   }),
 }));
 
+const { nazovFaktu } = await import('./profilKatalog');
 const { ProfilKlientaPage } = await import('./ProfilKlientaPage');
 
 async function vykresli() {
@@ -120,7 +127,17 @@ describe('ProfilKlientaPage', () => {
     expect(filtre).toEqual(['Treba odpovedať2', 'Navrhnuté z histórie4', 'Potvrdené1']);
     expect(text).toContain('Od akej sumy firma účtuje majetok ako dlhodobý?');
     expect(text).toContain('Ako účtovať DPH pri protistrane ACME?');
-    expect(text).toContain('518100 · PD · KV B2');
+    // Každý kód s názvom poľa: inak nie je vidieť, čo je predkontácia a čo sekcia KV.
+    expect(text).toContain('Predkontácia 518100 · Členenie DPH PD · Sekcia KV B2 — 9× dokladov');
+    expect(text).toContain('Odpoveď platí pre doklady typu Faktúra prijatá.');
+    // Rozúčtovanie z praxe vrátane zvyšku na účte hlavičky.
+    expect(text).toContain('Doklad sa delí na položky:');
+    expect(text).toContain('20 % základu a 50 % dane na Predkontácia 501900, Členenie DPH PN, Sekcia KV B2');
+    expect(text).toContain('80 % základu a 50 % dane na Predkontácia 518100, Členenie DPH PD, Sekcia KV B2');
+    expect(text).toContain('Rozpis je doložený 6 z 9 dokl. tejto podoby.');
+    // Prepínač samozdanenia je nad druhmi plnení a druhy ho už neopakujú.
+    expect(text).toContain('Rieši firma samozdanenie prijatých faktúr?');
+    expect(text).not.toContain(nazovFaktu('samozdanenie.postup'));
     expect(text).toContain('Navrhnuté z histórie · 212 dokl.');
     expect(text).toContain('Potvrdil Jana Nová 12. 9. 2026');
     expect(text).toContain('Faktúra PN, KV KN · interný doklad DDsl§69 a PDsluz, KV B1');
@@ -147,7 +164,48 @@ describe('ProfilKlientaPage', () => {
         predkontaciaKod: '501100', predkontaciaNedanovaKod: '501900',
       }],
     });
+
+    // Prepínač samozdanenia nad sekciou: kliknutie na voľbu fakt hneď potvrdí.
+    const volbaPostupu = [...document.querySelectorAll('#pk-samozdanenie button')]
+      .find((button) => button.textContent?.startsWith('Samozdanenie neriešime')) as HTMLElement;
+    await act(async () => { volbaPostupu.click(); });
+    expect(mocky.ulozFakt).toHaveBeenLastCalledWith('org-1', 'samozdanenie.postup', { stav: 'potvrdene', hodnota: { postup: 'neriesime' } });
     zatvor();
+  });
+
+  // „Len pre typy dokladov" bol text: napísaná skratka mimo enumu servera pravidlo zneplatnila.
+  it('okno pravidla delenia: typy dokladov sa vyberajú zo zoznamu, nie píšu', async () => {
+    const { container, tlacidlo, zatvor } = await vykresli();
+    await act(async () => { tlacidlo('Pridať pravidlo')!.click(); });
+    const okno = container.querySelector('[role="dialog"]')!;
+    expect(okno.querySelector('input[id="pk-pole-typyDokladov"]')).toBeNull();
+    const typ = (nazov: string) => [...okno.querySelectorAll('button')]
+      .find((button) => button.textContent === nazov) as HTMLButtonElement;
+    await act(async () => { typ('Faktúra prijatá').click(); });
+    await act(async () => { typ('Ostatný záväzok').click(); });
+    expect([...okno.querySelectorAll('[aria-pressed="true"]')].map((button) => button.textContent))
+      .toEqual(['Faktúra prijatá', 'Ostatný záväzok']);
+    // Druhé kliknutie voľbu zruší — nevybraté znamená všetky doklady.
+    await act(async () => { typ('Faktúra prijatá').click(); });
+    expect([...okno.querySelectorAll('[aria-pressed="true"]')].map((button) => button.textContent)).toEqual(['Ostatný záväzok']);
+    zatvor();
+  });
+
+  it('vypnuté samozdanenie: voľba je vybraná a prijaté plnenia sú označené za nepoužité', async () => {
+    mocky.profil.fakty.push({
+      kluc: 'samozdanenie.postup', stav: 'potvrdene', hodnota: { postup: 'neriesime' }, zdroj: 'uctovnik',
+      updatedAt: '2026-09-16T10:00:00.000Z',
+    });
+    try {
+      const { container, zatvor } = await vykresli();
+      const sekcia = container.querySelector('#pk-samozdanenie')!;
+      expect(sekcia.querySelector('[aria-pressed="true"]')?.textContent).toContain('Samozdanenie neriešime');
+      expect(sekcia.textContent).toContain('Samozdanenie prijatých faktúr je vypnuté');
+      expect(sekcia.querySelector('.opacity-60')?.textContent).toContain('Prijaté plnenia');
+      zatvor();
+    } finally {
+      mocky.profil.fakty.pop();
+    }
   });
 
   it('Banka: jediný kandidát sa potvrdí hneď, z viacerých až po výbere; zamietnutie', async () => {

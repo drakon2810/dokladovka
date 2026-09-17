@@ -1026,6 +1026,15 @@ export interface NavrhRiadku {
   podielDph?: number;
 }
 
+/** Časť rozpisu položiek z praxe: podiel na základe a dani plus vlastné kódy. */
+export interface CastPraxe {
+  predkontaciaKod?: string;
+  clenenieDphKod?: string;
+  clenenieKvKod?: string;
+  podiel?: number;
+  podielDph?: number;
+}
+
 /** Podoba praxe protistrany na výber — id z číselníka firmy a kódy na zobrazenie. */
 export interface VariantOtazky {
   predkontaciaId: string;
@@ -1035,6 +1044,10 @@ export interface VariantOtazky {
   od: string;
   do: string;
   kody: { predkontacia: string; clenenieDph: string; clenenieKv?: string };
+  /** Rozpis položiek podoby — pri PHM (80/20 s polovicou dane) je práve on tou praxou. */
+  casti?: CastPraxe[];
+  /** Koľkými dokladmi je rozpis doložený; zlúčené podoby ho môžu mať iný. */
+  dokladovCasti?: number;
 }
 
 export interface OtazkaPraxe {

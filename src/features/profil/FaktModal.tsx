@@ -4,7 +4,8 @@ import { showToast } from '../../components/toast';
 import { CLENENIE_KV_KODY, type CodeListItem } from '../../data/types';
 import { t, tv, type SkKey } from '../../i18n/sk';
 import {
-  POSTUPY_SAMOZDANENIA, STATUSY, formularZHodnoty, hodnotaZFormulara, nazovFaktu, poliaFaktu, popisFaktu, popisPola, type PoleFormulara,
+  POSTUPY_SAMOZDANENIA, STATUSY, TYPY_DOKLADOV, formularZHodnoty, hodnotaZFormulara, nazovFaktu, nazovTypuDokladu, poliaFaktu,
+  popisFaktu, popisPola, type PoleFormulara,
 } from './profilKatalog';
 
 /**
@@ -110,6 +111,39 @@ function Pole({ kluc, pole, hodnota, polozky, onChange }: {
             </label>
           ))}
         </div>
+      </fieldset>
+    );
+  }
+
+  /**
+   * Typy dokladov sa vyberajú, nepíšu: server ich má ako uzavretý enum, takže
+   * preklep alebo iná skratka („bloček") celé pravidlo zneplatnili. Názvy sú tie
+   * isté ako v zozname dokladov. Nič nevybraté = pravidlo platí na všetky doklady.
+   */
+  if (pole.typ === 'typy') {
+    const zvolene = hodnota.split(',').map((typ) => typ.trim()).filter(Boolean);
+    const prepni = (typ: string) => onChange((zvolene.includes(typ)
+      ? zvolene.filter((item) => item !== typ) : [...zvolene, typ]).join(', '));
+    return (
+      <fieldset className="md:col-span-2">
+        <legend className="label">
+          {popis}
+          <span className="font-normal text-ink-faint"> {t('profilKlienta.nepovinne')}</span>
+        </legend>
+        <div className="flex flex-wrap gap-2">
+          {TYPY_DOKLADOV.map((typ) => (
+            <button
+              key={typ}
+              type="button"
+              className={`btn px-2.5 py-1 text-xs ${zvolene.includes(typ) ? 'border-accent bg-tint text-accent-hover' : ''}`}
+              aria-pressed={zvolene.includes(typ)}
+              onClick={() => prepni(typ)}
+            >
+              {nazovTypuDokladu(typ)}
+            </button>
+          ))}
+        </div>
+        {napoveda && <span className="mt-1 block text-xs text-ink-faint">{napoveda}</span>}
       </fieldset>
     );
   }

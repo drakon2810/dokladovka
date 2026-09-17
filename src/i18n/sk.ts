@@ -1708,6 +1708,10 @@ export const sk = {
   'profilKlienta.banka.vyberte': 'Vyberte predkontáciu',
   'profilKlienta.banka.bezPredkontacie': 'Firma nemá bankovú predkontáciu na účet {protiucet}',
   'profilKlienta.banka.zamietnute': 'Zamietnuté',
+  // Prepínač celej sekcie: „neriešime" vypne blok samozdanenia na prijatej
+  // faktúre úplne, preto stojí nad druhmi plnení, nie medzi nimi.
+  'profilKlienta.postup.titulok': 'Rieši firma samozdanenie prijatých faktúr?',
+  'profilKlienta.postup.vypnute': 'Samozdanenie prijatých faktúr je vypnuté: interné doklady sa netvoria a blok sa na faktúre neponúkne. Členenia nižšie ostávajú len ako členenie samotnej faktúry.',
   'profilKlienta.skupina.prijate': 'Prijaté plnenia',
   'profilKlienta.skupina.vystavene': 'Vystavené faktúry',
   'profilKlienta.skupina.vratenie': 'Zahraničná DPH',
@@ -1768,6 +1772,18 @@ export const sk = {
   'profilKlienta.otazka.blokuje': 'Bez odpovede sa nedá účtovať',
   'profilKlienta.otazka.spor': 'Ako účtovať DPH pri protistrane {protistrana}?',
   'profilKlienta.otazka.spor.popis': '{agenda}: firma túto protistranu účtovala viacerými spôsobmi s inou DPH. Vybraný spôsob sa uloží ako pravidlo protistrany a otázka zmizne aj z jej dokladov.',
+  // Sekcia KV ide za druhom dokladu: bloček z pokladne je zjednodušená faktúra
+  // (B3), prijatá faktúra od tej istej protistrany B2. Odpoveď preto platí pre
+  // jeden druh dokladu a karta to musí povedať, inak sľubuje B3 aj na faktúre.
+  'profilKlienta.otazka.spor.rozsah': 'Odpoveď platí pre doklady typu {typ}. Pri inom druhu dokladu tej istej protistrany určí sekciu KV sám doklad (faktúra B2, bloček z pokladne B3).',
+  'profilKlienta.otazka.spor.bezRozsahu': 'Odpoveď platí pre všetky doklady tejto protistrany, preto sa sekcia KV z nej neuloží — určí ju druh dokladu (faktúra B2, bloček z pokladne B3).',
+  'profilKlienta.otazka.kvPodlaDokladu': 'podľa druhu dokladu',
+  'profilKlienta.otazka.rozpis': 'Doklad sa delí na položky:',
+  'profilKlienta.otazka.rozpis.cast': '{podiely} na {kody}',
+  'profilKlienta.otazka.rozpis.zaklad': '{percento} % základu',
+  'profilKlienta.otazka.rozpis.dph': '{percento} % dane',
+  'profilKlienta.otazka.rozpis.dokladov': 'Rozpis je doložený {dokladovCasti} z {dokladov} dokl. tejto podoby.',
+  'profilKlienta.otazka.rozpis.pravidlo': '„Použiť" uloží len zaúčtovanie hlavičky — delenie položiek drží pravidlo v časti Vozidlá a PHM.',
   'profilKlienta.otazka.inePlaceholder': 'Napíšte, ako sa má táto protistrana účtovať. Uloží sa ako pokyn pre AI tejto firmy.',
   'profilKlienta.otazka.malo': 'Ako firma účtuje {nazov}?',
   'profilKlienta.otazka.malo.popis': 'V histórii je len {dokladov} dokl., na spoľahlivý návrh je to málo. Firma ich účtovala takto: {veta}.',
@@ -1879,7 +1895,7 @@ export const sk = {
   'profilKlienta.pole.nazov': 'Názov',
   'profilKlienta.pole.klucoveSlova': 'Kľúčové slová',
   'profilKlienta.pole.typyDokladov': 'Len pre typy dokladov',
-  'profilKlienta.pole.typyDokladov.napoveda': 'Skratky oddelené čiarkou: FP (prijatá faktúra), OZ (ostatný záväzok, bloček), PD (pokladnica). Prázdne = všetky doklady.',
+  'profilKlienta.pole.typyDokladov.napoveda': 'Nič nevybraté = pravidlo platí pre všetky doklady.',
   'profilKlienta.pole.klucoveSlova.napoveda': 'Oddeľte čiarkou — EČV, číslo karty alebo slová z položky, napr. natural 95.',
   'profilKlienta.pole.percentoZakladu': 'Daňový náklad (%)',
   'profilKlienta.pole.percentoZakladu.napoveda': 'Koľko z ceny ide do daňových nákladov, napríklad 80.',
