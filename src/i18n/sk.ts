@@ -654,10 +654,13 @@ export const sk = {
   'detail.zdroj.etapa.zauctovanie': 'Návrh zaúčtovania',
   'detail.zdroj.etapa.dph_kontrola': 'Kontrola DPH',
   'detail.zdroj.etapa.vysvetlenie': 'Vysvetlenie „Prečo?"',
+  'detail.zdroj.etapa.vektory': 'Vektory textov',
   'detail.zdroj.zdrzanie': 'AI sa návrhu zdržala',
   'detail.zdroj.zdrzanie.bez_zauctovania': 'nenašla vhodné zaúčtovanie',
   'detail.zdroj.zdrzanie.posudok_dph': 'kontrola DPH návrh zastavila',
   'detail.zdroj.zdrzanie.prazdna_odpoved': 'model nevrátil odpoveď',
+  'detail.zdroj.zdrzanie.neuplna_odpoved': 'model nevrátil vektory všetkých textov',
+  'detail.zdroj.zdrzanie.mimo_schemy': 'odpoveď modelu nezodpovedala požadovanému tvaru',
   'detail.duplicita.banner': 'Možná duplicita dokladu',
   'detail.duplicita.popis':
     'Rovnaký dodávateľ a číslo faktúry už existuje v tejto organizácii.',

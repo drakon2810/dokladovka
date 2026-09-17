@@ -12,6 +12,7 @@ import {
   importUctoHistory,
 } from '../services/uctoHistoryService.js';
 import { parseHistoriaXml } from '../services/uctoHistoriaXml.js';
+import { zaradPrepocetPraxe } from '../services/pohodaImportService.js';
 import { navrhyPravidielDelenia } from '../services/uctoPravidlaService.js';
 import { zmerajPresnost } from '../services/uctoPresnostService.js';
 import { ANALYZA_KIND } from '../workerService.js';
@@ -45,12 +46,16 @@ export function registerUctoProfileRoutes(
   app.put('/api/organizations/:id/ucto-history', async (request) => {
     const { auth, organizationId } = await pristup(request, true);
     const body = historyImportSchema.parse(request.body);
-    return importUctoHistory(database, {
+    const vysledok = await importUctoHistory(database, {
       tenantId: auth.tenantId,
       organizationId,
       rows: body.rows,
       source: 'mdb',
     });
+    // Ručné nahratie mení korpus rovnako ako prenos agentom — bez prepočtu by
+    // pravidlá a kategórie ostali zo starej histórie.
+    await zaradPrepocetPraxe(database, { tenantId: auth.tenantId, organizationId }, String(request.id));
+    return vysledok;
   });
 
   // Doklady s položkami priamo z POHODY, bez agenta: účtovník si stiahne
@@ -71,6 +76,7 @@ export function registerUctoProfileRoutes(
     const vysledok = await importUctoHistory(database, {
       tenantId: auth.tenantId, organizationId, rows, source: 'mdb',
     });
+    await zaradPrepocetPraxe(database, { tenantId: auth.tenantId, organizationId }, String(request.id));
     return { ...vysledok, dokladov: rows.filter((row) => row.riadokIndex === 0).length, warnings };
   });
 
@@ -137,7 +143,9 @@ export function registerUctoProfileRoutes(
   // z čoho vychádzať aj pred prvým plným exportom z POHODY.
   app.post('/api/organizations/:id/ucto-history/backfill', async (request) => {
     const { auth, organizationId } = await pristup(request, true);
-    return backfillHistoryFromDecisions(database, auth.tenantId, organizationId);
+    const vysledok = await backfillHistoryFromDecisions(database, auth.tenantId, organizationId);
+    await zaradPrepocetPraxe(database, { tenantId: auth.tenantId, organizationId }, String(request.id));
+    return vysledok;
   });
 
   app.get('/api/organizations/:id/ucto-history/stats', async (request) => {

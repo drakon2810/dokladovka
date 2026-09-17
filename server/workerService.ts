@@ -1094,7 +1094,9 @@ export async function processNextJob(
     await spracujPrepocetPraxe(database, job);
     return true;
   }
-  const jobStartedAt = performance.now();
+  // Oneskorenie behu extrakcie. Pred extrakciou sa posunie: klasifikácia má
+  // vlastný beh so svojím oneskorením a zlyhaná extrakcia ju rátala druhýkrát.
+  let startedAt = performance.now();
   let prepared: PreparedRun | undefined;
   try {
     const context = await attachmentContext(database, job);
@@ -1200,7 +1202,7 @@ export async function processNextJob(
         await zapisBeh({ usage, chyba });
       }
     }
-    const startedAt = performance.now();
+    startedAt = performance.now();
     const outcome = await provider.extract({
       documentId: prepared.documentId,
       mimeType: context.detected_mime_type as ExtractionInput['mimeType'],
@@ -1323,7 +1325,7 @@ export async function processNextJob(
     return true;
   } catch (error) {
     await database.transaction((tx) => failJob(
-      tx, job, prepared, asProviderError(error, prepared?.documentId), Math.max(0, Math.round(performance.now() - jobStartedAt)),
+      tx, job, prepared, asProviderError(error, prepared?.documentId), Math.max(0, Math.round(performance.now() - startedAt)),
     ));
     return true;
   }

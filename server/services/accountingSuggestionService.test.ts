@@ -354,6 +354,50 @@ describe('accounting suggestions', () => {
     )).rows[0].corrections_count)).toBe(1);
   }, 90_000);
 
+  // Pravidlo z otázky R09 vybral účtovník. Tri opravy ho vypli rovnako ako AI
+  // pravidlo — rozhodnutie človeka ticho zmizlo a návrhy sa vrátili k hádaniu.
+  it('spätná väzba pravidla: pravidlo od človeka po 3 opravách ostane aktívne na kontrolu, AI pravidlo sa vypne', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const documentId = randomUUID();
+    const pred = randomUUID();
+    await database.query(
+      `INSERT INTO documents (id,tenant_id,organization_id,document_type,status,processing_status,extracted,accounting,total_amount,currency)
+       VALUES ($1,$2,$3,'FP','na_kontrole','ready_for_review','{}'::jsonb,'{}'::jsonb,50,'EUR')`,
+      [documentId, seeded.tenantId, seeded.organizationId],
+    );
+    await database.query(
+      `INSERT INTO accounting_suggestions (document_id,tenant_id,organization_id,predkontacia_id,source,confidence,reason)
+       VALUES ($1,$2,$3,$4,'manual_rule',1,'test')`,
+      [documentId, seeded.tenantId, seeded.organizationId, pred],
+    );
+    const pravidlo = async (origin: string, dovodSource: string | null) => {
+      const ruleId = randomUUID();
+      await database.query(
+        `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_ico,predkontacia_id,origin,dovod,dovod_source)
+         VALUES ($1,$2,$3,'31386946',$4,$5,'dôvod',$6)`,
+        [ruleId, seeded.tenantId, seeded.organizationId, pred, origin, dovodSource],
+      );
+      await database.query('UPDATE accounting_suggestions SET rule_id=$2 WHERE document_id=$1', [documentId, ruleId]);
+      for (let index = 0; index < 3; index += 1) {
+        await updateRuleFeedback(database, {
+          tenantId: seeded.tenantId, documentId, accounting: { predkontaciaId: randomUUID() },
+        });
+      }
+      const row = (await database.query<Record<string, any>>(
+        'SELECT active, needs_review, corrections_count FROM accounting_rules WHERE id=$1', [ruleId],
+      )).rows[0];
+      return { ...row, corrections_count: Number(row.corrections_count) };
+    };
+
+    expect(await pravidlo('manual', 'human')).toEqual({ active: true, needs_review: true, corrections_count: 3 });
+    // AI pravidlo, ktorého dôvod potvrdil človek, je tiež rozhodnutie človeka.
+    expect(await pravidlo('ai', 'human')).toEqual({ active: true, needs_review: true, corrections_count: 3 });
+    expect(await pravidlo('ai', 'ai_draft')).toEqual({ active: false, needs_review: true, corrections_count: 3 });
+    expect(await pravidlo('ai', null)).toEqual({ active: false, needs_review: true, corrections_count: 3 });
+  }, 90_000);
+
   it('AI analýza vyberá len z aktívnych číselníkov; prepíše slabé zdroje, úplné pravidlo nie', async () => {
     const database = await createTestDatabase();
     databases.push(database);
@@ -2371,6 +2415,44 @@ describe('odpočet na účte, na ktorom firma neodpočítava', () => {
     ]);
   }, 90_000);
 
+  // Dobropis z roku 2026 k plneniu z roku 2024 nesie pôvodných 20 %. Sadzba sa
+  // posudzovala dňom dobropisu, kde 20 % slovenská nie je, a riadok s daňou
+  // odišiel do KN — z opravy vo výkaze ostala len časť.
+  it('dobropis posúdi slovenskú sadzbu dňom pôvodného plnenia', async () => {
+    const database = await createTestDatabase();
+    databases.push(database);
+    const seeded = await seedTestUser(database);
+    const kde = [seeded.tenantId, seeded.organizationId];
+    await ciselnik(database, kde);
+    await historia(database, kde);
+    const riadokDobropisu = async (povodnyDoklad?: { cislo: string; datumPlnenia: string }) => {
+      const documentId = await doklad(database, kde);
+      await database.query(`UPDATE documents SET podtyp='dobropis', extracted=$2::jsonb WHERE id=$1`, [documentId,
+        JSON.stringify({ datumVystavenia: '2026-03-10', datumDodania: '2026-03-10', ...(povodnyDoklad ? { povodnyDoklad } : {}) })]);
+      const parser = {
+        create: vi.fn().mockResolvedValue(aiOdpoved({
+          predkontaciaId: kancelarske, clenenieDphId: dphPd, clenenieKvKod: 'C2',
+          ciselnyRadId: null, confidence: 0.9, reason: 'Dobropis kancelárskych potrieb s pohostením',
+          riadky: [{ index: 1, predkontaciaId: repre, clenenieDphId: dphPd, clenenieKvKod: 'C2' }],
+        })),
+      };
+      const input = { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Print-Office s.r.o.' };
+      expect(await maybeAiAccountingSuggestion(database, testConfig(), input, {
+        ...kontext,
+        podtyp: 'dobropis',
+        polozky: [kontext.polozky[0], { ...kontext.polozky[1], sadzbaDph: 20 }],
+      }, parser)).toBe(true);
+      return (await navrhDokladu(database, documentId)).riadky[0];
+    };
+
+    // Riadok bez nároku s daňou dedí sekciu opravy dokladu.
+    expect(await riadokDobropisu({ cislo: '24FP118', datumPlnenia: '2024-11-20' })).toEqual({
+      index: 1, popis: 'Káva NESCAFÉ GOLD instantná 200 g', predkontaciaId: repre, clenenieDphId: dphPn,
+    });
+    // Bez pôvodného plnenia rozhoduje deň dobropisu ako doteraz: 20 % v roku 2026 nie je slovenská sadzba.
+    expect(await riadokDobropisu()).toMatchObject({ predkontaciaId: repre, clenenieDphId: dphPn, clenenieKvKod: 'KN' });
+  }, 90_000);
+
   // Stopa pribúdala riadkom za každé volanie modelu a nikto ju nemazal. Staré
   // stopy dokladu sa zmažú — okrem tej, na ktorú ukazuje zapísaná oprava.
   it('nechá len aktuálnu stopu dokladu a stopu, na ktorú ukazuje oprava', async () => {
@@ -3269,7 +3351,11 @@ describe('istota pri ustálenom pravidle protistrany', () => {
   async function priprava(
     dokladov: number,
     zhoda: number,
-    moznosti: { dph?: { pravidlo: string; navrh: string }; konflikt?: boolean; dennik?: number; priklad?: boolean; pravidloDph?: string } = {},
+    moznosti: {
+      dph?: { pravidlo: string; navrh: string }; konflikt?: boolean; dennik?: number; priklad?: boolean; pravidloDph?: string;
+      /** Pravidlo DPH vznikne, kým model beží (účtovník vybral prax na inom doklade). */
+      pravidloPocasBehu?: string;
+    } = {},
   ) {
     const database = await createTestDatabase();
     databases.push(database);
@@ -3310,13 +3396,12 @@ describe('istota pri ustálenom pravidle protistrany', () => {
       );
     }
     // Pravidlo účtovníka pre DPH protistrany — o spore rozhodol človek.
-    if (moznosti.pravidloDph) {
-      await database.query(
-        `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_name_normalized,clenenie_dph_id,origin)
-         VALUES ($1,$2,$3,'preprava s.r.o.',$4,'manual')`,
-        [randomUUID(), ...kde, clenenia.get(moznosti.pravidloDph)],
-      );
-    }
+    const pravidloDph = (kod: string) => database.query(
+      `INSERT INTO accounting_rules (id,tenant_id,organization_id,supplier_name_normalized,clenenie_dph_id,origin)
+       VALUES ($1,$2,$3,'preprava s.r.o.',$4,'manual')`,
+      [randomUUID(), ...kde, clenenia.get(kod)],
+    );
+    if (moznosti.pravidloDph) await pravidloDph(moznosti.pravidloDph);
     const variant = (clenenieDphKod: string, pocet: number) =>
       ({ predkontaciaKod: '518/321', clenenieDphKod, tvar: [], dokladov: pocet, od: '2025-01-05', do: '2025-12-20' });
     await database.query(
@@ -3338,8 +3423,22 @@ describe('istota pri ustálenom pravidle protistrany', () => {
         clenenieKvKod: null, ciselnyRadId: null, confidence: 0.99, reason: 'Preprava',
       })),
     };
+    // Pravidlo vznikne, keď už návrh pravidlá prečítal, no otázku ešte nezapísal
+    // (pri zápise behu modelu) — ako výber praxe na inom doklade počas behu.
+    const pocasBehu = moznosti.pravidloPocasBehu ? new Proxy(database, {
+      get(target, prop) {
+        if (prop === 'query') {
+          return async (sql: string, params?: unknown[]) => {
+            if (params?.includes('navrh-zauctovania-v1')) await pravidloDph(moznosti.pravidloPocasBehu!);
+            return target.query(sql, params as never);
+          };
+        }
+        const hodnota = Reflect.get(target, prop);
+        return typeof hodnota === 'function' ? hodnota.bind(target) : hodnota;
+      },
+    }) : database;
     await maybeAiAccountingSuggestion(
-      database, testConfig(),
+      pocasBehu, testConfig(),
       { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Preprava s.r.o.' },
       {
         documentType: 'FP', supplierName: 'Preprava s.r.o.', totalAmount: 100, currency: 'EUR',
@@ -3411,6 +3510,13 @@ describe('istota pri ustálenom pravidle protistrany', () => {
 
   it('keď o DPH protistrany rozhodlo pravidlo účtovníka, otázka nevznikne', async () => {
     const navrh = await priprava(60, 58, { konflikt: true, dph: { pravidlo: 'PD', navrh: 'PD' }, pravidloDph: 'PD' });
+    expect(navrh.otazka).toBeNull();
+  }, 90_000);
+
+  // Účtovník vybral prax na inom doklade protistrany, kým model bežal nad týmto:
+  // pravidlo-protistrany otázky zrušilo, no dobehnutý návrh ju zapísal späť.
+  it('pravidlo DPH vzniknuté počas behu modelu otázku nezapíše', async () => {
+    const navrh = await priprava(60, 58, { konflikt: true, dph: { pravidlo: 'PD', navrh: 'PD' }, pravidloPocasBehu: 'PD' });
     expect(navrh.otazka).toBeNull();
   }, 90_000);
 

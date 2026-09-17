@@ -13,7 +13,9 @@ import {
  *
  * Produkcia, len na čítanie — databáza každý pokus o zápis odmietne:
  *   docker compose exec -T -e PGOPTIONS='-c default_transaction_read_only=on' api node build/server/scripts/zmerajPresnost.js --rezim bez_ai
- * Voľby: --rezim bez_ai|ai  --okno test|validacia  --vzorka N  --max-volani N  --kategorie  --firma časť_názvu|id
+ * Voľby: --rezim bez_ai|ai  --okno test|validacia  --vzorka N  --max-volani N  --kategorie  --bez-historie  --firma časť_názvu|id
+ * --bez-historie meria firmu bez histórie (R18): návrh nevidí nič, čo firma
+ * robila — len číselníky a nastavenia; kategórie sa vtedy nepoužijú.
  * Režim ai stojí peniaze a posiela texty dokladov do OpenAI — len so súhlasom.
  * --max-volani je rozpočet CELÉHO behu (predvolene 100), nie na firmu; delí sa
  * rovnomerne a nevyčerpaný zvyšok prejde na ďalšie firmy. S --kategorie volá
@@ -26,11 +28,12 @@ const { values } = parseArgs({
     vzorka: { type: 'string' },
     'max-volani': { type: 'string' },
     kategorie: { type: 'boolean', default: false },
+    'bez-historie': { type: 'boolean', default: false },
     firma: { type: 'string' },
   },
 });
 if (!['bez_ai', 'ai'].includes(values.rezim) || !['test', 'validacia'].includes(values.okno)) {
-  throw new Error('Použitie: --rezim bez_ai|ai --okno test|validacia [--vzorka N] [--max-volani N] [--kategorie] [--firma časť_názvu|id]');
+  throw new Error('Použitie: --rezim bez_ai|ai --okno test|validacia [--vzorka N] [--max-volani N] [--kategorie] [--bez-historie] [--firma časť_názvu|id]');
 }
 
 const config = loadConfig();
@@ -60,6 +63,7 @@ try {
         // Podiel zo zvyšku rozpočtu; vzorka ho nikdy neprekročí (vyberVzorku).
         maxAiVolani: sAi ? Math.ceil(zostatok / (firmy.length - poradie)) : undefined,
         kategorie: values.kategorie,
+        bezHistorie: values['bez-historie'],
       });
       if (sAi) zostatok -= vysledok.vzorka;
       behy.push({ firma: firma.name, vysledok });
@@ -75,6 +79,8 @@ try {
 
 console.log(JSON.stringify(behy, null, 2));
 
+// Výsledok bez histórie sa nesmie čítať ako presnosť firmy s praxou.
+if (values['bez-historie']) console.log('\nFIRMA BEZ HISTÓRIE — návrh nevidel nič z histórie firmy, len číselníky a nastavenia');
 const podiel = (spravne: number, znamych: number) => (znamych > 0 ? `${((spravne / znamych) * 100).toFixed(1)} %` : '—');
 console.log(`\n${'firma'.padEnd(24)} ${'agenda'.padEnd(6)} dokl. ${POLIA.map((pole) => pole.padStart(20)).join('')}  zdržal sa`);
 for (const { firma, vysledok } of behy) {

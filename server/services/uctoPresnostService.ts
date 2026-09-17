@@ -48,6 +48,9 @@ const DRUH_PODLA_AGENDY: Record<string, { typ: string; podtyp?: string; pokladna
 export type RezimMerania = 'bez_ai' | 'ai';
 export type OknoMerania = 'test' | 'validacia';
 
+/** Delítko firmy bez histórie — pred ním nie je žiadny doklad ani záznam. */
+const PRED_HISTORIOU = '0001-01-01';
+
 interface Kody {
   predkontaciaId?: string;
   clenenieDphId?: string;
@@ -549,6 +552,9 @@ export async function zmerajPresnost(
     maxAiVolani?: number;
     /** Kategórie aj pri dátume dokladu — výsledok je horná hranica. */
     kategorie?: boolean;
+    /** Firma bez histórie (R18): žiadny doklad nevidí nič z histórie firmy, len
+     *  číselníky a nastavenia. Kategórie sa vtedy nepoužijú. */
+    bezHistorie?: boolean;
     /** Zapísať beh do ucto_presnost. Skript nezapisuje nikdy. */
     uloz?: boolean;
   } = {},
@@ -560,6 +566,11 @@ export async function zmerajPresnost(
   }
   const zaciatok = Date.now();
   const maxAiVolani = moznosti.maxAiVolani ?? 100;
+  // Firma bez histórie: delítko pred všetkou históriou. Každý zdroj návrhu sa
+  // delí týmto dátumom (denník, doklady, pravidlá protistrán, príklady, pravidlá
+  // a pokyny účtovníka — aj globálne —, použitie členení, rad); kategórie dátum
+  // nemajú, preto sa vypnú.
+  const kategorie = moznosti.kategorie && !moznosti.bezHistorie;
 
   // Okná sú percentily dátumov DOKLADOV, nie „max mínus tri mesiace" —
   // leasingové splátky a rezervy sú zaúčtované dopredu, takže max bol 31. 12.
@@ -607,7 +618,8 @@ export async function zmerajPresnost(
     let chyba: string | undefined;
     let spor: VysledokDokladu['spor'];
     let odpovedModelu: unknown;
-    const kontext = kontextZKorpusu(doklad);
+    const asOf = moznosti.bezHistorie ? PRED_HISTORIOU : doklad.datum;
+    const kontext = { ...kontextZKorpusu(doklad), historiaDoDatumu: asOf };
     // Len z histórie pred dátumom dokladu, ako všetko ostatné v meraní.
     // S IČO sa porovnáva IČO: rovnaké meno s iným IČO je iná firma. Menom sa
     // smie spárovať len riadok histórie bez IČO (staré importy ho nemali).
@@ -620,7 +632,7 @@ export async function zmerajPresnost(
                    THEN supplier_ico = $4 OR (supplier_ico IS NULL AND supplier_name_normalized = $5)
                    ELSE supplier_name_normalized = $5 END
         LIMIT 1`,
-      [input.tenantId, input.organizationId, doklad.datum, doklad.supplierIco ?? null, doklad.supplierName ?? null],
+      [input.tenantId, input.organizationId, asOf, doklad.supplierIco ?? null, doklad.supplierName ?? null],
     )).rows.length === 0;
     try {
       const vysledok = await navrhniZauctovanie(database, config, {
@@ -648,7 +660,7 @@ export async function zmerajPresnost(
         // Bez AI nikdy nevolá OpenAI ani pre kategórie: prázdny embedder = len lexikálna zhoda.
         ...(rezim === 'ai' ? {} : { embedder: bezVektorov }),
         bezWebu: true,
-        sKategoriami: moznosti.kategorie,
+        sKategoriami: kategorie,
       });
       // Samotné členenie DPH bez účtu nie je zaúčtovanie — zdržanie, nie zlý tvar.
       spor = vysledok.spor;
@@ -697,11 +709,13 @@ export async function zmerajPresnost(
     instrukcieSha256: createHash('sha256').update(AI_SUGGESTION_INSTRUCTIONS).digest('hex'),
     okno,
     okna: { validacia: { od: okna.p60, doVylucne: hranica }, test: { od: hranica, doVratane: okna.dnes } },
-    asOf: 'datum_dokladu',
-    kategorie: moznosti.kategorie ? 'horna_hranica' : 'vylucene',
+    asOf: moznosti.bezHistorie ? 'bez_historie' : 'datum_dokladu',
+    kategorie: kategorie ? 'horna_hranica' : 'vylucene',
     // Embeddingy OpenAI len v režime ai s kategóriami; nerátajú sa do maxAiVolani ani do tokenov.
-    embeddingy: rezim === 'ai' && moznosti.kategorie ? 'openai' : null,
-    vylucene: moznosti.kategorie ? [] : ['ucto_kategorie'],
+    embeddingy: rezim === 'ai' && kategorie ? 'openai' : null,
+    vylucene: moznosti.bezHistorie
+      ? ['ucto_historia', 'ucto_dennik', 'ucto_pravidla', 'ucto_decisions', 'accounting_rules', 'ai_instructions', 'ucto_kategorie']
+      : kategorie ? [] : ['ucto_kategorie'],
     // Agendy, na ktoré rozpočet vzorky nestačil (viac agend než miest).
     vynechaneAgendy: [...new Set(vsetky.map((doklad) => doklad.agenda))]
       .filter((agenda) => !merane.some((doklad) => doklad.agenda === agenda)),

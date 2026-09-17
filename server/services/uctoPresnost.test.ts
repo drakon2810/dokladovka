@@ -367,6 +367,81 @@ describe('bez úniku budúcnosti', () => {
   }, 120_000);
 });
 
+// Firma bez histórie (R18): tie isté doklady, ale engine nesmie vidieť nič
+// z toho, čo firma robila — len číselníky. Každý zdroj histórie sa overuje
+// najprv v bežnom behu, inak by prázdny prompt nič nedokazoval.
+describe('firma bez histórie', () => {
+  it('prompt nemá denník, doklady, pravidlá, príklady, rozdelenie, pokyny ani kategórie a rad ide cestou novej firmy', async () => {
+    const { database, kde, vloz, kod, riadok } = await firma();
+    const p518 = await kod('predkontacie', '518/321', { ucet_md: '518100' });
+    const p501 = await kod('predkontacie', '501/321', { ucet_md: '501100' });
+    const pd = await kod('cleneniaDph', 'PD');
+    await kod('ciselneRady', 'R1', { agenda: 'prijate_faktury', external_id: '11', accounting_year: '2026', last_number: 'R1005' });
+    // Nová firma nemá z čoho počítať rad — dostane ho z posledného čísla v číselníku.
+    await kod('ciselneRady', 'R2', { agenda: 'prijate_faktury', external_id: '12', accounting_year: '2026', last_number: 'R2099' });
+    const kody = { predkontacia_id: p518, predkontacia_kod: '518/321', clenenie_dph_id: pd, clenenie_dph_kod: 'PD', clenenie_kv_kod: 'B2', rad_external_id: '11', rad_kod: 'R1' };
+    for (const [index, cislo] of ['26FP001', '26FP002', '26FP003', '26FP090'].entries()) {
+      await riadok({ doklad_cislo: cislo, datum: index === 3 ? '2026-08-20' : `2026-0${index + 1}-15`, ...kody });
+      if (index === 3) continue;
+      for (const ucet of ['518100', '501100']) {
+        await vloz('ucto_dennik', {
+          externalny_id: `${cislo}-${ucet}`, agenda: 'Prijaté faktúry', doklad_cislo: cislo, datum: `2026-0${index + 1}-15`,
+          ucet_md: ucet, ucet_dal: '321000', partner_nazov: 'preprava s.r.o.',
+        });
+      }
+    }
+    await vloz('ucto_decisions', {
+      supplier_name_normalized: 'preprava s.r.o.', line_text_normalized: 'preprava tovaru', predkontacia_id: p518,
+      document_type: 'FP', source: 'import', created_at: '2026-01-01',
+    });
+    // Pravidlo účtovníka prebije odpoveď modelu — v bežnom behu je predkontácia 501/321.
+    await vloz('accounting_rules', { supplier_name_normalized: 'preprava s.r.o.', predkontacia_id: p501, priority: 1, created_at: '2026-01-01' });
+    await database.query(
+      `INSERT INTO ai_instructions (id,scope,nazov,text,faza,created_at)
+       VALUES ($1,'global','Staré pravidlo','platí','accounting','2026-01-01')`, [randomUUID()],
+    );
+    await vloz('ucto_kategorie', {
+      nazov: 'Preprava', slovnik: JSON.stringify(['preprava']), predkontacia_id: p518, agendy: JSON.stringify(['FP']), pocet: 30,
+    });
+
+    const parser = {
+      create: vi.fn().mockResolvedValue(aiOdpoved({
+        predkontaciaId: p518, clenenieDphId: pd, clenenieKvKod: null, ciselnyRadId: null, confidence: 0.8, reason: 'Preprava',
+      })),
+    };
+    const zmeraj = async (bezHistorie: boolean) => {
+      parser.create.mockClear();
+      const vysledok = await zmerajPresnost(database, testConfig(), kde,
+        { rezim: 'ai', deliciDatum: '2026-08-01', kategorie: true, bezHistorie }, parser);
+      return { vysledok, prompt: prompt(parser) };
+    };
+
+    const bezne = await zmeraj(false);
+    expect(bezne.prompt.dennik).not.toEqual([]);
+    expect(bezne.prompt.doklady).toBeDefined();
+    expect(bezne.prompt.pravidlo).toBeDefined();
+    expect(bezne.prompt.rozdelenie).toBeDefined();
+    expect(bezne.prompt.priklady).not.toEqual([]);
+    expect(bezne.prompt.kategorie).not.toEqual([]);
+    expect(bezne.prompt.pravidla).toContain('Staré pravidlo');
+    expect(bezne.prompt.ciselniky.cleneniaDph).toEqual([expect.objectContaining({ pouziteNaTomtoTypeDokladu: 3 })]);
+    expect(bezne.vysledok.doklady[0]).toMatchObject({ navrh: { predkontacia: '501/321', rad: 'R1' } });
+    expect(bezne.vysledok.doklady[0].novaProtistrana).toBeUndefined();
+
+    const nova = await zmeraj(true);
+    expect(nova.prompt.dennik).toEqual([]);
+    expect(nova.prompt.doklady).toBeUndefined();
+    expect(nova.prompt.pravidlo).toBeUndefined();
+    expect(nova.prompt.rozdelenie).toBeUndefined();
+    expect(nova.prompt.priklady).toEqual([]);
+    expect(nova.prompt.kategorie).toEqual([]);
+    expect(JSON.stringify(nova.prompt.pravidla ?? null)).not.toContain('Staré pravidlo');
+    expect(nova.prompt.ciselniky.cleneniaDph).toEqual([{ id: pd, kod: 'PD', nazov: 'PD' }]);
+    expect(nova.vysledok.doklady[0]).toMatchObject({ novaProtistrana: true, navrh: { predkontacia: '518/321', rad: 'R2' } });
+    expect(nova.vysledok.manifest).toMatchObject({ asOf: 'bez_historie', kategorie: 'vylucene', embeddingy: null });
+  }, 120_000);
+});
+
 describe('meranie bez zápisov', () => {
   it('v oboch režimoch nezapíše nič; uloz=true zapíše práve jeden beh', async () => {
     const { database, kde, kod, riadok } = await firma();

@@ -31,15 +31,18 @@ describe('právna kontrola profilu', () => {
     }
 
     const parser = {
-      create: vi.fn().mockResolvedValue(aiOdpoved({
-        kombinacie: [
-          {
-            agenda: 'FP', clenenieDphKod: 'PN (PN)', clenenieKvKod: 'B2', sedi: false,
-            poznamka: 'Plnenie mimo priznania nepatrí do B2, patrí do KN.',
-          },
-          { agenda: 'FP', clenenieDphKod: 'PD (PD)', clenenieKvKod: 'B2', sedi: true, poznamka: '' },
-        ],
-      })),
+      create: vi.fn().mockResolvedValue({
+        ...aiOdpoved({
+          kombinacie: [
+            {
+              agenda: 'FP', clenenieDphKod: 'PN (PN)', clenenieKvKod: 'B2', sedi: false,
+              poznamka: 'Plnenie mimo priznania nepatrí do B2, patrí do KN.',
+            },
+            { agenda: 'FP', clenenieDphKod: 'PD (PD)', clenenieKvKod: 'B2', sedi: true, poznamka: '' },
+          ],
+        }, 'Overujem § 78a.'),
+        usage: { input_tokens: 500, output_tokens: 80 },
+      }),
     };
     const vysledok = await overPravnuStranku(
       database, testConfig(), { tenantId: seeded.tenantId, organizationId: seeded.organizationId }, parser,
@@ -55,6 +58,16 @@ describe('právna kontrola profilu', () => {
 
     // Bez nástroja na web sa volanie zopakuje bez neho, nie zahodí.
     expect((parser.create.mock.calls[0][0] as any).tools).toEqual([{ type: 'web_search' }]);
+
+    // Kontrola s web searchom je platené volanie nad firmou: beh bez dokladu
+    // so spotrebou aj počtom hľadaní, ktoré sa platia zvlášť.
+    expect((await database.query<Record<string, any>>(
+      'SELECT document_id, prompt_version, status, error_code, usage FROM extraction_runs WHERE organization_id=$1',
+      [seeded.organizationId],
+    )).rows).toEqual([{
+      document_id: null, prompt_version: 'pravna-kontrola-v1', status: 'succeeded', error_code: null,
+      usage: { inputTokens: 500, cachedTokens: null, outputTokens: 80, reasoningTokens: null, webSearchCalls: 1 },
+    }]);
   }, 90_000);
 
   it('bez kategórií s dvojicou kódov sa modelu ani nevolá', async () => {
@@ -67,5 +80,6 @@ describe('právna kontrola profilu', () => {
     );
     expect(vysledok).toEqual({ overenych: 0, sporne: 0 });
     expect(parser.create).not.toHaveBeenCalled();
+    expect((await database.query('SELECT 1 FROM extraction_runs WHERE organization_id=$1', [seeded.organizationId])).rowCount).toBe(0);
   }, 60_000);
 });

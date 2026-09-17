@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireBrowserAuth, requireCsrf, requireOrganizationAccess, requireRole } from '../auth.js';
 import { writeAudit } from '../audit.js';
-import { seedTaxRatioDefaults } from '../services/taxRatios.js';
+import { doplnUcetMdZKodu } from '../services/ucetMdZKodu.js';
 import type { Database, Queryable } from '../db/database.js';
 
 const kinds = ['predkontacie', 'cleneniaDph', 'ciselneRady', 'strediska', 'zakazky', 'cinnosti', 'projekty', 'bankoveUcty'] as const;
@@ -159,9 +159,8 @@ export function registerCodeListRoutes(app: FastifyInstance, database: Database)
           perKind[kind].vyradene += result.rowCount;
         }
       }
-      // Doplnenie účtov a daňových pomerov novým predkontáciám (idempotentné,
-      // ručné úpravy neprepisuje — guard tax_ratio_kod IS NULL).
-      await seedTaxRatioDefaults(tx, auth.tenantId, id);
+      // Doplnenie účtu MD novým predkontáciám z prefixu kódu (idempotentné).
+      await doplnUcetMdZKodu(tx, auth.tenantId, id);
       await writeAudit(tx, {
         tenantId: auth.tenantId,
         organizationId: id,
