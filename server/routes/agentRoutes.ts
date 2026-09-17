@@ -16,7 +16,7 @@ import { doplnUcetMdZKodu } from '../services/ucetMdZKodu.js';
 import { buildApprovedDocumentsXml } from '../services/exportService.js';
 import { importTrainingRows, trainingRowSchema } from './aiTrainingRoutes.js';
 import { klucPolozky, konfliktPolozky, osvojRadBezIdentifikatora } from './codeListRoutes.js';
-import { historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
+import { historyDokladSchema, historyImportSchema, importUctoHistory, ulozRadyZDokladov } from '../services/uctoHistoryService.js';
 import { importujAdresar } from '../services/partnerService.js';
 import { parseDennik, ulozDennik } from '../services/uctoDennikService.js';
 import { publikaciaSchema, publikujImport, ulozDavku } from '../services/pohodaImportService.js';
@@ -50,7 +50,7 @@ const codeListKind = z.enum(['predkontacie', 'cleneniaDph', 'ciselneRady', 'stre
 // synchronizáciu a adresár. Adresár tam pribudol preto, že jeho zlyhanie sa
 // dovtedy zapísalo iba do lokálneho logu agenta — na serveri to vyzeralo
 // rovnako ako „prebehlo a nič tam nebolo".
-const syncRunKind = z.enum([...codeListKind.options, 'treningAi', 'adresar', 'uctovnyProfil', 'uctovnyDennik']);
+const syncRunKind = z.enum([...codeListKind.options, 'treningAi', 'adresar', 'uctovnyProfil', 'uctovnyDennik', 'otvoreneFaktury']);
 const codeListItem = z.object({
   kod: z.string().trim().min(1).max(100),
   nazov: z.string().trim().min(1).max(300),
@@ -319,9 +319,11 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
               COALESCE(l.preferred_year, 'latest') AS "preferredYear",
               (l.code_list_sync_requested_at IS NOT NULL) AS "syncRequested",
               (l.training_sync_requested_at IS NOT NULL) AS "trainingSyncRequested",
-              -- Server prijíma dávky do stagingu a publikáciu. Mostík 0.18 podľa
-              -- toho vyberie protokol; starší server pole nemá a agent ostane pri 1.
-              2 AS "historiaProtokol"
+              (l.open_invoices_sync_requested_at IS NOT NULL) AS "openInvoicesSyncRequested",
+              -- Server prijíma dávky do stagingu a publikáciu (2) aj s hlavičkami
+              -- dokladov (3). Mostík podľa toho vyberie protokol; starší server
+              -- pole nemá a agent ostane pri 1.
+              3 AS "historiaProtokol"
          FROM organizations o
          LEFT JOIN pohoda_company_links l ON l.organization_id=o.id AND l.tenant_id=o.tenant_id
         WHERE o.tenant_id=$1 AND o.archived=false ORDER BY o.name`, [agent.tenant_id],
@@ -525,14 +527,18 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
   app.put('/api/agent/organizations/:id/ucto-history', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const body = historyImportSchema.extend(davkaImportu).strict().refine(importIdSDavkou, importIdSDavkouChyba).parse(request.body);
+    const body = historyImportSchema.extend({
+      ...davkaImportu,
+      // Hlavičky dokladov s väzbami (protokol 3) — uložia sa až publikáciou.
+      doklady: z.array(historyDokladSchema).max(20_000).optional(),
+    }).strict().refine(importIdSDavkou, importIdSDavkouChyba).parse(request.body);
     const organization = await database.query(
       'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
     if (body.importId !== undefined) {
       return ulozDavku(database, {
         tenantId: agent.tenant_id, organizationId: id, druh: 'historia', importId: body.importId, davka: body.davka!,
-        obsah: { rows: body.rows, series: body.series ?? [] }, pocet: body.rows.length, agentVersion: agent.agent_version,
+        obsah: { rows: body.rows, series: body.series ?? [], doklady: body.doklady }, pocet: body.rows.length, agentVersion: agent.agent_version,
       });
     }
     const { result, rady } = await database.transaction(async (tx) => {
@@ -600,6 +606,77 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
     return { ...vysledok, preskocene };
+  });
+
+  // Neuhradené faktúry pre párovanie banky. Agent ich stiahne na žiadosť
+  // (sync-open-invoices) a neúplnú odpoveď POHODY nepošle vôbec, takže zoznam
+  // firmy sa tu nahradí celý a žiadosť je vybavená. Po opakovanom zlyhaní
+  // exportu pošle { vzdat: true } — žiadosť sa zmaže a starý zoznam ostane.
+  app.put('/api/agent/organizations/:id/open-invoices', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
+    const agent = await requireAgent(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const text = z.string().trim().max(300).optional();
+    const suma = z.number().finite().optional();
+    const body = z.union([z.object({ vzdat: z.literal(true) }).strict(), z.object({
+      databaza: z.string().trim().min(1).max(255),
+      faktury: z.array(z.object({
+        agenda: z.string().trim().min(1).max(10),
+        dokladId: z.number().int().positive(),
+        dokladCislo: text, partnerIco: text, partnerNazov: text, varSymbol: text,
+        mena: z.string().trim().max(10).optional(),
+        suma, sumaMena: suma, zostatok: suma, zostatokMena: suma,
+      }).strict()).max(20_000),
+    }).strict()]).parse(request.body);
+    const organization = await database.query(
+      'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
+    if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
+    const syncedAt = new Date().toISOString();
+    // Faktúra dvakrát v odpovedi sa uloží raz.
+    const faktury = 'vzdat' in body ? [] : [...new Map(body.faktury.map((faktura) => [faktura.dokladId, faktura])).values()];
+    await database.transaction(async (tx) => {
+      if (!('vzdat' in body)) {
+        await tx.query('DELETE FROM pohoda_otvorene_faktury WHERE tenant_id=$1 AND organization_id=$2', [agent.tenant_id, id]);
+        await tx.query(
+          'INSERT INTO pohoda_otvorene_faktury SELECT * FROM jsonb_populate_recordset(null::pohoda_otvorene_faktury, $1::jsonb)',
+          [JSON.stringify(faktury.map((faktura) => ({
+            tenant_id: agent.tenant_id, organization_id: id, zdroj_databaza: body.databaza, pohoda_doklad_id: faktura.dokladId,
+            agenda: faktura.agenda, doklad_cislo: faktura.dokladCislo, partner_ico: faktura.partnerIco, partner_nazov: faktura.partnerNazov,
+            var_symbol: faktura.varSymbol, mena: faktura.mena, suma: faktura.suma, suma_mena: faktura.sumaMena,
+            zostatok: faktura.zostatok, zostatok_mena: faktura.zostatokMena, synced_at: syncedAt,
+          })))],
+        );
+      }
+      await tx.query(
+        `UPDATE pohoda_company_links SET open_invoices_sync_requested_at=NULL, updated_at=now()
+          WHERE organization_id=$1 AND tenant_id=$2 AND open_invoices_sync_requested_at IS NOT NULL`,
+        [id, agent.tenant_id],
+      );
+      await writeAudit(tx, {
+        tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
+        action: 'vzdat' in body ? 'agent.open_invoices_abandoned' : 'agent.open_invoices_synced', entityType: 'organization', entityId: id,
+        correlationId: request.id, metadata: 'vzdat' in body ? {} : { databaza: body.databaza, pocet: faktury.length },
+      });
+    });
+    await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);
+    return { ulozenych: faktury.length };
+  });
+
+  // Aktuálny zoznam neuhradených faktúr z POHODY pre párovanie platieb.
+  app.get('/api/organizations/:id/otvorene-faktury', async (request) => {
+    const auth = await requireBrowserAuth(request, database);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    await requireOrganizationAccess(database, auth, id);
+    // float8: pg vracia numeric aj bigint ako text, PGlite bigint ako číslo.
+    const result = await database.query(
+      `SELECT agenda, pohoda_doklad_id::float8 AS "pohodaDokladId", doklad_cislo AS "dokladCislo",
+              partner_ico AS "partnerIco", partner_nazov AS "partnerNazov", var_symbol AS "varSymbol", mena,
+              suma::float8 AS suma, suma_mena::float8 AS "sumaMena", zostatok::float8 AS zostatok,
+              zostatok_mena::float8 AS "zostatokMena", zdroj_databaza AS databaza, synced_at AS "synchronizovane"
+         FROM pohoda_otvorene_faktury WHERE tenant_id=$1 AND organization_id=$2
+        ORDER BY agenda, doklad_cislo, pohoda_doklad_id`,
+      [auth.tenantId, id],
+    );
+    return result.rows;
   });
 
   // Publikácia prenosu: overí manifest (všetky dávky, počet riadkov, stav
@@ -1039,63 +1116,42 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
     return { organizationId, ...body, matchedAt: new Date().toISOString(), matchRule };
   });
 
-  // „Synchronizovať mostíkom": web požiada o okamžitú synchronizáciu číselníkov,
-  // agent žiadosť vybaví pri najbližšom cykle (~30 s) mimo hodinového intervalu.
-  app.post('/api/mostik/organization-links/:organizationId/sync-code-lists', async (request, reply) => {
-    const auth = await requireBrowserAuth(request, database);
-    requireCsrf(request, auth);
-    requireRole(auth, ['admin', 'uctovnik']);
-    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
-    await requireOrganizationAccess(database, auth, organizationId);
-    const updated = await database.query(
-      `UPDATE pohoda_company_links SET code_list_sync_requested_at=now(), updated_at=now()
-        WHERE organization_id=$1 AND tenant_id=$2`,
-      [organizationId, auth.tenantId],
-    );
-    if (updated.rowCount === 0) {
-      throw new HttpError(404, 'mostik_link_missing', 'Organizácia nemá prepojenie na POHODU. Skontrolujte Nastavenia → Mostík.');
-    }
-    await writeAudit(database, {
-      tenantId: auth.tenantId,
-      organizationId,
-      actorType: 'user',
-      actorId: auth.userId,
-      action: 'mostik.code_list_sync_requested',
-      entityType: 'organization',
-      entityId: organizationId,
-      correlationId: request.id,
+  // Žiadosti pre agenta — vybaví ich pri najbližšom cykle (~30 s):
+  // - sync-code-lists: „Synchronizovať mostíkom", číselníky mimo hodinového intervalu,
+  // - sync-training: Tréning AI, agent stiahne históriu z POHODY (XML export, iba čítanie),
+  // - sync-open-invoices: neuhradené faktúry pre párovanie banky.
+  for (const [cesta, stlpec, akcia] of [
+    ['sync-code-lists', 'code_list_sync_requested_at', 'mostik.code_list_sync_requested'],
+    ['sync-training', 'training_sync_requested_at', 'mostik.training_sync_requested'],
+    ['sync-open-invoices', 'open_invoices_sync_requested_at', 'mostik.open_invoices_sync_requested'],
+  ] as const) {
+    app.post(`/api/mostik/organization-links/:organizationId/${cesta}`, async (request, reply) => {
+      const auth = await requireBrowserAuth(request, database);
+      requireCsrf(request, auth);
+      requireRole(auth, ['admin', 'uctovnik']);
+      const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
+      await requireOrganizationAccess(database, auth, organizationId);
+      const updated = await database.query(
+        `UPDATE pohoda_company_links SET ${stlpec}=now(), updated_at=now()
+          WHERE organization_id=$1 AND tenant_id=$2`,
+        [organizationId, auth.tenantId],
+      );
+      if (updated.rowCount === 0) {
+        throw new HttpError(404, 'mostik_link_missing', 'Organizácia nemá prepojenie na POHODU. Skontrolujte Nastavenia → Mostík.');
+      }
+      await writeAudit(database, {
+        tenantId: auth.tenantId,
+        organizationId,
+        actorType: 'user',
+        actorId: auth.userId,
+        action: akcia,
+        entityType: 'organization',
+        entityId: organizationId,
+        correlationId: request.id,
+      });
+      return reply.code(202).send({ requested: true });
     });
-    return reply.code(202).send({ requested: true });
-  });
-
-  // „Synchronizovať mostíkom" pre Tréning AI: agent stiahne prijaté faktúry
-  // z POHODY (XML export, iba čítanie) a naplní pamäť rozhodnutí.
-  app.post('/api/mostik/organization-links/:organizationId/sync-training', async (request, reply) => {
-    const auth = await requireBrowserAuth(request, database);
-    requireCsrf(request, auth);
-    requireRole(auth, ['admin', 'uctovnik']);
-    const { organizationId } = z.object({ organizationId: z.string().uuid() }).parse(request.params);
-    await requireOrganizationAccess(database, auth, organizationId);
-    const updated = await database.query(
-      `UPDATE pohoda_company_links SET training_sync_requested_at=now(), updated_at=now()
-        WHERE organization_id=$1 AND tenant_id=$2`,
-      [organizationId, auth.tenantId],
-    );
-    if (updated.rowCount === 0) {
-      throw new HttpError(404, 'mostik_link_missing', 'Organizácia nemá prepojenie na POHODU. Skontrolujte Nastavenia → Mostík.');
-    }
-    await writeAudit(database, {
-      tenantId: auth.tenantId,
-      organizationId,
-      actorType: 'user',
-      actorId: auth.userId,
-      action: 'mostik.training_sync_requested',
-      entityType: 'organization',
-      entityId: organizationId,
-      correlationId: request.id,
-    });
-    return reply.code(202).send({ requested: true });
-  });
+  }
 
   app.post('/api/mostik/export-jobs', async (request, reply) => {
     const auth = await requireBrowserAuth(request, database);

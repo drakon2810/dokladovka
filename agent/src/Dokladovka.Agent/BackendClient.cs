@@ -24,9 +24,12 @@ public sealed record AgentOrganization(
     bool SyncRequested = false,
     // Web požiadal o synchronizáciu histórie zaúčtovaní pre Tréning AI.
     bool TrainingSyncRequested = false,
-    // Protokol prenosu histórie. 2 = dávky do stagingu a jedna publikácia.
+    // Protokol prenosu histórie. 2 = dávky do stagingu a jedna publikácia,
+    // 3 = dávky nesú aj hlavičky dokladov s väzbami.
     // Starší server pole neposiela — agent ostane pri 1 a posiela to, čo pozná.
-    int HistoriaProtokol = 1);
+    int HistoriaProtokol = 1,
+    // Server žiada zoznam neuhradených faktúr (párovanie banky).
+    bool OpenInvoicesSyncRequested = false);
 public sealed record HeartbeatCompany(string Ico, string DbName, string UctovnyRok);
 // UcetMd/UcetDal: účty predkontácie z atribútov debit/credit (len kind=predkontacie).
 // PosledneCislo: najvyššie použité číslo číselného radu (topNumber z exportu POHODY) —
@@ -144,8 +147,17 @@ public sealed class BackendClient
     // prenos, opakovať ich pri každej dávke histórie by nemalo zmysel.
     // importId + davka (protokol 2): dávka ide len do stagingu a reset sa neposiela.
     // Null polia WhenWritingNull vynechá — protokol 1 posiela presne to, čo doteraz.
-    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, bool? reset, IReadOnlyList<PohodaXml.SeriesRow> series, Guid? importId, int? davka, CancellationToken cancellationToken) =>
-        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset, series, importId, davka }), cancellationToken);
+    // doklady (hlavičky s väzbami) len v protokole 3.
+    public Task<HistoryImportResult> UploadUctoHistoryAsync(string organizationId, IReadOnlyList<PohodaXml.HistoryRow> rows, bool? reset, IReadOnlyList<PohodaXml.SeriesRow> series, Guid? importId, int? davka, IReadOnlyList<PohodaXml.HistoryDoklad>? doklady, CancellationToken cancellationToken) =>
+        SendJsonAsync<HistoryImportResult>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/ucto-history", new { rows, reset, series, importId, davka, doklady }), cancellationToken);
+
+    /// <summary>Neuhradené faktúry — server nimi nahradí celý zoznam firmy.</summary>
+    public Task UploadOpenInvoicesAsync(string organizationId, string databaza, IReadOnlyList<PohodaXml.OpenInvoice> faktury, CancellationToken cancellationToken) =>
+        SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/open-invoices", new { databaza, faktury }), cancellationToken);
+
+    /// <summary>Vzdanie sa po opakovanom zlyhaní — server zmaže žiadosť a starý zoznam nechá.</summary>
+    public Task AbandonOpenInvoicesAsync(string organizationId, CancellationToken cancellationToken) =>
+        SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/open-invoices", new { vzdat = true }), cancellationToken);
 
     /// <summary>
     /// Účtovný denník — surová odpoveď POHODY. Rozoberá ju server (parseDennik),

@@ -40,9 +40,9 @@ const manifest = (stav = 'ok', rok?: number) => ({
 describe('prenos z Mostíka cez staging a publikáciu', () => {
   it('história: dávky čakajú v stagingu, publikácia vymení korpus len svojej databázy', async () => {
     const { app, headers, seeded, agent, publikuj, sql } = await priprav();
-    // Protokol vyjednáva server — Mostík 0.18 podľa neho posiela importId.
+    // Protokol vyjednáva server — Mostík 0.18 podľa neho posiela importId, 0.19 aj hlavičky dokladov.
     const organizacie = await app.inject({ method: 'GET', url: '/api/agent/organizations', headers });
-    expect(organizacie.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, historiaProtokol: 2 }));
+    expect(organizacie.json()).toContainEqual(expect.objectContaining({ organizationId: seeded.organizationId, historiaProtokol: 3 }));
     // Korpus ALPINY má ~22 000 riadkov; strop 20 000 telemetriu úspechu odmietal.
     const telemetria = await app.inject({
       method: 'POST', url: '/api/agent/sync-results', headers,
@@ -182,6 +182,124 @@ describe('prenos z Mostíka cez staging a publikáciu', () => {
     expect((await agent('PUT', 'ucto-history', { importId: starsi, davka: 1, rows: [] })).statusCode).toBe(409);
     expect((await publikuj(novsi, { druh: 'historia', davok: 1, pocet: 1, manifest: manifest() })).statusCode).toBe(200);
     expect(await zivy()).toEqual([{ line_text_normalized: 'novsi' }]);
+  }, 120_000);
+
+  it('hlavičky a väzby dokladov: publikácia ich vymení za svoju databázu a rok, starší protokol ich nechá', async () => {
+    const { agent, publikuj, sql } = await priprav();
+    const riadok = { agenda: 'FP', dokladCislo: 'FP26001', datum: '2026-02-01', lineText: 'Preprava', predkontaciaKod: '518/321', riadokIndex: 0, dokladId: 10 };
+    const dobropis = {
+      agenda: 'FP-D', dokladId: 10, dokladCislo: 'DF26001', datum: '2026-02-03', datumDane: '2026-01-31', datumUplatneniaDph: '2026-02-01',
+      externeCislo: 'CN-77', opravovanyDoklad: 'FA-2024-118', varSymbol: '2601', mena: 'CZK', kurz: 25.12, kurzMnozstvo: 1, sumaMena: -1236,
+      zakladZakladna: -40, dphZakladna: -9.2, sadzbaZakladna: 23, zaokruhlenie: 0.01,
+      vazby: [
+        { typ: 'link', druhaAgenda: 'receivedInvoice', druhyDokladId: 7, druhyDokladCislo: 'DF25007' },
+        { typ: 'liquidation', druhaAgenda: 'bank', druhyDokladId: 3301, druhyDokladCislo: 'BV26-015', likvidaciaId: 901, datum: '2026-02-20', suma: -49.19, sumaMena: -1236 },
+      ],
+    };
+    // Interný doklad s tým istým natívnym id je iná tabuľka POHODY, teda iný doklad.
+    const interny = { agenda: 'INT', dokladId: 10, dokladCislo: 'INT001', datumKvDph: '2026-02-01', vazby: [{ typ: 'manualLink', druhaAgenda: 'receivedInvoice', druhyDokladId: 7 }] };
+    const prenos = async (doklady: Array<Record<string, unknown>> | undefined, manifestPrenosu = manifest('ok', 2026)) => {
+      const importId = randomUUID();
+      expect((await agent('PUT', 'ucto-history', { importId, davka: 0, rows: [riadok], doklady })).statusCode).toBe(200);
+      // Doklad zopakovaný v ďalšej dávke sa uloží raz.
+      expect((await agent('PUT', 'ucto-history', { importId, davka: 1, rows: [], doklady: doklady?.slice(0, 1) })).statusCode).toBe(200);
+      return publikuj(importId, { druh: 'historia', davok: 2, pocet: 1, manifest: manifestPrenosu });
+    };
+    const hlavicky = () => sql(`SELECT zdroj_databaza, rok, tabulka, pohoda_doklad_id, agenda, datum_dane::text, datum_kv_dph::text, datum_uplatnenia_dph::text,
+        externe_cislo, opravovany_doklad, var_symbol, mena, kurz::float8, suma_mena::float8, dph_zakladna::float8, sadzba_zakladna::float8, zaokruhlenie::float8
+      FROM ucto_historia_doklady WHERE organization_id=$1 ORDER BY rok, tabulka`);
+    const vazby = () => sql(`SELECT rok, tabulka, poradie, typ, druha_agenda, druhy_doklad_id, druhy_doklad_cislo, likvidacia_id, datum::text, suma::float8, suma_mena::float8
+      FROM ucto_historia_vazby WHERE organization_id=$1 ORDER BY rok, tabulka, poradie`);
+
+    const prva = await prenos([dobropis, interny]);
+    expect(prva.statusCode, prva.body).toBe(200);
+    expect(prva.json()).toMatchObject({ imported: 1, doklady: { dokladov: 2, vazieb: 3 } });
+    const intDoc2026 = {
+      zdroj_databaza: DATABAZA, rok: 2026, tabulka: 'intDoc', pohoda_doklad_id: 10, agenda: 'INT', datum_dane: null, datum_kv_dph: '2026-02-01',
+      datum_uplatnenia_dph: null, externe_cislo: null, opravovany_doklad: null, var_symbol: null, mena: null, kurz: null, suma_mena: null,
+      dph_zakladna: null, sadzba_zakladna: null, zaokruhlenie: null,
+    };
+    const faktura2026 = {
+      zdroj_databaza: DATABAZA, rok: 2026, tabulka: 'invoice', pohoda_doklad_id: 10, agenda: 'FP-D', datum_dane: '2026-01-31', datum_kv_dph: null,
+      datum_uplatnenia_dph: '2026-02-01', externe_cislo: 'CN-77', opravovany_doklad: 'FA-2024-118', var_symbol: '2601', mena: 'CZK', kurz: 25.12,
+      suma_mena: -1236, dph_zakladna: -9.2, sadzba_zakladna: 23, zaokruhlenie: 0.01,
+    };
+    expect(await hlavicky()).toEqual([intDoc2026, faktura2026]);
+    expect(await vazby()).toEqual([
+      { rok: 2026, tabulka: 'intDoc', poradie: 0, typ: 'manualLink', druha_agenda: 'receivedInvoice', druhy_doklad_id: 7, druhy_doklad_cislo: null, likvidacia_id: null, datum: null, suma: null, suma_mena: null },
+      { rok: 2026, tabulka: 'invoice', poradie: 0, typ: 'link', druha_agenda: 'receivedInvoice', druhy_doklad_id: 7, druhy_doklad_cislo: 'DF25007', likvidacia_id: null, datum: null, suma: null, suma_mena: null },
+      { rok: 2026, tabulka: 'invoice', poradie: 1, typ: 'liquidation', druha_agenda: 'bank', druhy_doklad_id: 3301, druhy_doklad_cislo: 'BV26-015', likvidacia_id: 901, datum: '2026-02-20', suma: -49.19, suma_mena: -1236 },
+    ]);
+
+    // Opakovaný prenos (meno databázy inou veľkosťou písmen) nič nezdvojí a nesie
+    // aktuálny stav POHODY: nový kurz, likvidácia zrušená.
+    const opakovany = await prenos([{ ...dobropis, kurz: 25.2, vazby: dobropis.vazby.slice(0, 1) }, interny], { ...manifest('ok', 2026), databaza: DATABAZA.toLowerCase() });
+    expect(opakovany.statusCode, opakovany.body).toBe(200);
+    expect((await hlavicky()).map((row) => [row.tabulka, row.kurz])).toEqual([['intDoc', null], ['invoice', 25.2]]);
+    expect((await vazby()).map((row) => row.typ)).toEqual(['manualLink', 'link']);
+
+    // Mostík 0.18 (protokol 2) hlavičky neposiela — ostanú z posledného prenosu, ktorý ich niesol.
+    const stary = await prenos(undefined, manifest('ok', 2026));
+    expect(stary.statusCode, stary.body).toBe(200);
+    expect(stary.json()).not.toHaveProperty('doklady');
+    expect(await hlavicky()).toHaveLength(2);
+
+    // Databáza minulého roka s tým istým id je iný doklad; 2026 sa nedotkne.
+    const minuly = await prenos([dobropis], { ...manifest('ok', 2025), databaza: 'StwPh_12345678_2025' });
+    expect(minuly.statusCode, minuly.body).toBe(200);
+    expect((await hlavicky()).map((row) => [row.zdroj_databaza, row.rok, row.tabulka])).toEqual([
+      ['StwPh_12345678_2025', 2025, 'invoice'], [DATABAZA.toLowerCase(), 2026, 'intDoc'], [DATABAZA.toLowerCase(), 2026, 'invoice'],
+    ]);
+    expect(await vazby()).toHaveLength(4);
+
+    // Hlavičky sa kľúčujú rokom — manifest bez neho je neúplný a nič nezmení.
+    const bezRoka = await prenos([dobropis], manifest());
+    expect([bezRoka.statusCode, bezRoka.json().message]).toEqual([422, 'Prenos je neúplný: hlavičky dokladov bez roka databázy']);
+    expect(await hlavicky()).toHaveLength(3);
+  }, 120_000);
+
+  it('otvorené faktúry: žiadosť, prenos nahradí celý zoznam a čítanie pre párovanie', async () => {
+    const { app, browser, headers, seeded, agent } = await priprav();
+    const ziadost = async () => ((await app.inject({ method: 'GET', url: '/api/agent/organizations', headers })).json() as Array<Record<string, unknown>>)
+      .find((organizacia) => organizacia.organizationId === seeded.organizationId)?.openInvoicesSyncRequested;
+    expect(await ziadost()).toBe(false);
+    const poziadaj = await app.inject({ method: 'POST', url: `/api/mostik/organization-links/${seeded.organizationId}/sync-open-invoices`, headers: browser, payload: {} });
+    expect(poziadaj.statusCode, poziadaj.body).toBe(202);
+    expect(await ziadost()).toBe(true);
+
+    const faktura = (dokladId: number, zostatok: number) => ({
+      agenda: 'FP', dokladId, dokladCislo: `DF2600${dokladId}`, partnerIco: '12345678', partnerNazov: 'Dodavatel s.r.o.', varSymbol: `2600${dokladId}`, suma: 123, zostatok,
+    });
+    const dobropis = { agenda: 'FV-D', dokladId: 3, mena: 'CZK', sumaMena: -1000, zostatok: -40, zostatokMena: -1000 };
+    const prvy = await agent('PUT', 'open-invoices', { databaza: DATABAZA, faktury: [faktura(1, 123), faktura(2, 23.5), dobropis, faktura(2, 23.5)] });
+    expect([prvy.statusCode, prvy.json()]).toEqual([200, { ulozenych: 3 }]);
+    expect(await ziadost()).toBe(false);
+
+    const citaj = async () => (await app.inject({ method: 'GET', url: `/api/organizations/${seeded.organizationId}/otvorene-faktury`, headers: browser })).json();
+    const synchronizovane = expect.any(String);
+    expect(await citaj()).toEqual([
+      { ...faktura(1, 123), dokladId: undefined, pohodaDokladId: 1, mena: null, sumaMena: null, zostatokMena: null, databaza: DATABAZA, synchronizovane },
+      { ...faktura(2, 23.5), dokladId: undefined, pohodaDokladId: 2, mena: null, sumaMena: null, zostatokMena: null, databaza: DATABAZA, synchronizovane },
+      { ...dobropis, dokladId: undefined, pohodaDokladId: 3, dokladCislo: null, partnerIco: null, partnerNazov: null, varSymbol: null, suma: null, databaza: DATABAZA, synchronizovane },
+    ]);
+
+    // Ďalší prenos nahradí celý zoznam — uhradené faktúry zmiznú.
+    expect((await agent('PUT', 'open-invoices', { databaza: DATABAZA, faktury: [faktura(2, 10)] })).statusCode).toBe(200);
+    expect(await citaj()).toEqual([expect.objectContaining({ pohodaDokladId: 2, zostatok: 10 })]);
+
+    // Agent sa po opakovanom zlyhaní exportu vzdá: žiadosť zmizne, zoznam ostane.
+    await app.inject({ method: 'POST', url: `/api/mostik/organization-links/${seeded.organizationId}/sync-open-invoices`, headers: browser, payload: {} });
+    expect(await ziadost()).toBe(true);
+    const vzdane = await agent('PUT', 'open-invoices', { vzdat: true });
+    expect([vzdane.statusCode, vzdane.json()]).toEqual([200, { ulozenych: 0 }]);
+    expect(await ziadost()).toBe(false);
+    expect(await citaj()).toEqual([expect.objectContaining({ pohodaDokladId: 2, zostatok: 10 })]);
+    expect((await agent('PUT', 'open-invoices', { vzdat: true, databaza: DATABAZA, faktury: [] })).statusCode).toBe(400);
+    const telemetria = await app.inject({
+      method: 'POST', url: '/api/agent/sync-results', headers,
+      payload: { organizationId: seeded.organizationId, kind: 'otvoreneFaktury', state: 'ok', itemCount: 1, durationMs: 1 },
+    });
+    expect(telemetria.statusCode, telemetria.body).toBe(202);
   }, 120_000);
 
   it('pamäť: publikácia vymení importované rozhodnutia a vylúčenie dodávateľa ostane', async () => {

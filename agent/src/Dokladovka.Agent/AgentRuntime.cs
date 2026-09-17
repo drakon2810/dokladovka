@@ -24,6 +24,8 @@ public sealed class AgentCycleRunner
     // spúšťala celý export agendy (a POHODU v cli režime) donekonečna každý cyklus.
     private const int TrainingMaxAttempts = 3;
     private readonly Dictionary<string, int> _trainingSyncAttempts = new(StringComparer.Ordinal);
+    // Aj otvorené faktúry — po strope sa žiadosť na serveri zmaže a počítadlo vynuluje.
+    private readonly Dictionary<string, int> _openInvoicesAttempts = new(StringComparer.Ordinal);
 
     // handler: test podstrčí jeden HTTP handler cloudu aj mServeru a prejde celý cyklus bez siete.
     public AgentCycleRunner(AgentSettings settings, AgentSecrets secrets, IAgentLog log, HttpMessageHandler? handler = null)
@@ -91,10 +93,13 @@ public sealed class AgentCycleRunner
                 // v telemetrii — po opakovaných cykloch sa vzdá a žiadosť sa zmaže.
                 if (organization.TrainingSyncRequested)
                     await HandleTrainingSyncFailureAsync(organization.OrganizationId, "organization_unmatched", 0, cancellationToken);
+                if (organization.OpenInvoicesSyncRequested)
+                    await HandleOpenInvoicesFailureAsync(organization.OrganizationId, "organization_unmatched", 0, cancellationToken);
                 continue;
             }
             await TrySyncCodeListsAsync(organization, endpoint.Value, cancellationToken);
             if (organization.TrainingSyncRequested) await TrySyncTrainingAsync(organization, endpoint.Value, cancellationToken);
+            if (organization.OpenInvoicesSyncRequested) await TrySyncOpenInvoicesAsync(organization, endpoint.Value, cancellationToken);
             IReadOnlyList<AgentExportJob> jobs;
             try
             {
@@ -388,6 +393,42 @@ public sealed class AgentCycleRunner
         }
     }
 
+    /// <summary>
+    /// Neuhradené faktúry pre párovanie banky — na žiadosť servera, ktorú zmaže
+    /// až nahratie zoznamu. Neúplná odpoveď POHODY sa nenahráva vôbec (parser
+    /// spadne): server by ňou nahradil celý zoznam.
+    /// </summary>
+    private async Task TrySyncOpenInvoicesAsync(
+        AgentOrganization organization,
+        (MServerEndpointSettings Endpoint, MServerCompany Company) target,
+        CancellationToken cancellationToken)
+    {
+        // Strop dosiahnutý a vzdanie sa nevyšlo — export sa nespúšťa, skúša sa len zmazať žiadosť.
+        if (_openInvoicesAttempts.GetValueOrDefault(organization.OrganizationId) >= TrainingMaxAttempts)
+        {
+            await HandleOpenInvoicesFailureAsync(organization.OrganizationId, "max_attempts", 0, cancellationToken);
+            return;
+        }
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var requestXml = PohodaXml.BuildOpenInvoicesRequest(organization.Ico, $"faktury-{organization.OrganizationId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+            var errors = _validator.ValidateDataPack(requestXml);
+            if (errors.Count > 0) throw new InvalidOperationException("XSD validácia požiadavky otvorených faktúr zlyhala: " + string.Join("; ", errors.Take(5)));
+            var response = await _mServers[target.Endpoint.Id].PostXmlAsync(requestXml, $"faktury-{organization.OrganizationId}", false, cancellationToken);
+            var faktury = PohodaXml.ParseOpenInvoices(response);
+            await _backend.UploadOpenInvoicesAsync(organization.OrganizationId, target.Company.DatabaseName, faktury, cancellationToken);
+            _openInvoicesAttempts.Remove(organization.OrganizationId);
+            await TrySendSyncResultAsync(new AgentSyncResult(organization.OrganizationId, "otvoreneFaktury", "ok", faktury.Count, (int)stopwatch.ElapsedMilliseconds), cancellationToken, organization.HistoriaProtokol);
+            _log.Info("open_invoices_synced", new { organization.OrganizationId, faktury.Count, durationMs = stopwatch.ElapsedMilliseconds });
+        }
+        catch (Exception error)
+        {
+            _log.Error("open_invoices_sync_failed", error, new { organization.OrganizationId, target.Endpoint.Id });
+            await HandleOpenInvoicesFailureAsync(organization.OrganizationId, error.GetType().Name, (int)stopwatch.ElapsedMilliseconds, cancellationToken);
+        }
+    }
+
     /// <summary>Pamäť dodávateľov z prijatých faktúr — prvá časť tréningovej synchronizácie.</summary>
     private async Task<(int Riadkov, int Varovani, int Imported, int Duplicates, int Rejected)> SyncPamatAsync(
         AgentOrganization organization,
@@ -540,9 +581,11 @@ public sealed class AgentCycleRunner
         // do telemetrie. V protokole 2 publikáciu odmietne server.
         var chybaAgendy = parsed.Agendy.FirstOrDefault(agenda => agenda.Stav != "ok") is { } zla
             ? $"agenda:{zla.Agenda ?? zla.Poziadavka}:{zla.Stav}" : null;
+        // Hlavičky dokladov s väzbami pozná len server s protokolom 3 (strict schéma).
+        var doklady = organization.HistoriaProtokol >= 3 ? parsed.Doklady : null;
         // Aj prenos bez použiteľných riadkov korpusu môže niesť číselné rady —
         // rad z dokladu je jediná cesta k radom, ktoré POHODA do číselníka nedá.
-        if (parsed.Rows.Count == 0 && parsed.Series.Count == 0)
+        if (parsed.Rows.Count == 0 && parsed.Series.Count == 0 && (doklady?.Count ?? 0) == 0)
         {
             _log.Info("ucto_history_empty", new { organization.OrganizationId, warnings = parsed.Warnings.Count });
             if (chybaAgendy is not null) throw new NeuplnyExportException(chybaAgendy);
@@ -552,27 +595,28 @@ public sealed class AgentCycleRunner
         var importId = Guid.NewGuid();
         var imported = 0;
         var duplicates = 0;
-        // Dávky po 2 000 riadkov — server berie najviac 20 000 na požiadavku
-        // a bodyLimit je 30 MB; história býva rádovo väčšia než pamäť.
+        // Dávky po 2 000 riadkov a 2 000 hlavičiek — server berie najviac 20 000
+        // na požiadavku a bodyLimit je 30 MB; história býva rádovo väčšia než pamäť.
         // Bez riadkov korpusu treba aj tak jednu dávku — nesie číselné rady.
-        var davky = parsed.Rows.Count > 0
-            ? parsed.Rows.Chunk(2000).ToArray()
-            : new[] { Array.Empty<PohodaXml.HistoryRow>() };
-        for (var davka = 0; davka < davky.Length; davka++)
+        const int velkostDavky = 2000;
+        var davok = Math.Max(1, (Math.Max(parsed.Rows.Count, doklady?.Count ?? 0) + velkostDavky - 1) / velkostDavky);
+        for (var davka = 0; davka < davok; davka++)
         {
+            var rows = parsed.Rows.Skip(davka * velkostDavky).Take(velkostDavky).ToArray();
             // Rady idú len s prvou dávkou.
             var series = davka == 0 ? parsed.Series : Array.Empty<PohodaXml.SeriesRow>();
             if (protokol2)
             {
-                await _backend.UploadUctoHistoryAsync(organization.OrganizationId, davky[davka], null, series, importId, davka, cancellationToken);
+                await _backend.UploadUctoHistoryAsync(organization.OrganizationId, rows, null, series, importId, davka,
+                    doklady?.Skip(davka * velkostDavky).Take(velkostDavky).ToArray(), cancellationToken);
                 continue;
             }
             // Prvá dávka nesie reset — server korpus zahodí a postaví z tohto
             // prenosu. Až potom sa dávky pripájajú. Natívne id starý server
             // (strict schéma) nepozná, preto sa neposielajú.
             var result = await _backend.UploadUctoHistoryAsync(
-                organization.OrganizationId, davky[davka].Select(row => row with { DokladId = null, PolozkaId = null }).ToArray(),
-                davka == 0, series, null, null, cancellationToken);
+                organization.OrganizationId, rows.Select(row => row with { DokladId = null, PolozkaId = null }).ToArray(),
+                davka == 0, series, null, null, null, cancellationToken);
             imported += result.Imported;
             duplicates += result.Duplicates;
         }
@@ -581,7 +625,7 @@ public sealed class AgentCycleRunner
             try
             {
                 var publikovane = await _backend.PublishImportAsync(
-                    organization.OrganizationId, importId, "historia", davky.Length, parsed.Rows.Count,
+                    organization.OrganizationId, importId, "historia", davok, parsed.Rows.Count,
                     new ImportManifest(target.Company.DatabaseName, RokDatabazy(target), parsed.ProgramVersion, parsed.Kluc, parsed.Agendy),
                     cancellationToken);
                 (imported, duplicates) = (publikovane.Imported, publikovane.Duplicates);
@@ -602,28 +646,38 @@ public sealed class AgentCycleRunner
     // Zlyhanie tréningovej synchronizácie: telemetria + počítadlo pokusov. Po
     // TrainingMaxAttempts sa žiadosť vzdá (prázdny upload s done=true ju zmaže),
     // aby trvalá chyba nespúšťala celý export agendy donekonečna.
-    private async Task HandleTrainingSyncFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken)
+    // Prázdny prenos iba uzatvára žiadosť — pamäť sa nemaže.
+    private Task HandleTrainingSyncFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken) =>
+        HandleSyncFailureAsync("treningAi", _trainingSyncAttempts, organizationId, errorCode, durationMs,
+            () => _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, null, null, cancellationToken), cancellationToken);
+
+    // Otvorené faktúry rovnako: vzdanie sa žiadosť zmaže bez nahradenia zoznamu,
+    // takže nová žiadosť z webu začne od nuly a nečaká na reštart služby.
+    private Task HandleOpenInvoicesFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken) =>
+        HandleSyncFailureAsync("otvoreneFaktury", _openInvoicesAttempts, organizationId, errorCode, durationMs,
+            () => _backend.AbandonOpenInvoicesAsync(organizationId, cancellationToken), cancellationToken);
+
+    private async Task HandleSyncFailureAsync(string kind, Dictionary<string, int> pokusy, string organizationId, string errorCode, int durationMs, Func<Task> vzdatSa, CancellationToken cancellationToken)
     {
-        await TrySendSyncResultAsync(new AgentSyncResult(organizationId, "treningAi", "error", 0, durationMs, errorCode), cancellationToken);
-        var attempts = _trainingSyncAttempts.GetValueOrDefault(organizationId) + 1;
+        await TrySendSyncResultAsync(new AgentSyncResult(organizationId, kind, "error", 0, durationMs, errorCode), cancellationToken);
+        var attempts = pokusy.GetValueOrDefault(organizationId) + 1;
         if (attempts < TrainingMaxAttempts)
         {
-            _trainingSyncAttempts[organizationId] = attempts;
+            pokusy[organizationId] = attempts;
             return;
         }
         try
         {
-            // Prázdny prenos iba uzatvára žiadosť — pamäť sa nemaže.
-            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, null, null, cancellationToken);
-            _trainingSyncAttempts.Remove(organizationId);
-            _log.Info("training_sync_abandoned", new { organizationId, attempts, errorCode });
+            await vzdatSa();
+            pokusy.Remove(organizationId);
+            _log.Info("sync_request_abandoned", new { organizationId, kind, attempts, errorCode });
         }
         catch (Exception error)
         {
             // Zmazanie žiadosti sa nepodarilo — počítadlo ostáva na strope, ďalší
             // cyklus skúsi iba lacné zmazanie, export POHODY sa už nespúšťa.
-            _trainingSyncAttempts[organizationId] = attempts;
-            _log.Error("training_sync_abandon_failed", error, new { organizationId });
+            pokusy[organizationId] = attempts;
+            _log.Error("sync_request_abandon_failed", error, new { organizationId, kind });
         }
     }
 
