@@ -80,7 +80,7 @@ import {
 import './sourceHighlight.css';
 import { AssistantPanel } from '../assistant/AssistantPanel';
 import { pouziNavrhNaPolozky } from './ItemsSection';
-import { popisBehu, type EtapaBehu } from './behDokladu';
+import { popisBehu, prebiehaSpracovanie, type EtapaBehu } from './behDokladu';
 import { danovaKontrolaBrzdi } from './predvyplnenie';
 import {
   createMostikExportJob,
@@ -343,8 +343,15 @@ export function DocumentDetailPage() {
   const { data, loading, error } = useDataQuery();
 
   const sourceDocument = data?.documents.find((item) => item.id === id);
+  // Krok pipeline, ktorý na doklade ešte beží. Berie sa zo snapshotu, NIE
+  // z konceptu: koncept sa obnovuje podľa id a verzie dokladu, a dokončená
+  // extrakcia verziu nezvyšuje — čakanie by tak nikdy neskončilo.
+  const beziKrok = sourceDocument ? prebiehaSpracovanie(sourceDocument) : undefined;
+  const otvoritelny = Boolean(sourceDocument) && !beziKrok;
   // Jediné miesto, cez ktoré vedie otvorenie dokladu — zoznam sem naviguje.
-  useEffect(() => { if (id) oznacPrecitany(id); }, [id]);
+  // Za prečítaný sa počíta až doklad, ktorý sa naozaj otvoril: kto len narazil
+  // na čakanie, by inak prišiel o zvýraznenie „NOVÉ" a doklad by mu ušiel.
+  useEffect(() => { if (id && otvoritelny) oznacPrecitany(id); }, [id, otvoritelny]);
   const organization = data?.organizations.find((item) => item.id === sourceDocument?.orgId);
   const role = data?.role ?? 'uctovnik';
   const [draft, setDraft] = useState<DocumentItem>();
@@ -812,6 +819,25 @@ export function DocumentDetailPage() {
   }
   if (error) {
     return <p className="text-sm text-red-700">{t('chyba.vseobecna')}</p>;
+  }
+  // Zadaná adresa editor neotvorí o nič skôr než zoznam: kým na doklade beží
+  // krok pipeline, vykreslí sa čakanie. Otvorí sa samo — snapshot sa ťahá
+  // každých päť sekúnd a táto podmienka sa s ním prepočíta.
+  if (beziKrok) {
+    return (
+      <div className="space-y-3" role="status" aria-live="polite">
+        <p className="inline-flex items-center gap-2 text-sm font-semibold text-ink">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-600" aria-hidden />
+          {t('detail.caka.titulok')}
+        </p>
+        <p className="text-sm text-ink-soft">
+          {t(beziKrok === 'zauctovanie' ? 'detail.caka.zauctovanie' : 'detail.caka.extrakcia')}
+        </p>
+        <Link className="btn" to={`/doklady${location.search}`}>
+          {t('detail.spat')}
+        </Link>
+      </div>
+    );
   }
   if (!data || !draft || !organization) {
     return (

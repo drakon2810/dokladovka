@@ -26,6 +26,7 @@ import { t, type SkKey } from '../../i18n/sk';
 import { formatDate, formatMoney } from '../../lib/format';
 import { UploadModal } from './UploadModal';
 import { oznacPrecitane, poslednaNavsteva, usePrecitane, zapisNavstevu } from './precitane';
+import { jeNeklasifikovany, prebiehaSpracovanie } from './behDokladu';
 import { ExportPohodaModal } from './ExportPohodaModal';
 
 const PaymentQrModal = lazy(() =>
@@ -127,12 +128,24 @@ function AiChip({ value }: { value: number }) {
 }
 
 function ProcessingCell({ document, manualLabel }: { document: DocumentItem; manualLabel?: string }) {
+  // Rozrobený doklad ide prvý — pred ručným pôvodom, chybou aj „Dokončené".
+  // Ručne nahratý súbor má počas extrakcie istotu 0, takže tu hlásil „Nahrané
+  // bez AI extrakcie", hoci na ňom AI práve bežala; doklad s hotovou extrakciou
+  // a novým návrhom vo fronte hlásil zelené „Dokončené"; a dočasná chyba
+  // červenú, hoci sa doklad ešte prepíše.
+  const bezi = prebiehaSpracovanie(document);
+  if (bezi) {
+    return (
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-sky-700">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-600" aria-hidden />
+        {bezi === 'zauctovanie' ? t('processing.navrh') : t(`processing.${document.processingStatus}`)}
+      </span>
+    );
+  }
   if (manualLabel) {
     return <span className="whitespace-nowrap text-[12px] text-ink-faint">{manualLabel}</span>;
   }
-  const isError = document.processingStatus.startsWith('failed');
-  const isDone = document.processingStatus === 'ready_for_review';
-  if (isError) {
+  if (document.processingStatus.startsWith('failed')) {
     return (
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] font-medium text-red-700">
         <span className="text-red-600"><IcAlert /></span>
@@ -140,18 +153,10 @@ function ProcessingCell({ document, manualLabel }: { document: DocumentItem; man
       </span>
     );
   }
-  if (isDone) {
-    return (
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-ink-soft">
-        <span className="text-accent"><IcCheck /></span>
-        {t('doklady.spracovanie.dokoncene')}
-      </span>
-    );
-  }
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-sky-700">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-600" aria-hidden />
-      {t(`processing.${document.processingStatus}`)}
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-ink-soft">
+      <span className="text-accent"><IcCheck /></span>
+      {t('doklady.spracovanie.dokoncene')}
     </span>
   );
 }
@@ -1154,25 +1159,32 @@ export function DocumentsPage() {
                     const isKos = activeTab === 'kos';
                     const novy = jeNovy(document);
                     const payable = document.typ !== 'BV';
+                    // Kým na doklade beží krok pipeline, riadok nie je odkaz: ani
+                    // kliknutím, ani Enterom, ani z tab-poradia. Vlastník takto
+                    // otvoril doklad uprostred behu AI a údaje sa mu menili pod
+                    // rukami — a TYP hlásil FP na neklasifikovanom doklade.
+                    const bezi = prebiehaSpracovanie(document);
                     const rowLabel = [
                       showOrganization ? organization?.nazov : null,
                       document.extracted.dodavatel.nazov,
-                      document.typ,
+                      jeNeklasifikovany(document) ? t('typ.neklasifikovany.dlhy') : document.typ,
                       formatMoney(document.extracted.sumaSpolu, document.extracted.mena),
                       t(`status.${document.status}`),
                       overdue ? t('doklady.poSplatnosti') : null,
+                      bezi ? t('doklady.spracovanie.nedaSaOtvorit') : null,
                     ]
                       .filter(Boolean)
                       .join(', ');
                     return (
                       <div
                         key={document.id}
-                        role="link"
+                        role={bezi ? undefined : 'link'}
                         aria-label={rowLabel}
-                        tabIndex={0}
-                        className={`group relative cursor-pointer border-b border-line-soft text-[13px] text-ink transition last:border-0 hover:bg-[#F7F9F7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${
-                          novy ? 'border-l-[3px] border-l-accent' : 'border-l-[3px] border-l-transparent'
-                        }`}
+                        aria-disabled={bezi ? true : undefined}
+                        tabIndex={bezi ? undefined : 0}
+                        className={`group relative border-b border-line-soft text-[13px] text-ink transition last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ${
+                          bezi ? 'cursor-default' : 'cursor-pointer hover:bg-[#F7F9F7]'
+                        } ${novy ? 'border-l-[3px] border-l-accent' : 'border-l-[3px] border-l-transparent'}`}
                         style={{
                           display: 'grid',
                           gridTemplateColumns: gridTemplate,
@@ -1182,8 +1194,8 @@ export function DocumentsPage() {
                           opacity: exitingId === document.id ? 0.4 : 1,
                           pointerEvents: exitingId === document.id ? 'none' : undefined,
                         }}
-                        onClick={() => navigate(detailHref(document.id))}
-                        onKeyDown={(event) => {
+                        onClick={bezi ? undefined : () => navigate(detailHref(document.id))}
+                        onKeyDown={bezi ? undefined : (event) => {
                           if (event.currentTarget === event.target && (event.key === 'Enter' || event.key === ' ')) {
                             event.preventDefault();
                             navigate(detailHref(document.id));
@@ -1211,7 +1223,7 @@ export function DocumentsPage() {
                             <span className="truncate font-medium">{organization?.nazov ?? '—'}</span>
                           </span>
                         )}
-                        <span><TypBadge typ={document.typ} /></span>
+                        <span><TypBadge typ={jeNeklasifikovany(document) ? undefined : document.typ} /></span>
                         <span className="min-w-0">
                           <span className="flex min-w-0 items-center gap-1.5">
                             {novy && <span className="h-2 w-2 shrink-0 rounded-full bg-[#16A37B]" aria-hidden />}
@@ -1322,11 +1334,13 @@ export function DocumentsPage() {
                           className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1.5 pl-10 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
                           style={{ background: 'linear-gradient(90deg,transparent,#F7F9F7 32%)' }}
                         >
+                          {/* Rozrobený doklad sa neotvorí ani touto skratkou. */}
                           <button
                             type="button"
-                            className="grid h-[30px] w-[30px] place-items-center rounded-lg border border-line bg-surface text-ink-soft transition hover:-translate-y-px hover:border-accent hover:bg-tint hover:text-accent-hover"
-                            title={t('doklady.akcia.otvorit')}
-                            aria-label={t('doklady.akcia.otvorit')}
+                            disabled={Boolean(bezi)}
+                            className="grid h-[30px] w-[30px] place-items-center rounded-lg border border-line bg-surface text-ink-soft transition hover:-translate-y-px hover:border-accent hover:bg-tint hover:text-accent-hover disabled:cursor-default disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:border-line disabled:hover:bg-surface disabled:hover:text-ink-soft"
+                            title={bezi ? t('doklady.spracovanie.nedaSaOtvorit') : t('doklady.akcia.otvorit')}
+                            aria-label={bezi ? t('doklady.spracovanie.nedaSaOtvorit') : t('doklady.akcia.otvorit')}
                             onClick={(event) => {
                               event.stopPropagation();
                               navigate(detailHref(document.id));

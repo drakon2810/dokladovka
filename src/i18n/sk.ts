@@ -337,6 +337,11 @@ export const sk = {
   'typ.MZDY.dlhy': 'Interný doklad',
   'typ.OZ.dlhy': 'Ostatný záväzok',
   'typ.PD.dlhy': 'Pokladničný doklad',
+  // Nový doklad vzniká so zástupným 'FP' (stĺpec je NOT NULL) — kým ho AI
+  // neklasifikuje, zoznam nemá čo tvrdiť. Stĺpec TYP je široký 40 px, takže
+  // vidieť je pomlčku a veta stojí v tooltipe.
+  'typ.neklasifikovany': '—',
+  'typ.neklasifikovany.dlhy': 'Typ dokladu zatiaľ neurčený — AI doklad ešte neklasifikovala',
 
   // ===== Stavy dokladov =====
   'status.novy': 'Nový',
@@ -358,6 +363,7 @@ export const sk = {
   'processing.ready_for_review': 'AI extrakcia dokončená',
   'processing.failed_retryable': 'Dočasná chyba spracovania',
   'processing.failed_permanent': 'Trvalá chyba spracovania',
+  'processing.navrh': 'Návrh zaúčtovania prebieha',
   'processing.label': 'Spracovanie',
   'processing.manual': 'Ručne vytvorený koncept',
   'processing.upload': 'Nahrané bez AI extrakcie',
@@ -484,6 +490,10 @@ export const sk = {
   // ===== Detail dokladu =====
   'detail.titulok': 'Detail dokladu',
   'detail.spat': 'Späť na doklady',
+  // Editor sa na rozrobenom doklade neotvorí vôbec — ani po zadaní adresy.
+  'detail.caka.titulok': 'Doklad sa ešte spracúva',
+  'detail.caka.extrakcia': 'AI z dokladu vyťahuje údaje. Otvorí sa sám, keď bude hotový.',
+  'detail.caka.zauctovanie': 'AI pripravuje návrh zaúčtovania. Doklad sa otvorí sám, keď bude hotový.',
   'detail.predchadzajuci': 'Predchádzajúci',
   'detail.nasledujuci': 'Nasledujúci',
   'detail.stiahnutPdf': 'Stiahnuť PDF',
@@ -1413,6 +1423,7 @@ export const sk = {
   'doklady.ai.tooltip': 'Klikni pre kontrolu polí extrakcie',
   'doklady.spracovanie.dokoncene': 'Dokončené',
   'doklady.spracovanie.chybaExtrakcie': 'Chyba extrakcie',
+  'doklady.spracovanie.nedaSaOtvorit': 'Doklad sa dá otvoriť až po dokončení spracovania',
   'doklady.nove.pas': 'nové doklady od poslednej návštevy',
   'doklady.nove.popis': 'Neotvorené faktúry sú zvýraznené a zoradené navrchu.',
   'doklady.nove.oznacit': 'Označiť všetky ako prečítané',

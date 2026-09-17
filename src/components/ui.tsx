@@ -69,15 +69,24 @@ export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
   );
 }
 
-export function TypBadge({ typ }: { typ: DocumentType }) {
+/**
+ * Skratka typu dokladu. `typ` je zámerne povinný, ale smie byť `undefined` —
+ * doklad, ktorý AI ešte neklasifikovala, nemá čo tvrdiť. Zástupné 'FP' zo
+ * zakladajúceho INSERT-u sa vlastníkovi ukázalo ako hotový typ na doklade,
+ * ktorý sa ešte spracúval; prerušovaný rámček povie, že hodnota len chýba.
+ */
+export function TypBadge({ typ }: { typ: DocumentType | undefined }) {
+  const kluc = typ ?? 'neklasifikovany';
   return (
     <span
-      className="tnum inline-flex items-center rounded-md border border-line bg-app px-2 py-0.5 text-xs font-semibold text-ink-soft"
-      title={t(`typ.${typ}.dlhy` as SkKey)}
+      className={`tnum inline-flex items-center rounded-md border bg-app px-2 py-0.5 text-xs font-semibold ${
+        typ ? 'border-line text-ink-soft' : 'border-dashed border-line text-ink-mute'
+      }`}
+      title={t(`typ.${kluc}.dlhy` as SkKey)}
     >
       {/* Skratka je jazykový reťazec, nie kód z databázy — MZDY sa účtovníkovi
           ukazuje ako INT (interný doklad v POHODE). */}
-      {t(`typ.${typ}` as SkKey)}
+      {t(`typ.${kluc}` as SkKey)}
     </span>
   );
 }

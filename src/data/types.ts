@@ -545,6 +545,14 @@ export interface DocumentItem {
   podtyp?: DocumentPodtyp;
   status: DocumentStatus;
   processingStatus: ProcessingStatus;
+  /**
+   * Krok, ktorý na doklade EŠTE BEŽÍ — čakajúci alebo bežiaci processing_jobs
+   * riadok (prázdne = na doklade už nikto nerobí). Samotný processingStatus na
+   * to nestačí: doklad s hotovou extrakciou (`ready_for_review`) môže mať vo
+   * fronte nový návrh zaúčtovania po zmene druhu, a naopak doklad s čakajúcim
+   * jobom ešte nemusí mať riadok v extraction_runs.
+   */
+  prebiehajuciKrok?: 'extrakcia' | 'zauctovanie';
   /** Seed URL; ručne nahrané súbory sa načítajú cez zdroj.localFileKey. */
   pdfUrl: string;
   prijateDna: string; // ISO — kedy prišiel e-mail
