@@ -24,7 +24,7 @@ public sealed class AgentCycleRunner
     // spúšťala celý export agendy (a POHODU v cli režime) donekonečna každý cyklus.
     private const int TrainingMaxAttempts = 3;
     private readonly Dictionary<string, int> _trainingSyncAttempts = new(StringComparer.Ordinal);
-    // ponytail: aj otvorené faktúry — po strope žiadosť čaká do reštartu služby.
+    // Aj otvorené faktúry — po strope sa žiadosť na serveri zmaže a počítadlo vynuluje.
     private readonly Dictionary<string, int> _openInvoicesAttempts = new(StringComparer.Ordinal);
 
     // handler: test podstrčí jeden HTTP handler cloudu aj mServeru a prejde celý cyklus bez siete.
@@ -93,6 +93,8 @@ public sealed class AgentCycleRunner
                 // v telemetrii — po opakovaných cykloch sa vzdá a žiadosť sa zmaže.
                 if (organization.TrainingSyncRequested)
                     await HandleTrainingSyncFailureAsync(organization.OrganizationId, "organization_unmatched", 0, cancellationToken);
+                if (organization.OpenInvoicesSyncRequested)
+                    await HandleOpenInvoicesFailureAsync(organization.OrganizationId, "organization_unmatched", 0, cancellationToken);
                 continue;
             }
             await TrySyncCodeListsAsync(organization, endpoint.Value, cancellationToken);
@@ -401,7 +403,12 @@ public sealed class AgentCycleRunner
         (MServerEndpointSettings Endpoint, MServerCompany Company) target,
         CancellationToken cancellationToken)
     {
-        if (_openInvoicesAttempts.GetValueOrDefault(organization.OrganizationId) >= TrainingMaxAttempts) return;
+        // Strop dosiahnutý a vzdanie sa nevyšlo — export sa nespúšťa, skúša sa len zmazať žiadosť.
+        if (_openInvoicesAttempts.GetValueOrDefault(organization.OrganizationId) >= TrainingMaxAttempts)
+        {
+            await HandleOpenInvoicesFailureAsync(organization.OrganizationId, "max_attempts", 0, cancellationToken);
+            return;
+        }
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -417,9 +424,8 @@ public sealed class AgentCycleRunner
         }
         catch (Exception error)
         {
-            _openInvoicesAttempts[organization.OrganizationId] = _openInvoicesAttempts.GetValueOrDefault(organization.OrganizationId) + 1;
             _log.Error("open_invoices_sync_failed", error, new { organization.OrganizationId, target.Endpoint.Id });
-            await TrySendSyncResultAsync(new AgentSyncResult(organization.OrganizationId, "otvoreneFaktury", "error", 0, (int)stopwatch.ElapsedMilliseconds, error.GetType().Name), cancellationToken);
+            await HandleOpenInvoicesFailureAsync(organization.OrganizationId, error.GetType().Name, (int)stopwatch.ElapsedMilliseconds, cancellationToken);
         }
     }
 
@@ -640,28 +646,38 @@ public sealed class AgentCycleRunner
     // Zlyhanie tréningovej synchronizácie: telemetria + počítadlo pokusov. Po
     // TrainingMaxAttempts sa žiadosť vzdá (prázdny upload s done=true ju zmaže),
     // aby trvalá chyba nespúšťala celý export agendy donekonečna.
-    private async Task HandleTrainingSyncFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken)
+    // Prázdny prenos iba uzatvára žiadosť — pamäť sa nemaže.
+    private Task HandleTrainingSyncFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken) =>
+        HandleSyncFailureAsync("treningAi", _trainingSyncAttempts, organizationId, errorCode, durationMs,
+            () => _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, null, null, cancellationToken), cancellationToken);
+
+    // Otvorené faktúry rovnako: vzdanie sa žiadosť zmaže bez nahradenia zoznamu,
+    // takže nová žiadosť z webu začne od nuly a nečaká na reštart služby.
+    private Task HandleOpenInvoicesFailureAsync(string organizationId, string errorCode, int durationMs, CancellationToken cancellationToken) =>
+        HandleSyncFailureAsync("otvoreneFaktury", _openInvoicesAttempts, organizationId, errorCode, durationMs,
+            () => _backend.AbandonOpenInvoicesAsync(organizationId, cancellationToken), cancellationToken);
+
+    private async Task HandleSyncFailureAsync(string kind, Dictionary<string, int> pokusy, string organizationId, string errorCode, int durationMs, Func<Task> vzdatSa, CancellationToken cancellationToken)
     {
-        await TrySendSyncResultAsync(new AgentSyncResult(organizationId, "treningAi", "error", 0, durationMs, errorCode), cancellationToken);
-        var attempts = _trainingSyncAttempts.GetValueOrDefault(organizationId) + 1;
+        await TrySendSyncResultAsync(new AgentSyncResult(organizationId, kind, "error", 0, durationMs, errorCode), cancellationToken);
+        var attempts = pokusy.GetValueOrDefault(organizationId) + 1;
         if (attempts < TrainingMaxAttempts)
         {
-            _trainingSyncAttempts[organizationId] = attempts;
+            pokusy[organizationId] = attempts;
             return;
         }
         try
         {
-            // Prázdny prenos iba uzatvára žiadosť — pamäť sa nemaže.
-            await _backend.UploadTrainingDecisionsAsync(organizationId, Array.Empty<TrainingDecision>(), true, false, null, null, cancellationToken);
-            _trainingSyncAttempts.Remove(organizationId);
-            _log.Info("training_sync_abandoned", new { organizationId, attempts, errorCode });
+            await vzdatSa();
+            pokusy.Remove(organizationId);
+            _log.Info("sync_request_abandoned", new { organizationId, kind, attempts, errorCode });
         }
         catch (Exception error)
         {
             // Zmazanie žiadosti sa nepodarilo — počítadlo ostáva na strope, ďalší
             // cyklus skúsi iba lacné zmazanie, export POHODY sa už nespúšťa.
-            _trainingSyncAttempts[organizationId] = attempts;
-            _log.Error("training_sync_abandon_failed", error, new { organizationId });
+            pokusy[organizationId] = attempts;
+            _log.Error("sync_request_abandon_failed", error, new { organizationId, kind });
         }
     }
 

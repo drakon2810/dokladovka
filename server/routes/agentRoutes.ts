@@ -610,13 +610,14 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
 
   // Neuhradené faktúry pre párovanie banky. Agent ich stiahne na žiadosť
   // (sync-open-invoices) a neúplnú odpoveď POHODY nepošle vôbec, takže zoznam
-  // firmy sa tu nahradí celý a žiadosť je vybavená.
+  // firmy sa tu nahradí celý a žiadosť je vybavená. Po opakovanom zlyhaní
+  // exportu pošle { vzdat: true } — žiadosť sa zmaže a starý zoznam ostane.
   app.put('/api/agent/organizations/:id/open-invoices', { bodyLimit: 30 * 1024 * 1024 }, async (request) => {
     const agent = await requireAgent(request, database);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const text = z.string().trim().max(300).optional();
     const suma = z.number().finite().optional();
-    const body = z.object({
+    const body = z.union([z.object({ vzdat: z.literal(true) }).strict(), z.object({
       databaza: z.string().trim().min(1).max(255),
       faktury: z.array(z.object({
         agenda: z.string().trim().min(1).max(10),
@@ -625,24 +626,26 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
         mena: z.string().trim().max(10).optional(),
         suma, sumaMena: suma, zostatok: suma, zostatokMena: suma,
       }).strict()).max(20_000),
-    }).strict().parse(request.body);
+    }).strict()]).parse(request.body);
     const organization = await database.query(
       'SELECT 1 FROM organizations WHERE id=$1 AND tenant_id=$2 AND archived=false', [id, agent.tenant_id]);
     if (organization.rowCount === 0) throw new HttpError(404, 'organization_not_found', 'Organizácia neexistuje');
     const syncedAt = new Date().toISOString();
     // Faktúra dvakrát v odpovedi sa uloží raz.
-    const faktury = [...new Map(body.faktury.map((faktura) => [faktura.dokladId, faktura])).values()];
+    const faktury = 'vzdat' in body ? [] : [...new Map(body.faktury.map((faktura) => [faktura.dokladId, faktura])).values()];
     await database.transaction(async (tx) => {
-      await tx.query('DELETE FROM pohoda_otvorene_faktury WHERE tenant_id=$1 AND organization_id=$2', [agent.tenant_id, id]);
-      await tx.query(
-        'INSERT INTO pohoda_otvorene_faktury SELECT * FROM jsonb_populate_recordset(null::pohoda_otvorene_faktury, $1::jsonb)',
-        [JSON.stringify(faktury.map((faktura) => ({
-          tenant_id: agent.tenant_id, organization_id: id, zdroj_databaza: body.databaza, pohoda_doklad_id: faktura.dokladId,
-          agenda: faktura.agenda, doklad_cislo: faktura.dokladCislo, partner_ico: faktura.partnerIco, partner_nazov: faktura.partnerNazov,
-          var_symbol: faktura.varSymbol, mena: faktura.mena, suma: faktura.suma, suma_mena: faktura.sumaMena,
-          zostatok: faktura.zostatok, zostatok_mena: faktura.zostatokMena, synced_at: syncedAt,
-        })))],
-      );
+      if (!('vzdat' in body)) {
+        await tx.query('DELETE FROM pohoda_otvorene_faktury WHERE tenant_id=$1 AND organization_id=$2', [agent.tenant_id, id]);
+        await tx.query(
+          'INSERT INTO pohoda_otvorene_faktury SELECT * FROM jsonb_populate_recordset(null::pohoda_otvorene_faktury, $1::jsonb)',
+          [JSON.stringify(faktury.map((faktura) => ({
+            tenant_id: agent.tenant_id, organization_id: id, zdroj_databaza: body.databaza, pohoda_doklad_id: faktura.dokladId,
+            agenda: faktura.agenda, doklad_cislo: faktura.dokladCislo, partner_ico: faktura.partnerIco, partner_nazov: faktura.partnerNazov,
+            var_symbol: faktura.varSymbol, mena: faktura.mena, suma: faktura.suma, suma_mena: faktura.sumaMena,
+            zostatok: faktura.zostatok, zostatok_mena: faktura.zostatokMena, synced_at: syncedAt,
+          })))],
+        );
+      }
       await tx.query(
         `UPDATE pohoda_company_links SET open_invoices_sync_requested_at=NULL, updated_at=now()
           WHERE organization_id=$1 AND tenant_id=$2 AND open_invoices_sync_requested_at IS NOT NULL`,
@@ -650,8 +653,8 @@ export function registerAgentRoutes(app: FastifyInstance, database: Database, st
       );
       await writeAudit(tx, {
         tenantId: agent.tenant_id, organizationId: id, actorType: 'agent', actorId: agent.id,
-        action: 'agent.open_invoices_synced', entityType: 'organization', entityId: id,
-        correlationId: request.id, metadata: { databaza: body.databaza, pocet: faktury.length },
+        action: 'vzdat' in body ? 'agent.open_invoices_abandoned' : 'agent.open_invoices_synced', entityType: 'organization', entityId: id,
+        correlationId: request.id, metadata: 'vzdat' in body ? {} : { databaza: body.databaza, pocet: faktury.length },
       });
     });
     await database.query('UPDATE agent_installations SET last_seen_at=now() WHERE id=$1', [agent.id]);

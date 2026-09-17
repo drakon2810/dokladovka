@@ -286,6 +286,15 @@ describe('prenos z Mostíka cez staging a publikáciu', () => {
     // Ďalší prenos nahradí celý zoznam — uhradené faktúry zmiznú.
     expect((await agent('PUT', 'open-invoices', { databaza: DATABAZA, faktury: [faktura(2, 10)] })).statusCode).toBe(200);
     expect(await citaj()).toEqual([expect.objectContaining({ pohodaDokladId: 2, zostatok: 10 })]);
+
+    // Agent sa po opakovanom zlyhaní exportu vzdá: žiadosť zmizne, zoznam ostane.
+    await app.inject({ method: 'POST', url: `/api/mostik/organization-links/${seeded.organizationId}/sync-open-invoices`, headers: browser, payload: {} });
+    expect(await ziadost()).toBe(true);
+    const vzdane = await agent('PUT', 'open-invoices', { vzdat: true });
+    expect([vzdane.statusCode, vzdane.json()]).toEqual([200, { ulozenych: 0 }]);
+    expect(await ziadost()).toBe(false);
+    expect(await citaj()).toEqual([expect.objectContaining({ pohodaDokladId: 2, zostatok: 10 })]);
+    expect((await agent('PUT', 'open-invoices', { vzdat: true, databaza: DATABAZA, faktury: [] })).statusCode).toBe(400);
     const telemetria = await app.inject({
       method: 'POST', url: '/api/agent/sync-results', headers,
       payload: { organizationId: seeded.organizationId, kind: 'otvoreneFaktury', state: 'ok', itemCount: 1, durationMs: 1 },

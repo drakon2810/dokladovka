@@ -1110,6 +1110,27 @@ public sealed class AgentTests
         Assert.Equal("ok|", VysledokTelemetrie(poziadavky, "otvoreneFaktury"));
     }
 
+    // Po troch zlyhaniach exportu sa agent vzdá: server žiadosť zmaže bez nahradenia
+    // zoznamu a nová žiadosť z webu spustí export znova — nečaká na reštart služby.
+    // Nespárovaná firma žiadosť uzavrie rovnako, inak by visela bez stopy.
+    [Theory]
+    [InlineData("12345678", 4, "error|InvalidOperationException")]
+    [InlineData("87654321", 0, "error|organization_unmatched")]
+    public async Task OtvoreneFakturyPoStropePokusovZmazuZiadost(string ico, int exportov, string telemetria)
+    {
+        var pokusy = 0;
+        var poziadavky = await SpustiCyklusAsync(Organizacie(3, otvoreneFaktury: true).Replace("12345678", ico, StringComparison.Ordinal), poziadavka =>
+        {
+            if (!poziadavka.Contains("note=\"Export otvorenych faktur\"", StringComparison.Ordinal)) return OdpovedPohody(poziadavka);
+            Interlocked.Increment(ref pokusy);
+            return """<rsp:responsePack xmlns:rsp="http://www.stormware.cz/schema/version_2/response.xsd" version="2.0" state="error" note="Databáza je zamknutá."/>""";
+        }, cyklov: 4);
+        var vzdanie = Assert.Single(poziadavky, poziadavka => poziadavka.Cesta == "/api/agent/organizations/org-1/open-invoices");
+        Assert.Equal("""{"vzdat":true}""", vzdanie.Telo);
+        Assert.Equal(exportov, pokusy);
+        Assert.Equal(telemetria, VysledokTelemetrie(poziadavky, "otvoreneFaktury"));
+    }
+
     // Výnimka histórie išla doteraz len do lokálneho logu a tréning sa ohlásil
     // ako ok — na serveri neúplný prenos vyzeral rovnako ako úspešný.
     [Fact]
@@ -1214,9 +1235,9 @@ public sealed class AgentTests
         return PrazdnaOdpoved;
     }
 
-    /// <summary>Jeden cyklus agenta proti podstrčenému cloudu aj mServeru. Vráti požiadavky na cloud.</summary>
+    /// <summary>Cykly jedného behu služby proti podstrčenému cloudu aj mServeru. Vráti požiadavky na cloud.</summary>
     private static async Task<List<(string Metoda, string Cesta, string Telo)>> SpustiCyklusAsync(
-        string organizacie, Func<string, string> pohoda, Func<string, string, (HttpStatusCode Status, string Json)?>? cloud = null)
+        string organizacie, Func<string, string> pohoda, Func<string, string, (HttpStatusCode Status, string Json)?>? cloud = null, int cyklov = 1)
     {
         var poziadavky = new List<(string Metoda, string Cesta, string Telo)>();
         var handler = new DelegateHandler(async request =>
@@ -1248,7 +1269,8 @@ public sealed class AgentTests
         try
         {
             var secrets = new AgentSecrets { AgentToken = "token", MServers = [new MServerSecret { EndpointId = "one", UserName = "user", Password = "password" }] };
-            await new AgentCycleRunner(Settings("http://localhost:3001"), secrets, new NullLog(), handler).RunOnceAsync(CancellationToken.None);
+            var runner = new AgentCycleRunner(Settings("http://localhost:3001"), secrets, new NullLog(), handler);
+            for (var cyklus = 0; cyklus < cyklov; cyklus++) await runner.RunOnceAsync(CancellationToken.None);
         }
         finally
         {

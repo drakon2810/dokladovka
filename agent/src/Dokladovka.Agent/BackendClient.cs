@@ -155,6 +155,10 @@ public sealed class BackendClient
     public Task UploadOpenInvoicesAsync(string organizationId, string databaza, IReadOnlyList<PohodaXml.OpenInvoice> faktury, CancellationToken cancellationToken) =>
         SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/open-invoices", new { databaza, faktury }), cancellationToken);
 
+    /// <summary>Vzdanie sa po opakovanom zlyhaní — server zmaže žiadosť a starý zoznam nechá.</summary>
+    public Task AbandonOpenInvoicesAsync(string organizationId, CancellationToken cancellationToken) =>
+        SendJsonAsync<JsonElement>(() => JsonRequest(HttpMethod.Put, $"api/agent/organizations/{Uri.EscapeDataString(organizationId)}/open-invoices", new { vzdat = true }), cancellationToken);
+
     /// <summary>
     /// Účtovný denník — surová odpoveď POHODY. Rozoberá ju server (parseDennik),
     /// aby jeden formát nemal dva parsery. Ročný denník má megabajty, cesta má
