@@ -3427,6 +3427,8 @@ describe('istota pri ustálenom pravidle protistrany', () => {
     zhoda: number,
     moznosti: {
       dph?: { pravidlo: string; navrh: string }; konflikt?: boolean; dennik?: number; priklad?: boolean; pravidloDph?: string;
+      /** Verdikt právnej kontroly DPH k členeniu, ktoré napokon vyjde z návrhu. */
+      verdikt?: { posudene: string; odporucane: string; istota: number };
       /** Pravidlo DPH vznikne, kým model beží (účtovník vybral prax na inom doklade). */
       pravidloPocasBehu?: string;
     } = {},
@@ -3511,6 +3513,13 @@ describe('istota pri ustálenom pravidle protistrany', () => {
         return typeof hodnota === 'function' ? hodnota.bind(target) : hodnota;
       },
     }) : database;
+    if (moznosti.verdikt) {
+      await database.query(
+        `INSERT INTO dph_audit (document_id,tenant_id,organization_id,posudene_clenenie_kod,verdikt,odporucane_clenenie_kod,dovod,istota)
+         VALUES ($1,$2,$3,$4,'nesuhlasi',$5,'Miesto dodania je mimo tuzemska.',$6)`,
+        [documentId, ...kde, moznosti.verdikt.posudene, moznosti.verdikt.odporucane, moznosti.verdikt.istota],
+      );
+    }
     await maybeAiAccountingSuggestion(
       pocasBehu, testConfig(),
       { tenantId: seeded.tenantId, organizationId: seeded.organizationId, documentId, supplierName: 'Preprava s.r.o.' },
@@ -3538,6 +3547,29 @@ describe('istota pri ustálenom pravidle protistrany', () => {
     expect(Number((await priprava(5, 5)).confidence)).toBeGreaterThanOrEqual(0.9);
     expect(Number((await priprava(5, 4)).confidence)).toBeLessThan(0.9);
   }, 120_000);
+
+  // Prax firmy môže byť zaužívaná chyba: RCI dala 116 zo 116 moldavských
+  // faktúr členenie UDzahr, ktoré píše do riadku 13 priznania, hoci plnenie
+  // s miestom dodania mimo tuzemska tam nepatrí. Kontrola DPH to zachytila,
+  // ale doklad sa aj tak predvyplnil — verdikt na istotu nesiahol.
+  it('návrh, s ktorým kontrola DPH nesúhlasí, sa nepredvyplní', async () => {
+    const bezVerdiktu = await priprava(60, 58, { dph: { pravidlo: 'PD', navrh: 'PD' } });
+    expect(Number(bezVerdiktu.confidence)).toBeGreaterThanOrEqual(0.9);
+
+    const sVerdiktom = await priprava(60, 58, {
+      dph: { pravidlo: 'PD', navrh: 'PD' },
+      verdikt: { posudene: 'PD', odporucane: 'PN', istota: 0.98 },
+    });
+    expect(Number(sVerdiktom.confidence)).toBeLessThan(0.9);
+    expect(sVerdiktom.reason).toContain('PN');
+
+    // Verdikt o inom členení, než aké vyšlo, o tomto návrhu nehovorí.
+    const inyKod = await priprava(60, 58, {
+      dph: { pravidlo: 'PD', navrh: 'PD' },
+      verdikt: { posudene: 'PN', odporucane: 'PD', istota: 0.98 },
+    });
+    expect(Number(inyKod.confidence)).toBeGreaterThanOrEqual(0.9);
+  }, 180_000);
 
   it('denník predvyplní až pri piatich rovnakých riadkoch', async () => {
     expect(Number((await priprava(3, 2, { dennik: 5 })).confidence)).toBeGreaterThanOrEqual(0.9);

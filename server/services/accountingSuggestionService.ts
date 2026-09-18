@@ -1858,6 +1858,7 @@ WHAT THE LAW SAYS OUTRANKS WHAT THE FIRM HAPPENS TO HAVE DONE. The code lists, t
 HOSPITALITY AND ENTERTAINMENT DO NOT DEDUCT — and the test is the PURPOSE, not the goods. §49 ods. 7 písm. a) denies the deduction on pohostenie a zábava, NOT on every purchase of food. Food and drink consumed as hospitality — a restaurant, café or bar bill, a table of dishes and drinks, a business lunch, entertaining a guest — takes the firm's NON-deductible classification and KN, never a deductible classification and never B3, even with Slovak VAT printed on it and even when the firm has no such posting on this document type yet; its account is the firm's representation account (513, "repre"), and when the code list offers several, take the one whose agenda matches this document. Food and drink bought as an INPUT to something the firm itself supplies stays deductible: goods for resale, catering it re-invoices, refreshments inside a training or an event it charges for. Employee meal schemes (stravné, závodné stravovanie, finančný príspevok na stravu) are a separate regime and are not this rule. When the paper does not say which of the three it is, write that in the reason instead of assuming hospitality.
 
 REVERSE CHARGE LIVES ON A DIFFERENT DOCUMENT. When a foreign supplier bills a Slovak payer with no VAT and the tax is self-assessed under §69 ods. 3, the RECEIVED INVOICE itself is not a Slovak taxable supply: it takes the classification this firm uses for invoices outside the VAT return, and KN. The self-assessment — the classification that reports the tax and its KV section B1 — belongs to a SEPARATE internal document the accountant creates. Do not move the internal document's classification onto the invoice, however correct the law is: you would report the tax twice and on the wrong document.
+"ciselniky.cleneniaDph" may also carry what the code ACTUALLY does in POHODA, from the reference list of Slovak VAT classifications: "riadkyPriznania" are the rows of the VAT return the code writes into (an empty list means the code writes into no row at all) and "suhrnnyVykaz" is its code in the EC sales list ("súhrnný výkaz"), null when it belongs in none. Read that, not the name of the code: names mislead. A supply whose place of supply is outside Slovakia is reported in NO row of the return and in no control statement (Poučenie DPHv25, point 9); for a customer who is a taxable person in another EU member state the service still belongs in the EC sales list, for a customer in a third country it belongs nowhere. So a code whose "riadkyPriznania" is non-empty is wrong for such a supply however fitting its name sounds, and however many times the firm used it — a settled practice that contradicts what the code does is a settled mistake. When the codes on offer carry this field, say in the reason which rows the chosen code writes into and why the document belongs there.
 "ciselniky.cleneniaDph" carries "pouziteNaTomtoTypeDokladu": how many times this firm used that classification on THIS document type. Zero on a classification the firm uses elsewhere is the signal above — the code belongs to the other document, not to this one. A classification the firm has never used anywhere is a legitimate first occurrence and stays available; classifications proven to belong to another document type are removed from the list entirely.
 DECIDE BY WHAT THE SECTION HOLDS, never by the shape of the code. Every section except KN presumes the place of supply is IN SLOVAKIA. A service supplied to a business established abroad has its place of supply at the customer (§15 ods. 1), so it belongs in NO section and takes KN — D2 in particular is wrong for it, because nobody owes Slovak tax on it.
 Evidence, strongest first:
@@ -3005,6 +3006,7 @@ export async function maybeAiAccountingSuggestion(
     return false;
   }
   const { navrh, dokazy } = vysledok;
+  const { istota: istotaNavrhu, dovod: dovodNavrhu } = await poKontroleDph(database, input, navrh);
 
   // Stopa dôkazov ide do vlastnej tabuľky, nie do návrhu: accounting_suggestions
   // posiela dátový snapshot celé (SELECT *) každému prehliadaču. Zapisuje sa
@@ -3038,7 +3040,7 @@ export async function maybeAiAccountingSuggestion(
       navrh.predkontacia_id ?? null, navrh.clenenie_dph_id ?? null,
       navrh.ciselny_rad_id ?? null,
       navrh.stredisko_id ?? null, navrh.clenenie_kv_kod ?? null,
-      navrh.confidence, navrh.reason,
+      istotaNavrhu, dovodNavrhu,
       // Pravidlo, ktoré do návrhu prispelo — nesie si samokontrolu (updateRuleFeedback).
       navrh.rule_id ?? null,
       navrh.riadky ? JSON.stringify(navrh.riadky) : null, stopaId,
@@ -3056,6 +3058,51 @@ export async function maybeAiAccountingSuggestion(
   ).catch((chyba) => console.warn(`[ai-navrh] ${input.documentId}: upratanie starých stôp zlyhalo:`,
     chyba instanceof Error ? chyba.message : chyba));
   return true;
+}
+
+/** Istota návrhu, ktorý právna kontrola DPH odmietla — pod hranicou predvyplnenia. */
+const ISTOTA_PROTI_KONTROLE = 0.8;
+/** Pod touto istotou je verdikt kontroly úvaha, nie dôvod brzdiť návrh. */
+const VERDIKT_ISTOTA_OD = 0.9;
+
+/**
+ * Právny verdikt ako vstup do predvyplnenia, nie iba poznámka pod poľom.
+ *
+ * Kontrola DPH posudzuje návrh z pamäte ešte pred AI. Keď AI skončí na tom
+ * istom členení, ktoré kontrola odmietla, doklad sa nesmie vyplniť sám —
+ * účtovník ho musí otvoriť. RCI, faktúra prepravy do Moldavska: prax 116 zo
+ * 116 dokladov dala UDzahr (istota 0,95), kontrola s istotou 0,98 žiadala UN,
+ * lebo UDzahr píše do riadku 13 priznania, kam plnenie s miestom dodania mimo
+ * tuzemska nepatrí — a doklad sa aj tak predvyplnil zaužívanou chybou.
+ *
+ * Verdikt o INOM členení, než aké nakoniec vyšlo, nehovorí o tomto návrhu
+ * a istotu nemení. Keď o rozpore už rozhodol účtovník, rozhoduje jeho slovo.
+ */
+async function poKontroleDph(
+  database: Database,
+  input: SuggestionInput,
+  navrh: NavrhZauctovania,
+): Promise<{ istota: number; dovod: string }> {
+  if (navrh.confidence <= ISTOTA_PROTI_KONTROLE) return { istota: navrh.confidence, dovod: navrh.reason };
+  const verdikt = (await database.query<{
+    odporucane?: string; istota?: string; sedi: boolean;
+  } & Record<string, unknown>>(
+    `SELECT a.odporucane_clenenie_kod AS odporucane, a.istota,
+            a.posudene_clenenie_kod IS NOT DISTINCT FROM c.code AS sedi
+       FROM dph_audit a
+       LEFT JOIN code_list_items c ON c.id=$3 AND c.tenant_id=a.tenant_id
+      WHERE a.document_id=$1 AND a.tenant_id=$2 AND a.verdikt='nesuhlasi' AND a.rozhodnutie IS NULL`,
+    [input.documentId, input.tenantId, navrh.clenenie_dph_id ?? null],
+  )).rows[0];
+  if (!verdikt?.sedi || Number(verdikt.istota ?? 0) < VERDIKT_ISTOTA_OD) {
+    return { istota: navrh.confidence, dovod: navrh.reason };
+  }
+  const odporucane = verdikt.odporucane ? ` a odporúča ${verdikt.odporucane}` : '';
+  console.info(`[ai-navrh] ${input.documentId}: kontrola DPH nesúhlasí s členením — istota znížená na ${ISTOTA_PROTI_KONTROLE}`);
+  return {
+    istota: ISTOTA_PROTI_KONTROLE,
+    dovod: `Pozor: kontrola DPH s návrhom nesúhlasí${odporucane} — doklad sa preto nepredvyplní. ${navrh.reason}`.slice(0, 500),
+  };
 }
 
 /** Chyba vznikla pri volaní modelu (nie pri príprave) — len tá je neúspešný beh AI. */
@@ -3479,7 +3526,16 @@ export async function navrhniZauctovanie(
             // pomýli doklad — nech to vidí, nie iba kratší zoznam.
             cleneniaDph: cleneniaDph.map((item) => {
               const stat = pouzitie.get(item.kod.trim());
-              return stat ? { ...item, pouziteNaTomtoTypeDokladu: stat.tu } : item;
+              const spouzitim = stat ? { ...item, pouziteNaTomtoTypeDokladu: stat.tu } : item;
+              // Čo kód naozaj robí, nie ako sa volá. Názov „UDzahr — Miesto
+              // plnenia v zahraničí" znie pre moldavského odberateľa správne,
+              // lenže kód píše sumu do riadku 13 priznania, kam plnenie
+              // s miestom dodania mimo tuzemska nepatrí. Bez tohto poľa model
+              // rozpor nevidel a nasledoval prax firmy (RCI: 116 zo 116 faktúr).
+              const popis = popisKodu(item.kod);
+              return popis
+                ? { ...spouzitim, riadkyPriznania: popis.riadky, suhrnnyVykaz: popis.sv }
+                : spouzitim;
             }),
             // Rad musí sedieť s druhom dokladu: zálohová faktúra má vlastnú
             // agendu a modelu by inak ostala ponuka bežných faktúr — presne to
