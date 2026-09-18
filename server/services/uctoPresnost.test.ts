@@ -553,7 +553,11 @@ describe('firma bez histórie', () => {
     expect(nova.prompt.priklady).toEqual([]);
     expect(nova.prompt.kategorie).toEqual([]);
     expect(JSON.stringify(nova.prompt.pravidla ?? null)).not.toContain('Staré pravidlo');
-    expect(nova.prompt.ciselniky.cleneniaDph).toEqual([{ id: pd, kod: 'PD', nazov: 'PD' }]);
+    // Riadky priznania a súhrnný výkaz sú fakty o kóde z číselníka POHODY, nie
+    // história firmy — nová firma ich dostane tiež. Bez histórie chýba len to,
+    // koľkokrát kód na tomto type dokladu použila.
+    expect(nova.prompt.ciselniky.cleneniaDph)
+      .toEqual([{ id: pd, kod: 'PD', nazov: 'PD', riadkyPriznania: ['18', '18a', '19', '20', '20a', '21'], suhrnnyVykaz: null }]);
     expect(nova.vysledok.doklady[0]).toMatchObject({ novaProtistrana: true, navrh: { predkontacia: '518/321', rad: 'R2' } });
     expect(nova.vysledok.manifest).toMatchObject({ asOf: 'bez_historie', kategorie: 'vylucene', embeddingy: null });
   }, 120_000);

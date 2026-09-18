@@ -240,6 +240,13 @@ describe('záznam opráv účtovníka', () => {
     // Dve úpravy druhu za sebou: návrhom ostáva druh od extrakcie, nie medzikrok.
     const verzia = await uprav({ documentType: 'FP', podtyp: 'tarchopis', expectedVersion: 1 });
     await uprav({ documentType: 'OZ', expectedVersion: verzia });
+    // Zmena druhu zaradí nový návrh zaúčtovania a doklad s čakajúcim jobom sa
+    // schváliť nedá. V produkcii ho worker dobehne v sekundách (aj bez AI —
+    // ostane deterministický návrh); v teste worker nebeží, tak ho dokončíme.
+    await database.query(
+      `UPDATE processing_jobs SET status='succeeded' WHERE document_id=$1 AND kind='navrh_zauctovania'`,
+      [documentId],
+    );
     const approved = await app.inject({
       method: 'POST', url: `/api/documents/${documentId}/approve`, headers, payload: { expectedVersion: verzia + 1 },
     });
